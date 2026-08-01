@@ -1,9 +1,10 @@
 """Game-process adapter — concrete ``GameProcessControl`` over ``/proc``.
 
 Owns the host-side view of what a flatpak app is running: the per-user flatpak
-instance registry, the ``/proc`` process tree beneath each live instance, and
-the signals sent to the processes found there. Direct file reads and
-``os.kill`` only — no ``subprocess``, no shelling out to ``flatpak kill``.
+instance registry, the ``/proc`` process tree beneath each live instance, what
+those processes were started with, and the signals sent to them. Direct file
+reads and ``os.kill`` only — no ``subprocess``, no shelling out to
+``flatpak kill``.
 
 Why the host process table at all — Steam cannot terminate these games.
 A RomM shortcut execs ``flatpak run <app>``; flatpak's D-Bus portal starts the
@@ -23,6 +24,8 @@ from __future__ import annotations
 import json
 import os
 import signal
+
+from domain.game_instance import GameInstance
 
 _PROC = "/proc"
 
@@ -59,23 +62,27 @@ _MAX_DEPTH = 16
 class GameProcessAdapter:
     """Real ``GameProcessControl`` backed by the flatpak instance registry and ``/proc``."""
 
-    def find_game_pids(self, flatpak_app_id: str) -> list[int]:
-        """Return *flatpak_app_id*'s live host PIDs, deepest process first.
+    def find_game_instances(self, flatpak_app_id: str) -> list[GameInstance]:
+        """Return one :class:`GameInstance` per live instance of *flatpak_app_id*.
 
         Resolves every live instance of the app through the per-user flatpak
         instance registry, takes each instance's inner ``bwrap`` pid, and walks
-        that pid's ``/proc`` descendants. ``bwrap`` processes and pids whose
-        identity cannot be read are excluded. Empty when the app is not running
-        or the registry is unreadable.
+        that pid's ``/proc`` descendants — deepest process first. ``bwrap``
+        processes and pids whose identity cannot be read are excluded, and each
+        instance carries the command-line tokens of the pids it did keep so a
+        caller can tell one instance's game from another's. An instance with no
+        signal target left (its tree exited mid-scan) is dropped, so an empty
+        list means the app is not running — or its registry is unreadable, which
+        is indistinguishable from here and means the same thing: nothing to stop.
         """
-        pids: list[int] = []
-        seen: set[int] = set()
+        instances: list[GameInstance] = []
         for root_pid in self._instance_root_pids(flatpak_app_id):
-            for pid in self._descendants(root_pid):
-                if pid not in seen:
-                    seen.add(pid)
-                    pids.append(pid)
-        return pids
+            pids = self._descendants(root_pid)
+            if not pids:
+                continue
+            argv = [token for pid in pids for token in self._cmdline_tokens(pid)]
+            instances.append(GameInstance(pids=tuple(pids), argv=tuple(argv)))
+        return instances
 
     def request_stop(self, pid: int) -> bool:
         """Send one ``SIGTERM`` to *pid*, returning whether it was delivered.
@@ -211,6 +218,23 @@ class GameProcessAdapter:
             return []
         # Space-separated pid list, possibly with a trailing space and newline.
         return [int(token) for token in raw.split() if token.isdigit()]
+
+    @staticmethod
+    def _cmdline_tokens(pid: int) -> list[str]:
+        """Return *pid*'s argv tokens from ``/proc/<pid>/cmdline``.
+
+        The file is a NUL-separated argv with a trailing NUL, so the empty
+        trailing field is dropped. Empty on any read failure and for a process
+        that has no argv at all (a kernel thread, or one already reaped) — an
+        unreadable command line only makes that process contribute nothing to
+        its instance's identification; it never fails the scan.
+        """
+        try:
+            with open(f"{_PROC}/{pid}/cmdline", encoding="utf-8") as f:
+                raw = f.read()
+        except (OSError, UnicodeDecodeError):
+            return []
+        return [token for token in raw.split("\0") if token]
 
     @staticmethod
     def _is_signal_target(pid: int) -> bool:

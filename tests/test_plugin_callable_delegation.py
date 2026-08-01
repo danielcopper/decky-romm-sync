@@ -507,8 +507,8 @@ class TestLifecycleCallableDelegation:
         plugin._game_process_service.stop_running_game = AsyncMock(
             return_value={"success": True, "stopped": 2, "force_killed": 0}
         )
-        result = await plugin.stop_running_game()
-        plugin._game_process_service.stop_running_game.assert_awaited_once_with()
+        result = await plugin.stop_running_game(42)
+        plugin._game_process_service.stop_running_game.assert_awaited_once_with(42)
         assert result == {"success": True, "stopped": 2, "force_killed": 0}
 
 

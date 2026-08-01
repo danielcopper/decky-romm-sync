@@ -57,6 +57,7 @@ SEAM_METHODS: frozenset[str] = frozenset(
         "active_core_for_rom",  # ActiveCoreResolver (services/active_core_resolver.py)
         "active_emulator_for_rom",  # ActiveCoreResolver (services/active_core_resolver.py)
         "installed_relaunch_items",  # RelaunchOptionsResolver (services/relaunch_options_resolver.py)
+        "launch_path_for_rom",  # RelaunchOptionsResolver (services/relaunch_options_resolver.py)
         "relaunch_item_for_rom",  # RelaunchOptionsResolver (services/relaunch_options_resolver.py)
     }
 )

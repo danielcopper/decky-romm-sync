@@ -1749,7 +1749,7 @@ session begins between the button rendering Play and the user pressing it.
 
 Beside Resume sits a chevron whose menu holds one destructive action: **Stop Game**. It confirms first (one line: any
 progress since the last in-game save may be lost — the plugin promises nothing about the save, because it cannot), then
-calls the `stop_running_game` backend callable.
+calls the `stop_running_game(rom_id)` backend callable.
 
 **Steam cannot terminate these games.** The shortcut execs `flatpak run net.retrodeck.retrodeck`; flatpak's D-Bus portal
 starts the sandbox from the session helper, so the emulator is not a descendant of Steam's `reaper`.
@@ -1764,6 +1764,35 @@ descended through but never signalled (killing the sandbox scaffolding collapses
 letting it flush). Every read is fail-soft — a pid that vanishes mid-scan is a normal race and is skipped, never fatal.
 Nothing shells out: direct `/proc` reads and `os.kill` only, all as the plugin's own uid, so no `flatpak kill`
 subprocess and no elevation.
+
+**One app id, several live instances — and only one of them is the game.** RetroDECK is a single flatpak app, so a
+second game launched from another shortcut, or ES-DE opened on its own, is another live instance of the _same_ app id.
+The registry scan therefore reports the instances **separately** (`GameInstance`: the tree's signal-target pids plus the
+`/proc/<pid>/cmdline` argv tokens read across them) rather than pooling every pid, and the service signals exactly one
+of them. Before #1619 the callable took no arguments and every instance was signalled, so stopping one game ended every
+RetroDECK session on the device; the `rom_id` argument is what makes the target knowable at all.
+
+The **matching rule**: the expected launch target comes from `RelaunchOptionsResolver.launch_path_for_rom` — the same
+derivation the shortcut's `launch_options` are baked from, so the comparison runs against that derivation rather than a
+second opinion of it. (It re-resolves from the current `rom_installs` row and disc pick, so a disc switch or reinstall
+since the launch yields a path that matches nothing; the failure direction is a refusal, never a wrong instance.) An
+instance matches when that exact absolute path is one of its argv tokens; failing that, when one of its tokens has the
+same **path tail** — `<parent>/<file>`, e.g. `snes/Aladdin.zip`.
+
+The tail, not the bare filename, because only the mount ROOT can differ between the host path and the sandboxed command
+line, and it is not yet verified on device whether they differ at all. Comparing the tail survives a re-rooting while
+still telling `roms/snes/Aladdin.zip` from `roms/genesis/Aladdin.zip` — one game, two platform directories, one
+filename, ordinary in a multi-platform library and fatal to match on, because in the sandbox regime **every** match is a
+fallback match. Comparison is whole-component equality, never a substring test, so `a.bin` cannot match `aaa.bin`. Two
+refusals guard the fallback since it is the weaker signal: the exact pass always wins outright, and a tail that matches
+**more than one** instance refuses rather than picking by scan order. Which discriminator matched (`path` vs
+`path-tail`) is logged at INFO precisely so an on-device run settles the open question; a log that only ever says
+`path-tail` means the sandbox path differs.
+
+The pure decision lives in `domain/game_instance.py` (`match_instance_for_launch_path`), so the "which tree" question is
+testable without a process table. **No attributable instance means signal nothing** — whether nothing matched or too
+much did, killing the wrong emulator mid-save is worse than refusing — reported as the distinct `game_not_running`
+failure below.
 
 **The ladder never re-sends the polite signal.** It is strictly _one SIGTERM per process → a bounded grace window
 (polled, 6 s) → SIGKILL for whatever is left_. A "retry SIGTERM a few times" loop looks like robustness and is in fact
@@ -1780,16 +1809,26 @@ again. A second concurrent call would rediscover the same still-alive pids and s
 loser is refused with `{success: false, reason: "already_stopping", message}`. It is a plain flag rather than an
 `asyncio.Lock` deliberately: a lock _queues_ the second caller and fires the repeat a few seconds late instead of never,
 whereas the needed semantic is refuse. (This mirrors the compare-and-swap shape of `LibrarySyncStateBox.try_begin_run`.)
-The frontend adds its own in-flight flag on top — the Stop Game menu item is disabled and reads "Stopping…" while the
-call is outstanding — but that is a convenience, not the guarantee: a remount, a second game-detail page, or the retry
-the error toast invites all bypass component state, so the backend claim is the load-bearing half.
+The claim stays **global** rather than per-ROM even though the ladder now targets one instance: two per-ROM ladders
+whose matches landed on the same tree — not excluded, since the path-tail fallback is a weaker signal than an exact hit
+— would fire exactly the repeat the claim exists to prevent. Global costs at most the grace window of a stop the user is
+already watching, and the poll returns as soon as the tree is gone, so the usual cost is one 0.25 s interval rather than
+the full 6 s; that is the cheaper side of the trade. The frontend adds its own in-flight flag on top — the Stop Game
+menu item is disabled and reads "Stopping…" while the call is outstanding — but that is a convenience, not the
+guarantee: a remount, a second game-detail page, or the retry the error toast invites all bypass component state, so the
+backend claim is the load-bearing half.
 
 Layering follows the usual split: `GameProcessControl` (`services/protocols/infra.py`) is the semantic seam — POSIX
-signal numbers never reach `services/` — `adapters/game_process.py` implements it, and `GameProcessService` owns the
-policy with an injected `Sleeper` for the grace window. The callable answers `{success: true, stopped, force_killed}`,
-or a canonical failure: `not_running` when nothing of RetroDECK's is alive, `already_stopping` when a ladder is in
-flight. The frontend treats `not_running` exactly like its own stale-overlay self-heal: clear the overlay (and reset a
-`launching` state stuck underneath it) rather than surface an error.
+signal numbers and `/proc` never reach `services/` — `adapters/game_process.py` implements it, `RomLaunchPathReader`
+(`services/protocols/cross_service.py`) is the launch-target seam the match reads through, and `GameProcessService` owns
+the policy with an injected `Sleeper` for the grace window.
+
+The callable answers `{success: true, stopped, force_killed}`, or a canonical failure: `not_running` when nothing of
+RetroDECK's is alive, `game_not_running` when it is but no instance could be attributed to this ROM (nothing was
+signalled), `already_stopping` when a ladder is in flight. The frontend treats `not_running` exactly like its own
+stale-overlay self-heal: clear the overlay (and reset a `launching` state stuck underneath it) rather than surface an
+error. `game_not_running` is deliberately **not** treated that way — the game may well still be running, only
+unidentified — so the overlay stays up, Resume stays reachable, and the backend's message is toasted.
 
 ### App ID to ROM ID mapping
 

@@ -284,3 +284,74 @@ def test_single_rom_multi_disc_pin_bakes_selected_disc_path():
         "app_id": 555,
         "launch_options": f'flatpak run net.retrodeck.retrodeck "{_DISC2_PATH}"',
     }
+
+
+# ── launch_path_for_rom — the bare launch target the stop-game match uses ────
+
+
+def test_launch_path_is_the_installs_file_path():
+    """An installed+bound single-file ROM → its own ``file_path``."""
+    uow = FakeUnitOfWork()
+    file_path = "/roms/n64/zelda.z64"
+    _seed_install(uow, 1, file_path=file_path, shortcut_app_id=4242)
+    resolver = _make_resolver(uow=uow)
+    assert resolver.launch_path_for_rom(1) == file_path
+
+
+def test_launch_path_equals_the_path_baked_into_the_launch_options():
+    """The two entry points never disagree — that identity is the point.
+
+    A read-path value that differs from what was actually launched matches no
+    live process, so the stop it backs would be refused for a running game.
+    Asserted over the multi-disc pin, where the launch target is NOT simply the
+    install's ``file_path`` and a re-derivation would be free to drift.
+    """
+    uow = FakeUnitOfWork()
+    _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, app_id=555)
+    resolver = _make_resolver(uow=uow, disc_resolver=_multi_disc_resolver())
+
+    launch_path = resolver.launch_path_for_rom(1)
+
+    assert launch_path == _DISC2_PATH
+    assert resolver.relaunch_item_for_rom(1)["launch_options"].endswith(f'"{launch_path}"')  # type: ignore[index]
+
+
+def test_launch_path_for_an_unpinned_multi_disc_rom_is_disc_1():
+    uow = FakeUnitOfWork()
+    _seed_multi_disc(uow, rom_id=1, selected_disc=None, app_id=555)
+    resolver = _make_resolver(uow=uow, disc_resolver=_multi_disc_resolver())
+    assert resolver.launch_path_for_rom(1) == _DISC1_PATH
+
+
+def test_launch_path_for_a_rom_with_no_install_row_is_none():
+    """Uninstalled → None: nothing was ever launched from it."""
+    uow = FakeUnitOfWork()
+    with uow:
+        uow.roms.save(_make_rom(1, shortcut_app_id=99))
+    resolver = _make_resolver(uow=uow)
+    assert resolver.launch_path_for_rom(1) is None
+
+
+def test_launch_path_for_an_unbound_rom_is_none():
+    """Installed but unbound (no shortcut) → None, same guard as the item path."""
+    uow = FakeUnitOfWork()
+    _seed_install(uow, 1, file_path="/roms/n64/a.z64", shortcut_app_id=None)
+    resolver = _make_resolver(uow=uow)
+    assert resolver.launch_path_for_rom(1) is None
+
+
+def test_launch_path_for_an_unknown_rom_is_none():
+    resolver = _make_resolver(uow=FakeUnitOfWork())
+    assert resolver.launch_path_for_rom(999) is None
+
+
+def test_launch_path_never_resolves_the_active_core():
+    """The bare path needs no emulator — the core seam is not touched at all."""
+    uow = FakeUnitOfWork()
+    _seed_install(uow, 1, file_path="/roms/n64/a.z64", shortcut_app_id=4242)
+    active_core = FakeActiveCoreResolver(per_rom={1: ("mupen64plus_next", "Mupen64Plus-Next")})
+    resolver = _make_resolver(uow=uow, active_core=active_core)
+
+    resolver.launch_path_for_rom(1)
+
+    assert active_core.emulator_calls == []

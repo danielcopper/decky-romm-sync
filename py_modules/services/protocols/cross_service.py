@@ -118,6 +118,29 @@ class RomRelaunchItemReader(Protocol):
     def relaunch_item_for_rom(self, rom_id: int) -> dict[str, Any] | None: ...
 
 
+class RomLaunchPathReader(Protocol):
+    """Single installed ROM launch-path resolution consumed by GameProcessService.
+
+    The composition root satisfies this with ``RelaunchOptionsResolver`` — the
+    same seam the relaunch items are baked from, narrowed to just the launch
+    target inside them. Stop Game matches the live sandbox instances against this
+    path to find the one running this ROM, so it MUST come from the bake seam
+    rather than be derived some other way: a second derivation would drift from
+    the one the shortcut was written with and refuse legitimate stops.
+
+    This is the *same derivation*, not a record of the launch: it re-resolves
+    from the current ``rom_installs`` row and disc pick, which a disc switch, a
+    version switch, or a reinstall can move between the launch and the stop. A
+    stale resolution matches nothing, so the failure direction is a refusal —
+    never a wrong instance. Returns ``None`` when the ROM has no install row or
+    no bound shortcut: nothing was launched from it. A UoW-opening seam — the
+    caller resolves it *outside* any open Unit of Work (the nested
+    ``BEGIN IMMEDIATE`` deadlocks).
+    """
+
+    def launch_path_for_rom(self, rom_id: int) -> str | None: ...
+
+
 class SaveDriftProbeFn(Protocol):
     """Local-save drift probe consumed by VersionSwitchService.
 

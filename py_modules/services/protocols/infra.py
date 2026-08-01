@@ -9,7 +9,10 @@ would otherwise require service-to-service concrete imports.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
+
+if TYPE_CHECKING:
+    from domain.game_instance import GameInstance
 
 
 class EventEmitter(Protocol):
@@ -125,23 +128,28 @@ class RendererGcFn(Protocol):
 class GameProcessControl(Protocol):
     """Discovery and signalled termination of a flatpak app's host processes.
 
-    The seam the stop-game ladder acts through: locate the host PIDs a flatpak
-    app is running, ask one to exit, ask whether it has, and force it when it
-    has not. POSIX signal numbers stay behind this Protocol — a service reasons
-    in ``request_stop`` / ``force_kill`` / ``is_alive``, never in ``SIGTERM`` /
-    ``SIGKILL`` — so the escalation policy stays expressible without raw
-    syscalls in ``services/``.
+    The seam the stop-game ladder acts through: locate the live instances a
+    flatpak app is running, ask one process to exit, ask whether it has, and
+    force it when it has not. POSIX signal numbers and ``/proc`` stay behind this
+    Protocol — a service reasons in instances, ``request_stop`` / ``force_kill``
+    / ``is_alive``, never in ``SIGTERM`` / ``SIGKILL`` — so the escalation policy
+    stays expressible without raw syscalls in ``services/``.
     """
 
-    def find_game_pids(self, flatpak_app_id: str) -> list[int]:
-        """Return the host PIDs running inside *flatpak_app_id*'s live instances.
+    def find_game_instances(self, flatpak_app_id: str) -> list[GameInstance]:
+        """Return one entry per live instance of *flatpak_app_id*.
 
-        Ordered **deepest-first**, so the emulator is reached before the shell
-        wrappers that would otherwise tear it down mid-write. Sandbox
-        scaffolding is excluded — every returned pid is a legitimate signal
-        target. An empty list means the app is not running (or its process
-        table is unreadable, which is indistinguishable from here; both mean
-        "nothing to stop").
+        An app can be running several instances at once (a second game, ES-DE
+        opened on its own), each an independent process tree — so they are
+        reported separately rather than pooled, and the caller signals only the
+        tree it has identified. Within an instance the pids are ordered
+        **deepest-first**, so the emulator is reached before the shell wrappers
+        that would otherwise tear it down mid-write, and sandbox scaffolding is
+        excluded: every reported pid is a legitimate signal target. Each instance
+        also carries the command-line tokens of those pids, which is what
+        identifies the game it is running. An empty list means the app is not
+        running (or its process table is unreadable, which is indistinguishable
+        from here; both mean "nothing to stop").
         """
         ...
 
