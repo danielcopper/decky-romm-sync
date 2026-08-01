@@ -224,6 +224,16 @@ def classify_error(exc):
     return ErrorCode.UNKNOWN.value, str(exc)
 
 
+class OperationAbortedError(Exception):
+    """A cooperative worker stopped because its caller asked it to stop.
+
+    Never a failure: the work was abandoned on request, before it committed
+    anything, and whatever partial state it had created has been cleaned up.
+    A caller that cannot distinguish this from a fault would report an
+    obedient stop as an error.
+    """
+
+
 def error_response(exc, fallback_message=None):
     """Build a canonical ``{success, reason, message}`` dict from an exception.
 

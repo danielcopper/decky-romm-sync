@@ -565,6 +565,7 @@ class RecoveryBundleStore(Protocol):
         artifacts: list[RecoveryArtifact],
         readme_context: BundleReadmeContext,
         playtime_text: str,
+        should_abort: Callable[[], bool] | None = None,
     ) -> str: ...
 
 

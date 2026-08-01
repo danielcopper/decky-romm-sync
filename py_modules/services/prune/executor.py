@@ -16,9 +16,16 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
 
 from domain.prune import liveness_guard
+from lib.errors import OperationAbortedError
 from lib.list_result import ErrorCode
 from lib.url_host import romm_namespace
-from services.prune._models import PrunePreview, RecoveryHandle, cancellation_state, shielded
+from services.prune._models import (
+    BackupControl,
+    PrunePreview,
+    RecoveryHandle,
+    cancellation_state,
+    shielded,
+)
 from services.prune.finalize import GroupFinalizer, GroupFinalizerConfig
 from services.prune.liveness import LivenessProber, LivenessProberConfig
 from services.prune.planning import GroupPlan, GroupPlanner, GroupPlannerConfig
@@ -291,6 +298,12 @@ class PruneExecutor:
             )
         except asyncio.CancelledError as exc:
             state = cancellation_state(exc)
+            # A worker that stopped because this run asked it to did what it was
+            # told; reporting that as a fault would turn an obedient stop into an
+            # error the user never caused.
+            aborted = isinstance(state.child_fault, OperationAbortedError)
+            if aborted:
+                state.child_fault = None
             if state.child_fault is not None:
                 state.group_result = self._results.fault_result(ledger, initial_rows, state.child_fault)
             elif state.group_result is None and ledger.has_commit():
@@ -298,6 +311,13 @@ class PruneExecutor:
                     ledger,
                     "cancelled",
                     "Cleanup was cancelled after a committed or ambiguous action; later groups were not started.",
+                )
+            elif state.group_result is None and aborted:
+                state.group_result = self._results.group_result(
+                    ledger.rows,
+                    "skipped",
+                    "cancelled",
+                    "Cleanup was cancelled while the recovery bundle was being written; nothing was removed.",
                 )
             raise
         except Exception as exc:
@@ -477,6 +497,11 @@ class PruneExecutor:
                 snapshot = await self._loop.run_in_executor(
                     None, self._recovery.snapshot_state, sorted(recovery_ids), frontend_steam
                 )
+                # Still shielded, so the worker's own cleanup finishes before the
+                # run ends — but the control turns "wait for the copy" into
+                # "tell it to stop, then wait", which is a chunk rather than
+                # minutes of copying the user already asked to abandon.
+                backup = BackupControl()
                 sealed = await shielded(
                     self._loop.run_in_executor(
                         None,
@@ -487,8 +512,10 @@ class PruneExecutor:
                             include_installed_rom_ids=set(options.include_installed_rom_ids),
                             delete_ids=plan.delete_ids,
                             app_id=plan.app_id if plan.whole_game_action else None,
+                            should_abort=backup.is_aborted,
                         ),
-                    )
+                    ),
+                    on_cancel=backup.abort,
                 )
                 bundle_path, steam_backend = sealed
                 sealed_claims = await self._loop.run_in_executor(None, self._recovery_store.source_claims, bundle_path)

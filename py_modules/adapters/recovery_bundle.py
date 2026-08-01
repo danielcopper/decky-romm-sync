@@ -15,11 +15,14 @@ from adapters.descriptor_paths import (
     identity_for_stat,
     measure_tree,
     mount_id_for_fd,
+    raise_if_aborted,
     remove_current,
 )
 from domain.prune import render_bundle_readme, sanitize_package_name
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from models.prune import (
         RecoveryArtifact,
         SealedSourceClaims,
@@ -225,7 +228,16 @@ class RecoveryBundleAdapter:
         artifacts: list[RecoveryArtifact],
         readme_context: BundleReadmeContext,
         playtime_text: str,
+        should_abort: Callable[[], bool] | None = None,
     ) -> str:
+        """Copy, verify and atomically publish one bundle, or leave nothing behind.
+
+        *should_abort* is polled between artifacts and between copy/hash chunks,
+        so a cancelled run stops within a chunk instead of after a
+        multi-hundred-megabyte copy. An abort unwinds through the same failure
+        path as any other error: the staging directory is removed, and a cleanup
+        that itself fails is reported rather than rewritten into a clean stop.
+        """
         if _SAFE_BUNDLE_ID.fullmatch(bundle_id) is None:
             raise ValueError("unsafe recovery bundle id")
         bundles_parent = os.path.join(self._root, "bundles")
@@ -245,7 +257,7 @@ class RecoveryBundleAdapter:
             os.mkdir(staging_name, 0o700, dir_fd=staging_parent_fd)
             staging_fd = self._open_dir_at(staging_parent_fd, staging_name)
             free_bytes = self._free_bytes_fd(root_fd)
-            records, source_sets, checksums = self._copy_artifacts(staging_fd, artifacts, free_bytes)
+            records, source_sets, checksums = self._copy_artifacts(staging_fd, artifacts, free_bytes, should_abort)
             enriched = dict(snapshot)
             enriched["plugin_version"] = self._plugin_version
             enriched["bundle_id"] = bundle_id
@@ -277,7 +289,7 @@ class RecoveryBundleAdapter:
                 json.dumps(seal, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
                 checksums=None,
             )
-            self._verify_staging_checksums(staging_fd, checksums)
+            self._verify_staging_checksums(staging_fd, checksums, should_abort)
             os.fsync(staging_fd)
             os.rename(
                 staging_name,
@@ -348,14 +360,19 @@ class RecoveryBundleAdapter:
             return lexical
 
     def _copy_artifacts(
-        self, staging_fd: int, artifacts: list[RecoveryArtifact], free_bytes: int
+        self,
+        staging_fd: int,
+        artifacts: list[RecoveryArtifact],
+        free_bytes: int,
+        should_abort: Callable[[], bool] | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, object]], dict[str, str]]:
         expanded: list[tuple[RecoveryArtifact, str]] = []
         source_sets: list[dict[str, object]] = []
         seen: set[str] = set()
         sealed_claims: dict[str, SourceClaim] = {}
         for artifact in artifacts:
-            claim = claim_source(artifact["source_path"], artifact["safe_root"])
+            raise_if_aborted(should_abort)
+            claim = claim_source(artifact["source_path"], artifact["safe_root"], should_abort)
             files = self._files_for_claim(claim)
             sealed_claims[artifact["source_path"]] = claim
             source_sets.append(
@@ -378,6 +395,7 @@ class RecoveryBundleAdapter:
                 expanded.append((artifact, file_path))
         required = 0
         for artifact, path in expanded:
+            raise_if_aborted(should_abort)
             fd = self._open_regular_beneath(path, artifact["safe_root"])
             try:
                 required += os.fstat(fd).st_size
@@ -392,10 +410,11 @@ class RecoveryBundleAdapter:
         checksums: dict[str, str] = {}
         try:
             for index, (artifact, source) in enumerate(expanded, start=1):
+                raise_if_aborted(should_abort)
                 name = f"{index:06d}"
                 relative = f"files/{name}"
                 source_stat, source_hash, source_identity = self._copy_opened_source(
-                    source, artifact["safe_root"], files_fd, name
+                    source, artifact["safe_root"], files_fd, name, should_abort
                 )
                 checksums[relative] = source_hash
                 record: dict[str, Any] = {
@@ -416,13 +435,19 @@ class RecoveryBundleAdapter:
         finally:
             os.close(files_fd)
         for source_path, sealed_claim in sealed_claims.items():
-            if claim_source(source_path, sealed_claim["safe_root"]) != sealed_claim:
+            raise_if_aborted(should_abort)
+            if claim_source(source_path, sealed_claim["safe_root"], should_abort) != sealed_claim:
                 raise OSError(f"Recovery source changed while the bundle was sealed: {source_path}")
         return records, source_sets, checksums
 
     @classmethod
     def _copy_opened_source(
-        cls, source: str, safe_root: str, destination_parent_fd: int, destination_name: str
+        cls,
+        source: str,
+        safe_root: str,
+        destination_parent_fd: int,
+        destination_name: str,
+        should_abort: Callable[[], bool] | None = None,
     ) -> tuple[os.stat_result, str, SourceIdentity]:
         source_fd = cls._open_regular_beneath(source, safe_root)
         try:
@@ -437,6 +462,7 @@ class RecoveryBundleAdapter:
             )
             try:
                 while block := os.read(source_fd, 1024 * 1024):
+                    raise_if_aborted(should_abort)
                     digest.update(block)
                     view = memoryview(block)
                     while view:
@@ -444,7 +470,7 @@ class RecoveryBundleAdapter:
                         view = view[written:]
                 os.fchmod(destination_fd, stat.S_IMODE(before.st_mode))
                 os.utime(destination_fd, ns=(before.st_atime_ns, before.st_mtime_ns))
-                destination_hash = cls._sha256_fd(destination_fd)
+                destination_hash = cls._sha256_fd(destination_fd, should_abort)
                 if digest.hexdigest() != destination_hash:
                     raise OSError(f"Recovery checksum mismatch for {source}")
                 os.fsync(destination_fd)
@@ -614,13 +640,16 @@ class RecoveryBundleAdapter:
             raise
 
     @classmethod
-    def _verify_staging_checksums(cls, staging_fd: int, checksums: dict[str, str]) -> None:
+    def _verify_staging_checksums(
+        cls, staging_fd: int, checksums: dict[str, str], should_abort: Callable[[], bool] | None = None
+    ) -> None:
         for relative, expected in checksums.items():
+            raise_if_aborted(should_abort)
             parent_fd, name = cls._open_relative_parent(staging_fd, relative)
             try:
                 fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
                 try:
-                    if not stat.S_ISREG(os.fstat(fd).st_mode) or cls._sha256_fd(fd) != expected:
+                    if not stat.S_ISREG(os.fstat(fd).st_mode) or cls._sha256_fd(fd, should_abort) != expected:
                         raise OSError(f"Recovery staging checksum mismatch: {relative}")
                 finally:
                     os.close(fd)
@@ -628,10 +657,11 @@ class RecoveryBundleAdapter:
                 os.close(parent_fd)
 
     @staticmethod
-    def _sha256_fd(fd: int) -> str:
+    def _sha256_fd(fd: int, should_abort: Callable[[], bool] | None = None) -> str:
         digest = hashlib.sha256()
         os.lseek(fd, 0, os.SEEK_SET)
         while block := os.read(fd, 1024 * 1024):
+            raise_if_aborted(should_abort)
             digest.update(block)
         return digest.hexdigest()
 

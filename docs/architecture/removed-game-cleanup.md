@@ -237,15 +237,32 @@ individual-row toggle.
 
 Groups execute serially, and an ordinary group failure does not stop unrelated groups. Recovery, path, disk-space,
 checksum, liveness, or Steam-acknowledgement failure skips the affected group **before** any destructive state deletion.
-Cancellation stops every group that has not started. Terminal results distinguish exact success, skipped work, known
-partial mutation, and ambiguous mutation, and the removed ids and affected appIds stay truthful even after cancellation
-or a failed event delivery.
+Cancellation stops every group that has not started, and abandons the one in flight if it has not committed anything
+yet. Terminal results distinguish exact success, skipped work, known partial mutation, and ambiguous mutation, and the
+removed ids and affected appIds stay truthful even after cancellation or a failed event delivery.
 
 `cancel_prune(run_id)` is the wire entry point, reachable from the confirmation dialog and from the Danger Zone while a
 run is live. It is deliberately **not** gated by the prune claim — stopping the run is the one operation that must stay
 available while that claim is held. It cancels only the run whose id matches, is idempotent for repeat requests, and
 answers the canonical failure shape for an unknown, finished, or malformed id. Nothing is rolled back: the group already
 executing runs to its own verdict and reports what it committed.
+
+### Where a cancellation lands
+
+Cancellation is cooperative up to the commit point and shielded past it, and the line between them is the first
+irreversible act: the Steam action, or — for a group with no Steam action — the finalizer's cascade.
+
+Before that line, the backup phase is the only stretch long enough to matter: copying and hashing a selected ROM of
+several hundred megabytes off an SD card takes minutes. It is interruptible. The run hands the sealing worker a one-way
+stop flag, polled between artifacts and between copy/hash chunks, so a cancellation is noticed within a chunk instead of
+after the copy. The worker unwinds through the same failure path as any other sealing error: its staging directory is
+removed, no bundle is published, and nothing else in the group has been touched — so the group is reported `skipped`
+with reason `cancelled`, which is the truth. A cleanup that itself fails is still reported as a preserved unsafe staging
+directory rather than rewritten into a tidy stop.
+
+Past the line nothing changes: the group runs to its own terminal verdict and reports what it committed, because a
+half-finished mutation that nobody recorded is worse than a slow stop. A cancellation arriving during a Steam action or
+the cascade therefore still waits, by design.
 
 The claim's release is bound to the run **task**, not to the run body. A task cancelled before the event loop first
 schedules it never enters the body whose `finally` normally releases the claim, so a done-callback releases a claim

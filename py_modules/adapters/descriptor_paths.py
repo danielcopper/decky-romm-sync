@@ -14,7 +14,11 @@ import struct
 import threading
 from typing import TYPE_CHECKING
 
+from lib.errors import OperationAbortedError
+
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from models.prune import MutationOutcome, SourceClaim, SourceEntry, SourceIdentity
 
 _F_SETOWN_EX = 15
@@ -48,8 +52,24 @@ def missing_identity() -> SourceIdentity:
     }
 
 
-def claim_source(path: str, safe_root: str) -> SourceClaim:
-    """Capture a complete no-follow identity claim for one source tree."""
+def raise_if_aborted(should_abort: Callable[[], bool] | None) -> None:
+    """Stop the current worker when its caller has asked it to.
+
+    The single place a cooperative stop becomes an exception, so every long
+    loop below reports an abort the same way and callers have one type to
+    recognise.
+    """
+    if should_abort is not None and should_abort():
+        raise OperationAbortedError("The operation was cancelled before it committed anything.")
+
+
+def claim_source(path: str, safe_root: str, should_abort: Callable[[], bool] | None = None) -> SourceClaim:
+    """Capture a complete no-follow identity claim for one source tree.
+
+    *should_abort* makes claiming a large tree interruptible: it is polled per
+    directory entry and per hashed chunk, and a true answer raises
+    :class:`OperationAbortedError` rather than finishing the walk.
+    """
     try:
         parent_fd, name = _open_parent(path, safe_root)
     except FileNotFoundError:
@@ -64,7 +84,7 @@ def claim_source(path: str, safe_root: str) -> SourceClaim:
                 _require_same_mount(parent_fd, file_fd, path)
                 identity = _identity_for_fd(file_fd)
                 _require_entry_matches_fd(path, current, identity)
-                digest = _sha256_fd(file_fd)
+                digest = _sha256_fd(file_fd, should_abort)
                 if _identity_for_fd(file_fd) != identity:
                     raise RuntimeError(f"Recovery source changed while it was claimed: {path}")
             finally:
@@ -79,7 +99,7 @@ def claim_source(path: str, safe_root: str) -> SourceClaim:
             _require_same_mount(parent_fd, directory_fd, path)
             identity = _identity_for_fd(directory_fd)
             _require_entry_matches_fd(path, current, identity)
-            entries = _inventory_directory(directory_fd, identity["mount_id"])
+            entries = _inventory_directory(directory_fd, identity["mount_id"], should_abort=should_abort)
         finally:
             os.close(directory_fd)
         return _claim(path, safe_root, identity, None, entries)
@@ -530,9 +550,16 @@ def _leased_regular(parent_fd: int, name: str, path: str):
         os.close(fd)
 
 
-def _inventory_directory(directory_fd: int, mount_id: int, prefix: str = "") -> dict[str, SourceEntry]:
+def _inventory_directory(
+    directory_fd: int,
+    mount_id: int,
+    prefix: str = "",
+    *,
+    should_abort: Callable[[], bool] | None = None,
+) -> dict[str, SourceEntry]:
     entries: dict[str, SourceEntry] = {}
     for name in sorted(os.listdir(directory_fd)):
+        raise_if_aborted(should_abort)
         current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
         relative = f"{prefix}/{name}" if prefix else name
         if stat.S_ISDIR(current.st_mode):
@@ -542,7 +569,7 @@ def _inventory_directory(directory_fd: int, mount_id: int, prefix: str = "") -> 
                 identity = _identity_for_fd(child_fd)
                 _require_entry_matches_fd(relative, current, identity)
                 entries[relative] = {"identity": identity}
-                entries.update(_inventory_directory(child_fd, mount_id, relative))
+                entries.update(_inventory_directory(child_fd, mount_id, relative, should_abort=should_abort))
             finally:
                 os.close(child_fd)
         elif stat.S_ISREG(current.st_mode):
@@ -551,7 +578,7 @@ def _inventory_directory(directory_fd: int, mount_id: int, prefix: str = "") -> 
                 _require_mount_id(file_fd, mount_id, relative)
                 identity = _identity_for_fd(file_fd)
                 _require_entry_matches_fd(relative, current, identity)
-                digest = _sha256_fd(file_fd)
+                digest = _sha256_fd(file_fd, should_abort)
                 if _identity_for_fd(file_fd) != identity:
                     raise RuntimeError(f"Recovery source changed while inventorying: {relative}")
                 entries[relative] = {"identity": identity, "sha256": digest}
@@ -586,10 +613,11 @@ def _measure_directory(directory_fd: int, mount_id: int, prefix: str = "") -> in
     return total
 
 
-def _sha256_fd(fd: int) -> str:
+def _sha256_fd(fd: int, should_abort: Callable[[], bool] | None = None) -> str:
     digest = hashlib.sha256()
     os.lseek(fd, 0, os.SEEK_SET)
     while block := os.read(fd, 1024 * 1024):
+        raise_if_aborted(should_abort)
         digest.update(block)
     return digest.hexdigest()
 

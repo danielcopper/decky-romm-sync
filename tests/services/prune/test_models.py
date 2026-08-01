@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from services.prune._models import cancellation_state, shielded
+from services.prune._models import BackupControl, cancellation_state, shielded
 
 
 class TestCancellationState:
@@ -107,3 +107,75 @@ async def test_shielded_cancelled_child_keeps_the_original_cancellation_state():
     assert state.child_result is None
     assert state.child_completed is False
     assert state.child_fault is None
+
+
+class TestBackupControl:
+    def test_starts_un_aborted_and_latches_once_asked(self):
+        control = BackupControl()
+        assert control.is_aborted() is False
+        control.abort()
+        assert control.is_aborted() is True
+
+    def test_aborting_twice_is_the_same_as_aborting_once(self):
+        control = BackupControl()
+        control.abort()
+        control.abort()
+        assert control.is_aborted() is True
+
+    def test_the_poll_is_a_callable_a_worker_thread_can_hold(self):
+        """The worker is handed the bound method, not the control object."""
+        control = BackupControl()
+        poll = control.is_aborted
+        assert poll() is False
+        control.abort()
+        assert poll() is True
+
+
+@pytest.mark.asyncio
+async def test_shielded_runs_on_cancel_before_awaiting_the_child():
+    """The child must learn it should stop while it can still act on it."""
+    observed: list[str] = []
+    release = asyncio.Event()
+
+    async def child():
+        observed.append("child-started")
+        await release.wait()
+        observed.append("child-finished")
+        return "done"
+
+    def on_cancel() -> None:
+        observed.append("on-cancel")
+        release.set()
+
+    task = asyncio.create_task(shielded(child(), on_cancel=on_cancel))
+    await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await task
+
+    assert observed == ["child-started", "on-cancel", "child-finished"]
+    state = cancellation_state(caught.value)
+    assert state.child_result == "done"
+    assert state.child_completed is True
+
+
+@pytest.mark.asyncio
+async def test_shielded_without_on_cancel_still_waits_the_child_out():
+    """The committed phase passes nothing and is awaited to its natural end."""
+    finished = []
+
+    async def child():
+        await asyncio.sleep(0)
+        finished.append("committed")
+        return "committed"
+
+    task = asyncio.create_task(shielded(child()))
+    await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await task
+
+    assert finished == ["committed"]
+    assert cancellation_state(caught.value).child_result == "committed"

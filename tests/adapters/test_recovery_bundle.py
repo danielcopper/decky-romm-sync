@@ -13,8 +13,11 @@ import pytest
 
 from adapters import descriptor_paths, recovery_bundle
 from adapters.recovery_bundle import RecoveryBundleAdapter
+from lib.errors import OperationAbortedError
 
 if TYPE_CHECKING:
+    from models.prune import RecoveryArtifact
+
     from domain.prune import BundleReadmeContext
 
 
@@ -357,7 +360,7 @@ def test_recovery_bundle_parent_replacement_is_not_reauthorized(tmp_path, monkey
     outside.mkdir()
     original = adapter._copy_artifacts
 
-    def swap_parent(staging, artifacts, free_bytes):
+    def swap_parent(staging, artifacts, free_bytes, should_abort=None):
         result = original(staging, artifacts, free_bytes)
         bundles.rename(detached)
         bundles.symlink_to(outside, target_is_directory=True)
@@ -385,7 +388,7 @@ def test_failed_seal_preserves_staging_instead_of_crossing_nested_mount(tmp_path
         target = os.readlink(f"/proc/self/fd/{fd}")
         return original_mount_id(fd) + (1 if target.endswith("/mounted") else 0)
 
-    def add_mount_transition_then_fail(staging_fd: int, checksums) -> None:
+    def add_mount_transition_then_fail(staging_fd: int, checksums, should_abort=None) -> None:
         nonlocal staging_path
         del checksums
         staging_path = Path(os.readlink(f"/proc/self/fd/{staging_fd}"))
@@ -566,8 +569,8 @@ def test_destination_replacement_cannot_modify_outside_file(tmp_path, monkeypatc
     adapter = _adapter(tmp_path)
     original = adapter._copy_opened_source
 
-    def replace_copied_destination(source_path, safe_root, parent_fd, name):
-        result = original(source_path, safe_root, parent_fd, name)
+    def replace_copied_destination(source_path, safe_root, parent_fd, name, should_abort=None):
+        result = original(source_path, safe_root, parent_fd, name, should_abort)
         os.unlink(name, dir_fd=parent_fd)
         os.symlink(outside, name, dir_fd=parent_fd)
         return result
@@ -585,3 +588,106 @@ def test_destination_replacement_cannot_modify_outside_file(tmp_path, monkeypatc
 
     assert outside.read_bytes() == b"outside"
     assert stat.S_IMODE(outside.stat().st_mode) == 0o600
+
+
+class TestCooperativeAbort:
+    """A cancelled run must stop copying, not finish copying then be discarded."""
+
+    def _sources(self, tmp_path) -> Path:
+        source_root = tmp_path / "sources"
+        source_root.mkdir()
+        # Several chunks, so the copy has interior points to notice the abort at.
+        (source_root / "big.bin").write_bytes(b"x" * (3 * 1024 * 1024))
+        (source_root / "small.bin").write_bytes(b"y")
+        return source_root
+
+    def _artifacts(self, source_root: Path) -> list[RecoveryArtifact]:
+        return [
+            {
+                "source_path": str(source_root / name),
+                "safe_root": str(source_root),
+                "kind": "installed_rom",
+                "rom_id": 7,
+            }
+            for name in ("big.bin", "small.bin")
+        ]
+
+    def test_an_abort_stops_the_copy_and_leaves_no_bundle_or_staging(self, tmp_path):
+        source_root = self._sources(tmp_path)
+        adapter = _adapter(tmp_path)
+
+        with pytest.raises(OperationAbortedError):
+            adapter.seal_bundle(
+                "TestGame_2026-07-24_abc123",
+                _snapshot(),
+                self._artifacts(source_root),
+                _readme_context(),
+                "playtime",
+                lambda: True,
+            )
+
+        recovery_root = tmp_path / "decky-romm-sync-recovery"
+        assert list((recovery_root / "bundles").iterdir()) == [], "no bundle is published"
+        assert list((recovery_root / "staging").iterdir()) == [], "staging is cleaned up"
+
+    def test_an_abort_partway_through_still_leaves_nothing_behind(self, tmp_path):
+        """The abort lands mid-stream, not before the first byte."""
+        source_root = self._sources(tmp_path)
+        adapter = _adapter(tmp_path)
+        checks = {"count": 0}
+
+        def should_abort() -> bool:
+            checks["count"] += 1
+            return checks["count"] > 3
+
+        with pytest.raises(OperationAbortedError):
+            adapter.seal_bundle(
+                "TestGame_2026-07-24_abc123",
+                _snapshot(),
+                self._artifacts(source_root),
+                _readme_context(),
+                "playtime",
+                should_abort,
+            )
+
+        assert checks["count"] > 3, "the abort was polled repeatedly, not once up front"
+        recovery_root = tmp_path / "decky-romm-sync-recovery"
+        assert list((recovery_root / "bundles").iterdir()) == []
+        assert list((recovery_root / "staging").iterdir()) == []
+
+    def test_a_cleanup_that_fails_is_reported_rather_than_read_as_a_clean_stop(self, tmp_path, monkeypatch):
+        """Never rewrite a cleanup failure into a tidy cancellation."""
+        source_root = self._sources(tmp_path)
+        adapter = _adapter(tmp_path)
+        monkeypatch.setattr(
+            recovery_bundle,
+            "remove_current",
+            lambda path, root: {"success": False, "changed": False, "ambiguous": True, "message": "staging is stuck"},
+        )
+
+        with pytest.raises(RuntimeError, match="unsafe staging was preserved"):
+            adapter.seal_bundle(
+                "TestGame_2026-07-24_abc123",
+                _snapshot(),
+                self._artifacts(source_root),
+                _readme_context(),
+                "playtime",
+                lambda: True,
+            )
+
+    def test_no_abort_callable_seals_exactly_as_before(self, tmp_path):
+        source_root = self._sources(tmp_path)
+        adapter = _adapter(tmp_path)
+
+        sealed = Path(
+            adapter.seal_bundle(
+                "TestGame_2026-07-24_abc123",
+                _snapshot(),
+                self._artifacts(source_root),
+                _readme_context(),
+                "playtime",
+            )
+        )
+
+        assert sealed.is_dir()
+        assert adapter.validate_sources(str(sealed)) is True

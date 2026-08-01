@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 from domain.prune import recovery_bundle_id
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from models.prune import RecoveryArtifact, SteamRecoverySnapshot
 
     from domain.prune import BundleReadmeContext
@@ -133,7 +135,13 @@ class RecoveryCoordinator:
         include_installed_rom_ids: set[int],
         delete_ids: set[int],
         app_id: int | None,
+        should_abort: Callable[[], bool] | None = None,
     ) -> tuple[str, SteamRecoverySnapshot | None]:
+        """Seal one group's recovery bundle and report where it landed.
+
+        *should_abort* is handed to the store so a cancelled run stops copying
+        within a chunk; an abort raises rather than returning a partial bundle.
+        """
         rom_ids = [row.rom_id for row in rows]
         artifacts: list[RecoveryArtifact] = list(save_inventory["artifacts"])
         artifacts.extend(self._prune_artifacts.recovery_artifacts(sorted(delete_ids)))
@@ -200,7 +208,9 @@ class RecoveryCoordinator:
         if app_id is not None:
             readme_context["steam_app_id"] = app_id
         playtime_text = self._playtime_text(snapshot, names)
-        sealed = self._recovery_store.seal_bundle(bundle_id, snapshot, artifacts, readme_context, playtime_text)
+        sealed = self._recovery_store.seal_bundle(
+            bundle_id, snapshot, artifacts, readme_context, playtime_text, should_abort
+        )
         return sealed, steam_backend
 
     @staticmethod

@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -22,7 +23,7 @@ from domain.playtime import Playtime
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.version_metadata import VersionMetadata
-from lib.errors import RommConnectionError, RommNotFoundError
+from lib.errors import OperationAbortedError, RommConnectionError, RommNotFoundError
 from services.prune import PruneService, PruneServiceConfig
 from services.prune._models import cancellation_state
 
@@ -49,6 +50,14 @@ class FakeRecoveryStore:
         self.sealed: list[dict[str, object]] = []
         self.failure: Exception | None = None
         self.sources_valid = True
+        # Backup-phase blocking knobs. ``block_seconds`` stands in for a long
+        # artifact copy; it is a bounded wait rather than an unbounded one so a
+        # build that never asks the copy to stop finishes the seal and fails the
+        # assertions, instead of hanging the suite.
+        self.block_seconds = 0.0
+        self.seal_entered = threading.Event()
+        self.seal_aborted = False
+        self.staging_cleaned = False
 
     def root(self) -> str:
         return "/recovery"
@@ -68,9 +77,19 @@ class FakeRecoveryStore:
         del bundle_path
         return SealedSourceClaims(claims={}, bundle_digest="sealed-digest")
 
-    def seal_bundle(self, bundle_id, snapshot, artifacts, readme_context, playtime_text):
+    def seal_bundle(self, bundle_id, snapshot, artifacts, readme_context, playtime_text, should_abort=None):
         if self.failure is not None:
             raise self.failure
+        self.seal_entered.set()
+        deadline = time.monotonic() + self.block_seconds
+        while time.monotonic() < deadline:
+            if should_abort is not None and should_abort():
+                self.seal_aborted = True
+                # What the real adapter does on the way out: its staging
+                # directory is removed before the abort leaves the worker.
+                self.staging_cleaned = True
+                raise OperationAbortedError("cancelled while writing the bundle")
+            time.sleep(0.005)
         self.sealed.append(
             {
                 "bundle_id": bundle_id,
@@ -175,6 +194,7 @@ class FakeSaveCoordinator:
 
 class FakeInstalledFilesRemover:
     def __init__(self) -> None:
+        self.removed: list[int] = []
         self.installed_ids: set[int] = set()
         self.block_ids: set[int] = set()
         self.failure_ids: set[int] = set()
@@ -183,6 +203,7 @@ class FakeInstalledFilesRemover:
 
     def __call__(self, rom_id: int, claims: dict[str, SourceClaim] | None = None) -> dict[str, Any]:
         del claims
+        self.removed.append(rom_id)
         if rom_id in self.block_ids:
             self.entered.set()
             if not self.release.wait(timeout=5):
@@ -545,6 +566,110 @@ async def test_cancel_stops_the_named_run_and_reports_it_as_cancelled(harness):
     assert harness.uow.roms.get(1) is not None
     # The claim is released, so the next scan is not locked out by a stopped run.
     assert harness.service.is_active() is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_the_backup_phase_abandons_it_without_mutating_anything(harness):
+    """Stop must not wait out a multi-hundred-megabyte copy the user gave up on.
+
+    The backup phase runs before anything is committed, so a cancellation
+    arriving inside it is told to stop at its next chunk rather than awaited to
+    completion. Nothing here is recoverable-by-rollback, so "nothing happened"
+    is the only honest outcome: no quarantine, no Steam action, no row removed.
+    """
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 5
+    harness.recovery.block_seconds = 5.0
+    preview = await _preview(harness)
+    started = await _start(harness, preview["preview_id"], remove_fully_vanished=True, create_recovery_bundle=True)
+    task = _active_run_task(harness)
+    await asyncio.get_running_loop().run_in_executor(None, harness.recovery.seal_entered.wait, 5.0)
+
+    await harness.service.cancel_prune(started["run_id"])
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert harness.recovery.seal_aborted is True, "the copy was asked to stop, not waited out"
+    assert harness.recovery.staging_cleaned is True
+    assert harness.recovery.sealed == [], "an abandoned backup publishes no bundle"
+    # Zero mutation: the row, its files, its saves and its shortcut are untouched.
+    assert harness.uow.roms.get(1) is not None
+    assert harness.saves.quarantined == []
+    assert harness.installed_remover.removed == []
+    assert harness.artifacts.removed == []
+    complete = [payload for name, payload in harness.events.events if name == "prune_complete"][-1]
+    assert complete["reason"] == "cancelled"
+    assert complete["removed_rom_ids"] == []
+    assert harness.service.is_active() is False
+
+
+@pytest.mark.asyncio
+async def test_the_abandoned_group_is_reported_as_skipped_not_failed(harness):
+    """An obedient stop is not an error — reporting it as one blames the user."""
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 5
+    harness.recovery.block_seconds = 5.0
+    preview = await _preview(harness)
+    started = await _start(harness, preview["preview_id"], remove_fully_vanished=True, create_recovery_bundle=True)
+    task = _active_run_task(harness)
+    await asyncio.get_running_loop().run_in_executor(None, harness.recovery.seal_entered.wait, 5.0)
+
+    await harness.service.cancel_prune(started["run_id"])
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    complete = [payload for name, payload in harness.events.events if name == "prune_complete"][-1]
+    assert [result["status"] for result in complete["results"]] == ["skipped"]
+    assert complete["results"][0]["reason"] == "cancelled"
+    assert complete["partial"] is False, "nothing was committed, so the run is not partial"
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_after_the_destructive_phase_started_does_not_abort_it(harness):
+    """The shield boundary is unchanged: once mutating, the group finishes.
+
+    Cancellation is cooperative only up to the commit point. Past it the group
+    runs to its own terminal verdict so what it changed is reported truthfully
+    rather than abandoned half-done.
+    """
+    app_id = 0x80000001
+    _seed(harness.uow, _rom(1, fetch="old", group="g", app_id=app_id), _rom(2, fetch="new", group="g"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 6
+    harness.romm.outcomes[2] = [{"id": 2}] * 6
+    preview = await _preview(harness)
+    started = await _start(harness, preview["preview_id"])
+    task = _active_run_task(harness)
+    # Parked on the Steam action, the group has already switched the binding —
+    # it is past the commit point.
+    action = await _wait_action(harness, "repoint_shortcut")
+
+    await harness.service.cancel_prune(started["run_id"])
+    await harness.service.report_prune_action(
+        {
+            "run_id": started["run_id"],
+            "action_token": action["action_token"],
+            "phase": "claim",
+            "action": "repoint_shortcut",
+            "app_id": app_id,
+            "target_rom_id": 2,
+        }
+    )
+    await harness.service.report_prune_action(
+        {
+            "run_id": started["run_id"],
+            "action_token": action["action_token"],
+            "phase": "complete",
+            "success": True,
+            "message": "done",
+        }
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # The committed repoint is reported, not discarded as if it never happened.
+    complete = [payload for name, payload in harness.events.events if name == "prune_complete"][-1]
+    assert complete["reason"] == "cancelled"
+    assert any(result.get("committed_action") == "repoint_shortcut" for result in complete["results"])
 
 
 @pytest.mark.asyncio

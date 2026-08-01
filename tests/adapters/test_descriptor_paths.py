@@ -11,6 +11,7 @@ from adapters.descriptor_paths import (
     remove_claimed,
     rename_claimed,
 )
+from lib.errors import OperationAbortedError
 
 
 def test_inside_root_symlink_replacement_is_not_removed(tmp_path):
@@ -316,3 +317,40 @@ def test_remove_reports_lease_release_failure_after_unlink_as_ambiguous(tmp_path
         "message": "Source was removed but writer-exclusion teardown is uncertain: injected lease release failure",
     }
     assert not source.exists()
+
+
+class TestCooperativeAbort:
+    """Claiming a large tree is interruptible — it is pre-commit work."""
+
+    def test_claiming_a_file_stops_when_asked(self, tmp_path):
+        source = tmp_path / "big.bin"
+        source.write_bytes(b"x" * (3 * 1024 * 1024))
+
+        with pytest.raises(OperationAbortedError):
+            claim_source(str(source), str(tmp_path), lambda: True)
+
+    def test_claiming_a_directory_stops_when_asked(self, tmp_path):
+        tree = tmp_path / "tree"
+        tree.mkdir()
+        for index in range(5):
+            (tree / f"file{index}.bin").write_bytes(b"y" * 1024)
+
+        with pytest.raises(OperationAbortedError):
+            claim_source(str(tree), str(tmp_path), lambda: True)
+
+    def test_no_poll_claims_the_whole_tree_exactly_as_before(self, tmp_path):
+        source = tmp_path / "small.bin"
+        source.write_bytes(b"z")
+
+        claim = claim_source(str(source), str(tmp_path))
+
+        assert claim["source_identity"]["exists"] is True
+        assert claim["sha256"] is not None
+
+    def test_a_poll_that_never_fires_claims_the_whole_tree(self, tmp_path):
+        source = tmp_path / "small.bin"
+        source.write_bytes(b"z")
+
+        claim = claim_source(str(source), str(tmp_path), lambda: False)
+
+        assert claim == claim_source(str(source), str(tmp_path))
