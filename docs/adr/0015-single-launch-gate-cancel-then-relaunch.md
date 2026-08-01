@@ -8,6 +8,13 @@ portion of [#1144](https://github.com/danielcopper/decky-romm-sync/issues/1144) 
 path in gaming mode — `steam://rungameid` deep links — now funnels through the gate); **desktop-mode** coverage remains
 open there and under [#831](https://github.com/danielcopper/decky-romm-sync/issues/831).
 
+> **Errata (2026-08).** "any Steam running-app source" below overstates what `utils/runningApps` consulted. Two of its
+> three sources — `Router.MainRunningApp` and `Router.RunningApps` — were read as page globals that no SteamUI build
+> defines, so they never reported anything and were removed in
+> [#1588](https://github.com/danielcopper/decky-romm-sync/issues/1588). The already-running guard was decided by
+> `SteamUIStore.RunningApps` alone from the start; the decision and the guard's behaviour are unchanged. Corrected
+> model: [Running-app detection](../architecture/save-file-sync-architecture.md#running-app-detection-utilsrunningapps).
+
 ## Context
 
 A RomM ROM can be launched two ways in Steam gaming mode, and today they behave inconsistently:
