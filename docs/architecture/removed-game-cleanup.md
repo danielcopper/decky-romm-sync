@@ -11,19 +11,24 @@ where their detail lives. Save-side path resolution and quarantine mechanics bel
 
 ## Where the code lives
 
-| Module                         | Responsibility                                                          |
-| ------------------------------ | ----------------------------------------------------------------------- |
-| `services/prune/service.py`    | Callable facade and the ephemeral per-run state                         |
-| `services/prune/preview.py`    | Builds the candidate preview (sizes, groups, warnings)                  |
-| `services/prune/registry.py`   | Discovers candidates from local rows and fetch generations              |
-| `services/prune/recovery.py`   | Sequences bundle creation and sealing                                   |
-| `services/prune/executor.py`   | Runs a confirmed group: proofs, Steam actions, mutation, cascade        |
-| `services/prune/results.py`    | Shapes progress/completion frames and terminal group results            |
-| `services/prune/requests.py`   | Parses and validates the wire payloads                                  |
-| `lib/prune_gate.py`            | The admission gate — reservations, conflicting-callable refusal, leases |
-| `adapters/recovery_bundle.py`  | Writes, checksums, seals and publishes a recovery bundle                |
-| `adapters/steam_recovery.py`   | Captures Steam-only state; edits the controller value in `localconfig`  |
-| `adapters/descriptor_paths.py` | Descriptor-relative, no-follow claim capture and claimed mutation       |
+| Module                            | Responsibility                                                          |
+| --------------------------------- | ----------------------------------------------------------------------- |
+| `services/prune/service.py`       | Callable facade and the ephemeral per-run state                         |
+| `services/prune/preview.py`       | Builds the candidate preview (sizes, groups, warnings)                  |
+| `services/prune/registry.py`      | Discovers candidates from local rows and fetch generations              |
+| `services/prune/recovery.py`      | Sequences bundle creation and sealing                                   |
+| `services/prune/executor.py`      | Sequences a confirmed group's phases and arms its recovery bundle       |
+| `services/prune/planning.py`      | Decides what a group would do, or the reason it is refused              |
+| `services/prune/liveness.py`      | Namespace-bound exact-ID proof — the only deletion authority            |
+| `services/prune/steam_actions.py` | Requests the frontend's Steam mutations and reads their outcome         |
+| `services/prune/finalize.py`      | Revalidates every proof, then runs the irreversible cascade             |
+| `services/prune/save_locks.py`    | Holds save locks over an ownership set proven stable under them         |
+| `services/prune/results.py`       | Shapes progress/completion frames and terminal group results            |
+| `services/prune/requests.py`      | Parses and validates the wire payloads                                  |
+| `lib/prune_gate.py`               | The admission gate — reservations, conflicting-callable refusal, leases |
+| `adapters/recovery_bundle.py`     | Writes, checksums, seals and publishes a recovery bundle                |
+| `adapters/steam_recovery.py`      | Captures Steam-only state; edits the controller value in `localconfig`  |
+| `adapters/descriptor_paths.py`    | Descriptor-relative, no-follow claim capture and claimed mutation       |
 
 ## Deletion authority
 

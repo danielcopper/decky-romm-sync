@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
+from domain.sibling_resolution import fs_name_stem, resolve_group_representative
+
 
 class BundleGameRow(TypedDict):
     """One ROM the bundle covers, named for a human reading the folder."""
@@ -194,3 +196,62 @@ def selected_prune_ids(
     if not live_ids or not remove_rows:
         return set()
     return candidate_ids & vanished_ids
+
+
+def liveness_guard(
+    verdicts: Mapping[int, Mapping[str, str]],
+    delete_ids: set[int],
+    target_id: int | None,
+    vanished_source_id: int | None,
+) -> tuple[str, str] | None:
+    """Refuse the group unless every fresh verdict still supports what it plans.
+
+    Reads a set of exact-ID verdicts and returns the ``(reason, message)`` the
+    group is skipped with, or ``None`` when all of them hold. Each row the run
+    would delete must still be ``vanished``, a repoint target must still be
+    ``live``, and the vanished source a repoint moves the shortcut off must
+    still be ``vanished`` — anything else (a resurrection, a disappearance, or
+    an unproven answer) retains local data.
+    """
+    for rom_id in sorted(delete_ids):
+        verdict = verdicts[rom_id]
+        if verdict["status"] != "vanished":
+            return verdict["reason"], f"ROM {rom_id}: {verdict['message']} Nothing else in this group was removed."
+    if target_id is not None and verdicts[target_id]["status"] != "live":
+        verdict = verdicts[target_id]
+        return verdict["reason"], f"Default target {target_id}: {verdict['message']}"
+    if vanished_source_id is not None and verdicts[vanished_source_id]["status"] != "vanished":
+        verdict = verdicts[vanished_source_id]
+        return verdict["reason"], f"Vanished source {vanished_source_id}: {verdict['message']}"
+    return None
+
+
+def natural_default(rows: Iterable[Rom], live_ids: set[int], preferred_region: str) -> int | None:
+    """Pick the live row a repointed shortcut should bind to, or ``None``.
+
+    Runs the same representative resolution the library sync uses, restricted to
+    the group's live rows and with no installed/bound bias — the shortcut is
+    about to move, so what it points at today may not influence where it lands.
+    ``None`` when the group's live rows cannot yield one.
+    """
+    candidates = [
+        {
+            "rom_id": row.rom_id,
+            "is_main_sibling": row.is_main_sibling,
+            "regions": list(row.regions),
+            "revision": row.revision,
+            "tags": list(row.tags),
+            "fs_name_no_ext": fs_name_stem(row.fs_name),
+        }
+        for row in rows
+        if row.rom_id in live_ids
+    ]
+    try:
+        return resolve_group_representative(
+            candidates,
+            installed_rom_ids=set(),
+            bound_rom_ids=set(),
+            preferred_region=preferred_region,
+        )
+    except (KeyError, ValueError):
+        return None

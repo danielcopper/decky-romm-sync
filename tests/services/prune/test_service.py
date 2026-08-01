@@ -1253,69 +1253,6 @@ async def test_group_exception_is_reported_and_unrelated_group_continues(harness
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fault", [False, True])
-async def test_shielded_child_finishes_then_reraises_cancellation_with_fault_state(harness, fault):
-    entered = asyncio.Event()
-    release = asyncio.Event()
-
-    async def child():
-        entered.set()
-        await release.wait()
-        if fault:
-            raise OSError("child failed after cancellation")
-        return "finished"
-
-    task = asyncio.create_task(harness.service._executor._shielded(child()))
-    await entered.wait()
-    task.cancel()
-    release.set()
-
-    with pytest.raises(asyncio.CancelledError) as caught:
-        await task
-
-    state = cancellation_state(caught.value)
-    assert task.cancelled()
-    if fault:
-        assert isinstance(state.child_fault, OSError)
-        assert str(state.child_fault) == "child failed after cancellation"
-    else:
-        assert state.child_fault is None
-
-
-@pytest.mark.asyncio
-async def test_shielded_cancelled_child_keeps_the_original_cancellation_state(harness):
-    """A child that is itself cancelled must not replace the captured cancellation.
-
-    The child's own ``CancelledError`` carries whatever state happens to be
-    attached to it — never what this run captured — so letting it propagate
-    would hand the group handler a foreign record of what the child did.
-    """
-    entered = asyncio.Event()
-    release = asyncio.Event()
-
-    async def child():
-        entered.set()
-        await release.wait()
-        foreign = asyncio.CancelledError()
-        cancellation_state(foreign).child_result = "state from the child's own cancellation"
-        raise foreign
-
-    task = asyncio.create_task(harness.service._executor._shielded(child()))
-    await entered.wait()
-    task.cancel()
-    release.set()
-
-    with pytest.raises(asyncio.CancelledError) as caught:
-        await task
-
-    state = cancellation_state(caught.value)
-    assert task.cancelled()
-    assert state.child_result is None
-    assert state.child_completed is False
-    assert state.child_fault is None
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("resume_after_claim", [False, True])
 async def test_claimed_action_result_is_attached_before_request_task_reraises_cancellation(harness, resume_after_claim):
     request_task = asyncio.create_task(

@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from models.prune import SourceClaim, SteamRecoverySnapshot
+
+
+# One frontend Steam action request: run id, kind, payload, expected bound rom,
+# repoint target, and the group the claim must still match.
+ActionRequester = Callable[[str, str, dict[str, object], int | None, int | None, set[int]], Awaitable[dict[str, Any]]]
 
 
 @dataclass(frozen=True)
@@ -95,3 +102,29 @@ def cancellation_state(error: BaseException) -> PruneCancellationState:
     state = PruneCancellationState()
     setattr(error, _CANCELLATION_STATE_ATTR, state)
     return state
+
+
+async def shielded(awaitable: Awaitable[Any]) -> Any:
+    """Run *awaitable* to its own end even when this task is cancelled.
+
+    A cancellation arriving mid-mutation must not leave the group unable to say
+    what happened, so the child is awaited to completion and its outcome is
+    recorded on the cancellation the caller will re-raise.
+    """
+    task = asyncio.ensure_future(awaitable)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError as exc:
+        state = cancellation_state(exc)
+        try:
+            state.child_result = await task
+            state.child_completed = True
+        except asyncio.CancelledError:
+            # The child was cancelled too. Its CancelledError carries no
+            # captured state, and callers read that state off whatever
+            # propagates to decide what the group actually did — so the
+            # original cancellation is re-raised instead of this one.
+            pass
+        except BaseException as child_fault:
+            state.child_fault = child_fault
+        raise
