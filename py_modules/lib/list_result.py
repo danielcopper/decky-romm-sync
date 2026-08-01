@@ -98,6 +98,13 @@ class ErrorCode(StrEnum):
     ``message`` so a Cloudflare bot-fight 403 stays distinguishable from
     wrong credentials). ``VERSION_ERROR`` / ``STALE_CONFLICT`` /
     ``STALE_PREVIEW`` stay distinct because the frontend routes on them.
+
+    ``NOT_FOUND`` is narrower than "the server answered 404": it means RomM's
+    entity layer said the entity does not exist, which the RomM adapter proves
+    from the response body before raising ``RommNotFoundError``. A 404 from a
+    reverse proxy or from FastAPI's route table carries no such verdict and
+    collapses onto ``SERVER_UNREACHABLE`` instead, so a caller that treats
+    "gone" as authority to delete fails open on it.
     """
 
     SERVER_UNREACHABLE = "server_unreachable"
