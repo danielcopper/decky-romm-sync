@@ -81,7 +81,6 @@ if TYPE_CHECKING:
         PluginMetadataReader,
         PruneArtifactStore,
         RecoveryBundleStore,
-        SteamRecoveryStore,
         RendererGcFn,
         RendererRssFn,
         ResolveUploadConflictFn,
@@ -94,6 +93,7 @@ if TYPE_CHECKING:
         SgdbArtworkCache,
         Sleeper,
         SteamConfigStore,
+        SteamRecoveryStore,
         SystemM3uSupportFn,
         SystemSupportedExtensionsFn,
         UnitOfWorkFactory,
@@ -126,6 +126,9 @@ class AdapterBundle:
     renderer_gc: RendererGcFn
     game_process: GameProcessControl
     resolve_upload_conflict: ResolveUploadConflictFn
+    recovery_store: RecoveryBundleStore
+    prune_artifacts: PruneArtifactStore
+    steam_recovery: SteamRecoveryStore
 
 
 @dataclass(frozen=True)
@@ -165,9 +168,6 @@ class CallbackBundle:
     settings_persister: SettingsPersister
     log_debug: DebugLogger
     plugin_metadata: PluginMetadataReader
-    recovery_store: RecoveryBundleStore
-    prune_artifacts: PruneArtifactStore
-    steam_recovery: SteamRecoveryStore
     uow_factory: UnitOfWorkFactory
 
 
@@ -370,6 +370,9 @@ def bootstrap(
         renderer_gc=renderer_gc,
         game_process=game_process,
         resolve_upload_conflict=resolve_upload_conflict,
+        recovery_store=recovery_store,
+        prune_artifacts=prune_artifacts,
+        steam_recovery=steam_recovery,
     )
     stores = StateBundle(
         settings=settings,
@@ -385,9 +388,6 @@ def bootstrap(
         settings_persister=settings_persister,
         log_debug=debug_logger,
         plugin_metadata=plugin_metadata,
-        recovery_store=recovery_store,
-        prune_artifacts=prune_artifacts,
-        steam_recovery=steam_recovery,
         uow_factory=uow_factory,
     )
     runtime_adapters = RuntimeAdaptersBundle(

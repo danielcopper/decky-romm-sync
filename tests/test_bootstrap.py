@@ -393,7 +393,7 @@ class TestWireServices:
     def test_returns_expected_services(self, tmp_path):
         deps = self._make_deps(tmp_path)
         result = wire_services(self._make_config(deps))
-        assert len(result) == 23
+        assert len(result) == 24
         assert "migration_service" in result
         assert "game_detail_service" in result
         assert "rom_removal_service" in result
