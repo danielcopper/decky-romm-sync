@@ -65,10 +65,17 @@ def _runner(
         requested.append(kind)
         return dict(action_result or {"success": True, "message": "ok"})
 
-    async def switch_version(app_id, rom_id, _drifted):
+    async def switch_version(app_id: int, target_rom_id: int, allow_stranded: bool) -> dict[str, Any]:
+        del allow_stranded
         return dict(
             switch_result
-            or {"success": True, "app_id": app_id, "rom_id": rom_id, "launch_options": "cmd", "target_installed": False}
+            or {
+                "success": True,
+                "app_id": app_id,
+                "rom_id": target_rom_id,
+                "launch_options": "cmd",
+                "target_installed": False,
+            }
         )
 
     runner = SteamActionRunner(
@@ -130,7 +137,8 @@ class TestCaptureSnapshot:
         assert result["removed_app_id"] == APP_ID
         assert "shortcut_binding" in ledger.mutations
         with uow:
-            assert uow.roms.get(1).shortcut_app_id is None
+            row = uow.roms.get(1)
+        assert row is not None and row.shortcut_app_id is None
 
 
 class TestRepoint:
@@ -209,7 +217,8 @@ class TestRemove:
         assert "shortcut_binding" in ledger.mutations
         assert requested == ["remove_shortcut"]
         with uow:
-            assert uow.roms.get(1).shortcut_app_id is None
+            row = uow.roms.get(1)
+        assert row is not None and row.shortcut_app_id is None
 
     async def test_a_claimed_but_unconfirmed_removal_retains_source_data(self):
         rows = [_rom(1, app_id=APP_ID)]

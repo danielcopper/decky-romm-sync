@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
@@ -76,7 +76,8 @@ def _planner(
             uow.roms.save(row)
     liveness = _FakeLiveness(statuses)
 
-    async def drift_probe(_rom_id: int) -> dict[str, Any]:
+    async def drift_probe(rom_id: int) -> dict[str, Any]:
+        del rom_id
         return {"drifted": drifted}
 
     planner = GroupPlanner(
@@ -85,7 +86,7 @@ def _planner(
             logger=logging.getLogger("test"),
             results=PruneResultReporter(config=PruneResultReporterConfig(emit=_noop_emit)),
             registry=PruneRegistry(config=PruneRegistryConfig(uow_factory=FakeUnitOfWorkFactory(uow))),
-            liveness=liveness,
+            liveness=cast("Any", liveness),
             active_downloads=lambda: active_downloads or set(),
             drift_probe=drift_probe,
             settings=settings if settings is not None else {},
@@ -96,6 +97,13 @@ def _planner(
 
 async def _noop_emit(*_args: Any, **_kwargs: Any) -> None:
     return None
+
+
+class _StubProbe:
+    """A liveness prober whose probe_many the test supplies outright."""
+
+    def __init__(self, probe) -> None:
+        self.probe_many = probe
 
 
 async def _plan(rows: list[Rom], statuses: dict[int, str], **kwargs: Any):
@@ -136,7 +144,7 @@ class TestRefusals:
         assert not isinstance(result, GroupPlan)
         assert result["reason"] == "liveness_uncertain"
 
-    async def test_a_namespace_change_is_named_as_itself(self):
+    async def test_a_namespace_change_is_named_as_itself(self, monkeypatch):
         rows = [_rom(1)]
         planner, _ = _planner(rows, {})
 
@@ -146,8 +154,9 @@ class TestRefusals:
                 for rom_id in rom_ids
             }
 
-        planner._liveness.probe_many = probe
+        monkeypatch.setattr(planner, "_liveness", _StubProbe(probe))
         result = await planner.plan("run-1", rows, {1}, _options(), 1, 1, MutationLedger(rows))
+        assert not isinstance(result, GroupPlan)
         assert result["reason"] == "server_namespace_changed"
 
     async def test_options_that_exclude_everything_say_so(self):
@@ -164,6 +173,7 @@ class TestRefusals:
             {1: "live", 2: "uncertain"},
             options=_options(remove_rows=False, remove_fully_vanished=False, repoint_shortcuts=False),
         )
+        assert not isinstance(result, GroupPlan)
         assert result["reason"] == "liveness_uncertain"
 
     async def test_unsynced_saves_without_a_bundle_refuse_the_group(self):

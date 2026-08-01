@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
@@ -80,10 +80,12 @@ def _executor(rows: list[Rom], settings: dict[str, Any], emitted: list[tuple[str
     async def unusable_request(*_args: Any) -> dict[str, Any]:
         raise AssertionError("no Steam action may be requested by these flows")
 
-    async def unusable_switch(*_args: Any) -> dict[str, Any]:
+    async def unusable_switch(app_id: int, target_rom_id: int, allow_stranded: bool) -> dict[str, Any]:
+        del app_id, target_rom_id, allow_stranded
         raise AssertionError("no version switch may be requested by these flows")
 
-    async def drift_probe(_rom_id: int) -> dict[str, Any]:
+    async def drift_probe(rom_id: int) -> dict[str, Any]:
+        del rom_id
         return {"drifted": False}
 
     return PruneExecutor(
@@ -91,17 +93,17 @@ def _executor(rows: list[Rom], settings: dict[str, Any], emitted: list[tuple[str
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("prune-test"),
             emit=emit,
-            romm_api=_Unusable(),
-            recovery_store=_Unusable(),
-            prune_artifacts=_Unusable(),
-            steam_recovery=_Unusable(),
-            save_coordinator=_Unusable(),
+            romm_api=cast("Any", _Unusable()),
+            recovery_store=cast("Any", _Unusable()),
+            prune_artifacts=cast("Any", _Unusable()),
+            steam_recovery=cast("Any", _Unusable()),
+            save_coordinator=cast("Any", _Unusable()),
             active_downloads=set,
             drift_probe=drift_probe,
-            remove_installed_files=_Unusable(),
+            remove_installed_files=cast("Any", _Unusable()),
             switch_version=unusable_switch,
             settings=settings,
-            recovery=_Unusable(),
+            recovery=cast("Any", _Unusable()),
             registry=PruneRegistry(config=PruneRegistryConfig(uow_factory=FakeUnitOfWorkFactory(uow))),
             request_action=unusable_request,
         )
@@ -133,14 +135,14 @@ class TestNamespaceGate:
 
 
 class TestAuditTrail:
-    async def test_the_run_is_opened_and_closed_in_the_log(self, caplog):
+    async def test_the_run_is_opened_and_closed_in_the_log(self, caplog, monkeypatch):
         rows = [_rom(1)]
         emitted: list[tuple[str, dict[str, Any]]] = []
         settings = dict(_SETTINGS)
         executor = _executor(rows, settings, emitted)
         preview = _preview(rows, romm_namespace(_SETTINGS))
         # Every group refuses at the local re-read, so nothing is probed or changed.
-        executor._planner._registry = _EmptyRegistry()
+        monkeypatch.setattr(executor._planner, "_registry", _EmptyRegistry())
 
         with caplog.at_level(logging.INFO, logger="prune-test"):
             await executor.run("run-1", preview, _options())
@@ -150,7 +152,7 @@ class TestAuditTrail:
         assert any("Cleanup run run-1 group 1/1" in message for message in messages)
         assert any("Cleanup run run-1 finished" in message for message in messages)
 
-    async def test_a_group_that_raises_is_reported_as_failed_and_the_run_continues(self, caplog):
+    async def test_a_group_that_raises_is_reported_as_failed_and_the_run_continues(self, caplog, monkeypatch):
         rows = [_rom(1), _rom(2)]
         emitted: list[tuple[str, dict[str, Any]]] = []
         executor = _executor(rows, dict(_SETTINGS), emitted)
@@ -162,7 +164,7 @@ class TestAuditTrail:
                 raise RuntimeError("planner exploded")
             return {"status": "skipped", "reason": "options_excluded", "message": "nothing", "rom_ids": [2]}
 
-        executor._planner.plan = exploding_plan
+        monkeypatch.setattr(executor._planner, "plan", exploding_plan)
 
         with caplog.at_level(logging.INFO, logger="prune-test"):
             await executor.run("run-1", _preview(rows, romm_namespace(_SETTINGS)), _options())
@@ -184,11 +186,11 @@ class _EmptyRegistry:
 
 
 @pytest.mark.parametrize("namespace", [romm_namespace(_SETTINGS), "a-namespace-from-another-server"])
-async def test_the_liveness_binding_is_released_when_the_run_ends(namespace):
+async def test_the_liveness_binding_is_released_when_the_run_ends(namespace, monkeypatch):
     rows = [_rom(1)]
     emitted: list[tuple[str, dict[str, Any]]] = []
     executor = _executor(rows, dict(_SETTINGS), emitted)
-    executor._planner._registry = _EmptyRegistry()
+    monkeypatch.setattr(executor._planner, "_registry", _EmptyRegistry())
 
     await executor.run("run-1", _preview(rows, namespace), _options())
 

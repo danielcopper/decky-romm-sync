@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
@@ -152,18 +152,18 @@ class Fixture:
                 loop=loop,
                 logger=logging.getLogger("test"),
                 results=PruneResultReporter(config=PruneResultReporterConfig(emit=_noop_emit)),
-                liveness=_FakeLiveness(statuses),
+                liveness=cast("Any", _FakeLiveness(statuses)),
                 save_locks=SaveLockCoordinator(
-                    config=SaveLockCoordinatorConfig(loop=loop, save_coordinator=self.saves)
+                    config=SaveLockCoordinatorConfig(loop=loop, save_coordinator=cast("Any", self.saves))
                 ),
                 registry=PruneRegistry(config=PruneRegistryConfig(uow_factory=FakeUnitOfWorkFactory(self.uow))),
-                recovery=self.recovery,
-                recovery_store=self.recovery_store,
-                steam_recovery=_FakeSteamRecovery(),
-                save_coordinator=self.saves,
-                prune_artifacts=self.artifacts,
+                recovery=cast("Any", self.recovery),
+                recovery_store=cast("Any", self.recovery_store),
+                steam_recovery=cast("Any", _FakeSteamRecovery()),
+                save_coordinator=cast("Any", self.saves),
+                prune_artifacts=cast("Any", self.artifacts),
                 active_downloads=lambda: active_downloads or set(),
-                remove_installed_files=self.installed,
+                remove_installed_files=cast("Any", self.installed),
             )
         )
 
@@ -215,7 +215,8 @@ class TestCascade:
         assert fixture.order == ["quarantine", "installed_content", "artifacts", "validate_absences"]
         assert ledger.mutations == ["installed_rom_content", "plugin_artifacts", "database_rows"]
         with fixture.uow:
-            assert fixture.uow.roms.get(1) is None
+            row = fixture.uow.roms.get(1)
+        assert row is None
 
     async def test_the_message_is_singular_for_one_row_and_plural_for_more(self):
         one = [_rom(1)]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, cast
 
 import pytest
 
@@ -28,12 +29,14 @@ class _FakeRomReader:
         return answer
 
 
-def _prober(answers: dict[int, object], settings: dict | None = None) -> tuple[LivenessProber, _FakeRomReader]:
+def _prober(
+    answers: dict[int, object], settings: dict[str, Any] | None = None
+) -> tuple[LivenessProber, _FakeRomReader]:
     reader = _FakeRomReader(answers)
     prober = LivenessProber(
         config=LivenessProberConfig(
             loop=asyncio.get_event_loop(),
-            romm_api=reader,
+            romm_api=cast("Any", reader),
             settings=settings if settings is not None else dict(_NAMESPACE_SETTINGS),
         )
     )
@@ -99,7 +102,9 @@ class TestNamespaceBinding:
                 raise RommNotFoundError("gone")
 
         prober = LivenessProber(
-            config=LivenessProberConfig(loop=asyncio.get_event_loop(), romm_api=_SwitchingReader({}), settings=settings)
+            config=LivenessProberConfig(
+                loop=asyncio.get_event_loop(), romm_api=cast("Any", _SwitchingReader({})), settings=settings
+            )
         )
         prober.bind_run("")
 
@@ -117,7 +122,9 @@ class TestNamespaceBinding:
                 return {"id": rom_id}
 
         prober = LivenessProber(
-            config=LivenessProberConfig(loop=asyncio.get_event_loop(), romm_api=_SwitchingReader({}), settings=settings)
+            config=LivenessProberConfig(
+                loop=asyncio.get_event_loop(), romm_api=cast("Any", _SwitchingReader({})), settings=settings
+            )
         )
         prober.bind_run("")
 
