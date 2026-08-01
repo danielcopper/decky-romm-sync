@@ -463,7 +463,7 @@ class TestV47SyncFlow:
         to. Absent slot isolation the newest-wins pick for the "pokemon.srm"
         target under the active "default" slot would choose 200 and download it —
         so the leaky filter would report ``synced==1`` with 200 in the downloads.
-        With ``filter_server_saves_to_slot`` the "default" slot only sees 100
+        With ``filter_saves_to_slot`` the "default" slot only sees 100
         (matches local → Skip) and the legacy save is never pulled in.
         """
         svc, fake = make_service(tmp_path)

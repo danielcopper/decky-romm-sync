@@ -115,7 +115,7 @@ class TestSaveStatus:
         than the named-slot head (id=100, updated 06:00) the local file is synced
         to. Absent slot isolation the newest-wins pick under the active "default"
         slot would surface 200 as a pending Download; with
-        ``filter_server_saves_to_slot`` the slot only sees 100 (matches local →
+        ``filter_saves_to_slot`` the slot only sees 100 (matches local →
         synced) and the legacy save never appears.
         """
         svc, fake = make_service(tmp_path)

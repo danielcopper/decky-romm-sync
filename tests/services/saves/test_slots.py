@@ -1771,7 +1771,7 @@ class TestSwitchSlot:
         The on-device carry-over: with a legacy save on the server, switching to
         an empty named slot left the local file quarantined (correct) BUT the
         active slot's status pulled the legacy save in (the old
-        filter_server_saves_to_slot matched null under any named slot) — so the
+        filter_saves_to_slot matched null under any named slot) — so the
         saves tab showed, and the sync downloaded, the legacy save into the slot.
         After the fix the named slot is empty: no legacy server reference, no
         download.

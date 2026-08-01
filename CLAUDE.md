@@ -194,12 +194,12 @@ Format: **invariant** — tier — enforced by.
 - **No sentinel objects on the wire — explicit JSON-representable tagged values only** — prompt-only — mechanizable once
   tagged values have replaced the sentinels
 - **Every destructive op has backup-or-confirm; never delete data that exists nowhere else** — prompt-only — save-file
-  removals route through `MatrixExecutor.quarantine_local_file` (the `.romm-backup` funnel); every other delete path
-  carries the rule unmechanized. Removed-game cleanup takes the **confirm** leg for one case deliberately: installed ROM
-  content the user did not select for the recovery bundle is deleted with its row. The ROM is re-downloadable from RomM
-  where a save is not, the per-candidate opt-in and its consequence are stated in the confirmation dialog and the user
-  guide, and the row cannot be removed at all without a fresh 404 — so this is a disclosed choice, not an exception that
-  drifted in
+  removals route through the `.romm-backup` funnel (`MatrixExecutor.quarantine_local_file`; the removed-game cleanup's
+  claimed variant is `PruneSaveSupport.quarantine_prune_saves`); every other delete path carries the rule unmechanized.
+  Removed-game cleanup takes the **confirm** leg for one case deliberately: installed ROM content the user did not
+  select for the recovery bundle is deleted with its row. The ROM is re-downloadable from RomM where a save is not, the
+  per-candidate opt-in and its consequence are stated in the confirmation dialog and the user guide, and the row cannot
+  be removed at all without a fresh 404 — so this is a disclosed choice, not an exception that drifted in
 - **Every read-mutate-write of a `RomSaveSyncState` runs under `SyncEngine.rom_lock(rom_id)`** — prompt-only — sync
   paths, `get_save_status`, and the four slot mutations hold the lock; mechanize via a `rom_save_sync_states.save`
   call-site audit
@@ -219,8 +219,8 @@ Format: **invariant** — tier — enforced by.
   `record_applied_launch_options` call-site audit
 - **An abandoned-chunk stash's whole-unit apply staging (`pending_sync` / `pending_all_roms` / `pending_cover_sources`)
   is never mutated while the stash is pending (box IDLE) — every run-entry path passes `try_begin_run`, which clears the
-  stash before any staging write (#1367)** — prompt-only — verified closed in #1367 review; mechanize via a
-  staging-writer call-site audit
+  stash before any staging write** — prompt-only — the invariant holds today rather than being aspirational; mechanize
+  via a staging-writer call-site audit
 - **A prune run's claim reservation and its refusal of every conflicting callable happen in one atomic gate hold (the
   preview rebuild does not), and frontend-owned Steam work holds a heartbeated, generation-tombstoned lease through
   every continuation's final write** — test + prompt-only — prune service/gate race tests + contract callable-entry
