@@ -188,6 +188,16 @@ class PruneExecutor:
         self._log_run_end(run_id, results, cancelled=cancelled, reason=reason, message=message)
         try:
             await self._results.emit_completion(run_id, results, cancelled=cancelled, reason=reason, message=message)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Same protection the final progress frame already has. Every
+            # mutation is committed and the audit trail already records it, so a
+            # failed terminal frame costs only the frontend's completion state —
+            # which its lost-result timeout recovers. Letting it escape into the
+            # unawaited run task would lose that recovery too, and the modal
+            # would wait for a frame that is never coming.
+            self._logger.warning(f"Removed-game cleanup completion delivery failed: {exc}")
         finally:
             self._run_namespace = None
             self._results.end_run()

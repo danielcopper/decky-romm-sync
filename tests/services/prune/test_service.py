@@ -803,6 +803,28 @@ async def test_active_download_and_multiple_bindings_skip_before_mutation(harnes
 
 
 @pytest.mark.asyncio
+async def test_a_failed_terminal_frame_does_not_escape_the_run_task(harness, monkeypatch):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+
+    async def failing_completion(*_args, **_kwargs):
+        raise RuntimeError("bridge closed")
+
+    monkeypatch.setattr(harness.service._executor._results, "emit_completion", failing_completion)
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    task = _active_run_task(harness)
+
+    # The mutations are committed either way; an escaping error would only add
+    # an unretrievable exception in an unawaited task on top of the lost frame.
+    await task
+    assert task.exception() is None
+    assert harness.uow.roms.get(1) is None
+    # The claim is still released, so cleanup stays reachable afterwards.
+    assert harness.service.is_active() is False
+
+
+@pytest.mark.asyncio
 async def test_group_result_leads_with_the_bound_row_s_game_name(harness):
     app_id = 0x80000001
     # The bound row is the group's representative — its name is the one the
