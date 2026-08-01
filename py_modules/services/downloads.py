@@ -16,6 +16,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from domain.disc_formats import DISC_IMAGE_EXTENSIONS
+from domain.download_frames import cancelled_frame
 from domain.rom_files import (
     build_m3u_content,
     detect_launch_file,
@@ -1336,23 +1337,8 @@ class DownloadService:
             self._remove_partial_tmp_files(target_path)
         # cancel_download runs on the loop thread; schedule the terminal frame the
         # same way the progress callbacks do (fire-and-forget on the loop).
-        self._loop.create_task(self._emit("download_progress", self._cancelled_frame(rom_id, entry)))
+        self._loop.create_task(self._emit("download_progress", cancelled_frame(rom_id, entry)))
         self.evict(rom_id)
-
-    @staticmethod
-    def _cancelled_frame(rom_id: int, entry: dict[str, Any]) -> dict[str, Any]:
-        """Build the terminal ``cancelled`` ``download_progress`` payload from a queue entry."""
-        return {
-            "rom_id": rom_id,
-            "rom_name": entry.get("rom_name", ""),
-            "platform_name": entry.get("platform_name", ""),
-            "file_name": entry.get("file_name", ""),
-            "status": "cancelled",
-            "progress": entry.get("progress", 0),
-            "bytes_downloaded": entry.get("bytes_downloaded", 0),
-            "total_bytes": entry.get("total_bytes", 0),
-            "resumable": entry.get("resumable", False),
-        }
 
     def pause_download(self, rom_id):
         """Pause an in-flight download, keeping the partial ``.tmp`` for resume.

@@ -1,6 +1,6 @@
 """Tests for domain/work_unit.py — event-payload shape + estimate weights (#1382)."""
 
-from domain.work_unit import WorkUnit
+from domain.work_unit import WorkUnit, collection_units
 
 
 def _platform_unit(**overrides):
@@ -100,3 +100,42 @@ class TestEstimatedItems:
     def test_zero_collapsed_count_weighs_zero_not_raw(self):
         """0 is a real collapsed count (edge), never confused with the None fallback."""
         assert _platform_unit(predicted_skip=False, collapsed_count=0).estimated_items() == 0
+
+
+class TestCollectionUnits:
+    def test_builds_a_unit_per_enabled_collection_only(self):
+        listing = [
+            {"id": 1, "name": "Shooters", "slug": "shooters", "rom_count": 3, "updated_at": "2026-07-20T06:27:12"},
+            {"id": 2, "name": "Puzzles", "slug": "puzzles", "rom_count": 9},
+        ]
+        units = collection_units(listing, {"1"}, "standard")
+        assert [(u.id, u.name, u.rom_count, u.collection_kind) for u in units] == [("1", "Shooters", 3, "standard")]
+        assert units[0].collection_updated_at == "2026-07-20T06:27:12"
+
+    def test_rom_count_falls_back_to_the_member_id_list(self):
+        listing = [{"id": 7, "name": "Faves", "slug": "faves", "rom_ids": [1, 2, 3, 4]}]
+        assert collection_units(listing, {"7"}, "smart")[0].rom_count == 4
+
+    def test_owner_scope_drops_a_foreign_collection_even_when_enabled(self):
+        listing = [
+            {"id": 1, "name": "Mine", "slug": "mine", "rom_count": 1, "user_id": 5},
+            {"id": 2, "name": "Theirs", "slug": "theirs", "rom_count": 1, "user_id": 9},
+        ]
+        units = collection_units(listing, {"1", "2"}, "standard", own_user_id=5, filter_to_own=True)
+        assert [u.id for u in units] == ["1"]
+
+    def test_a_virtual_collection_has_no_owner_and_always_survives_the_scope(self):
+        listing = [{"id": "franchise-1", "name": "Mario", "slug": "mario", "rom_count": 2}]
+        units = collection_units(
+            listing, {"franchise-1"}, "virtual", virtual_type="franchise", own_user_id=5, filter_to_own=True
+        )
+        assert [(u.id, u.virtual_type) for u in units] == [("franchise-1", "franchise")]
+
+    def test_nothing_enabled_yields_no_units(self):
+        listing = [{"id": 1, "name": "Shooters", "slug": "shooters", "rom_count": 3}]
+        assert collection_units(listing, set(), "standard") == []
+        assert collection_units([], {"1"}, "standard") == []
+
+    def test_a_missing_name_falls_back_to_the_id_and_the_slug_to_empty(self):
+        units = collection_units([{"id": 4}], {"4"}, "standard")
+        assert (units[0].name, units[0].slug, units[0].rom_count) == ("4", "", 0)

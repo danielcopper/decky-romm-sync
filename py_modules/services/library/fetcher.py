@@ -16,12 +16,12 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from domain.collection_owner import is_own_collection
-from domain.fetch_generation import count_rows_for_skip
+from domain.fetch_generation import backfill_needed, count_rows_for_skip
 from domain.platform_prefs import materialize_enabled_platforms, resolve_sync_enabled
 from domain.skip_prediction import collapsed_shortcut_count, new_shortcut_count, predict_unit_skip
 from domain.sync_stage import SyncStage
 from domain.sync_state import SyncCancelled, SyncState
-from domain.work_unit import CollectionKind, WorkUnit
+from domain.work_unit import WorkUnit, collection_units
 from lib.errors import classify_error
 from lib.list_result import ErrorCode
 from lib.romm_paging import LIST_PAGE_SIZE
@@ -29,10 +29,9 @@ from lib.romm_paging import LIST_PAGE_SIZE
 if TYPE_CHECKING:
     import asyncio
     import logging
-    from collections.abc import Awaitable, Callable, Sequence
+    from collections.abc import Awaitable, Callable
 
     from domain.collection_sync_state import CollectionSyncState
-    from domain.rom import Rom
     from services.library._state import LibrarySyncStateBox
     from services.protocols import (
         DebugLogger,
@@ -97,76 +96,6 @@ class _SkipBaseline(NamedTuple):
 # (interval 1) — a "page 3/7" update every few seconds — rather than throttled.
 # The interval knob stays so a future larger page count can throttle again.
 _FETCH_PROGRESS_PAGE_INTERVAL = 1
-
-
-def _backfill_needed(rows: Sequence[Rom], fetch_id: str | None) -> bool:
-    """Whether a NULL ``sibling_group_key`` among *rows* may force a full fetch.
-
-    Sibling twin of :func:`count_rows_for_skip` and gated on the same generation:
-    a full fetch can only backfill a row the server still returns, so only a row
-    carrying the stamp's generation may demand one. A row for a rom_id RomM has
-    dropped keeps its older generation (ADR-0007 retains it, nothing is deleted),
-    and no fetch will ever fill its key in — letting it force a backfill would
-    wedge the platform into a full fetch on every sync, forever.
-
-    A stamp with **no** generation (``fetch_id`` falsy) predates the contract and
-    cannot say what its fetch saw, so every NULL-key row still forces the fetch,
-    exactly as before — the same deliberately permissive legacy path
-    :func:`count_rows_for_skip` takes, here erring towards fetching rather than
-    skipping.
-    """
-    if not fetch_id:
-        return any(rom.sibling_group_key is None for rom in rows)
-    return any(rom.sibling_group_key is None and rom.last_fetch_id == fetch_id for rom in rows)
-
-
-def _collection_units(
-    collections: list[dict[str, Any]],
-    enabled_ids: set[str],
-    kind: CollectionKind,
-    *,
-    virtual_type: str | None = None,
-    own_user_id: int | None = None,
-    filter_to_own: bool = False,
-) -> list[WorkUnit]:
-    """Build WorkUnits for collections whose id is in *enabled_ids*, tagged with *kind*.
-
-    When *filter_to_own* is set (the "Mine" owner-scope), a foreign collection —
-    one owned by a known user id other than *own_user_id* — is dropped from the
-    queue even if it is enabled, so a scope selected over an earlier enable never
-    syncs someone else's collection. Virtual collections have no owner and
-    always survive (:func:`is_own_collection`).
-
-    *virtual_type* stamps the unit's virtual sub-type (``"franchise"`` /
-    ``"collection"``) for the ``kind == "virtual"`` caller, which fetches one
-    type at a time and so knows it authoritatively — the same source the QAM
-    listing uses. ``None`` for standard/smart callers (their kind alone labels
-    them).
-    """
-    units: list[WorkUnit] = []
-    for c in collections:
-        cid = str(c.get("id", ""))
-        if cid not in enabled_ids:
-            continue
-        if filter_to_own and not is_own_collection(c.get("user_id"), own_user_id, kind=kind):
-            continue
-        units.append(
-            WorkUnit(
-                type="collection",
-                id=cid,
-                name=c.get("name", cid),
-                slug=c.get("slug", ""),
-                rom_count=int(c.get("rom_count", len(c.get("rom_ids", [])))),
-                collection_kind=kind,
-                virtual_type=virtual_type,
-                # RomM bumps the collection's updated_at on any membership change
-                # (#742). Threaded so the skip gate compares it against the stamp;
-                # ``None`` for a listing that omits it (e.g. virtual, never
-                # stamped).
-                collection_updated_at=c.get("updated_at"),
-            )
-        )
-    return units
 
 
 @dataclass(frozen=True)
@@ -583,23 +512,23 @@ class LibraryFetcher:
 
         collection_units: list[WorkUnit] = []
         collection_units.extend(
-            await self._build_standard_collection_units(
+            await self._build_standardcollection_units(
                 enabled_standard_ids, own_user_id=own_user_id, filter_to_own=filter_to_own
             )
         )
         collection_units.extend(
-            await self._build_smart_collection_units(
+            await self._build_smartcollection_units(
                 enabled_smart_ids, own_user_id=own_user_id, filter_to_own=filter_to_own
             )
         )
-        collection_units.extend(await self._build_virtual_collection_units(enabled_virtual_ids))
+        collection_units.extend(await self._build_virtualcollection_units(enabled_virtual_ids))
         # One short read UoW for every collection at once — after the listing
         # fetches, never across them.
         units.extend(await self._attach_collection_bound_counts(collection_units))
 
         return units
 
-    async def _build_standard_collection_units(
+    async def _build_standardcollection_units(
         self, enabled_ids: set[str], *, own_user_id: int | None = None, filter_to_own: bool = False
     ) -> list[WorkUnit]:
         """Fetch standard collections and emit work units for those whose id is in *enabled_ids*.
@@ -614,11 +543,11 @@ class LibraryFetcher:
         except Exception as e:
             self._logger.warning(f"Failed to fetch standard collections for work queue: {e}")
             collections = []
-        return _collection_units(
+        return collection_units(
             collections, enabled_ids, "standard", own_user_id=own_user_id, filter_to_own=filter_to_own
         )
 
-    async def _build_smart_collection_units(
+    async def _build_smartcollection_units(
         self, enabled_ids: set[str], *, own_user_id: int | None = None, filter_to_own: bool = False
     ) -> list[WorkUnit]:
         """Fetch smart collections and emit work units for those whose id is in *enabled_ids*.
@@ -633,11 +562,9 @@ class LibraryFetcher:
         except Exception as e:
             self._logger.warning(f"Failed to fetch smart collections for work queue: {e}")
             collections = []
-        return _collection_units(
-            collections, enabled_ids, "smart", own_user_id=own_user_id, filter_to_own=filter_to_own
-        )
+        return collection_units(collections, enabled_ids, "smart", own_user_id=own_user_id, filter_to_own=filter_to_own)
 
-    async def _build_virtual_collection_units(self, enabled_ids: set[str]) -> list[WorkUnit]:
+    async def _build_virtualcollection_units(self, enabled_ids: set[str]) -> list[WorkUnit]:
         """Fetch every supported virtual type and emit units for those whose id is in *enabled_ids*.
 
         The ids are globally unique across virtual types (RomM bakes the type
@@ -655,7 +582,7 @@ class LibraryFetcher:
             except Exception as e:
                 self._logger.warning(f"Failed to fetch {virtual_type} collections for work queue: {e}")
                 continue
-            units.extend(_collection_units(collections, enabled_ids, "virtual", virtual_type=virtual_type))
+            units.extend(collection_units(collections, enabled_ids, "virtual", virtual_type=virtual_type))
         return units
 
     async def _attach_plan_estimates(self, platform_units: list[WorkUnit]) -> list[WorkUnit]:
@@ -814,7 +741,7 @@ class LibraryFetcher:
                     # gate's local conditions.
                     fetched_count=count_rows_for_skip(all_rows, fetch_id),
                     registry_count=bound_count,
-                    needs_backfill=_backfill_needed(all_rows, fetch_id),
+                    needs_backfill=backfill_needed(all_rows, fetch_id),
                 )
                 collapsed = (
                     collapsed_shortcut_count(
@@ -915,7 +842,7 @@ class LibraryFetcher:
             reconstructed_roms=reconstructed,
             fetched_count=count_rows_for_skip(all_rows, fetch_id),
             persisted_count=len(all_rows),
-            needs_backfill=_backfill_needed(all_rows, fetch_id),
+            needs_backfill=backfill_needed(all_rows, fetch_id),
         )
 
     @staticmethod

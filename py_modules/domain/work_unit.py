@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from domain.collection_owner import is_own_collection
+
 UnitType = Literal["platform", "collection"]
 CollectionKind = Literal["standard", "smart", "virtual"]
 
@@ -95,3 +97,52 @@ class WorkUnit:
         if self.new_shortcut_count is not None:
             payload["new_shortcut_count"] = self.new_shortcut_count
         return payload
+
+
+def collection_units(
+    collections: list[dict[str, Any]],
+    enabled_ids: set[str],
+    kind: CollectionKind,
+    *,
+    virtual_type: str | None = None,
+    own_user_id: int | None = None,
+    filter_to_own: bool = False,
+) -> list[WorkUnit]:
+    """Build WorkUnits for collections whose id is in *enabled_ids*, tagged with *kind*.
+
+    When *filter_to_own* is set (the "Mine" owner-scope), a foreign collection —
+    one owned by a known user id other than *own_user_id* — is dropped from the
+    queue even if it is enabled, so a scope selected over an earlier enable never
+    syncs someone else's collection. Virtual collections have no owner and
+    always survive (:func:`is_own_collection`).
+
+    *virtual_type* stamps the unit's virtual sub-type (``"franchise"`` /
+    ``"collection"``) for the ``kind == "virtual"`` caller, which fetches one
+    type at a time and so knows it authoritatively — the same source the QAM
+    listing uses. ``None`` for standard/smart callers (their kind alone labels
+    them).
+    """
+    units: list[WorkUnit] = []
+    for c in collections:
+        cid = str(c.get("id", ""))
+        if cid not in enabled_ids:
+            continue
+        if filter_to_own and not is_own_collection(c.get("user_id"), own_user_id, kind=kind):
+            continue
+        units.append(
+            WorkUnit(
+                type="collection",
+                id=cid,
+                name=c.get("name", cid),
+                slug=c.get("slug", ""),
+                rom_count=int(c.get("rom_count", len(c.get("rom_ids", [])))),
+                collection_kind=kind,
+                virtual_type=virtual_type,
+                # RomM bumps the collection's updated_at on any membership change
+                # (#742). Threaded so the skip gate compares it against the stamp;
+                # ``None`` for a listing that omits it (e.g. virtual, never
+                # stamped).
+                collection_updated_at=c.get("updated_at"),
+            )
+        )
+    return units

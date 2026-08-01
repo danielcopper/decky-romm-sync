@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from domain.fetch_generation import count_rows_for_skip, prune_candidate_ids
+from domain.fetch_generation import backfill_needed, count_rows_for_skip, prune_candidate_ids
 from domain.platform_sync_state import PlatformSyncState
 from domain.rom import Rom
 
@@ -83,3 +83,41 @@ class TestPruneCandidateIds:
             )
             == set()
         )
+
+
+def _keyed_row(rom_id: int, fetch_id: str | None, group_key: str | None) -> Rom:
+    return Rom(
+        rom_id=rom_id,
+        platform_slug="dc",
+        name=f"rom-{rom_id}",
+        fs_name=f"rom-{rom_id}.gdi",
+        shortcut_app_id=None,
+        last_synced_at="2026-07-20T06:27:12",
+        sibling_group_key=group_key,
+        last_fetch_id=fetch_id,
+    )
+
+
+class TestBackfillNeeded:
+    def test_null_key_in_the_stamped_generation_demands_a_backfill(self):
+        rows = [_keyed_row(25135, "run-new", "group-a"), _keyed_row(25136, "run-new", None)]
+        assert backfill_needed(rows, "run-new") is True
+
+    def test_null_key_on_a_dropped_row_may_not_hold_the_skip_off(self):
+        """#1504: no fetch can ever fill a key the server no longer returns."""
+        rows = [_keyed_row(4375, "run-old", None), _keyed_row(25135, "run-new", "group-a")]
+        assert backfill_needed(rows, "run-new") is False
+
+    def test_every_key_present_needs_no_backfill(self):
+        rows = [_keyed_row(25135, "run-new", "group-a"), _keyed_row(25136, "run-new", "group-a")]
+        assert backfill_needed(rows, "run-new") is False
+
+    def test_a_stamp_without_a_generation_counts_every_null_key(self):
+        """The legacy path predates the contract and errs towards fetching."""
+        rows = [_keyed_row(4375, "run-old", None)]
+        assert backfill_needed(rows, None) is True
+        assert backfill_needed(rows, "") is True
+
+    def test_no_rows_never_demands_a_backfill(self):
+        assert backfill_needed([], "run-new") is False
+        assert backfill_needed([], None) is False
