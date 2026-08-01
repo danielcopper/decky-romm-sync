@@ -83,6 +83,18 @@ fact rather than inferred from what survived.
 This is a precondition on top of the 404 rule, never a softening of it: deletion authority is still, only, a fresh
 single-attempt exact-id 404 under the pinned namespace.
 
+**What it does not cover.** The control and the candidate are different ids by construction, so a _per-id_ misroute —
+one that answers correctly for the control and a bogus 404 for the candidate — passes every check here. Nothing
+client-side can close that: a client cannot distinguish "this id is gone" from "this id, specifically, was misrouted"
+without a second source of truth about that id. What the tiers rule out is the whole-route failure, which is the shape a
+proxy misconfiguration actually takes.
+
+**How this composes with the adapter-side 404 discrimination** (#1622): the two run in series and are not redundant. The
+adapter filters non-entity 404 **shapes** at the transport boundary, so a 404 that does not look like RomM answering
+about an entity never reaches this layer as a `RommNotFoundError`. The canary demands **endpoint proof** per round,
+regardless of shape. A misroute that answers an entity-shaped JSON 404 passes the adapter untouched, so the canary
+remains the sole defence against it.
+
 ### Server namespace binding
 
 A run pins the RomM namespace it discovered its candidates under: canonical server origin, token origin, and RomM user
