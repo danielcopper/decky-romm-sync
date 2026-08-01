@@ -8,7 +8,15 @@
  */
 
 import { toaster } from "@decky/api";
-import { recordSessionStart, getAppIdRomIdMap, finalizeGameSession, logInfo, logError, debugLog } from "../api/backend";
+import {
+  recordSessionStart,
+  getAppIdRomIdMap,
+  finalizeGameSession,
+  logInfo,
+  logWarn,
+  logError,
+  debugLog,
+} from "../api/backend";
 import { saveSyncToastBody } from "./saveSyncToast";
 import { setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
@@ -17,9 +25,24 @@ import { detach } from "./detach";
 import { readPrimaryRunningApp, readRunningApps, type RunningApp } from "./runningApps";
 import { delay } from "./pacedOps";
 
-// Active session tracking
-let activeRomId: number | null = null;
-let sessionStartTime: number | null = null;
+// Active session tracking — ONE slot, deliberately (#1621). The slot records the
+// Steam app that opened the session alongside the rom, so a lifecycle stop can be
+// matched against it; a second RomM game starting displaces the first. Turning
+// the slot into a per-rom map is a deliberate non-goal, not an oversight: it
+// would ripple into the breadcrumb, both adoption branches, and every
+// `getActiveSessionRomId()` consumer — including the launch gate's already-running
+// guard, which is save-safety machinery. Concurrent RomM games are rare, and
+// scoping the stop to its own app already removes the dangerous behaviour
+// (finalizing the wrong session, post-exit save sync against a running game).
+interface ActiveSession {
+  /** The Steam app that opened the session — what a lifecycle stop is matched against. */
+  appId: number;
+  romId: number;
+  /** Wall-clock start, mirrored into the durable breadcrumb. */
+  startMs: number;
+}
+
+let activeSession: ActiveSession | null = null;
 
 // Serialization chain — ensures lifecycle events don't interleave
 let lifecycleChain: Promise<void> = Promise.resolve();
@@ -60,14 +83,7 @@ export function getAppIdRomIdMapSnapshot(): Record<string, number> {
  * holds the file open, and Steam blocks the relaunch as "already running" anyway.
  */
 export function getActiveSessionRomId(): number | null {
-  return activeRomId;
-}
-
-function getAppIdForRom(romId: number): number | null {
-  for (const [appIdStr, rid] of Object.entries(appIdToRomId)) {
-    if (rid === romId) return Number(appIdStr);
-  }
-  return null;
+  return activeSession?.romId ?? null;
 }
 
 async function refreshAppIdMap(): Promise<void> {
@@ -145,12 +161,21 @@ async function handleGameStart(appId: number): Promise<void> {
   if (!romId) return; // Not a RomM shortcut
 
   logInfo(`Session start: romId=${romId}, appId=${appId}`);
-  activeRomId = romId;
-  sessionStartTime = Date.now();
+  if (activeSession && activeSession.romId !== romId) {
+    // Two RomM games at once, and the single slot holds one. The displaced session
+    // is dropped rather than given a fabricated end — its stop was never observed,
+    // the same rule an orphaned breadcrumb follows. Rare enough to keep the slot
+    // single (see the state block), loud enough to leave a trace when it happens.
+    logWarn(
+      `Session start for romId=${romId} displaces still-active romId=${activeSession.romId} — its playtime is dropped`,
+    );
+  }
+  const session: ActiveSession = { appId, romId, startMs: Date.now() };
+  activeSession = session;
   dispatchSessionChanged(true, appId, romId);
 
   // Attest the open session so a reload mid-game can adopt and finalize it.
-  writeSessionBreadcrumb({ v: SESSION_BREADCRUMB_VERSION, appId, romId, startMs: sessionStartTime });
+  writeSessionBreadcrumb({ v: SESSION_BREADCRUMB_VERSION, appId, romId, startMs: session.startMs });
 
   // Record session start for playtime tracking
   try {
@@ -161,22 +186,42 @@ async function handleGameStart(appId: number): Promise<void> {
   // Pre-launch sync moved to CustomPlayButton.handlePlay
 }
 
-async function handleGameStop(): Promise<void> {
-  if (!activeRomId) return;
+/**
+ * Finalize the active session, but only when `stoppedAppId` is the app that
+ * opened it.
+ *
+ * `RegisterForAppLifetimeNotifications` fires for EVERY app Steam tracks, so an
+ * unrelated app's exit reaches here too (#1621). The comparison is against the
+ * appId RECORDED WITH THE SESSION, never a fresh `getRomIdForApp` lookup: the
+ * cached map can be stale at stop time, and a stale miss would drop a real
+ * session — recording no playtime and skipping the post-exit sync entirely.
+ */
+async function handleGameStop(stoppedAppId: number): Promise<void> {
+  const session = activeSession;
+  if (!session) return;
 
-  const romId = activeRomId;
+  if (session.appId !== stoppedAppId) {
+    // Some other app stopped. The live session stays open — finalizing here would
+    // record its playtime early AND run the post-exit save sync while the emulator
+    // still holds the save file open, capturing a half-written file.
+    detach(
+      debugLog(
+        `Session stop ignored: appId=${stoppedAppId} is not the active session (appId=${session.appId}, romId=${session.romId})`,
+      ),
+    );
+    return;
+  }
+
+  const { appId, romId } = session;
   logInfo(`Session end: romId=${romId}`);
 
-  // Flip any open Resume button back to Play before we lose the appId mapping
-  // (#1313). Best-effort — a missing reverse-map entry leaves the button to
-  // self-heal on remount; the button keys on romId regardless.
-  const stoppedAppId = getAppIdForRom(romId);
-  if (stoppedAppId !== null) dispatchSessionChanged(false, stoppedAppId, romId);
+  // Flip any open Resume button back to Play (#1313). The appId comes from the
+  // session itself, so this needs no reverse-map lookup.
+  dispatchSessionChanged(false, appId, romId);
 
   // Clear active session immediately to avoid double-processing. The breadcrumb
   // goes with it — the stop is observed, so there is nothing left to adopt.
-  activeRomId = null;
-  sessionStartTime = null;
+  activeSession = null;
   clearSessionBreadcrumb();
 
   try {
@@ -184,10 +229,7 @@ async function handleGameStop(): Promise<void> {
 
     // Playtime display update — appStore mutation must stay frontend.
     if (result.total_seconds != null) {
-      const appId = getAppIdForRom(romId);
-      if (appId) {
-        updatePlaytimeDisplay(appId, result.total_seconds);
-      }
+      updatePlaytimeDisplay(appId, result.total_seconds);
     }
 
     // Post-exit save-sync toast. The directional success toast is rendered
@@ -297,8 +339,7 @@ async function adoptOrphanedSession(): Promise<void> {
       // (a) The breadcrumb attests this exact running session. Restore the
       // in-memory state and leave the durable marker untouched — re-stamping it
       // would discard the pre-reload playtime the backend already holds.
-      activeRomId = runningRomId;
-      sessionStartTime = crumb.startMs;
+      activeSession = { appId, romId: runningRomId, startMs: crumb.startMs };
       dispatchSessionChanged(true, appId, runningRomId);
       logInfo(`Adopted running session from breadcrumb: romId=${runningRomId}, appId=${appId}`);
     } else {
@@ -306,13 +347,13 @@ async function adoptOrphanedSession(): Promise<void> {
       // corrupt). Adopt it and re-stamp the marker to a truthful lower bound
       // from now, then attest with a fresh breadcrumb so a later reload adopts
       // via (a) rather than re-stamping again.
-      activeRomId = runningRomId;
-      sessionStartTime = Date.now();
+      const adopted: ActiveSession = { appId, romId: runningRomId, startMs: Date.now() };
+      activeSession = adopted;
       writeSessionBreadcrumb({
         v: SESSION_BREADCRUMB_VERSION,
         appId,
         romId: runningRomId,
-        startMs: sessionStartTime,
+        startMs: adopted.startMs,
       });
       dispatchSessionChanged(true, appId, runningRomId);
       try {
@@ -357,8 +398,8 @@ export async function initSessionManager(): Promise<void> {
             await handleGameStart(appId);
           }
         } else {
-          // Game stopped
-          await handleGameStop();
+          // An app stopped — `handleGameStop` decides whether it is ours.
+          await handleGameStop(update.unAppID);
         }
       })
       .catch((e) => {
@@ -390,8 +431,7 @@ export function destroySessionManager(): void {
     lifetimeHook = null;
   }
 
-  activeRomId = null;
-  sessionStartTime = null;
+  activeSession = null;
   lifecycleChain = Promise.resolve();
   // Signal any in-flight adoption poll to abort instead of mutating torn-down state.
   sessionEpoch++;

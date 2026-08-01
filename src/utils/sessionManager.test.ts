@@ -27,6 +27,11 @@ type LifetimeCb = (update: LifetimeUpdate) => void;
 // The map binds Steam app id 100 → RomM rom id 7.
 const APP_ID = 100;
 const ROM_ID = 7;
+// A second RomM shortcut — the concurrent-games case from #1621.
+const OTHER_APP_ID = 200;
+const OTHER_ROM_ID = 9;
+// An app the plugin does not own: a regular Steam game or a foreign shortcut.
+const UNRELATED_APP_ID = 4242;
 
 const IDLE_FINALIZE = {
   total_seconds: null,
@@ -50,17 +55,27 @@ function captureLifetimeCb(): LifetimeCb {
   return cb as LifetimeCb;
 }
 
-/** Drive a game-start notification through the serialized lifecycle chain. */
-async function startGame(cb: LifetimeCb): Promise<void> {
-  cb({ bRunning: true, unAppID: APP_ID });
+/** Drive a start notification for a specific app through the lifecycle chain. */
+async function startApp(cb: LifetimeCb, appId: number): Promise<void> {
+  cb({ bRunning: true, unAppID: appId });
   // handleGameStart is gated behind a delay(500) inside the lifecycle chain.
   await vi.advanceTimersByTimeAsync(500);
 }
 
+/** Drive a stop notification for a specific app and flush the chain. */
+async function stopApp(cb: LifetimeCb, appId: number): Promise<void> {
+  cb({ bRunning: false, unAppID: appId });
+  await vi.advanceTimersByTimeAsync(0);
+}
+
+/** Drive a game-start notification through the serialized lifecycle chain. */
+async function startGame(cb: LifetimeCb): Promise<void> {
+  await startApp(cb, APP_ID);
+}
+
 /** Drive a game-stop notification and flush the chain. */
 async function stopGame(cb: LifetimeCb): Promise<void> {
-  cb({ bRunning: false, unAppID: APP_ID });
-  await vi.advanceTimersByTimeAsync(0);
+  await stopApp(cb, APP_ID);
 }
 
 // #1148: adoptOrphanedSession now polls the running-app surfaces for up to 15s
@@ -751,5 +766,164 @@ describe("sessionManager session-changed dispatch (#1313)", () => {
     stubNothingRunning();
     await initDrainingAdoptionPoll();
     expect(sessionEvents).toEqual([]);
+  });
+});
+
+// #1621: RegisterForAppLifetimeNotifications fires for EVERY app Steam tracks,
+// so the stop path must finalize only the app that opened the active session.
+// Finalizing on a foreign app's exit recorded the wrong playtime AND ran the
+// post-exit save sync against a game still holding its save file open.
+describe("sessionManager stop scoping (#1621)", () => {
+  const BREADCRUMB_KEY = "decky-romm-sync:active-session";
+  const readCrumb = (): unknown => {
+    const raw = localStorage.getItem(BREADCRUMB_KEY);
+    return raw === null ? null : JSON.parse(raw);
+  };
+
+  // finalizeGameSession is the single callable behind BOTH the playtime write and
+  // the post-exit save sync, so "not called" is the direct assertion that neither
+  // ran. total_seconds makes the playtime display write observable too.
+  const FINALIZE_WITH_PLAYTIME = { ...IDLE_FINALIZE, total_seconds: 99 };
+
+  let dataChanged: unknown[];
+  let dataListener: (e: Event) => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    localStorage.clear();
+    stubLifecycleSteamClient();
+    // Two RomM shortcuts in the map; the unrelated app is deliberately absent.
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({
+      [String(APP_ID)]: ROM_ID,
+      [String(OTHER_APP_ID)]: OTHER_ROM_ID,
+    });
+    vi.mocked(backend.recordSessionStart).mockResolvedValue({ success: true });
+    vi.mocked(backend.finalizeGameSession).mockResolvedValue({ ...FINALIZE_WITH_PLAYTIME });
+    // Nothing in the running-app store → handleGameStart resolves the app from
+    // the notification's unAppID, so each start is addressable per app.
+    stubNothingRunning();
+    dataChanged = [];
+    dataListener = (e: Event) => dataChanged.push((e as CustomEvent).detail);
+    globalThis.addEventListener("romm_data_changed", dataListener);
+  });
+
+  afterEach(() => {
+    globalThis.removeEventListener("romm_data_changed", dataListener);
+    destroySessionManager();
+    vi.useRealTimers();
+  });
+
+  it("finalizes when the active session's own app stops", async () => {
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+
+    await startGame(lifetime);
+    vi.setSystemTime(60_000);
+    await stopApp(lifetime, APP_ID);
+
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
+    expect(updatePlaytimeDisplay).toHaveBeenCalledWith(APP_ID, 99);
+    expect(dataChanged).toContainEqual({ type: "save_sync", rom_id: ROM_ID });
+  });
+
+  it("ignores a stop for an unrelated app and leaves the session open", async () => {
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+
+    await startGame(lifetime);
+    vi.setSystemTime(30_000);
+    await stopApp(lifetime, UNRELATED_APP_ID);
+
+    // No playtime write and no post-exit sync — finalizeGameSession performs both.
+    expect(backend.finalizeGameSession).not.toHaveBeenCalled();
+    expect(updatePlaytimeDisplay).not.toHaveBeenCalled();
+    expect(dataChanged).toEqual([]);
+    expect(backend.debugLog).toHaveBeenCalledWith(expect.stringContaining("Session stop ignored"));
+
+    // The session is still open: its breadcrumb survives and its own app's stop
+    // still finalizes it, at the real end time.
+    expect(readCrumb()).toMatchObject({ v: 1, appId: APP_ID, romId: ROM_ID });
+    vi.setSystemTime(60_000);
+    await stopApp(lifetime, APP_ID);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
+    expect(updatePlaytimeDisplay).toHaveBeenCalledWith(APP_ID, 99);
+  });
+
+  it("ignores a stop for a second RomM game that is not the active session", async () => {
+    // The stopping app maps to a real rom, so a fresh map lookup would happily
+    // resolve one — only the appId RECORDED with the session rejects it.
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+
+    await startGame(lifetime);
+    await stopApp(lifetime, OTHER_APP_ID);
+
+    expect(backend.finalizeGameSession).not.toHaveBeenCalled();
+    expect(dataChanged).toEqual([]);
+  });
+
+  it("warns and drops the displaced session when a second game takes the slot", async () => {
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+
+    await startGame(lifetime);
+    vi.setSystemTime(30_000);
+    await startApp(lifetime, OTHER_APP_ID);
+
+    // The displaced session leaves a trace and is dropped, not finalized with a
+    // fabricated end — its stop was never observed.
+    const warning = vi.mocked(backend.logWarn).mock.calls.map((c) => c[0]);
+    expect(warning).toContainEqual(expect.stringContaining(`romId=${OTHER_ROM_ID}`));
+    expect(warning).toContainEqual(expect.stringContaining(`romId=${ROM_ID}`));
+    expect(backend.finalizeGameSession).not.toHaveBeenCalled();
+    expect(backend.recordSessionStart).toHaveBeenCalledWith(OTHER_ROM_ID);
+
+    // The displaced app's exit is now a no-op; the live session finalizes on its
+    // own app's exit — the exact ordering from the device log in #1621.
+    await stopApp(lifetime, APP_ID);
+    expect(backend.finalizeGameSession).not.toHaveBeenCalled();
+    await stopApp(lifetime, OTHER_APP_ID);
+    expect(backend.finalizeGameSession).toHaveBeenCalledTimes(1);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(OTHER_ROM_ID);
+  });
+
+  it("does not warn when the same game re-opens its own session", async () => {
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+
+    await startGame(lifetime);
+    await startGame(lifetime);
+
+    expect(backend.logWarn).not.toHaveBeenCalled();
+  });
+
+  it("scopes the stop after adopting a session from a matching breadcrumb", async () => {
+    localStorage.setItem(BREADCRUMB_KEY, JSON.stringify({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 }));
+    stubRunningApp(APP_ID);
+
+    await initSessionManager();
+    const lifetime = captureLifetimeCb();
+
+    // The adopted session carries its appId, so a foreign stop is still ignored.
+    await stopApp(lifetime, UNRELATED_APP_ID);
+    expect(backend.finalizeGameSession).not.toHaveBeenCalled();
+
+    await stopApp(lifetime, APP_ID);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
+  });
+
+  it("scopes the stop after adopting a running game with no breadcrumb", async () => {
+    stubRunningApp(APP_ID);
+
+    await initSessionManager();
+    const lifetime = captureLifetimeCb();
+
+    await stopApp(lifetime, UNRELATED_APP_ID);
+    expect(backend.finalizeGameSession).not.toHaveBeenCalled();
+
+    await stopApp(lifetime, APP_ID);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
   });
 });

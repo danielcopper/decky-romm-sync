@@ -1408,7 +1408,10 @@ Triggered from the game detail page when the user clicks the Play button (if `sy
 
 Triggered automatically when a game stops (if `sync_after_exit` is enabled).
 
-1. `RegisterForAppLifetimeNotifications` fires with `bRunning: false`.
+1. `RegisterForAppLifetimeNotifications` fires with `bRunning: false`. The notification arrives for **every** app Steam
+   tracks, so `handleGameStop(unAppID)` finalizes only when the stopping app is the one that opened the active session —
+   see [Session scoping](#session-scoping-one-slot-keyed-by-its-app). A stop for any other app returns before the
+   `finalizeGameSession` call, so the post-exit sync never runs against a game that is still holding its save file open.
 2. `sessionManager.handleGameStop` makes a single `finalizeGameSession(romId)` call; the backend
    `SessionLifecycleService.finalize` orchestrates playtime record → post-exit save sync → migration refresh and returns
    one typed payload (the old `recordSessionEnd` / `postExitSync` frontend callables were collapsed into it). If the
@@ -1526,6 +1529,29 @@ Playtime is **additive, not a conflict** — the union of per-device session str
 newest-wins / conflict / `.romm-backup` machinery. The server dedupes on `(user_id, device_id, rom_id, start_time)`, so
 a re-POST of a queued session is idempotent; the outbox dequeues on a `created` or `duplicate` result and stays queued
 only on `error` (ADR-0018).
+
+### Session scoping: one slot, keyed by its app
+
+`sessionManager` tracks **one** active session: `{appId, romId, startMs}`, opened on a game start and on either
+reload-adoption branch, and always with the appId set alongside the rom.
+
+The appId is what a stop is matched against. `RegisterForAppLifetimeNotifications` fires for every app Steam tracks —
+another non-Steam shortcut, a regular Steam game, a second RomM game — so the stop path checks the stopping app against
+the **appId recorded with the session**, never a fresh `appId → romId` map lookup (the cached map can be stale at stop
+time, and a stale miss would drop a real session instead of an unrelated one). A stop for any other app is a debug-level
+no-op: no playtime write, no post-exit sync, and the session stays open until its own app exits. Before #1621 the stop
+path took no appId at all and finalized whatever was in the slot, which recorded a wrong (early) duration and — the part
+that mattered — ran the post-exit save sync against a game whose emulator still held the save file open, capturing a
+half-written file that the real exit then diverged from.
+
+Two RomM games at once still exceed the single slot: the second start displaces the first, and the displaced session is
+**dropped**, logged at warning with both rom ids. Its stop was never observed, so it gets no fabricated end — the same
+rule an orphaned breadcrumb follows (see below).
+
+Keeping the slot single is a deliberate decision, not an oversight. A per-rom map would ripple into the breadcrumb, both
+adoption branches, and every `getActiveSessionRomId()` consumer — including the launch gate's already-running guard,
+which is save-safety machinery. Concurrent RomM games are rare, and scoping the stop to its own app removes the
+dangerous behaviour without touching that surface. Revisit only if concurrent play stops being an edge case.
 
 ### Surviving a plugin reload mid-session
 
