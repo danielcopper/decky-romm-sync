@@ -384,10 +384,10 @@ class TestTargetsOnlyTheMatchedInstance:
         assert control.stop_calls == [101, 102]
 
     @pytest.mark.asyncio
-    async def test_a_sandbox_path_that_only_shares_the_basename_still_matches(self) -> None:
+    async def test_a_re_rooted_sandbox_path_still_matches(self) -> None:
         # The sandbox's command line may expose the ROM under a different
         # absolute path than the host one the launch command was baked from, so
-        # the basename fallback is what makes the stop work at all there.
+        # the path-tail fallback is what makes the stop work at all there.
         control = FakeGameProcessControlAdapter()
         control.add_instance([201], self.THEIRS)
         control.add_instance([101], "/run/media/mmcblk0p1/roms/psx/ours.chd")
@@ -399,10 +399,9 @@ class TestTargetsOnlyTheMatchedInstance:
         assert control.stop_calls == [101]
 
     @pytest.mark.asyncio
-    async def test_an_exact_path_match_wins_over_a_basename_match(self) -> None:
-        # Two instances whose ROMs share a filename: the one running the exact
-        # resolved path is the one that gets signalled, whichever order they are
-        # reported in.
+    async def test_an_exact_path_match_wins_over_a_path_tail_match(self) -> None:
+        # Two instances running the same ROM tail: the one running the exact
+        # resolved path is the one that gets signalled.
         control = FakeGameProcessControlAdapter()
         control.add_instance([201], "/run/media/mmcblk0p1/roms/psx/ours.chd")
         control.add_instance([101], self.OURS)
@@ -411,6 +410,40 @@ class TestTargetsOnlyTheMatchedInstance:
         await service.stop_running_game(ROM_ID)
 
         assert control.stop_calls == [101]
+
+    @pytest.mark.asyncio
+    async def test_the_same_filename_on_another_platform_is_not_the_match(self) -> None:
+        # One game, two platform directories, one filename — ordinary in a
+        # multi-platform library. Matching on the filename alone would end the
+        # Genesis session while the SNES one was meant.
+        control = FakeGameProcessControlAdapter()
+        control.add_instance([201], "/run/media/mmcblk0p1/roms/genesis/Aladdin.zip")
+        service = _make_service(
+            control,
+            launch_path=FakeRomLaunchPathReader({ROM_ID: "/home/deck/retrodeck/roms/snes/Aladdin.zip"}),
+        )
+
+        result = await service.stop_running_game(ROM_ID)
+
+        assert result["reason"] == "game_not_running"
+        assert control.stop_calls == []
+        assert control.kill_calls == []
+
+    @pytest.mark.asyncio
+    async def test_two_instances_matching_the_same_tail_signal_nothing(self) -> None:
+        # An ambiguous fallback must refuse, not resolve the tie by scan order:
+        # one of the two is another game, and there is no way to tell which.
+        control = FakeGameProcessControlAdapter()
+        control.add_instance([201], "/run/media/sd/roms/psx/ours.chd")
+        control.add_instance([101], "/home/deck/other/roms/psx/ours.chd")
+        service = _make_service(control, launch_path=FakeRomLaunchPathReader({ROM_ID: self.OURS}))
+
+        result = await service.stop_running_game(ROM_ID)
+
+        assert result["success"] is False
+        assert result["reason"] == "game_not_running"
+        assert control.stop_calls == []
+        assert control.kill_calls == []
 
     @pytest.mark.asyncio
     async def test_no_matching_instance_signals_nothing_and_refuses(self) -> None:

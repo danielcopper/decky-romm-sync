@@ -19,10 +19,11 @@ if TYPE_CHECKING:
 
 # How a tree was recognised as this ROM's, reported so the caller can log it.
 # ``PATH_DISCRIMINATOR`` is the strong match (the resolved launch path appears
-# verbatim in the tree's command line); ``BASENAME_DISCRIMINATOR`` is the
-# deliberately narrow fallback below.
+# verbatim in the tree's command line); ``PATH_TAIL_DISCRIMINATOR`` is the
+# deliberately narrow fallback below. The two are logged verbatim, so an
+# on-device run shows which one a sandboxed command line actually satisfies.
 PATH_DISCRIMINATOR = "path"
-BASENAME_DISCRIMINATOR = "basename"
+PATH_TAIL_DISCRIMINATOR = "path-tail"
 
 
 @dataclass(frozen=True)
@@ -48,34 +49,59 @@ class InstanceMatch:
     discriminator: str
 
 
+def path_tail(path: str) -> str:
+    """Return *path*'s last two components — ``<parent>/<file>``.
+
+    ``/home/deck/roms/snes/Aladdin.zip`` → ``snes/Aladdin.zip``. A path with no
+    parent component yields the file alone. The ROM's own filename is not
+    unique across a library (the same game exists for several platforms, one
+    directory each), but the filename **under its platform directory** is — and
+    it survives a re-rooted mount, which the bare filename's uniqueness does not
+    buy anything extra over.
+    """
+    parent, name = os.path.split(path)
+    return os.path.join(os.path.basename(parent), name)
+
+
 def match_instance_for_launch_path(instances: Sequence[GameInstance], launch_path: str) -> InstanceMatch | None:
     """Return the instance whose command line runs *launch_path*, or None.
 
     *launch_path* is the resolved absolute launch target baked into the ROM's
     Steam shortcut. An instance matches when that exact path is one of its argv
-    tokens; failing that, when one of its argv tokens has the same **basename**.
+    tokens; failing that, when one of its argv tokens has the same **path tail**
+    (``<parent>/<file>``, see :func:`path_tail`).
 
-    The basename fallback exists because the command lines being matched are read
+    The tail fallback exists because the command lines being matched are read
     from inside the flatpak sandbox, whose mount namespace may expose the ROM
     under a different absolute path than the host one the launch command was
-    baked from. It is deliberately narrow — whole-basename equality on a single
-    token, never a substring test, so ``a.bin`` cannot match ``aaa.bin`` — and
-    the exact-path pass always wins, so a correct absolute match is never
-    displaced by a coincidental filename.
+    baked from. Only the ROOT can differ that way, so comparing the tail rather
+    than the whole path is what survives the re-rooting — while still telling
+    ``roms/snes/Aladdin.zip`` from ``roms/genesis/Aladdin.zip``, which a bare
+    filename cannot, and which matters because the sandbox regime is exactly the
+    one where EVERY match is a fallback match. It is component equality, never a
+    substring test, so ``a.bin`` cannot match ``aaa.bin``.
 
-    ``None`` means no instance is running this ROM: the caller must signal
-    nothing rather than fall back to "some instance", because the tree it would
-    hit is another game whose save is being held open.
+    Two refusals guard the fallback, because it is a weaker signal than an exact
+    hit. It never runs while an exact hit exists (the whole first pass completes
+    first), and it refuses outright when it matches **more than one** instance:
+    picking either would be picking by scan order, which is the arbitrary kill
+    this function exists to prevent. The exact pass has no such rule — argv
+    carrying the identical absolute path IS this ROM, however many trees run it.
+
+    ``None`` means no instance could be attributed to this ROM — nothing matched,
+    or too much did. The caller must signal nothing rather than fall back to
+    "some instance", because the tree it would hit is another game whose save is
+    being held open.
     """
     if not launch_path:
         return None
     for instance in instances:
         if launch_path in instance.argv:
             return InstanceMatch(instance=instance, discriminator=PATH_DISCRIMINATOR)
-    basename = os.path.basename(launch_path)
-    if not basename:
+    if not os.path.basename(launch_path):
         return None
-    for instance in instances:
-        if any(os.path.basename(token) == basename for token in instance.argv):
-            return InstanceMatch(instance=instance, discriminator=BASENAME_DISCRIMINATOR)
-    return None
+    tail = path_tail(launch_path)
+    hits = [instance for instance in instances if any(path_tail(token) == tail for token in instance.argv)]
+    if len(hits) != 1:
+        return None
+    return InstanceMatch(instance=hits[0], discriminator=PATH_TAIL_DISCRIMINATOR)

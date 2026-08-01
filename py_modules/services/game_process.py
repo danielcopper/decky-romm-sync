@@ -101,11 +101,14 @@ class GameProcessService:
         #
         # The claim stays GLOBAL rather than per-ROM even now that the ladder
         # targets one instance. Per-ROM would admit two ladders whose matches
-        # both landed on the same instance — the basename fallback below can put
-        # two ROM ids on one tree — which is precisely the save-destroying second
-        # request. Global costs at most the ~6 s grace window of a stop the user
-        # is already watching before a second game can be stopped, and cannot be
-        # wrong; the finer claim buys a rare convenience for a real risk.
+        # both landed on the same instance — the path-tail fallback below is a
+        # weaker signal than an exact hit, so two ROM ids reaching one tree is
+        # not excluded — which is precisely the save-destroying second request.
+        # Global costs at most the grace window of a stop the user is already
+        # watching (and the poll returns the moment the tree is gone, so the
+        # usual cost is one 0.25 s interval, not the full 6 s) before a second
+        # game can be stopped, and it cannot be wrong; the finer claim buys a
+        # rare convenience for a real risk.
         if self._stopping:
             self._log_debug("GameProcessService: stop refused — a stop is already in flight")
             return {
@@ -184,25 +187,28 @@ class GameProcessService:
     def _matched_pids(self, rom_id: int, instances: list[GameInstance]) -> list[int] | None:
         """Return the pids of the instance running *rom_id*, or None if none is.
 
-        The launch target comes from the same seam that bakes it into the
-        shortcut, so the value compared against a live command line is the value
-        that was launched. ``None`` is the refusal: with several instances of the
-        app alive — a second game, or ES-DE opened on its own — signalling an
-        unmatched one would end someone else's session mid-save, which is worse
-        than not stopping at all.
+        The launch target is resolved through the same seam that bakes it into
+        the shortcut, so the value compared against a live command line is the
+        one that derivation yields. ``None`` is the refusal — no instance could
+        be attributed to this ROM, whether because none matched or because more
+        than one did ambiguously. With several instances of the app alive — a
+        second game, or ES-DE opened on its own — signalling an unmatched one
+        would end someone else's session mid-save, which is worse than not
+        stopping at all.
 
         Which discriminator matched is logged at INFO deliberately: whether a
         sandbox command line shows the same absolute path as the host is not yet
         settled on device, and this log is what settles it. A run that only ever
-        matches by basename means the exact-path comparison never holds inside
-        the sandbox.
+        matches by ``path-tail`` means the exact-path comparison never holds
+        inside the sandbox.
         """
         launch_path = self._launch_path.launch_path_for_rom(rom_id)
         match = match_instance_for_launch_path(instances, launch_path or "")
         if match is None:
             self._logger.info(
-                f"Stop Game refused for rom_id={rom_id}: {len(instances)} live "
-                f"{self._flatpak_app_id} instance(s), none running {launch_path!r} — signalling nothing"
+                f"Stop Game refused for rom_id={rom_id}: none of the {len(instances)} live "
+                f"{self._flatpak_app_id} instance(s) could be attributed to {launch_path!r} "
+                f"(no match, or more than one) — signalling nothing"
             )
             return None
         self._logger.info(

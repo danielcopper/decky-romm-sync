@@ -312,9 +312,10 @@ all. The plugin's Stop Game finds the emulator itself and ends it.
 
 It ends **only the game you pressed it for**. RetroDECK can be running more than one thing at a time — a second game
 launched from another shortcut, or ES-DE opened on its own — so the plugin identifies the session by the ROM the button
-belongs to and leaves the rest alone. If it cannot find a running session for that game, it stops nothing and tells you
-so: ending someone else's game mid-save would be worse than not stopping at all. Should that happen while the game
-really is running, Resume stays available, and quitting from inside the emulator always works.
+belongs to and leaves the rest alone. If it cannot pin down that game's session — nothing matches, or it cannot tell two
+sessions apart with certainty — it stops nothing and tells you so: ending someone else's game mid-save would be worse
+than not stopping at all. Should that happen while the game really is running, Resume stays available, and quitting from
+inside the emulator always works.
 
 It asks the emulator to quit politely **once**, waits a few seconds for it to shut down (which is when emulators write
 their save file), and only forces it if it is still running after that. The polite request is deliberately never
