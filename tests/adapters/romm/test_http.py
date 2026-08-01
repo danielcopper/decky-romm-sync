@@ -1067,6 +1067,13 @@ class TestNotFoundDiscrimination:
             ("detail is not a string", {"content_type": "application/json", "body": b'{"detail":["a","b"]}'}),
             ("detail is absent", {"content_type": "application/json", "body": b'{"error":"nope"}'}),
             ("detail is blank", {"content_type": "application/json", "body": b'{"detail":"   "}'}),
+            # A rephrased default is still the default: a real entity answer
+            # NAMES the entity, so it is never the bare phrase in any casing.
+            ("generic detail, lowercase", {"content_type": "application/json", "body": b'{"detail":"not found"}'}),
+            (
+                "generic detail, upper + padded",
+                {"content_type": "application/json", "body": b'{"detail":" NOT FOUND "}'},
+            ),
             ("body is not an object", {"content_type": "application/json", "body": b'["Not Found"]'}),
         ],
     )

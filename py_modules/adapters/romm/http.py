@@ -235,6 +235,9 @@ class RommHttpAdapter:
     # wording moves between releases while this one default stays put.
     # Blocklisting the default is the robust test in the other direction:
     # anything else carrying a ``detail`` string counts as RomM answering.
+    # Matched case-insensitively: a real entity answer always NAMES the entity,
+    # so it can never be the bare phrase in any casing, while a proxy that
+    # rephrases the default must not slip through as an entity verdict.
     _GENERIC_NOT_FOUND_DETAIL = "Not Found"
 
     @staticmethod
@@ -255,13 +258,14 @@ class RommHttpAdapter:
 
         True only for a JSON response whose body parsed to an object carrying a
         ``detail`` string that names something — i.e. neither blank nor
-        :attr:`_GENERIC_NOT_FOUND_DETAIL`. A missing, unparseable, or non-object
-        body reaches here as ``detail=None`` and is treated exactly like a
-        non-JSON one.
+        :attr:`_GENERIC_NOT_FOUND_DETAIL` in any casing. A missing, unparseable,
+        or non-object body reaches here as ``detail=None`` and is treated
+        exactly like a non-JSON one.
         """
-        if not cls._has_json_content_type(exc):
+        if not cls._has_json_content_type(exc) or not isinstance(detail, str):
             return False
-        return isinstance(detail, str) and detail.strip() not in ("", cls._GENERIC_NOT_FOUND_DETAIL)
+        named = detail.strip().casefold()
+        return named not in ("", cls._GENERIC_NOT_FOUND_DETAIL.casefold())
 
     def _translate_not_found(self, exc: urllib.error.HTTPError, url: str, method: str, *, detail: Any) -> RommApiError:
         """Map a 404 to :class:`RommNotFoundError` only when RomM answered about an entity.

@@ -1183,11 +1183,12 @@ stale device registration on it. A bare HTTP 404 does not carry that meaning on 
 misconfigured path prefix with the same status and a generic `{"detail": "Not Found"}` body, and a reverse proxy in
 front of RomM (Cloudflare Tunnel, Traefik) answers a misroute with an HTML or empty one. So on the **API routes** the
 adapter raises `RommNotFoundError` only for a response that proves it came from RomM's entity layer: a JSON content type
-whose body parses to an object carrying a `detail` string that is neither blank nor FastAPI's stock `Not Found`. The
-requested id is deliberately **not** parsed back out of that detail — its wording moves between RomM releases while the
-generic default stays put, so blocklisting the default is the robust test. Every other 404 shape degrades to a plain
-`RommApiError`, which `classify_error` maps to `server_unreachable`, so infrastructure can no longer authorize a
-deletion and each caller fails **open** on it instead.
+whose body parses to an object carrying a `detail` string that is neither blank nor FastAPI's stock `Not Found` (matched
+case-insensitively — a real entity answer always names the entity, so it is never the bare phrase). The requested id is
+deliberately **not** parsed back out of that detail — its wording moves between RomM releases while the generic default
+stays put, so blocklisting the default is the robust test. Every other 404 shape degrades to a plain `RommApiError`,
+which `classify_error` maps to `server_unreachable`, so infrastructure can no longer authorize a deletion and each
+caller fails **open** on it instead.
 
 The **byte-stream routes** — `download`, `download_conditional`, `download_external` — opt out via
 `translate_http_error(..., asset_route=True)` and keep the plain status mapping. Their 404 answers about a _file_, not
