@@ -27,7 +27,7 @@ if TYPE_CHECKING:
         PruneSaveCoordinator,
         RecoveryBundleStore,
         RetroDeckPaths,
-        RommRomReader,
+        RommLivenessApi,
         SaveDriftProbeFn,
         SteamRecoveryStore,
         UnitOfWorkFactory,
@@ -49,7 +49,7 @@ class PruneServiceConfig:
     uuid_gen: UuidGen
     emit: EventEmitter
     uow_factory: UnitOfWorkFactory
-    romm_api: RommRomReader
+    romm_api: RommLivenessApi
     recovery_store: RecoveryBundleStore
     prune_artifacts: PruneArtifactStore
     steam_recovery: SteamRecoveryStore

@@ -20,11 +20,19 @@ _NAMESPACE_SETTINGS = {"romm_url": "https://romm.example", "romm_user_id": 1}
 
 
 class _FakeRomReader:
-    """A RomM ROM reader whose per-id answer the test dictates."""
+    """A RomM reader whose per-id answer, and identity answer, the test dictates."""
 
-    def __init__(self, answers: Mapping[int, object]) -> None:
+    def __init__(self, answers: Mapping[int, object], user: object = None) -> None:
         self._answers = answers
+        self._user = user
         self.calls: list[int] = []
+        self.user_calls = 0
+
+    def get_current_user(self) -> object:
+        self.user_calls += 1
+        if isinstance(self._user, Exception):
+            raise self._user
+        return self._user
 
     def get_rom_once(self, rom_id: int) -> object:
         self.calls.append(rom_id)
@@ -39,8 +47,9 @@ def _prober(
     settings: dict[str, Any] | None = None,
     *,
     controls: list[int] | None = None,
+    user: object = None,
 ) -> tuple[LivenessProber, _FakeRomReader]:
-    reader = _FakeRomReader(answers)
+    reader = _FakeRomReader(answers, user)
     prober = LivenessProber(
         config=LivenessProberConfig(
             loop=asyncio.get_event_loop(),
@@ -216,19 +225,23 @@ class TestEndpointConfirmation:
         assert verdicts[7]["status"] == "uncertain"
         assert reader.calls == [7], "nothing was going to be deleted, so nothing needed proving"
 
-    async def test_controls_are_tried_until_one_answers(self):
-        answers = {
-            7: RommNotFoundError("gone"),
-            97: RommNotFoundError("also gone"),
-            98: RommConnectionError("flaky"),
-            99: {"id": 99},
-        }
-        prober, reader = _prober(answers, controls=[97, 98, 99])
+    async def test_a_second_known_live_id_is_tried_when_the_first_has_also_gone(self):
+        """One retry, because a single control can have legitimately vanished too."""
+        answers = {7: RommNotFoundError("gone"), 97: RommNotFoundError("also gone"), 98: {"id": 98}}
+        prober, reader = _prober(answers, controls=[97, 98])
 
         verdicts = await prober.probe_many({7})
 
         assert verdicts[7]["status"] == "vanished"
-        assert reader.calls == [7, 97, 98, 99]
+        assert reader.calls == [7, 97, 98]
+
+    async def test_the_control_walk_stops_at_two(self):
+        """Bounded: a control is a check, not a survey of the library."""
+        answers = {7: RommNotFoundError("gone"), 97: RommNotFoundError("x"), 98: RommNotFoundError("x")}
+        prober, reader = _prober(answers, controls=[97, 98, 99])
+
+        assert (await prober.probe_many({7}))[7]["reason"] == UNCONFIRMED_REASON
+        assert reader.calls == [7, 97, 98], "the third candidate control is never asked"
 
     async def test_the_probed_ids_are_never_used_as_their_own_control(self):
         seen: list[set[int]] = []
@@ -280,11 +293,65 @@ class TestEndpointConfirmation:
 
         assert any("run-7" in record.message and "404s stand" in record.message for record in caplog.records)
 
-    async def test_a_round_with_no_control_available_says_that_too(self, caplog):
+    async def test_a_round_with_no_proof_at_all_names_the_none_tier(self, caplog):
         prober, _ = _prober({7: RommNotFoundError("gone")}, controls=[])
         prober.bind_run("run-7", romm_namespace(_NAMESPACE_SETTINGS))
 
         with caplog.at_level(logging.WARNING, logger="prune-liveness-test"):
             await prober.probe_many({7})
 
-        assert any("none available" in record.message for record in caplog.records)
+        assert any("tier=none" in record.message for record in caplog.records)
+        assert any("nothing will be removed" in record.message for record in caplog.records)
+
+    @pytest.mark.parametrize(
+        ("probed", "controls", "user", "expected"),
+        [
+            ({7: RommNotFoundError("gone"), 8: {"id": 8}}, [], None, "tier=still_there"),
+            ({7: RommNotFoundError("gone"), 99: {"id": 99}}, [99], None, "tier=canary_rom"),
+            ({7: RommNotFoundError("gone")}, [], {"id": 1}, "tier=canary_user"),
+        ],
+    )
+    async def test_every_tier_names_itself_in_the_audit_trail(self, caplog, probed, controls, user, expected):
+        prober, _ = _prober(probed, controls=controls, user=user)
+        prober.bind_run("run-7", romm_namespace(_NAMESPACE_SETTINGS))
+
+        with caplog.at_level(logging.INFO, logger="prune-liveness-test"):
+            await prober.probe_many({key for key in probed if key != 99})
+
+        assert any("run-7" in record.message and expected in record.message for record in caplog.records)
+
+
+class TestUserFallbackTier:
+    """Only when the library offers no known-live id at all."""
+
+    async def test_a_matching_user_identity_vouches_for_the_round(self):
+        prober, reader = _prober({7: RommNotFoundError("gone")}, controls=[], user={"id": 1})
+
+        assert (await prober.probe_many({7}))[7]["status"] == "vanished"
+        assert reader.user_calls == 1
+
+    async def test_a_different_user_does_not_vouch(self):
+        """A token that now belongs to someone else cannot authorize this run's deletions."""
+        prober, _ = _prober({7: RommNotFoundError("gone")}, controls=[], user={"id": 999})
+
+        assert (await prober.probe_many({7}))[7]["reason"] == UNCONFIRMED_REASON
+
+    @pytest.mark.parametrize("user", [None, {}, {"id": None}, "not-a-dict", RommConnectionError("down")])
+    async def test_an_absent_or_unusable_identity_does_not_vouch(self, user):
+        prober, _ = _prober({7: RommNotFoundError("gone")}, controls=[], user=user)
+
+        assert (await prober.probe_many({7}))[7]["reason"] == UNCONFIRMED_REASON
+
+    async def test_it_is_never_reached_while_a_known_live_id_exists(self):
+        """A control that 404s is a proof failure, not a reason to seek a softer answer."""
+        answers = {7: RommNotFoundError("gone"), 99: RommNotFoundError("also gone")}
+        prober, reader = _prober(answers, controls=[99], user={"id": 1})
+
+        assert (await prober.probe_many({7}))[7]["reason"] == UNCONFIRMED_REASON
+        assert reader.user_calls == 0
+
+    async def test_it_is_not_reached_when_a_rom_control_answers(self):
+        prober, reader = _prober({7: RommNotFoundError("gone"), 99: {"id": 99}}, controls=[99], user={"id": 1})
+
+        assert (await prober.probe_many({7}))[7]["status"] == "vanished"
+        assert reader.user_calls == 0

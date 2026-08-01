@@ -42,27 +42,43 @@ distinguishes a dead id, so every liveness probe goes through it.
 
 ### The 404 has to come from RomM
 
-A 404 is only evidence that a ROM is gone if the thing answering is RomM and is answering about ROMs correctly. A
-reverse proxy that misroutes `/api/roms/*` answers 404 for every id — including ids that plainly exist — and one request
-at a time that is indistinguishable from the real thing. Believed, it is also amplified: the run probes a group's
-**live** siblings too, so a misroute turns "one version vanished, repoint to the other" into "the whole game is gone",
-taking the Steam shortcut and any unselected installed content with it.
+A 404 is only evidence that a ROM is gone if the thing answering is RomM and the request reached the ROM route. RomM is
+FastAPI, so a reverse proxy with a wrong path prefix makes **RomM itself** answer a clean JSON 404
+(`{"detail": "Not Found"}`) for every id — including ids that plainly exist. No body-shape check distinguishes that
+route-404 from an entity-404, and one request at a time neither can a human. Believed, it is also amplified: the run
+probes a group's **live** siblings too, so a misroute turns "one version vanished, repoint to the other" into "the whole
+game is gone", taking the Steam shortcut and any unselected installed content with it.
 
-So no 404 is honoured unless the same round holds positive evidence that the ROM endpoint answers:
+So no 404 is honoured unless the same round holds positive proof, recorded as the tier that supplied it:
 
-- **A live verdict is its own proof.** Any `still_there` answer — a 200 carrying the right id — came from the very
-  endpoint whose 404s are in question, so a round that saw one needs nothing further. Groups with a live member (every
-  repoint case) pay nothing for this.
-- **Otherwise the round asks a control.** Up to three ids the last complete fetch is recorded as having returned, which
-  are by construction not candidates, are probed with the same single-attempt request. One correct answer confirms the
-  round; the first success stops the walk, so the usual cost is one extra request per round, never per candidate.
-- **No confirmation, no deletion.** Every 404 in that round becomes `uncertain` with reason `unconfirmed_server`, the
-  group is skipped, and the message says the server's answers could not be confirmed. A control that is itself genuinely
-  gone reads the same way — retaining data rather than removing it.
+| Tier          | What it is                                                                     |
+| ------------- | ------------------------------------------------------------------------------ |
+| `still_there` | A probed ROM answered 200 with its own id — the round already proved the route |
+| `canary_rom`  | A known-live id answered 200 with its own id                                   |
+| `canary_user` | No known-live id exists; the authenticated user matched the pinned namespace   |
+| `none`        | Nothing vouched — every 404 in the round is unconfirmed and nothing is removed |
 
-Confirmation is per round and never carried over, for the same reason the re-proof rounds exist at all: a route can
-start misbehaving between them. The control's outcome is logged with the run id, so a misroute is diagnosable from the
-audit trail rather than only from the retained rows.
+**`still_there` is free.** Any 200-carrying-the-right-id came from the very route whose 404s are in question, so groups
+with a live member — every repoint case — pay nothing.
+
+**`canary_rom` is the dedicated check**, and it deliberately rides the same route family rather than a health or version
+endpoint, which a path misroute leaves working. Its subjects are ids the last complete fetch is recorded as returning:
+the best available liveness prior, and by construction never candidates. One 200-with-its-own-id proves route, auth and
+server at once. At most two are asked — a retry, because the first can genuinely have vanished since the sync, and no
+more, because this is a check rather than a survey.
+
+**`canary_user` is the weaker fallback**, reached only when the library holds no known-live id at all (an essentially
+empty library). It shows the server is RomM and the token still belongs to the pinned user, but says nothing about the
+ROM route, which is why it is last and why the tier is written down.
+
+**A control that 404s is a proof failure, not a licence to keep looking.** Every 404 in the round becomes `uncertain`
+with reason `unconfirmed_server`, the group is skipped, and the message says the server's answers could not be confirmed
+— the same outcome whether the route is broken or the control genuinely vanished, because from here those are the same
+observation.
+
+Proof is per round and never carried over, for the same reason the re-proof rounds exist at all: a route can start
+misbehaving between them. The tier is logged with the run id, so which authority a run acted on is readable after the
+fact rather than inferred from what survived.
 
 This is a precondition on top of the 404 rule, never a softening of it: deletion authority is still, only, a fresh
 single-attempt exact-id 404 under the pinned namespace.

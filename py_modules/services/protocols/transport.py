@@ -442,6 +442,16 @@ class RommAchievementsApi(RommRomReader, RommVersion, Protocol):
     """RomM surface for AchievementsService — ROM detail + server identity."""
 
 
+class RommLivenessApi(RommRomReader, RommVersion, Protocol):
+    """Exact-ID ROM reads plus the server identity that can vouch for them.
+
+    Removed-game cleanup needs both on one adapter: a 404 from ``get_rom_once``
+    is only deletion authority once something has shown that the ROM route is
+    answering, and when no ROM answer is available the authenticated user
+    identity is the weaker fallback proof.
+    """
+
+
 class RommConnectionApi(RommPlatformReader, RommVersion, RommTokenApi, Protocol):
     """RomM surface for ConnectionService — platform listing, version/heartbeat, token mint/delete."""
 

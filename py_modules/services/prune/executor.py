@@ -44,7 +44,7 @@ if TYPE_CHECKING:
         PruneArtifactStore,
         PruneSaveCoordinator,
         RecoveryBundleStore,
-        RommRomReader,
+        RommLivenessApi,
         SaveDriftProbeFn,
         SteamRecoveryStore,
         VersionSwitcherFn,
@@ -61,7 +61,7 @@ class PruneExecutorConfig:
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     emit: Callable[..., Awaitable[None]]
-    romm_api: RommRomReader
+    romm_api: RommLivenessApi
     recovery_store: RecoveryBundleStore
     prune_artifacts: PruneArtifactStore
     steam_recovery: SteamRecoveryStore
