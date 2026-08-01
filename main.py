@@ -449,15 +449,17 @@ class Plugin:
         self.loop.create_task(self._save_sync_service.check_save_status_background(int(rom_id)))
         return {"success": True}
 
-    async def stop_running_game(self):
-        """Terminate the game RetroDECK is currently running.
+    async def stop_running_game(self, rom_id):
+        """Terminate the RetroDECK instance running *rom_id*.
 
         Backs the game-detail running overlay's Stop Game action. Steam's own
         ``TerminateApp`` cannot end these games — the shortcut execs ``flatpak
         run``, whose portal-started sandbox is not under Steam's reaper — so the
-        kill runs backend-side over the flatpak instance's host processes.
+        kill runs backend-side over the flatpak instance's host processes. The
+        ROM is what picks the instance: RetroDECK can have several live at once,
+        and only the one running this ROM may be signalled.
         """
-        return await self._game_process_service.stop_running_game()
+        return await self._game_process_service.stop_running_game(int(rom_id))
 
     async def finalize_game_session(self, rom_id):
         result = await self._session_lifecycle_service.finalize(rom_id)

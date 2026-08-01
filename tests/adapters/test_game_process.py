@@ -2,9 +2,10 @@
 
 Drives a fake flatpak instance registry and a fake ``/proc`` tree under
 ``tmp_path`` by pointing the adapter's ``_RUNTIME_BASE`` / ``_PROC`` module
-constants at them, so instance resolution, the deepest-first descent, and every
-fail-soft path are exercised without a live sandbox. The signal methods are
-driven through a stubbed ``os.kill`` — nothing here ever signals a real process.
+constants at them, so instance resolution, the deepest-first descent, the
+command-line read that identifies what a tree is running, and every fail-soft
+path are exercised without a live sandbox. The signal methods are driven through
+a stubbed ``os.kill`` — nothing here ever signals a real process.
 """
 
 from __future__ import annotations
@@ -72,13 +73,32 @@ def _make_instance(
         (entry / "bwrapinfo.json").write_text(json.dumps({"child-pid": child_pid}), encoding="utf-8")
 
 
-def _make_process(proc_root: Path, pid: int, comm: str, children: list[int] | None = None) -> None:
-    """Write a fake ``/proc/<pid>`` entry with a ``comm`` and a ``children`` list."""
+def _make_process(
+    proc_root: Path,
+    pid: int,
+    comm: str,
+    children: list[int] | None = None,
+    argv: list[str] | None = None,
+) -> None:
+    """Write a fake ``/proc/<pid>`` entry: ``comm``, ``children``, and ``cmdline``.
+
+    *argv* ``None`` writes the ordinary shape — the NUL-separated tokens with the
+    trailing NUL the kernel emits, defaulting to just the *comm*. Omitting the
+    ``cmdline`` file entirely (the unreadable case) is done by the tests that
+    care, by deleting it afterwards.
+    """
     entry = proc_root / str(pid)
     task = entry / "task" / str(pid)
     task.mkdir(parents=True)
     (entry / "comm").write_text(f"{comm}\n", encoding="utf-8")
     task.joinpath("children").write_text(" ".join(str(c) for c in (children or [])) + " \n", encoding="utf-8")
+    tokens = argv if argv is not None else [comm]
+    (entry / "cmdline").write_text("".join(f"{token}\0" for token in tokens), encoding="utf-8")
+
+
+def _find_pids(app_id: str) -> list[int]:
+    """Every signal-target pid across the app's live instances, instance order."""
+    return [pid for instance in GameProcessAdapter().find_game_instances(app_id) for pid in instance.pids]
 
 
 def _make_status(proc_root: Path, pid: int, state: str) -> None:
@@ -91,10 +111,10 @@ def _make_status(proc_root: Path, pid: int, state: str) -> None:
     )
 
 
-# ── find_game_pids ───────────────────────────────────────────────────────────
+# ── find_game_instances ──────────────────────────────────────────────────────
 
 
-class TestFindGamePids:
+class TestFindGameInstancePids:
     def test_returns_the_instance_subtree_deepest_first_without_bwrap(
         self, instances_root: Path, proc_root: Path
     ) -> None:
@@ -106,7 +126,7 @@ class TestFindGamePids:
         _make_process(proc_root, 1003, "pipewire", [])
 
         # Deepest first, and the bwrap scaffolding never appears as a target.
-        assert GameProcessAdapter().find_game_pids(APP_ID) == [1003, 1002, 1001]
+        assert _find_pids(APP_ID) == [1003, 1002, 1001]
 
     def test_sibling_children_share_a_level_and_precede_their_parent(
         self, instances_root: Path, proc_root: Path
@@ -117,7 +137,7 @@ class TestFindGamePids:
         _make_process(proc_root, 1002, "duckstation", [])
         _make_process(proc_root, 1003, "helper", [])
 
-        pids = GameProcessAdapter().find_game_pids(APP_ID)
+        pids = _find_pids(APP_ID)
         assert pids[-1] == 1001
         assert set(pids[:2]) == {1002, 1003}
 
@@ -128,11 +148,9 @@ class TestFindGamePids:
         _make_process(proc_root, 1001, "bwrap", [1002])
         _make_process(proc_root, 1002, "pcsx2", [])
 
-        assert GameProcessAdapter().find_game_pids(APP_ID) == [1002]
+        assert _find_pids(APP_ID) == [1002]
 
-    def test_two_live_instances_of_the_same_app_are_both_walked_and_deduped(
-        self, instances_root: Path, proc_root: Path
-    ) -> None:
+    def test_two_live_instances_of_the_same_app_are_both_walked(self, instances_root: Path, proc_root: Path) -> None:
         _make_instance(instances_root, "inst-a", child_pid=1000)
         _make_instance(instances_root, "inst-b", child_pid=2000)
         _make_process(proc_root, 1000, "bwrap", [1001])
@@ -140,14 +158,14 @@ class TestFindGamePids:
         _make_process(proc_root, 2000, "bwrap", [2001])
         _make_process(proc_root, 2001, "dolphin-emu", [])
 
-        assert sorted(GameProcessAdapter().find_game_pids(APP_ID)) == [1001, 2001]
+        assert sorted(_find_pids(APP_ID)) == [1001, 2001]
 
     def test_a_different_app_id_resolves_to_nothing(self, instances_root: Path, proc_root: Path) -> None:
         _make_instance(instances_root, "inst-a", app_id="org.videolan.VLC", child_pid=1000)
         _make_process(proc_root, 1000, "bwrap", [1001])
         _make_process(proc_root, 1001, "vlc", [])
 
-        assert GameProcessAdapter().find_game_pids(APP_ID) == []
+        assert _find_pids(APP_ID) == []
 
     def test_an_app_id_that_is_only_a_prefix_of_ours_does_not_match(
         self, instances_root: Path, proc_root: Path
@@ -157,19 +175,19 @@ class TestFindGamePids:
         _make_process(proc_root, 1000, "bwrap", [1001])
         _make_process(proc_root, 1001, "retroarch", [])
 
-        assert GameProcessAdapter().find_game_pids(APP_ID) == []
+        assert _find_pids(APP_ID) == []
 
     def test_an_info_file_without_a_name_line_is_skipped(self, instances_root: Path, proc_root: Path) -> None:
         _make_instance(instances_root, "inst-a", app_id=None, child_pid=1000)
         _make_process(proc_root, 1000, "bwrap", [1001])
         _make_process(proc_root, 1001, "retroarch", [])
 
-        assert GameProcessAdapter().find_game_pids(APP_ID) == []
+        assert _find_pids(APP_ID) == []
 
     def test_an_instance_without_an_info_file_is_skipped(self, instances_root: Path, proc_root: Path) -> None:
         (instances_root / "inst-a").mkdir()
 
-        assert GameProcessAdapter().find_game_pids(APP_ID) == []
+        assert _find_pids(APP_ID) == []
 
     def test_a_missing_bwrapinfo_is_skipped_without_failing_the_scan(
         self, instances_root: Path, proc_root: Path
@@ -180,7 +198,7 @@ class TestFindGamePids:
         _make_process(proc_root, 2000, "bwrap", [2001])
         _make_process(proc_root, 2001, "retroarch", [])
 
-        assert GameProcessAdapter().find_game_pids(APP_ID) == [2001]
+        assert _find_pids(APP_ID) == [2001]
 
     @pytest.mark.parametrize(
         "body",
@@ -199,7 +217,7 @@ class TestFindGamePids:
     def test_an_unusable_bwrapinfo_yields_no_pids(self, instances_root: Path, proc_root: Path, body: str) -> None:
         _make_instance(instances_root, "inst-a", bwrapinfo=body)
 
-        assert GameProcessAdapter().find_game_pids(APP_ID) == []
+        assert _find_pids(APP_ID) == []
 
     def test_a_pid_that_vanished_mid_scan_is_skipped_not_fatal(self, instances_root: Path, proc_root: Path) -> None:
         # 1002 is listed as a child but its /proc entry is already gone (it
@@ -208,7 +226,7 @@ class TestFindGamePids:
         _make_process(proc_root, 1000, "bwrap", [1001])
         _make_process(proc_root, 1001, "retroarch", [1002])
 
-        assert GameProcessAdapter().find_game_pids(APP_ID) == [1001]
+        assert _find_pids(APP_ID) == [1001]
 
     def test_a_root_pid_that_vanished_before_the_walk_yields_no_pids(
         self, instances_root: Path, proc_root: Path
@@ -216,7 +234,7 @@ class TestFindGamePids:
         # The instance dir still exists but its bwrap is already reaped.
         _make_instance(instances_root, "inst-a", child_pid=1000)
 
-        assert GameProcessAdapter().find_game_pids(APP_ID) == []
+        assert _find_pids(APP_ID) == []
 
     def test_an_absent_instance_registry_yields_no_pids(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proc_root: Path
@@ -225,7 +243,7 @@ class TestFindGamePids:
         monkeypatch.setattr(game_process, "_RUNTIME_BASE", str(tmp_path / "nowhere"))
         monkeypatch.setattr(game_process.os, "getuid", lambda: UID)
 
-        assert GameProcessAdapter().find_game_pids(APP_ID) == []
+        assert _find_pids(APP_ID) == []
 
     def test_an_unreadable_instance_registry_yields_no_pids(
         self, instances_root: Path, proc_root: Path, monkeypatch: pytest.MonkeyPatch
@@ -237,7 +255,7 @@ class TestFindGamePids:
 
         monkeypatch.setattr(game_process.os, "listdir", _boom)
 
-        assert GameProcessAdapter().find_game_pids(APP_ID) == []
+        assert _find_pids(APP_ID) == []
 
     def test_a_self_referencing_children_list_terminates(self, instances_root: Path, proc_root: Path) -> None:
         # /proc can't really produce a cycle, but the visited set must make one
@@ -246,7 +264,7 @@ class TestFindGamePids:
         _make_process(proc_root, 1000, "bwrap", [1001])
         _make_process(proc_root, 1001, "retroarch", [1000, 1001])
 
-        assert GameProcessAdapter().find_game_pids(APP_ID) == [1001]
+        assert _find_pids(APP_ID) == [1001]
 
     def test_a_children_file_with_junk_tokens_keeps_only_the_pids(self, instances_root: Path, proc_root: Path) -> None:
         _make_instance(instances_root, "inst-a", child_pid=1000)
@@ -254,7 +272,7 @@ class TestFindGamePids:
         (proc_root / "1000" / "task" / "1000" / "children").write_text("1001 -3 abc \n", encoding="utf-8")
         _make_process(proc_root, 1001, "retroarch", [])
 
-        assert GameProcessAdapter().find_game_pids(APP_ID) == [1001]
+        assert _find_pids(APP_ID) == [1001]
 
     def test_a_tree_deeper_than_the_depth_cap_stops_at_the_cap(self, instances_root: Path, proc_root: Path) -> None:
         # A chain twice as deep as the cap: the walk is bounded, and what it did
@@ -266,9 +284,129 @@ class TestFindGamePids:
             _make_process(proc_root, 1000 + offset, f"level{offset}", [1000 + offset + 1])
         _make_process(proc_root, 1000 + depth, "deepest", [])
 
-        pids = GameProcessAdapter().find_game_pids(APP_ID)
+        pids = _find_pids(APP_ID)
         assert len(pids) == game_process._MAX_DEPTH - 1
         assert pids == sorted(pids, reverse=True)
+
+
+class TestFindGameInstanceGrouping:
+    """Each live instance is reported on its own, with what its tree is running.
+
+    The grouping is the whole point: pooling every instance's pids is what made
+    Stop Game end every RetroDECK session at once, and the command lines are how
+    a caller tells one instance's game from another's.
+    """
+
+    ROM_A = "/home/deck/retrodeck/roms/psx/game-a.chd"
+    ROM_B = "/home/deck/retrodeck/roms/snes/game-b.sfc"
+
+    def _two_games(self, instances_root: Path, proc_root: Path) -> None:
+        _make_instance(instances_root, "inst-a", child_pid=1000)
+        _make_instance(instances_root, "inst-b", child_pid=2000)
+        _make_process(proc_root, 1000, "bwrap", [1001])
+        _make_process(proc_root, 1001, "duckstation", [], argv=["duckstation-qt", self.ROM_A])
+        _make_process(proc_root, 2000, "bwrap", [2001])
+        _make_process(proc_root, 2001, "retroarch", [], argv=["retroarch", "-L", "snes9x.so", self.ROM_B])
+
+    def test_each_live_instance_is_its_own_entry(self, instances_root: Path, proc_root: Path) -> None:
+        self._two_games(instances_root, proc_root)
+
+        instances = GameProcessAdapter().find_game_instances(APP_ID)
+
+        assert len(instances) == 2
+        assert sorted(instance.pids for instance in instances) == [(1001,), (2001,)]
+
+    def test_an_instances_argv_carries_the_rom_its_tree_is_running(self, instances_root: Path, proc_root: Path) -> None:
+        self._two_games(instances_root, proc_root)
+
+        instances = GameProcessAdapter().find_game_instances(APP_ID)
+        by_pid = {instance.pids[0]: instance for instance in instances}
+
+        assert self.ROM_A in by_pid[1001].argv
+        # And nothing of the other game's leaks into it — that separation is
+        # what lets a caller signal one instance and not the other.
+        assert self.ROM_B not in by_pid[1001].argv
+        assert self.ROM_B in by_pid[2001].argv
+        assert self.ROM_A not in by_pid[2001].argv
+
+    def test_argv_is_pooled_across_the_whole_tree_of_one_instance(self, instances_root: Path, proc_root: Path) -> None:
+        # The launcher shell holds the ROM path, the emulator below it does not —
+        # the instance is identified as a whole, so which process carries it
+        # must not matter.
+        _make_instance(instances_root, "inst-a", child_pid=1000)
+        _make_process(proc_root, 1000, "bwrap", [1001])
+        _make_process(proc_root, 1001, "run_game.sh", [1002], argv=["/bin/sh", "run_game.sh", self.ROM_A])
+        _make_process(proc_root, 1002, "retroarch", [], argv=["retroarch", "--verbose"])
+
+        instances = GameProcessAdapter().find_game_instances(APP_ID)
+
+        assert len(instances) == 1
+        assert instances[0].pids == (1002, 1001)
+        assert self.ROM_A in instances[0].argv
+
+    def test_the_trailing_nul_does_not_become_an_empty_token(self, instances_root: Path, proc_root: Path) -> None:
+        _make_instance(instances_root, "inst-a", child_pid=1000)
+        _make_process(proc_root, 1000, "bwrap", [1001])
+        _make_process(proc_root, 1001, "retroarch", [], argv=["retroarch", self.ROM_A])
+
+        instances = GameProcessAdapter().find_game_instances(APP_ID)
+
+        assert instances[0].argv == ("retroarch", self.ROM_A)
+
+    def test_an_unreadable_cmdline_leaves_the_instance_with_its_pids(
+        self, instances_root: Path, proc_root: Path
+    ) -> None:
+        # A process that exits between the tree walk and the cmdline read has no
+        # cmdline file left. It contributes no argv, but it is still a live
+        # signal target as far as this scan knows — never dropped.
+        _make_instance(instances_root, "inst-a", child_pid=1000)
+        _make_process(proc_root, 1000, "bwrap", [1001])
+        _make_process(proc_root, 1001, "retroarch", [], argv=["retroarch", self.ROM_A])
+        (proc_root / "1001" / "cmdline").unlink()
+
+        instances = GameProcessAdapter().find_game_instances(APP_ID)
+
+        assert len(instances) == 1
+        assert instances[0].pids == (1001,)
+        assert instances[0].argv == ()
+
+    def test_an_empty_cmdline_contributes_no_tokens(self, instances_root: Path, proc_root: Path) -> None:
+        # A kernel thread (or an already-reaped process) reads as a zero-length
+        # cmdline — the split must not turn that into an empty-string token.
+        _make_instance(instances_root, "inst-a", child_pid=1000)
+        _make_process(proc_root, 1000, "bwrap", [1001])
+        _make_process(proc_root, 1001, "retroarch", [], argv=[])
+
+        instances = GameProcessAdapter().find_game_instances(APP_ID)
+
+        assert instances[0].argv == ()
+
+    def test_an_instance_whose_tree_vanished_is_dropped_entirely(self, instances_root: Path, proc_root: Path) -> None:
+        # inst-dead's bwrap is already reaped, so it has no signal target at all;
+        # reporting it would make "something is running" true when nothing is.
+        _make_instance(instances_root, "inst-dead", child_pid=3000)
+        _make_instance(instances_root, "inst-live", child_pid=1000)
+        _make_process(proc_root, 1000, "bwrap", [1001])
+        _make_process(proc_root, 1001, "retroarch", [], argv=["retroarch", self.ROM_A])
+
+        instances = GameProcessAdapter().find_game_instances(APP_ID)
+
+        assert len(instances) == 1
+        assert instances[0].pids == (1001,)
+
+    def test_a_pid_vanishing_mid_scan_costs_only_that_pid(self, instances_root: Path, proc_root: Path) -> None:
+        # 1002 is listed as a child but its /proc entry is gone: it is not a
+        # signal target and contributes no argv, while its live sibling still is.
+        _make_instance(instances_root, "inst-a", child_pid=1000)
+        _make_process(proc_root, 1000, "bwrap", [1001])
+        _make_process(proc_root, 1001, "run_game.sh", [1002, 1003], argv=["run_game.sh", self.ROM_A])
+        _make_process(proc_root, 1003, "retroarch", [], argv=["retroarch"])
+
+        instances = GameProcessAdapter().find_game_instances(APP_ID)
+
+        assert len(instances) == 1
+        assert instances[0].pids == (1003, 1001)
+        assert instances[0].argv == ("retroarch", "run_game.sh", self.ROM_A)
 
 
 # ── request_stop / force_kill ────────────────────────────────────────────────
@@ -363,6 +501,6 @@ def test_the_instance_registry_path_is_built_from_the_real_uid(tmp_path: Path, m
 
     monkeypatch.setattr(game_process.os, "listdir", _record)
 
-    GameProcessAdapter().find_game_pids(APP_ID)
+    _find_pids(APP_ID)
 
     assert listed == [os.path.join(str(tmp_path / "run" / "user"), "1337", ".flatpak")]

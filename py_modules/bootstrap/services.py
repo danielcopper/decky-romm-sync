@@ -456,10 +456,14 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
     # Stop Game (the running-overlay chevron action). Steam's own TerminateApp
     # cannot reach a flatpak-detached emulator, so the kill is backend-side; the
     # service owns the escalation policy and takes the RetroDECK app id from the
-    # single domain constant the launch command is built from.
+    # single domain constant the launch command is built from. The instance the
+    # ladder signals is matched against the launch path from the SAME resolver
+    # that bakes the shortcut's launch command, so the path it compares a live
+    # process against is the path that was launched.
     game_process_service = GameProcessService(
         config=GameProcessServiceConfig(
             game_process=cfg.adapters.game_process,
+            launch_path=relaunch_options_resolver,
             sleeper=cfg.runtime.sleeper,
             logger=cfg.runtime.logger,
             log_debug=cfg.callbacks.log_debug,

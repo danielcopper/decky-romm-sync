@@ -2288,6 +2288,76 @@ describe("CustomPlayButton — Stop Game", () => {
     expect(utils.queryByText("Resume")).toBeNull();
   });
 
+  it("passes the rom id so the backend stops THIS game's instance", async () => {
+    // RetroDECK can have several live instances at once; without the rom id the
+    // backend cannot tell them apart and ends all of them (#1619).
+    const { menu } = await renderRunningWithMenu();
+    const stopItem = await menu.findByText("Stop Game");
+
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(backend.stopRunningGame).toHaveBeenCalledWith(42);
+  });
+
+  it("does not call the backend before the rom id has resolved", async () => {
+    // No rom id means no instance to identify, and "stop whichever is running"
+    // is the very bug the argument exists to prevent.
+    vi.mocked(getCachedGameDetail).mockResolvedValue({ found: true, rom_name: "Test ROM", installed: true });
+    const { utils, menu } = await renderRunningWithMenu();
+    const stopItem = await menu.findByText("Stop Game");
+
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(backend.stopRunningGame).not.toHaveBeenCalled();
+    // Nothing to confirm either — the destructive prompt is never raised for an
+    // action that cannot be carried out.
+    expect(showStopGameModal).not.toHaveBeenCalled();
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
+      title: "RomM Sync",
+      body: "Couldn't stop the game — still loading its details",
+    });
+    // Nothing was stopped, so Resume must stay reachable.
+    expect(await utils.findByText("Resume")).toBeInTheDocument();
+  });
+
+  it("keeps the overlay up when the backend matched no instance to this game", async () => {
+    // `game_not_running`: RetroDECK is alive but nothing of it is running this
+    // ROM, so the backend signalled nothing. The game may well still be running
+    // (a sandbox path the match could not tie back), so — unlike `not_running` —
+    // the overlay must NOT come down: Resume has to stay reachable.
+    vi.mocked(backend.stopRunningGame).mockResolvedValue({
+      success: false,
+      reason: "game_not_running",
+      message: "RetroDECK is running, but not this game — nothing was stopped.",
+    });
+    const { utils, menu } = await renderRunningWithMenu();
+    const stopItem = await menu.findByText("Stop Game");
+
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
+      title: "RomM Sync",
+      body: "RetroDECK is running, but not this game — nothing was stopped.",
+    });
+    expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+      expect.stringContaining("stop_running_game refused for appId=100 — reason=game_not_running"),
+    );
+    expect(await utils.findByText("Resume")).toBeInTheDocument();
+    expect(utils.queryByText("Play")).toBeNull();
+  });
+
   it("does NOT call the backend when the confirm is cancelled, and leaves the overlay up", async () => {
     vi.mocked(showStopGameModal).mockResolvedValue(false);
     const { utils, menu } = await renderRunningWithMenu();

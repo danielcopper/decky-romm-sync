@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+from domain.game_instance import GameInstance
+
+# The launch path the single-instance shorthand puts on its command line. Tests
+# that only care about the ladder point their launch-path seam at this, so the
+# instance matches and the ladder runs; tests that care about the MATCH build
+# their instances explicitly with ``add_instance``.
+DEFAULT_LAUNCH_PATH = "/home/deck/retrodeck/roms/gba/game.gba"
+
 
 class FakeGameProcessControlAdapter:
     """In-memory ``GameProcessControl`` for tests.
 
-    Models a process table without touching ``/proc``. ``pids`` is what
-    :meth:`find_game_pids` reports for a matching app id (empty models "nothing
-    running"); ``alive`` is the set of pids that still answer :meth:`is_alive`;
+    Models a process table without touching ``/proc``. The table is a list of
+    live :class:`GameInstance` trees; :attr:`pids` is the single-instance
+    shorthand (assigning it replaces the table with one instance running
+    :data:`DEFAULT_LAUNCH_PATH`, and reading it flattens whatever is there), and
+    :meth:`add_instance` builds the multi-instance tables the match is about.
+    ``alive`` is the set of pids that still answer :meth:`is_alive`;
     ``survive_stop`` marks pids that stay alive through the stop request so the
     escalation to :meth:`force_kill` is exercised.
 
@@ -25,14 +36,16 @@ class FakeGameProcessControlAdapter:
     is append-only across the fake's whole lifetime, so a duplicate stop request
     for one pid — whether from a retry loop or from a second concurrent call —
     is directly observable. That is the guard for the never-re-request
-    save-safety invariant.
+    save-safety invariant. ``kill_calls`` carries the same weight for the
+    never-signal-an-unmatched-instance rule: a pid that belongs to another
+    instance must appear in neither list.
     """
 
     def __init__(self, pids: list[int] | None = None, app_id: str | None = None) -> None:
-        self.pids: list[int] = list(pids) if pids else []
-        # When set, only this app id resolves to ``pids``; any other reports none.
+        self.instances: list[GameInstance] = []
+        # When set, only this app id resolves to the table; any other reports none.
         self.app_id = app_id
-        self.alive: set[int] = set(self.pids)
+        self.alive: set[int] = set()
         self.unsignalable: set[int] = set()
         self.unkillable: set[int] = set()
         self.survive_stop: set[int] = set()
@@ -40,12 +53,37 @@ class FakeGameProcessControlAdapter:
         self.stop_calls: list[int] = []
         self.kill_calls: list[int] = []
         self.alive_calls: list[int] = []
+        if pids:
+            self.pids = list(pids)
 
-    def find_game_pids(self, flatpak_app_id: str) -> list[int]:
+    @property
+    def pids(self) -> list[int]:
+        """Every live pid across the table, in instance order."""
+        return [pid for instance in self.instances for pid in instance.pids]
+
+    @pids.setter
+    def pids(self, value: list[int]) -> None:
+        """Replace the table with ONE instance running :data:`DEFAULT_LAUNCH_PATH`.
+
+        Also re-seeds ``alive`` from *value*: a fresh table describes a fresh set
+        of live processes, and a test that wants a pid to read as dead assigns
+        ``alive`` afterwards (as it always had to).
+        """
+        self.instances = [GameInstance(pids=tuple(value), argv=(DEFAULT_LAUNCH_PATH,))] if value else []
+        self.alive = set(value)
+
+    def add_instance(self, pids: list[int], launch_path: str) -> GameInstance:
+        """Append one more live instance whose command line runs *launch_path*."""
+        instance = GameInstance(pids=tuple(pids), argv=("/app/bin/retroarch", launch_path))
+        self.instances.append(instance)
+        self.alive.update(pids)
+        return instance
+
+    def find_game_instances(self, flatpak_app_id: str) -> list[GameInstance]:
         self.find_calls.append(flatpak_app_id)
         if self.app_id is not None and flatpak_app_id != self.app_id:
             return []
-        return list(self.pids)
+        return list(self.instances)
 
     def request_stop(self, pid: int) -> bool:
         self.stop_calls.append(pid)

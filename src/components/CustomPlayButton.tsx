@@ -746,7 +746,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // has nothing to signal (measured on-device: a no-op even with force=true).
   // The backend owns the kill instead — it resolves the flatpak instance's host
   // processes and runs a single-stop-request → grace → force ladder
-  // (`services/game_process.py`).
+  // (`services/game_process.py`). The `romId` is what tells it WHICH instance:
+  // RetroDECK can have several live at once (a second game, ES-DE opened on its
+  // own), and only the one running this ROM may be signalled.
   const handleStopGame = async () => {
     // A stop is already running — do not start a second one. The disabled menu
     // item makes this hard to reach; this is the guard for the paths that
@@ -766,6 +768,17 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       return;
     }
 
+    // Without the rom id the backend cannot tell this game's instance from any
+    // other live one, and stopping "whichever" is exactly the bug this argument
+    // exists to fix. The detail lookup that fills `romId` normally lands long
+    // before a running overlay can be pressed; if it somehow has not, say so and
+    // leave the overlay up so Resume stays reachable.
+    if (romId == null) {
+      detach(debugLog(`CustomPlayButton: Stop on appId=${appId} but the rom id is not resolved yet — not stopping`));
+      toaster.toast({ title: "RomM Sync", body: "Couldn't stop the game — still loading its details" });
+      return;
+    }
+
     // Destructive and unrecoverable: the emulator gets one chance to flush and
     // is forced after that, so anything unsaved is gone. Confirm first.
     if (!(await showStopGameModal())) {
@@ -778,7 +791,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     stopInFlightRef.current = true;
     setStopPending(true);
     try {
-      const result = await stopRunningGame();
+      const result = await stopRunningGame(romId);
       if (result.success || result.reason === "not_running") {
         // "not_running" is the same stale-overlay case caught one layer down:
         // the backend found nothing of RetroDECK's alive. Either way the game is
@@ -792,6 +805,13 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         clearRunningOverlay();
         return;
       }
+      // Every other failure leaves the overlay UP on purpose. That includes
+      // "game_not_running": RetroDECK is alive but the backend could not tie any
+      // of its instances to this ROM, so it signalled nothing — the game may
+      // well still be running, and Resume has to stay reachable either way.
+      detach(
+        debugLog(`CustomPlayButton: stop_running_game refused for appId=${appId} — reason=${result.reason ?? "none"}`),
+      );
       toaster.toast({ title: "RomM Sync", body: result.message || "Couldn't stop the game" });
     } catch (e) {
       // The overlay deliberately stays up: the call never reached a verdict, so
