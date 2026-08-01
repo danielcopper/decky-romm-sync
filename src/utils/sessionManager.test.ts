@@ -889,6 +889,37 @@ describe("sessionManager stop scoping (#1621)", () => {
     expect(backend.finalizeGameSession).toHaveBeenCalledWith(OTHER_ROM_ID);
   });
 
+  it("finalizes the live session even when the app map went stale mid-session", async () => {
+    // The reason the stop compares the RECORDED appId instead of re-resolving the
+    // stopping app through the cached map: the map can go stale while a game runs
+    // (a sync that drops or re-keys the shortcut). A fresh lookup would then
+    // resolve nothing for the very app that opened the session and drop it —
+    // losing its playtime AND skipping its post-exit sync, which turns a
+    // mis-attribution bug into a data-loss one. The recorded appId cannot go
+    // stale, so the live session still finalizes.
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+
+    await startGame(lifetime);
+
+    // The map empties, and an unrelated app's start refreshes the cache to it —
+    // that start is a no-op for the session (nothing maps to the app).
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({});
+    await startApp(lifetime, UNRELATED_APP_ID);
+    expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
+    expect(backend.recordSessionStart).toHaveBeenCalledWith(ROM_ID);
+
+    vi.setSystemTime(60_000);
+    await stopApp(lifetime, APP_ID);
+
+    // The session finalizes on the stale map: playtime folded, display updated,
+    // post-exit sync run, breadcrumb cleared.
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
+    expect(updatePlaytimeDisplay).toHaveBeenCalledWith(APP_ID, 99);
+    expect(dataChanged).toContainEqual({ type: "save_sync", rom_id: ROM_ID });
+    expect(readCrumb()).toBeNull();
+  });
+
   it("does not warn when the same game re-opens its own session", async () => {
     await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
