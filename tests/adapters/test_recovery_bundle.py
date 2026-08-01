@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import inspect
 import json
 import os
 import shutil
@@ -655,6 +656,35 @@ class TestCooperativeAbort:
         assert list((recovery_root / "bundles").iterdir()) == []
         assert list((recovery_root / "staging").iterdir()) == []
 
+    def test_the_copy_loop_itself_polls_between_chunks(self, tmp_path):
+        """The requirement is a stop mid-file, not merely between files.
+
+        Driven straight at the copy helper so the poll count is unambiguous: a
+        4 MB source is five 1 MB reads, and an abort armed after the first read
+        must unwind from inside that loop rather than at the next artifact.
+        """
+        source_root = tmp_path / "sources"
+        source_root.mkdir()
+        source = source_root / "big.bin"
+        source.write_bytes(b"x" * (4 * 1024 * 1024))
+        destination_root = tmp_path / "staging"
+        destination_root.mkdir()
+        adapter = _adapter(tmp_path)
+        destination_fd = os.open(str(destination_root), os.O_RDONLY | os.O_DIRECTORY)
+        polls = {"count": 0}
+
+        def should_abort() -> bool:
+            polls["count"] += 1
+            return polls["count"] > 1
+
+        try:
+            with pytest.raises(OperationAbortedError):
+                adapter._copy_opened_source(str(source), str(source_root), destination_fd, "000001", should_abort)
+        finally:
+            os.close(destination_fd)
+
+        assert polls["count"] == 2, "the abort was noticed on the second chunk, not after the whole file"
+
     def test_a_cleanup_that_fails_is_reported_rather_than_read_as_a_clean_stop(self, tmp_path, monkeypatch):
         """Never rewrite a cleanup failure into a tidy cancellation."""
         source_root = self._sources(tmp_path)
@@ -674,6 +704,32 @@ class TestCooperativeAbort:
                 "playtime",
                 lambda: True,
             )
+
+    def test_the_authoritative_revalidation_takes_no_abort_poll(self, tmp_path):
+        """What gates the destructive phase must not be interruptible.
+
+        Sealing is pre-commit work and may be abandoned; ``validate_sources`` is
+        the proof the cascade is authorized by, and a poll reaching into it would
+        make that proof stoppable by the very cancellation it is meant to
+        outrank. It is un-abortable structurally — there is no parameter to pass
+        — and this pins that rather than trusting the next reader to notice.
+        """
+        for name in ("validate_sources", "source_claims"):
+            parameters = inspect.signature(getattr(RecoveryBundleAdapter, name)).parameters
+            assert "should_abort" not in parameters, f"{name} must not become interruptible"
+
+    def test_validation_still_succeeds_while_a_backup_elsewhere_is_aborting(self, tmp_path):
+        source_root = self._sources(tmp_path)
+        adapter = _adapter(tmp_path)
+        sealed = adapter.seal_bundle(
+            "TestGame_2026-07-24_abc123",
+            _snapshot(),
+            self._artifacts(source_root),
+            _readme_context(),
+            "playtime",
+        )
+
+        assert adapter.validate_sources(sealed) is True
 
     def test_no_abort_callable_seals_exactly_as_before(self, tmp_path):
         source_root = self._sources(tmp_path)
