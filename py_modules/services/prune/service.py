@@ -62,6 +62,34 @@ class PruneServiceConfig:
     settings: dict[str, Any]
 
 
+def _invalid_action_report(request: dict[str, Any], pending: PendingAction) -> tuple[str, str] | None:
+    """The reason a completion report is unusable, or ``None`` when it is well-formed.
+
+    Everything here is shape, not outcome: a report that cannot be read is
+    refused rather than guessed at, because the value it carries decides whether
+    the run treats Steam as mutated.
+    """
+    if type(request.get("success")) is not bool or not isinstance(request.get("message"), str):
+        return "invalid_action_result", "Action success and message fields are required."
+    mutation_attempted = request.get("mutation_attempted")
+    if mutation_attempted is not None and type(mutation_attempted) is not bool:
+        return "invalid_action_result", "Action mutation-attempted must be a boolean."
+    snapshot = request.get("snapshot")
+    shortcut_absent = request.get("shortcut_absent") is True
+    snapshot_required = (
+        pending.kind == "capture_shortcut_snapshot" and request["success"] is True and not shortcut_absent
+    )
+    if snapshot_required and snapshot is None:
+        return "invalid_snapshot", "The Steam recovery snapshot was missing."
+    if shortcut_absent and pending.kind not in {"capture_shortcut_snapshot", "remove_shortcut"}:
+        return "invalid_action_result", "This action may not report an absent shortcut."
+    if snapshot is not None and (
+        pending.kind != "capture_shortcut_snapshot" or not valid_snapshot(snapshot, pending.app_id)
+    ):
+        return "invalid_snapshot", "The Steam recovery snapshot was invalid or too large."
+    return None
+
+
 class PruneService:
     """Own preview consumption, one run claim, and frontend action leases."""
 
@@ -205,16 +233,10 @@ class PruneService:
         """Atomically consume a preview and start one explicit cleanup run."""
         if not isinstance(request, dict) or request.get("confirmed") is not True:
             return self._failure("confirmation_required", "Explicit confirmation is required before cleanup.")
-        raw_selection_id = request.get("installed_selection_id")
-        if raw_selection_id is not None and not isinstance(raw_selection_id, str):
-            return self._failure("invalid_selection_id", "Installed selection id must be a string or null.")
-        selected_ids = frozenset[int]()
-        if isinstance(raw_selection_id, str):
-            selection = self._selection
-            if selection is None or selection.selection_id != raw_selection_id or not selection.finalized:
-                return self._failure("stale_selection", "Finish staging installed-content selections before cleanup.")
-            selected_ids = frozenset(selection.rom_ids)
-        options = parse_options(request, selected_ids)
+        selected = self._finalized_selection(request)
+        if isinstance(selected, dict):
+            return selected
+        options = parse_options(request, selected)
         if isinstance(options, dict):
             return options
         preview_id = request.get("preview_id")
@@ -274,6 +296,23 @@ class PruneService:
         response: dict[str, Any] = {"success": True, "run_id": run_id}
         response["status"] = "running"
         return response
+
+    def _finalized_selection(self, request: dict[str, Any]) -> frozenset[int] | dict[str, Any]:
+        """The installed-content ids this start is authorized to include.
+
+        An absent selection id means "none selected", which is the empty set —
+        distinct from a selection that exists but was never finished, where
+        starting would silently back up less than the user chose.
+        """
+        raw_selection_id = request.get("installed_selection_id")
+        if raw_selection_id is None:
+            return frozenset[int]()
+        if not isinstance(raw_selection_id, str):
+            return self._failure("invalid_selection_id", "Installed selection id must be a string or null.")
+        selection = self._selection
+        if selection is None or selection.selection_id != raw_selection_id or not selection.finalized:
+            return self._failure("stale_selection", "Finish staging installed-content selections before cleanup.")
+        return frozenset(selection.rom_ids)
 
     async def cancel_prune(self, run_id: object) -> dict[str, Any]:
         """Request that one identified run stop before starting another group.
@@ -339,63 +378,59 @@ class PruneService:
             if self._clock.monotonic() >= pending.expires_at:
                 return self._failure("stale_action", "This cleanup action token has expired.")
             if phase == "claim":
-                action = request.get("action")
-                app_id = request.get("app_id")
-                target_rom_id = request.get("target_rom_id")
-                if action != pending.kind or app_id != pending.app_id or target_rom_id != pending.target_rom_id:
-                    return self._failure("action_mismatch", "Action claim does not match the pending Steam operation.")
-                if pending.claimed:
-                    return {"success": True, "ignored": True, "message": "Action token was already claimed."}
-                if pending.app_id is not None and pending.expected_bound_rom_id is not None:
-                    valid = await self._loop.run_in_executor(
-                        None,
-                        self._registry.validate_action_state,
-                        pending.kind,
-                        pending.expected_bound_rom_id,
-                        pending.app_id,
-                        pending.target_rom_id,
-                        pending.group_rom_ids,
-                    )
-                    if not valid:
-                        return self._failure(
-                            "local_state_changed", "The shortcut binding changed before the Steam action."
-                        )
-                if self._pending_action is not pending or self._clock.monotonic() >= pending.expires_at:
-                    return self._failure("stale_action", "This cleanup action token has expired.")
-                pending.claimed = True
-                pending.expires_at = self._clock.monotonic() + _ACTION_TIMEOUT_SECONDS
-                claim_event = cast("asyncio.Event", pending.claim_event)
-                claim_event.set()
-                return {"success": True, "message": "Action token claimed."}
+                return await self._claim_action(request, pending)
+            return self._complete_action(request, pending)
 
-            if not pending.claimed:
-                return self._failure("action_not_claimed", "Claim the action token before reporting its result.")
-            if type(request.get("success")) is not bool or not isinstance(request.get("message"), str):
-                return self._failure("invalid_action_result", "Action success and message fields are required.")
-            mutation_attempted = request.get("mutation_attempted")
-            if mutation_attempted is not None and type(mutation_attempted) is not bool:
-                return self._failure("invalid_action_result", "Action mutation-attempted must be a boolean.")
-            snapshot = request.get("snapshot")
-            shortcut_absent = request.get("shortcut_absent") is True
-            snapshot_required = (
-                pending.kind == "capture_shortcut_snapshot" and request["success"] is True and not shortcut_absent
+    async def _claim_action(self, request: dict[str, Any], pending: PendingAction) -> dict[str, Any]:
+        """Take exclusive ownership of the awaited action, or refuse the claim.
+
+        The claim is what authorizes the frontend to touch Steam, so it has to
+        match the pending operation exactly and the local binding has to still
+        be the one the run planned against — re-checked after the await, because
+        the token can expire or be replaced while the validation runs.
+        """
+        if (
+            request.get("action") != pending.kind
+            or request.get("app_id") != pending.app_id
+            or request.get("target_rom_id") != pending.target_rom_id
+        ):
+            return self._failure("action_mismatch", "Action claim does not match the pending Steam operation.")
+        if pending.claimed:
+            return {"success": True, "ignored": True, "message": "Action token was already claimed."}
+        if pending.app_id is not None and pending.expected_bound_rom_id is not None:
+            valid = await self._loop.run_in_executor(
+                None,
+                self._registry.validate_action_state,
+                pending.kind,
+                pending.expected_bound_rom_id,
+                pending.app_id,
+                pending.target_rom_id,
+                pending.group_rom_ids,
             )
-            if snapshot_required and snapshot is None:
-                return self._failure("invalid_snapshot", "The Steam recovery snapshot was missing.")
-            if shortcut_absent and pending.kind not in {"capture_shortcut_snapshot", "remove_shortcut"}:
-                return self._failure("invalid_action_result", "This action may not report an absent shortcut.")
-            if snapshot is not None and (
-                pending.kind != "capture_shortcut_snapshot" or not valid_snapshot(snapshot, pending.app_id)
-            ):
-                return self._failure("invalid_snapshot", "The Steam recovery snapshot was invalid or too large.")
-            future = cast("asyncio.Future[dict[str, Any]]", pending.future)
-            if future.done():
-                return {"success": True, "ignored": True, "message": "Action result was already received."}
-            result = dict(request)
-            result["claimed"] = pending.claimed
-            future.set_result(result)
-            self._completed_action_tokens.add(pending.token)
-            return {"success": True, "message": "Action result accepted."}
+            if not valid:
+                return self._failure("local_state_changed", "The shortcut binding changed before the Steam action.")
+        if self._pending_action is not pending or self._clock.monotonic() >= pending.expires_at:
+            return self._failure("stale_action", "This cleanup action token has expired.")
+        pending.claimed = True
+        pending.expires_at = self._clock.monotonic() + _ACTION_TIMEOUT_SECONDS
+        cast("asyncio.Event", pending.claim_event).set()
+        return {"success": True, "message": "Action token claimed."}
+
+    def _complete_action(self, request: dict[str, Any], pending: PendingAction) -> dict[str, Any]:
+        """Accept the outcome of a claimed action, or refuse a malformed report."""
+        if not pending.claimed:
+            return self._failure("action_not_claimed", "Claim the action token before reporting its result.")
+        invalid = _invalid_action_report(request, pending)
+        if invalid is not None:
+            return self._failure(*invalid)
+        future = cast("asyncio.Future[dict[str, Any]]", pending.future)
+        if future.done():
+            return {"success": True, "ignored": True, "message": "Action result was already received."}
+        result = dict(request)
+        result["claimed"] = pending.claimed
+        future.set_result(result)
+        self._completed_action_tokens.add(pending.token)
+        return {"success": True, "message": "Action result accepted."}
 
     async def shutdown(self) -> None:
         """Cancel unstarted work and await any already-claimed destructive phase."""
