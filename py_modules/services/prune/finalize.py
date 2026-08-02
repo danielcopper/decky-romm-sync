@@ -22,7 +22,7 @@ from services.prune._models import cancellation_state, shielded
 if TYPE_CHECKING:
     import logging
 
-    from models.prune import SourceClaim
+    from models.prune import MutationOutcome, SourceClaim
 
     from domain.rom import Rom
     from services.protocols import (
@@ -384,7 +384,7 @@ class GroupFinalizer:
             raise RuntimeError(steam_outcome.get("message", "Steam state cleanup failed"))
 
     @staticmethod
-    def _record_outcome(outcome: dict[str, Any], label: str, ledger: MutationLedger) -> None:
+    def _record_outcome(outcome: MutationOutcome, label: str, ledger: MutationLedger) -> None:
         """Write one mutation's changed/ambiguous flags into the ledger."""
         if outcome.get("changed"):
             ledger.mutations.append(label)
