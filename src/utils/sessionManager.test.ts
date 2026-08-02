@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { toaster } from "@decky/api";
 import * as backend from "../api/backend";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
-import { initSessionManager, destroySessionManager, isSessionActive, ADOPTION_POLL_MAX_MS } from "./sessionManager";
+import {
+  initSessionManager,
+  destroySessionManager,
+  isSessionActive,
+  planAdoption,
+  ADOPTION_POLL_MAX_MS,
+} from "./sessionManager";
 
 // sessionManager talks to the backend callable surface and the migration
 // stores. Mock both so the test observes only what `handleGameStop` forwards
@@ -145,6 +151,81 @@ function stubLifecycleSteamClient(): void {
     },
   });
 }
+
+// The reconcile matrix as a pure decision, independent of the poll, the epoch,
+// localStorage and the backend. The behavioural tests below drive the same
+// matrix end-to-end; these pin each cell of it directly, including the
+// combinations that are awkward to stage through the running-app store.
+describe("planAdoption — the reload reconcile matrix", () => {
+  // The map binds APP_ID → ROM_ID and OTHER_APP_ID → OTHER_ROM_ID; anything else
+  // is a foreign app the plugin does not own.
+  const resolveRomId = (appId: number): number | null =>
+    ({ [APP_ID]: ROM_ID, [OTHER_APP_ID]: OTHER_ROM_ID })[appId] ?? null;
+  const NOW = 9_000;
+  const plan = (crumbs: { appId: number; romId: number; startMs: number }[], running: number[], tracked?: number[]) =>
+    planAdoption(crumbs, running, new Set(tracked ?? []), resolveRomId, NOW);
+
+  it("decides nothing from nothing", () => {
+    expect(plan([], [])).toEqual({ adopted: [], restamped: [], orphans: [] });
+  });
+
+  it("adopts an attested session whose app is running, keeping its attested rom and start", () => {
+    // The attested romId is trusted over the resolver: the open marker belongs to
+    // the rom the START opened, and the binding is not stable over time.
+    const crumb = { appId: APP_ID, romId: OTHER_ROM_ID, startMs: 5_000 };
+
+    expect(plan([crumb], [APP_ID])).toEqual({ adopted: [crumb], restamped: [], orphans: [] });
+  });
+
+  it("orphans an attested session whose app is not running", () => {
+    const crumb = { appId: APP_ID, romId: ROM_ID, startMs: 5_000 };
+
+    expect(plan([crumb], [])).toEqual({ adopted: [], restamped: [], orphans: [crumb] });
+  });
+
+  it("re-stamps a running app of ours that nothing attests", () => {
+    expect(plan([], [APP_ID])).toEqual({
+      adopted: [],
+      restamped: [{ appId: APP_ID, romId: ROM_ID, startMs: NOW }],
+      orphans: [],
+    });
+  });
+
+  it("ignores a foreign running app entirely, and never orphans over it", () => {
+    // The foreign app is at the HEAD, ahead of the attested one — the ordering
+    // that used to make adoption drop a live session.
+    const crumb = { appId: APP_ID, romId: ROM_ID, startMs: 5_000 };
+
+    expect(plan([crumb], [UNRELATED_APP_ID, APP_ID])).toEqual({
+      adopted: [crumb],
+      restamped: [],
+      orphans: [],
+    });
+  });
+
+  it("splits a mixed set: one adopted, one orphaned, one re-stamped", () => {
+    const live = { appId: APP_ID, romId: ROM_ID, startMs: 5_000 };
+    const gone = { appId: 555, romId: 99, startMs: 7_000 };
+
+    expect(plan([live, gone], [APP_ID, OTHER_APP_ID])).toEqual({
+      adopted: [live],
+      restamped: [{ appId: OTHER_APP_ID, romId: OTHER_ROM_ID, startMs: NOW }],
+      orphans: [gone],
+    });
+  });
+
+  it("skips an app that already holds an open session, in both passes (#1589)", () => {
+    // Neither re-adopted (which would reset its start) nor orphaned (which would
+    // drop a live attestation) — the running session is simply left alone.
+    const crumb = { appId: APP_ID, romId: ROM_ID, startMs: 5_000 };
+
+    expect(plan([crumb], [APP_ID, OTHER_APP_ID], [APP_ID, OTHER_APP_ID])).toEqual({
+      adopted: [],
+      restamped: [],
+      orphans: [],
+    });
+  });
+});
 
 describe("sessionManager lifecycle forwarding", () => {
   beforeEach(() => {

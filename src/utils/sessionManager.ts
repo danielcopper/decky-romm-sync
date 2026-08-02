@@ -21,7 +21,7 @@ import { delay } from "./pacedOps";
 // Active session tracking — ONE ENTRY PER RUNNING APP (#1624). Two RomM games at
 // once each hold their own entry, so a second start no longer displaces the
 // first (which dropped its playtime and its post-exit save sync entirely).
-interface ActiveSession {
+export interface ActiveSession {
   /** The Steam app that opened the session — what a lifecycle stop is matched against. */
   appId: number;
   romId: number;
@@ -341,6 +341,77 @@ async function pollForRunningApps(wanted: Set<number>): Promise<RunningAppsReadi
   }
 }
 
+/** What reconciling the attested sessions against the running apps decided. */
+export interface AdoptionPlan {
+  /** Attested and still running — restored exactly as attested. */
+  adopted: ActiveSession[];
+  /** Running and ours but unattested — restored with the marker re-stamped. */
+  restamped: ActiveSession[];
+  /** Attested but no longer running — dropped, never finalized. */
+  orphans: ActiveSession[];
+}
+
+/**
+ * Decide the fate of every attested session and every running app (#1624).
+ *
+ * Pure: reads no module state, performs no I/O, mutates nothing it is handed.
+ * The caller commits the plan — this only says what should happen:
+ *
+ * - attested AND running → adopted as attested. The crumb's own romId is
+ *   trusted, which is why `resolveRomId` is not consulted for it: the durable
+ *   marker belongs to THAT rom, and re-stamping the map's current romId instead
+ *   would open a marker on a different row and leave the original dangling (the
+ *   rule #1621 established for the stop path — an `appId → romId` binding is 1:1
+ *   at any instant but not stable over time).
+ * - running, ours, but unattested → re-stamped: adopted with the marker moved to
+ *   `nowMs`, a truthful lower bound, and attested afterwards so a later reload
+ *   adopts it as attested rather than re-stamping again.
+ * - attested but NOT running → orphaned. Its stop was never observed, and a
+ *   truthful finalize is impossible without an observed end, so the attestation
+ *   is dropped rather than an end time fabricated.
+ * - running but not ours (`resolveRomId` returns `null`) → ignored entirely. A
+ *   foreign app is never adopted and never causes anything else to be orphaned.
+ *
+ * `tracked` names the apps that already hold an open session; both passes skip
+ * them, so adoption can never re-open one a start notification opened first
+ * (#1589).
+ *
+ * That skip is UNREACHABLE as the manager is currently wired, and deliberately
+ * kept: adoption and every notification handler run on the one serialized
+ * `lifecycleChain`, adoption is enqueued in the same synchronous block that
+ * registers the hook, and a teardown clears the session map — so a fresh init
+ * always reconciles against an empty `tracked`. Two wiring changes would make it
+ * live: taking adoption off that chain (giving a notification a window to
+ * complete during the up-to-15s poll), or a handler that acts directly instead
+ * of enqueueing. Do not delete it as dead code without making one of those
+ * orderings impossible instead.
+ */
+export function planAdoption(
+  crumbs: readonly ActiveSession[],
+  runningAppIds: readonly number[],
+  tracked: ReadonlySet<number>,
+  resolveRomId: (appId: number) => number | null,
+  nowMs: number,
+): AdoptionPlan {
+  const running = new Set(runningAppIds);
+  const adopted: ActiveSession[] = [];
+  const orphans: ActiveSession[] = [];
+  for (const crumb of crumbs) {
+    if (tracked.has(crumb.appId)) continue;
+    (running.has(crumb.appId) ? adopted : orphans).push(crumb);
+  }
+
+  const attested = new Set(adopted.map((session) => session.appId));
+  const restamped: ActiveSession[] = [];
+  for (const appId of runningAppIds) {
+    if (tracked.has(appId) || attested.has(appId)) continue;
+    const romId = resolveRomId(appId);
+    if (romId !== null) restamped.push({ appId, romId, startMs: nowMs });
+  }
+
+  return { adopted, restamped, orphans };
+}
+
 /**
  * Adopt the play sessions orphaned by a plugin reload mid-game.
  *
@@ -356,22 +427,9 @@ async function pollForRunningApps(wanted: Set<number>): Promise<RunningAppsReadi
  * up (#1054 / #1148 round 2), so a one-shot read raced the restart and wrongly
  * orphaned a still-running session.
  *
- * The two sets are then reconciled per app, so any number of concurrent games
- * recovers together (#1624):
- *
- * - attested AND running → adopted as attested. The crumb's own romId is
- *   trusted; the durable marker belongs to THAT rom, and re-stamping the map's
- *   current romId instead would open a marker on a different row and leave the
- *   original dangling (the rule #1621 established for the stop path — an
- *   `appId → romId` binding is 1:1 at any instant but not stable over time).
- * - running, ours, but unattested → adopted with the marker re-stamped to a
- *   truthful lower bound from now, then attested so a later reload adopts it
- *   as attested rather than re-stamping again.
- * - attested but NOT running → orphaned. Its stop was never observed, and a
- *   truthful finalize is impossible without an observed end, so the attestation
- *   is dropped rather than an end time fabricated.
- * - running but not ours → ignored entirely. A foreign app is never adopted and
- *   never causes anything else to be orphaned.
+ * This is the orchestration around that: capture the epoch, poll, re-check the
+ * epoch, ask {@link planAdoption} what to do, then commit / dispatch / log /
+ * re-stamp. The reconcile matrix itself lives in that pure function.
  */
 async function adoptOrphanedSessions(): Promise<void> {
   const epoch = sessionEpoch;
@@ -391,33 +449,13 @@ async function adoptOrphanedSessions(): Promise<void> {
       : `adoption: no running app after ${waitedMs}ms [${reading.diagnostics}]`,
   );
 
-  // Both passes skip an app that already has an open session, so adoption can
-  // never re-open one a start notification opened first (#1589).
-  //
-  // UNREACHABLE as currently wired, deliberately kept: adoption and every
-  // notification handler run on the one serialized `lifecycleChain`, adoption is
-  // enqueued in the same synchronous block that registers the hook, and a
-  // teardown clears the map — so a fresh init always reconciles an empty map. Two
-  // wiring changes would make these live: taking adoption off that chain (giving
-  // a notification a window to complete during the up-to-15s poll), or a handler
-  // that acts directly instead of enqueueing. Do not delete these as dead code
-  // without making one of those orderings impossible instead.
-  const running = new Set(reading.apps.map((app) => app.appid));
-  const adopted: ActiveSession[] = [];
-  const orphans: ActiveSession[] = [];
-  for (const crumb of crumbs) {
-    if (activeSessions.has(crumb.appId)) continue;
-    (running.has(crumb.appId) ? adopted : orphans).push(crumb);
-  }
-
-  const restamped: ActiveSession[] = [];
-  for (const app of reading.apps) {
-    if (activeSessions.has(app.appid)) continue;
-    if (adopted.some((session) => session.appId === app.appid)) continue;
-    const romId = getRomIdForApp(app.appid);
-    if (romId === null) continue;
-    restamped.push({ appId: app.appid, romId, startMs: Date.now() });
-  }
+  const { adopted, restamped, orphans } = planAdoption(
+    crumbs,
+    reading.apps.map((app) => app.appid),
+    new Set(activeSessions.keys()),
+    getRomIdForApp,
+    Date.now(),
+  );
 
   const recovered = [...adopted, ...restamped];
   for (const session of recovered) activeSessions.set(session.appId, session);
