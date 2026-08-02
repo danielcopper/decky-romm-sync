@@ -50,6 +50,27 @@ class GroupPlan:
 
 
 @dataclass(frozen=True)
+class _GroupLiveness:
+    """One group's ids sorted by what RomM proved about each of them."""
+
+    vanished_ids: set[int]
+    live_ids: set[int]
+    uncertain_ids: set[int]
+    fully_dead: bool
+
+    @classmethod
+    def of(cls, group_ids: set[int], verdicts: dict[int, dict[str, str]]) -> _GroupLiveness:
+        vanished_ids = {rom_id for rom_id, verdict in verdicts.items() if verdict["status"] == "vanished"}
+        live_ids = {rom_id for rom_id, verdict in verdicts.items() if verdict["status"] == "live"}
+        return cls(
+            vanished_ids=vanished_ids,
+            live_ids=live_ids,
+            uncertain_ids=group_ids - vanished_ids - live_ids,
+            fully_dead=bool(group_ids) and group_ids <= vanished_ids,
+        )
+
+
+@dataclass(frozen=True)
 class GroupPlannerConfig:
     """Dependencies for deciding one group's cleanup without mutating anything."""
 
@@ -139,75 +160,41 @@ class GroupPlanner:
             )
         group_ids = {row.rom_id for row in rows}
         candidate_ids = group_ids & preview_candidate_ids
-        bound = [row for row in rows if row.shortcut_app_id is not None]
-        if len(bound) > 1:
-            return self._results.group_result(rows, "skipped", "multiple_bindings", "The group has multiple shortcuts.")
-        if self._active_downloads() & group_ids:
-            return self._results.group_result(rows, "skipped", "download_in_progress", "Cancel active downloads first.")
+        bound_row, unstable = self._admit_group(rows, group_ids)
+        if unstable is not None:
+            return unstable
 
         verdicts = await self._liveness.probe_many(group_ids)
-        vanished_ids = {rom_id for rom_id, verdict in verdicts.items() if verdict["status"] == "vanished"}
-        live_ids = {rom_id for rom_id, verdict in verdicts.items() if verdict["status"] == "live"}
-        uncertain_ids = group_ids - vanished_ids - live_ids
-        fully_dead = bool(group_ids) and group_ids <= vanished_ids
-        # The verdicts are what every later decision turns on, so they belong in
-        # the audit trail: a group reported as skipped is otherwise impossible to
-        # explain after the fact without re-running against the same server.
-        self._logger.info(
-            f"Cleanup run {run_id} group {index}/{total} liveness: "
-            f"gone={sorted(vanished_ids)}, still_there={sorted(live_ids)}, unconfirmed={sorted(uncertain_ids)}, "
-            f"candidates={sorted(candidate_ids)}, bound={bound[0].rom_id if bound else None}"
-        )
-        if not live_ids and uncertain_ids:
+        proof = _GroupLiveness.of(group_ids, verdicts)
+        self._log_liveness(f"{run_id} group {index}/{total}", proof, candidate_ids, bound_row)
+        if not proof.live_ids and proof.uncertain_ids:
             reason, message = _unproven_refusal(
-                {verdicts[rom_id]["reason"] for rom_id in uncertain_ids}, len(uncertain_ids)
+                {verdicts[rom_id]["reason"] for rom_id in proof.uncertain_ids}, len(proof.uncertain_ids)
             )
             return self._results.group_result(rows, "skipped", reason, message)
 
         delete_ids = selected_prune_ids(
             group_ids=sorted(group_ids),
             candidate_ids=candidate_ids,
-            vanished_ids=vanished_ids,
-            live_ids=live_ids,
+            vanished_ids=proof.vanished_ids,
+            live_ids=proof.live_ids,
             remove_rows=options.remove_rows,
             remove_fully_vanished=options.remove_fully_vanished,
         )
-        bound_row = bound[0] if bound else None
-        target_id = self._repoint_target(rows, bound_row, vanished_ids, live_ids, options)
+        target_id = self._repoint_target(rows, bound_row, proof.vanished_ids, proof.live_ids, options)
         if target_id is _NO_LIVE_DEFAULT:
             return self._results.group_result(rows, "skipped", "no_live_default", "No live default could be selected.")
-        if bound_row is not None and bound_row.rom_id in delete_ids and live_ids and target_id is None:
+        if bound_row is not None and bound_row.rom_id in delete_ids and proof.live_ids and target_id is None:
             # Deleting the row that owns the shortcut would strand a live game.
             delete_ids.remove(bound_row.rom_id)
 
-        whole_game_action = fully_dead and bool(delete_ids)
+        whole_game_action = proof.fully_dead and bool(delete_ids)
         if not delete_ids and target_id is None:
-            # Distinguish "your options excluded everything" from "RomM never
-            # confirmed anything gone". Both leave nothing to do, but only the
-            # first is answered by changing a toggle — reporting the second as
-            # an options problem sends the user to fiddle with settings that
-            # cannot help (#1570 F17).
-            if uncertain_ids:
-                return self._results.group_result(
-                    rows,
-                    "skipped",
-                    "liveness_uncertain",
-                    f"RomM could not confirm {len(uncertain_ids)} of this game's version(s); nothing was removed.",
-                )
-            return self._results.group_result(
-                rows, "skipped", "options_excluded", "No confirmed rows matched the selected options."
-            )
+            return self._nothing_to_do(rows, proof.uncertain_ids)
 
-        drifted = False
-        if bound_row is not None and bound_row.rom_id in vanished_ids and (target_id is not None or whole_game_action):
-            drifted = bool((await self._drift_probe(bound_row.rom_id)).get("drifted"))
-            if drifted and not options.create_recovery_bundle:
-                return self._results.group_result(
-                    rows,
-                    "skipped",
-                    "unsynced_saves",
-                    "Unsynced saves require a sealed recovery bundle before changing this shortcut.",
-                )
+        drifted, unsynced = await self._probe_drift(rows, bound_row, proof, target_id, whole_game_action, options)
+        if unsynced is not None:
+            return unsynced
 
         return GroupPlan(
             rows=rows,
@@ -216,10 +203,81 @@ class GroupPlanner:
             app_id=bound_row.shortcut_app_id if bound_row is not None else None,
             delete_ids=delete_ids,
             target_id=target_id,
-            fully_dead=fully_dead,
+            fully_dead=proof.fully_dead,
             whole_game_action=whole_game_action,
             drifted=drifted,
         )
+
+    def _log_liveness(
+        self, run_label: str, proof: _GroupLiveness, candidate_ids: set[int], bound_row: Rom | None
+    ) -> None:
+        """Record the verdicts every later decision turns on.
+
+        A group reported as skipped is otherwise impossible to explain after the
+        fact without re-running against the same server.
+        """
+        self._logger.info(
+            f"Cleanup run {run_label} liveness: "
+            f"gone={sorted(proof.vanished_ids)}, still_there={sorted(proof.live_ids)}, "
+            f"unconfirmed={sorted(proof.uncertain_ids)}, "
+            f"candidates={sorted(candidate_ids)}, bound={bound_row.rom_id if bound_row else None}"
+        )
+
+    def _admit_group(self, rows: list[Rom], group_ids: set[int]) -> tuple[Rom | None, dict[str, Any] | None]:
+        """Name the group's bound row, or refuse a group nothing may act on yet."""
+        bound = [row for row in rows if row.shortcut_app_id is not None]
+        if len(bound) > 1:
+            return None, self._results.group_result(
+                rows, "skipped", "multiple_bindings", "The group has multiple shortcuts."
+            )
+        if self._active_downloads() & group_ids:
+            return None, self._results.group_result(
+                rows, "skipped", "download_in_progress", "Cancel active downloads first."
+            )
+        return (bound[0] if bound else None), None
+
+    def _nothing_to_do(self, rows: list[Rom], uncertain_ids: set[int]) -> dict[str, Any]:
+        """Say why a group with nothing selected has nothing selected.
+
+        Distinguish "your options excluded everything" from "RomM never
+        confirmed anything gone". Both leave nothing to do, but only the first
+        is answered by changing a toggle — reporting the second as an options
+        problem sends the user to fiddle with settings that cannot help.
+        """
+        if uncertain_ids:
+            return self._results.group_result(
+                rows,
+                "skipped",
+                "liveness_uncertain",
+                f"RomM could not confirm {len(uncertain_ids)} of this game's version(s); nothing was removed.",
+            )
+        return self._results.group_result(
+            rows, "skipped", "options_excluded", "No confirmed rows matched the selected options."
+        )
+
+    async def _probe_drift(
+        self,
+        rows: list[Rom],
+        bound_row: Rom | None,
+        proof: _GroupLiveness,
+        target_id: int | None,
+        whole_game_action: bool,
+        options: PruneOptions,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Ask whether the shortcut this run would change still holds unsynced saves."""
+        if bound_row is None or bound_row.rom_id not in proof.vanished_ids:
+            return False, None
+        if target_id is None and not whole_game_action:
+            return False, None
+        drifted = bool((await self._drift_probe(bound_row.rom_id)).get("drifted"))
+        if drifted and not options.create_recovery_bundle:
+            return drifted, self._results.group_result(
+                rows,
+                "skipped",
+                "unsynced_saves",
+                "Unsynced saves require a sealed recovery bundle before changing this shortcut.",
+            )
+        return drifted, None
 
 
 __all__ = ["GroupPlan", "GroupPlanner", "GroupPlannerConfig"]

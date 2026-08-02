@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from domain.emulator_tag import build_emulator_tag
 from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
-from domain.save_backup import backup_name, select_backups_to_prune
+from domain.save_backup import BACKUP_DIR_NAME, backup_name, select_backups_to_prune
 from domain.save_slot import filter_saves_to_slot
 from domain.sync_action import (
     Conflict,
@@ -332,7 +332,7 @@ class MatrixExecutor:
         local_path = os.path.join(saves_dir, filename)
         if not self._save_file_store.is_file(local_path):
             return False
-        backup_dir = os.path.join(saves_dir, ".romm-backup")
+        backup_dir = os.path.join(saves_dir, BACKUP_DIR_NAME)
         if self._save_file_store.is_symlink(backup_dir) or not self._save_file_store.is_within(backup_dir, saves_dir):
             raise ValueError(f"Unsafe save backup directory: {backup_dir}")
         self._save_file_store.make_dirs(backup_dir)

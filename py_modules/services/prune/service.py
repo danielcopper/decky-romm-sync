@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         VersionSwitcherFn,
     )
 
+_STALE_PREVIEW_MESSAGE = "This cleanup preview is stale. Scan again before confirming."
 _ACTION_TIMEOUT_SECONDS = 60.0
 _RELEASE_TIMEOUT_SECONDS = 5.0
 
@@ -185,7 +186,7 @@ class PruneService:
                 or preview.explicit_rom_id != explicit_rom_id
                 or preview.server_namespace != romm_namespace(self._settings)
             ):
-                return self._failure("stale_preview", "This cleanup preview is stale. Scan again before confirming.")
+                return self._failure("stale_preview", _STALE_PREVIEW_MESSAGE)
             result = self._preview_builder.page(preview, offset, limit)
             result["recovery_root"] = self._recovery_store.root()
             return result
@@ -202,7 +203,7 @@ class PruneService:
         async with self._admission_lock:
             preview = self._preview
             if self.is_active() or preview is None or preview.preview_id != preview_id:
-                return self._failure("stale_preview", "This cleanup preview is stale. Scan again before confirming.")
+                return self._failure("stale_preview", _STALE_PREVIEW_MESSAGE)
             installed_ids = {
                 int(entry["rom_id"])
                 for entry in preview.entries
@@ -247,7 +248,7 @@ class PruneService:
                 return self._failure("prune_active", "A removed-game cleanup is already running.")
             preview = self._preview
             if not isinstance(preview_id, str) or preview is None or preview.preview_id != preview_id:
-                return self._failure("stale_preview", "This cleanup preview is stale. Scan again before confirming.")
+                return self._failure("stale_preview", _STALE_PREVIEW_MESSAGE)
             self._starting = True
             self._admission_task = asyncio.current_task()
         started_run = False

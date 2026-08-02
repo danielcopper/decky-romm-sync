@@ -13,7 +13,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from domain.save_backup import backup_name, is_backup_for
+from domain.save_backup import BACKUP_DIR_NAME, backup_name, is_backup_for
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -201,7 +201,7 @@ class PruneSaveSupport:
 
     def _backup_artifacts(self, item: dict[str, str], rom_id: int, saves_root: str) -> list[dict[str, object]]:
         """Every ``.romm-backup`` history file belonging to one projected save."""
-        backup_dir = os.path.join(item["saves_dir"], ".romm-backup")
+        backup_dir = os.path.join(item["saves_dir"], BACKUP_DIR_NAME)
         if self._save_file_store.is_symlink(backup_dir) or not self._save_file_store.is_within(backup_dir, saves_root):
             raise ValueError(f"ROM {rom_id}: save backup directory is unsafe: {backup_dir}")
         found: list[dict[str, object]] = []
@@ -221,7 +221,7 @@ class PruneSaveSupport:
         saves_root = self._retrodeck_paths.saves_path()
         try:
             for item in files:
-                backup_dir = os.path.join(item["saves_dir"], ".romm-backup")
+                backup_dir = os.path.join(item["saves_dir"], BACKUP_DIR_NAME)
                 if (
                     not self._save_file_store.is_within(item["path"], saves_root)
                     or not self._save_file_store.is_within(backup_dir, saves_root)
@@ -276,7 +276,7 @@ class PruneSaveSupport:
     ) -> MutationOutcome:
         """Durably quarantine one exact claimed save through anchored directories."""
         local_path = os.path.join(saves_dir, filename)
-        backup_dir = os.path.join(saves_dir, ".romm-backup")
+        backup_dir = os.path.join(saves_dir, BACKUP_DIR_NAME)
         self._save_file_store.ensure_directory(backup_dir, safe_root)
         ts = self._clock.now().strftime("%Y%m%d_%H%M%S")
         backup = backup_name(filename, ts, set(self._save_file_store.listdir(backup_dir)))

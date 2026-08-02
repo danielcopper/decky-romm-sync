@@ -22,6 +22,7 @@ from services.prune.results import GroupOutcome
 
 if TYPE_CHECKING:
     import logging
+    from collections.abc import Awaitable
 
     from models.prune import MutationOutcome, SourceClaim
 
@@ -99,12 +100,7 @@ class GroupFinalizer:
         delete_ids = plan.delete_ids
         target_id = plan.target_id
         app_id = plan.app_id
-        refreshed = await self._liveness.probe_many(
-            delete_ids
-            | ({target_id} if target_id is not None else set())
-            | ({vanished_source_id} if vanished_source_id is not None else set())
-        )
-        guard = liveness_guard(refreshed, delete_ids, target_id, vanished_source_id)
+        guard = await self._refreshed_liveness_guard(plan, vanished_source_id)
         if guard is not None:
             return self._results.ledger_or_guard_result(ledger, initial_rows, guard, handle, app_id)
         if self._active_downloads() & delete_ids:
@@ -185,14 +181,44 @@ class GroupFinalizer:
                 delete_inventory=delete_inventory,
                 ledger=ledger,
             )
-            try:
-                result = await shielded(commit)
-            except asyncio.CancelledError as exc:
-                state = cancellation_state(exc)
-                if state.child_completed and isinstance(state.child_result, dict):
-                    state.group_result = state.child_result
-                raise
+            result = await self._commit_shielded(commit)
 
+        await self._report_removed(run_id, index, total, rows, handle, result)
+        return result
+
+    async def _refreshed_liveness_guard(
+        self, plan: GroupPlan, vanished_source_id: int | None
+    ) -> tuple[str, str] | None:
+        """Re-prove every id the cascade turns on, immediately before it may run."""
+        target_id = plan.target_id
+        refreshed = await self._liveness.probe_many(
+            plan.delete_ids
+            | ({target_id} if target_id is not None else set())
+            | ({vanished_source_id} if vanished_source_id is not None else set())
+        )
+        return liveness_guard(refreshed, plan.delete_ids, target_id, vanished_source_id)
+
+    @staticmethod
+    async def _commit_shielded(commit: Awaitable[Any]) -> dict[str, Any]:
+        """Run the cascade to its own end, keeping its verdict if the run is cancelled."""
+        try:
+            return await shielded(commit)
+        except asyncio.CancelledError as exc:
+            state = cancellation_state(exc)
+            if state.child_completed and isinstance(state.child_result, dict):
+                state.group_result = state.child_result
+            raise
+
+    async def _report_removed(
+        self,
+        run_id: str,
+        index: int,
+        total: int,
+        rows: list[Rom],
+        handle: RecoveryHandle | None,
+        result: dict[str, Any],
+    ) -> None:
+        """Publish the group's last progress frame without letting delivery change its verdict."""
         try:
             await self._results.emit_progress(
                 run_id, index, total, "removed", rows, bundle_path=handle.bundle_path if handle else None
@@ -202,7 +228,6 @@ class GroupFinalizer:
             raise
         except Exception as exc:
             self._logger.warning(f"Removed-game cleanup final progress delivery failed: {exc}")
-        return result
 
     async def _recovery_still_matches(
         self,
