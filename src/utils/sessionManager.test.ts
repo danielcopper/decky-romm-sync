@@ -98,6 +98,10 @@ function stubRunningApp(appid: number, displayName = "Game"): void {
   vi.stubGlobal("SteamUIStore", { RunningApps: [{ appid, display_name: displayName }] });
 }
 
+function stubRunningApps(apps: { appid: number; display_name: string }[]): void {
+  vi.stubGlobal("SteamUIStore", { RunningApps: apps });
+}
+
 function stubNothingRunning(): void {
   vi.stubGlobal("SteamUIStore", { RunningApps: [] });
 }
@@ -448,18 +452,20 @@ describe("sessionManager reload adoption", () => {
     expect(readSessions()).toEqual([expect.objectContaining({ appId: APP_ID, romId: ROM_ID })]);
   });
 
-  it("adopts and re-stamps when the breadcrumb names a different app than the running game", async () => {
-    // Stale breadcrumb for a different app, in the pre-#1624 shape; the running
-    // game is authoritative.
+  it("adopts and re-stamps the running game while orphaning a breadcrumb for a different app", async () => {
+    // Stale breadcrumb for an app that is not running, in the pre-#1624 shape.
+    // Its app never surfaces, so the poll spends its whole budget waiting for it.
     seedV1Session({ appId: 555, romId: 99, startMs: 5_000 });
     stubRunningApp(APP_ID);
 
-    await initSessionManager();
+    await initDrainingAdoptionPoll();
 
     expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
     expect(backend.recordSessionStart).toHaveBeenCalledWith(ROM_ID);
-    // The stale breadcrumb is overwritten with a fresh one for the live game.
+    // The running game is adopted on its own terms; the stale attestation is
+    // orphaned rather than transplanted onto it.
     expect(readSessions()).toEqual([expect.objectContaining({ appId: APP_ID, romId: ROM_ID })]);
+    expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining("orphaned"));
   });
 
   it("clears the breadcrumb and does not adopt when nothing is running", async () => {
@@ -664,16 +670,187 @@ describe("sessionManager reload adoption", () => {
     expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
   });
 
-  it("clears a live breadcrumb when a non-RomM app is in the foreground", async () => {
+  // #1624: liveness is a MEMBERSHIP question. Adoption used to read only the head
+  // of the running-app list, so a foreign app in the foreground orphaned a RomM
+  // game that was still running right behind it — losing its playtime and its
+  // post-exit save sync.
+  it("adopts a running game listed behind a foreground foreign app", async () => {
     seedSessions([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
-    stubRunningApp(999, "Other");
+    stubRunningApps([
+      { appid: 999, display_name: "Other" },
+      { appid: APP_ID, display_name: "Game" },
+    ]);
 
     await initSessionManager();
 
-    // The RomM game is not the foreground app → its session is orphaned, its
-    // breadcrumb dropped, and nothing is adopted or finalized.
+    // Attested and running → adopted as attested, marker untouched, row kept.
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    expect(readSessions()).toEqual([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
+    expect(backend.logInfo).not.toHaveBeenCalledWith(expect.stringContaining("orphaned"));
+
+    const lifetime = captureLifetimeCb();
+    await stopGame(lifetime);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
+  });
+
+  // #1624: adoption reconciles the whole attested SET against the whole running
+  // set, so any number of concurrent games recovers from one reload.
+  it("restores two attested sessions when both games are still running", async () => {
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({
+      [String(APP_ID)]: ROM_ID,
+      [String(OTHER_APP_ID)]: OTHER_ROM_ID,
+    });
+    seedSessions([
+      { appId: APP_ID, romId: ROM_ID, startMs: 5_000 },
+      { appId: OTHER_APP_ID, romId: OTHER_ROM_ID, startMs: 7_000 },
+    ]);
+    stubRunningApps([
+      { appid: APP_ID, display_name: "Game" },
+      { appid: OTHER_APP_ID, display_name: "Other Game" },
+    ]);
+    const sessionEvents: unknown[] = [];
+    const listener = (e: WindowEventMap["romm_session_changed"]) => sessionEvents.push(e.detail);
+    globalThis.addEventListener("romm_session_changed", listener);
+
+    try {
+      await initSessionManager();
+
+      // Both attested spans survive: neither marker is re-stamped, both rows are
+      // kept verbatim, and both surfaces are told their game is live.
+      expect(backend.recordSessionStart).not.toHaveBeenCalled();
+      expect(readSessions()).toEqual([
+        { appId: APP_ID, romId: ROM_ID, startMs: 5_000 },
+        { appId: OTHER_APP_ID, romId: OTHER_ROM_ID, startMs: 7_000 },
+      ]);
+      expect(sessionEvents).toEqual([
+        { running: true, appId: APP_ID, romId: ROM_ID },
+        { running: true, appId: OTHER_APP_ID, romId: OTHER_ROM_ID },
+      ]);
+
+      // Each adopted session finalizes on its own app's exit.
+      const lifetime = captureLifetimeCb();
+      await stopApp(lifetime, OTHER_APP_ID);
+      expect(backend.finalizeGameSession).toHaveBeenCalledTimes(1);
+      expect(backend.finalizeGameSession).toHaveBeenCalledWith(OTHER_ROM_ID);
+      await stopApp(lifetime, APP_ID);
+      expect(backend.finalizeGameSession).toHaveBeenCalledTimes(2);
+      expect(backend.finalizeGameSession).toHaveBeenLastCalledWith(ROM_ID);
+    } finally {
+      globalThis.removeEventListener("romm_session_changed", listener);
+    }
+  });
+
+  it("waits for a late-surfacing attested app instead of orphaning it", async () => {
+    // The store omits apps whose overview has not loaded yet, so a reading that
+    // already lists one concurrent game can still be missing its sibling.
+    // Settling on the first non-empty reading would orphan the straggler.
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({
+      [String(APP_ID)]: ROM_ID,
+      [String(OTHER_APP_ID)]: OTHER_ROM_ID,
+    });
+    seedSessions([
+      { appId: APP_ID, romId: ROM_ID, startMs: 5_000 },
+      { appId: OTHER_APP_ID, romId: OTHER_ROM_ID, startMs: 7_000 },
+    ]);
+    stubRunningApp(APP_ID);
+
+    const init = initSessionManager();
+    await vi.advanceTimersByTimeAsync(1_000); // rounds pass with only one app listed
+    stubRunningApps([
+      { appid: APP_ID, display_name: "Game" },
+      { appid: OTHER_APP_ID, display_name: "Other Game" },
+    ]);
+    await vi.advanceTimersByTimeAsync(500);
+    await init;
+
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    expect(backend.logInfo).not.toHaveBeenCalledWith(expect.stringContaining("orphaned"));
+    expect(readSessions()).toEqual([
+      { appId: APP_ID, romId: ROM_ID, startMs: 5_000 },
+      { appId: OTHER_APP_ID, romId: OTHER_ROM_ID, startMs: 7_000 },
+    ]);
+  });
+
+  it("adopts the attested session that is still running and orphans the one that is not", async () => {
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({
+      [String(APP_ID)]: ROM_ID,
+      [String(OTHER_APP_ID)]: OTHER_ROM_ID,
+    });
+    seedSessions([
+      { appId: APP_ID, romId: ROM_ID, startMs: 5_000 },
+      { appId: OTHER_APP_ID, romId: OTHER_ROM_ID, startMs: 7_000 },
+    ]);
+    stubRunningApp(APP_ID);
+
+    // The second game's app never surfaces — the poll waits out its budget for it.
+    await initDrainingAdoptionPoll();
+
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    expect(readSessions()).toEqual([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
+    expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining(`orphaned`));
+    expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining(`romId=${OTHER_ROM_ID}`));
+
+    // The survivor still finalizes; the orphan's app is no longer tracked.
+    const lifetime = captureLifetimeCb();
+    await stopApp(lifetime, OTHER_APP_ID);
+    expect(backend.finalizeGameSession).not.toHaveBeenCalled();
+    await stopApp(lifetime, APP_ID);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
+  });
+
+  it("adopts an attested game as-is alongside an unattested one it re-stamps", async () => {
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({
+      [String(APP_ID)]: ROM_ID,
+      [String(OTHER_APP_ID)]: OTHER_ROM_ID,
+    });
+    seedSessions([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
+    vi.setSystemTime(9_000);
+    stubRunningApps([
+      { appid: APP_ID, display_name: "Game" },
+      { appid: OTHER_APP_ID, display_name: "Other Game" },
+    ]);
+
+    await initSessionManager();
+
+    // Exactly one re-stamp — the attested game keeps its span, the unattested one
+    // gets a truthful lower bound from now.
+    expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
+    expect(backend.recordSessionStart).toHaveBeenCalledWith(OTHER_ROM_ID);
+    expect(readSessions()).toEqual([
+      { appId: APP_ID, romId: ROM_ID, startMs: 5_000 },
+      { appId: OTHER_APP_ID, romId: OTHER_ROM_ID, startMs: 9_000 },
+    ]);
+  });
+
+  it("adopts the romId the breadcrumb attests, not the one the map now resolves", async () => {
+    // The appId → romId binding is 1:1 at any instant but not stable over time —
+    // a version switch moves the shortcut to a different rom row. The durable
+    // marker belongs to the rom the START opened, so re-stamping the map's
+    // CURRENT rom would open a second marker and leave the original dangling.
+    seedSessions([{ appId: APP_ID, romId: OTHER_ROM_ID, startMs: 5_000 }]);
+    stubRunningApp(APP_ID); // the map binds APP_ID to ROM_ID, not OTHER_ROM_ID
+
+    await initSessionManager();
+
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    expect(readSessions()).toEqual([{ appId: APP_ID, romId: OTHER_ROM_ID, startMs: 5_000 }]);
+
+    const lifetime = captureLifetimeCb();
+    await stopGame(lifetime);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(OTHER_ROM_ID);
+  });
+
+  it("orphans an attested session when only a foreign app is running", async () => {
+    seedSessions([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
+    stubRunningApp(999, "Other");
+
+    // The attested app never surfaces, so the poll waits out its budget before
+    // concluding the session ended while the plugin was down.
+    await initDrainingAdoptionPoll();
+
     expect(readCrumb()).toBeNull();
     expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining("orphaned"));
     const lifetime = captureLifetimeCb();
     await stopGame(lifetime);
     expect(backend.finalizeGameSession).not.toHaveBeenCalled();

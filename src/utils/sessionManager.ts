@@ -15,7 +15,7 @@ import { setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { detach } from "./detach";
-import { readRunningApps, type RunningApp } from "./runningApps";
+import { readRunningApps, type RunningAppsReading } from "./runningApps";
 import { delay } from "./pacedOps";
 
 // Active session tracking — ONE ENTRY PER RUNNING APP (#1624). Two RomM games at
@@ -296,94 +296,118 @@ const ADOPTION_POLL_INTERVAL_MS = 500;
 export const ADOPTION_POLL_MAX_MS = 15_000;
 
 /**
- * Poll the running-app reader until it reports a running app or the window
- * elapses. Returns the foreground app (any app, RomM or not — the caller applies
- * the adoption matrix) or `null` on timeout, alongside the last round's
- * `diagnostics` so a timed-out adoption logs what the store actually reported
- * (absent / empty / threw). Each round's diagnostics are also emitted at debug
- * level.
+ * Poll the running-app reader until its reading has SETTLED or the window
+ * elapses, and return that last reading (its `diagnostics` say what the store
+ * reported — absent / empty / threw / the appids found; each round's are also
+ * emitted at debug level).
+ *
+ * Settled means: something is running AND every app the breadcrumbs attest has
+ * surfaced. Stopping at the first non-empty reading is not enough — the store
+ * omits apps whose overview has not loaded yet, so a reading that already lists
+ * one concurrent game can still be missing its sibling, which would then be
+ * orphaned. The wait for a stragglers shares the one existing budget.
  */
-async function pollForRunningApp(): Promise<{ app: RunningApp | null; diagnostics: string }> {
+async function pollForRunningApps(wanted: Set<number>): Promise<RunningAppsReading> {
   const started = Date.now();
   for (;;) {
     const reading = readRunningApps();
     detach(debugLog(`adoption poll round: ${reading.diagnostics}`));
-    if (reading.apps.length > 0) return { app: reading.apps[0]!, diagnostics: reading.diagnostics };
-    if (Date.now() - started >= ADOPTION_POLL_MAX_MS) return { app: null, diagnostics: reading.diagnostics };
+    const surfaced = new Set(reading.apps.map((app) => app.appid));
+    if (surfaced.size > 0 && [...wanted].every((appId) => surfaced.has(appId))) return reading;
+    if (Date.now() - started >= ADOPTION_POLL_MAX_MS) return reading;
     await delay(ADOPTION_POLL_INTERVAL_MS);
   }
 }
 
 /**
- * Adopt a play session orphaned by a plugin reload mid-game.
+ * Adopt the play sessions orphaned by a plugin reload mid-game.
  *
- * `destroySessionManager` wipes the in-memory session on unload, so the
- * game-stop after a reload would otherwise never finalize — the pre-reload
+ * `destroySessionManager` wipes the in-memory sessions on unload, so the
+ * game-stops after a reload would otherwise never finalize — the pre-reload
  * playtime is lost and the post-exit sync never runs. Steam's running-state
  * (`SteamUIStore.RunningApps`) is the liveness authority; the localStorage
- * breadcrumb is the attestation of a start we actually observed. Every finalize
- * fold thus stays anchored to a marker stamped by an observed start.
+ * breadcrumbs are the attestations of starts we actually observed. Every
+ * finalize fold thus stays anchored to a marker stamped by an observed start.
  *
  * The liveness read is POLLED, not a single read: after a loader restart the
  * store reports an EMPTY running-app list for seconds while the game is still
  * up (#1054 / #1148 round 2), so a one-shot read raced the restart and wrongly
  * orphaned a still-running session.
+ *
+ * The two sets are then reconciled per app, so any number of concurrent games
+ * recovers together (#1624):
+ *
+ * - attested AND running → adopted as attested. The crumb's own romId is
+ *   trusted; the durable marker belongs to THAT rom, and re-stamping the map's
+ *   current romId instead would open a marker on a different row and leave the
+ *   original dangling (the rule #1621 established for the stop path — an
+ *   `appId → romId` binding is 1:1 at any instant but not stable over time).
+ * - running, ours, but unattested → adopted with the marker re-stamped to a
+ *   truthful lower bound from now, then attested so a later reload adopts it
+ *   as attested rather than re-stamping again.
+ * - attested but NOT running → orphaned. Its stop was never observed, and a
+ *   truthful finalize is impossible without an observed end, so the attestation
+ *   is dropped rather than an end time fabricated.
+ * - running but not ours → ignored entirely. A foreign app is never adopted and
+ *   never causes anything else to be orphaned.
  */
-async function adoptOrphanedSession(): Promise<void> {
+async function adoptOrphanedSessions(): Promise<void> {
   const epoch = sessionEpoch;
   const pollStart = Date.now();
-  const { app: running, diagnostics } = await pollForRunningApp();
+  const crumbs = readSessionBreadcrumbs();
+  const reading = await pollForRunningApps(new Set(crumbs.map((c) => c.appId)));
   if (epoch !== sessionEpoch) {
     // destroySessionManager ran while the poll was in flight — abort before
-    // touching module state, the breadcrumb, or the backend.
+    // touching module state, the breadcrumbs, or the backend.
     detach(debugLog("adoption: cancelled by destroy"));
     return;
   }
   const waitedMs = Date.now() - pollStart;
   logInfo(
-    running
-      ? `adoption: running app appeared after ${waitedMs}ms [${diagnostics}]`
-      : `adoption: no running app after ${waitedMs}ms [${diagnostics}]`,
+    reading.apps.length > 0
+      ? `adoption: running app appeared after ${waitedMs}ms [${reading.diagnostics}]`
+      : `adoption: no running app after ${waitedMs}ms [${reading.diagnostics}]`,
   );
-  const runningRomId = running ? getRomIdForApp(running.appid) : null;
-  const crumbs = readSessionBreadcrumbs();
-  const crumb = crumbs[0] ?? null;
 
-  if (running && runningRomId !== null) {
-    const appId = running.appid;
-    if (crumb && crumb.appId === appId && crumb.romId === runningRomId) {
-      // (a) The breadcrumb attests this exact running session. Restore the
-      // in-memory state, keeping the attested startMs — re-stamping the durable
-      // marker would discard the pre-reload playtime the backend already holds.
-      activeSessions.set(appId, { appId, romId: runningRomId, startMs: crumb.startMs });
-      persistSessions();
-      dispatchSessionChanged(true, appId, runningRomId);
-      logInfo(`Adopted running session from breadcrumb: romId=${runningRomId}, appId=${appId}`);
-    } else {
-      // (a′) A game is running but no usable breadcrumb (missing / mismatched /
-      // corrupt). Adopt it and re-stamp the marker to a truthful lower bound
-      // from now, then attest it so a later reload adopts via (a) rather than
-      // re-stamping again.
-      const adopted: ActiveSession = { appId, romId: runningRomId, startMs: Date.now() };
-      activeSessions.set(appId, adopted);
-      persistSessions();
-      dispatchSessionChanged(true, appId, runningRomId);
-      try {
-        await recordSessionStart(runningRomId);
-      } catch (e) {
-        logError(`Failed to record session start on adoption: ${e}`);
-      }
-      logInfo(`Adopted running session without breadcrumb, re-stamped marker: romId=${runningRomId}, appId=${appId}`);
-    }
-    return;
+  const running = new Set(reading.apps.map((app) => app.appid));
+  const adopted: ActiveSession[] = [];
+  const orphans: ActiveSession[] = [];
+  for (const crumb of crumbs) {
+    (running.has(crumb.appId) ? adopted : orphans).push(crumb);
   }
 
-  // No RomM game is running (nothing running, or a non-RomM app). A breadcrumb
-  // here names a session whose stop we never saw — a truthful finalize is
-  // impossible without an observed end, so drop it rather than fabricate one.
-  if (crumb) {
-    persistSessions();
-    logInfo(`Session orphaned — playtime not recorded (romId=${crumb.romId})`);
+  const restamped: ActiveSession[] = [];
+  for (const app of reading.apps) {
+    if (adopted.some((session) => session.appId === app.appid)) continue;
+    const romId = getRomIdForApp(app.appid);
+    if (romId === null) continue;
+    restamped.push({ appId: app.appid, romId, startMs: Date.now() });
+  }
+
+  const recovered = [...adopted, ...restamped];
+  for (const session of recovered) activeSessions.set(session.appId, session);
+  // One rewrite for the whole reconcile: it drops the orphans and lifts a row
+  // written by an older schema version into the current one.
+  persistSessions();
+
+  for (const session of recovered) dispatchSessionChanged(true, session.appId, session.romId);
+  for (const s of adopted) logInfo(`Adopted running session from breadcrumb: romId=${s.romId}, appId=${s.appId}`);
+  for (const s of orphans) logInfo(`Session orphaned — playtime not recorded (romId=${s.romId})`);
+
+  for (const session of restamped) {
+    if (epoch !== sessionEpoch) {
+      // Each re-stamp is an await, so the teardown check is per iteration.
+      detach(debugLog("adoption: cancelled by destroy"));
+      return;
+    }
+    try {
+      await recordSessionStart(session.romId);
+    } catch (e) {
+      logError(`Failed to record session start on adoption: ${e}`);
+    }
+    logInfo(
+      `Adopted running session without breadcrumb, re-stamped marker: romId=${session.romId}, appId=${session.appId}`,
+    );
   }
 }
 
@@ -428,7 +452,7 @@ export async function initSessionManager(): Promise<void> {
   // lifecycle chain so a stop notification arriving during adoption finalizes
   // after it rather than interleaving with the in-memory state it restores.
   const adoption = lifecycleChain
-    .then(() => adoptOrphanedSession())
+    .then(() => adoptOrphanedSessions())
     .catch((e) => {
       logError(`Session adoption error: ${e}`);
     });
