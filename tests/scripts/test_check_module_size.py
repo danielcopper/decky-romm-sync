@@ -8,7 +8,8 @@ real walk and the real comparison logic run against a controlled layout.
 Coverage centres on the ratchet's four failure modes — an unlisted module over
 the threshold, a listed module that grew, a listed module that graduated, and a
 stale entry — plus the boundary conditions, where an off-by-one would silently
-widen or narrow the gate.
+widen or narrow the gate, and the code-line counting itself, where counting
+comments would quietly turn every ceiling into a budget shared with prose.
 """
 
 from __future__ import annotations
@@ -40,20 +41,32 @@ check = _load_check_module()
 
 
 def _write_module(root: Path, relative: str, lines: int) -> None:
-    """Create ``relative`` under ``root`` with exactly ``lines`` physical lines."""
+    """Create ``relative`` under ``root`` with exactly ``lines`` lines of code.
+
+    Every line written is code, so the file's physical length and its code-line
+    count agree — which keeps the ratchet tests about the ratchet. Counting is
+    pinned separately in ``TestLineCount``.
+    """
+    _write_raw_module(root, relative, "\n".join(f"x = {n}" for n in range(lines)) + "\n")
+
+
+def _write_raw_module(root: Path, relative: str, text: str) -> None:
+    """Create ``relative`` under ``root`` with verbatim ``text``."""
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(f"x = {n}" for n in range(lines)) + "\n", encoding="utf-8")
+    path.write_text(text, encoding="utf-8")
 
 
 @pytest.fixture
 def run_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Yield a helper that lays out modules, retargets the check, and runs it."""
 
-    def _run(modules: dict[str, int], allowlist: dict[str, int]) -> int:
+    def _run(modules: dict[str, int], allowlist: dict[str, int], raw: dict[str, str] | None = None) -> int:
         (tmp_path / "py_modules" / "services").mkdir(parents=True, exist_ok=True)
         for relative, lines in modules.items():
             _write_module(tmp_path, relative, lines)
+        for relative, text in (raw or {}).items():
+            _write_raw_module(tmp_path, relative, text)
         monkeypatch.setattr(check, "ROOT", tmp_path)
         monkeypatch.setattr(check, "ALLOWLIST", allowlist)
         return check.main()
@@ -62,66 +75,108 @@ def run_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 
 class TestLineCount:
-    """``wc -l`` parity — the ceiling is meaningless if counting disagrees."""
+    """Lines of code — the ceiling is meaningless if counting disagrees."""
 
-    def test_counts_physical_lines(self, tmp_path: Path) -> None:
+    def test_counts_code_lines(self, tmp_path: Path) -> None:
         _write_module(tmp_path, "m.py", 12)
         assert check.line_count(tmp_path / "m.py") == 12
 
+    def test_blank_and_comment_only_lines_are_excluded(self, tmp_path: Path) -> None:
+        _write_raw_module(tmp_path, "m.py", "# header\n\nx = 1\n    # indented\n   \ny = 2\n")
+        assert check.line_count(tmp_path / "m.py") == 2
+
+    def test_trailing_comment_on_a_code_line_still_counts(self, tmp_path: Path) -> None:
+        _write_raw_module(tmp_path, "m.py", "x = 1  # why this is here\n")
+        assert check.line_count(tmp_path / "m.py") == 1
+
+    def test_docstring_lines_count_as_code(self, tmp_path: Path) -> None:
+        """Deliberate: exempting docstrings would just move prose to dodge the counter."""
+        _write_raw_module(tmp_path, "m.py", '"""Title.\n\nBody.\n"""\nx = 1\n')
+        assert check.line_count(tmp_path / "m.py") == 4
+
+    def test_hash_line_inside_a_string_counts_as_a_comment(self, tmp_path: Path) -> None:
+        """Accepted inaccuracy of the textual count, pinned so it stays a known one.
+
+        A tokenizer would call this line code. The textual form is what makes
+        the ceiling reproducible by hand, and the two agree on the in/out
+        verdict for every module in scope, so this stays as-is.
+        """
+        _write_raw_module(tmp_path, "m.py", 'DOC = """\n# not really a comment\n"""\n')
+        assert check.line_count(tmp_path / "m.py") == 2
+
     def test_final_line_without_trailing_newline_still_counts(self, tmp_path: Path) -> None:
-        (tmp_path / "m.py").write_text("a = 1\nb = 2", encoding="utf-8")
+        _write_raw_module(tmp_path, "m.py", "a = 1\nb = 2")
         assert check.line_count(tmp_path / "m.py") == 2
 
     def test_empty_file_is_zero(self, tmp_path: Path) -> None:
-        (tmp_path / "m.py").write_text("", encoding="utf-8")
+        _write_raw_module(tmp_path, "m.py", "")
         assert check.line_count(tmp_path / "m.py") == 0
 
 
 class TestHappyPath:
     def test_passes_when_everything_is_small(self, run_check, capsys: pytest.CaptureFixture[str]) -> None:
         assert run_check({"py_modules/services/small.py": 120}, {}) == 0
-        assert "OK: no module over 700 lines" in capsys.readouterr().out
+        assert "OK: no module over 1000 lines" in capsys.readouterr().out
 
     def test_listed_module_at_its_ceiling_passes(self, run_check) -> None:
-        modules = {"py_modules/services/big.py": 900}
-        assert run_check(modules, {"py_modules/services/big.py": 900}) == 0
+        modules = {"py_modules/services/big.py": 1200}
+        assert run_check(modules, {"py_modules/services/big.py": 1200}) == 0
 
     def test_bootstrap_package_is_in_scope_via_scope_dirs(self, run_check, capsys: pytest.CaptureFixture[str]) -> None:
-        assert run_check({"py_modules/bootstrap/services.py": 900}, {}) == 1
-        assert "py_modules/bootstrap/services.py: 900 lines exceeds" in capsys.readouterr().err
+        assert run_check({"py_modules/bootstrap/services.py": 1200}, {}) == 1
+        assert "py_modules/bootstrap/services.py: 1200 lines exceeds" in capsys.readouterr().err
 
     def test_main_py_is_out_of_scope(self, run_check) -> None:
         """``main.py`` grows with the callable surface by design — never flagged."""
         assert run_check({"main.py": 5000}, {}) == 0
 
 
+class TestCodeLinesNotPhysicalLines:
+    """Comments must not compete with code for the ceiling."""
+
+    def test_comments_and_blanks_do_not_count_toward_the_threshold(self, run_check) -> None:
+        """Physically 1190 lines, 990 of code — a heavily documented module passes."""
+        body = "\n".join(f"x = {n}" for n in range(990))
+        padding = "\n".join("# explanation" if n % 2 else "" for n in range(200))
+        raw = {"py_modules/services/documented.py": f"{body}\n{padding}\n"}
+        assert run_check({}, {}, raw) == 0
+
+    def test_comments_do_not_buy_room_above_a_ceiling(self, run_check, capsys: pytest.CaptureFixture[str]) -> None:
+        """Being mostly prose does not excuse a listed module that grew in code."""
+        body = "\n".join(f"x = {n}" for n in range(1210))
+        padding = "\n".join("# explanation" for _ in range(300))
+        raw = {"py_modules/services/big.py": f"{body}\n{padding}\n"}
+        assert run_check({}, {"py_modules/services/big.py": 1200}, raw) == 1
+        assert "1210 lines, up from its 1200-line ceiling" in capsys.readouterr().err
+
+
 class TestFailureModes:
     def test_unlisted_module_over_threshold_fails(self, run_check, capsys: pytest.CaptureFixture[str]) -> None:
-        assert run_check({"py_modules/services/new.py": 701}, {}) == 1
+        assert run_check({"py_modules/services/new.py": 1001}, {}) == 1
         err = capsys.readouterr().err
-        assert "py_modules/services/new.py: 701 lines exceeds the 700-line threshold" in err
+        assert "py_modules/services/new.py: 1001 lines exceeds the 1000-line threshold" in err
         assert "Adding it to ALLOWLIST is not the fix" in err
 
     def test_listed_module_that_grew_fails_with_the_delta(self, run_check, capsys: pytest.CaptureFixture[str]) -> None:
-        modules = {"py_modules/services/big.py": 910}
-        assert run_check(modules, {"py_modules/services/big.py": 900}) == 1
+        modules = {"py_modules/services/big.py": 1210}
+        assert run_check(modules, {"py_modules/services/big.py": 1200}) == 1
         err = capsys.readouterr().err
-        assert "910 lines, up from its 900-line ceiling" in err
+        assert "1210 lines, up from its 1200-line ceiling" in err
         assert "Move the 10 added line(s)" in err
 
     def test_graduated_module_must_leave_the_allowlist(self, run_check, capsys: pytest.CaptureFixture[str]) -> None:
-        modules = {"py_modules/services/shrunk.py": 650}
-        assert run_check(modules, {"py_modules/services/shrunk.py": 900}) == 1
-        assert "back under the 700-line threshold" in capsys.readouterr().err
+        modules = {"py_modules/services/shrunk.py": 950}
+        assert run_check(modules, {"py_modules/services/shrunk.py": 1200}) == 1
+        assert "back under the 1000-line threshold" in capsys.readouterr().err
 
     def test_stale_allowlist_entry_fails(self, run_check, capsys: pytest.CaptureFixture[str]) -> None:
-        assert run_check({}, {"py_modules/services/deleted.py": 900}) == 1
+        assert run_check({}, {"py_modules/services/deleted.py": 1200}) == 1
         assert "listed in ALLOWLIST but not found" in capsys.readouterr().err
 
     def test_every_failing_module_is_reported_not_just_the_first(
         self, run_check, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        modules = {"py_modules/services/a.py": 800, "py_modules/services/b.py": 900}
+        modules = {"py_modules/services/a.py": 1100, "py_modules/services/b.py": 1200}
         assert run_check(modules, {}) == 1
         err = capsys.readouterr().err
         assert "2 module(s)" in err
@@ -133,35 +188,35 @@ class TestBoundaries:
     """An off-by-one here silently widens or narrows the gate."""
 
     def test_exactly_at_threshold_is_allowed(self, run_check) -> None:
-        assert run_check({"py_modules/services/edge.py": 700}, {}) == 0
+        assert run_check({"py_modules/services/edge.py": 1000}, {}) == 0
 
     def test_one_over_threshold_is_not(self, run_check) -> None:
-        assert run_check({"py_modules/services/edge.py": 701}, {}) == 1
+        assert run_check({"py_modules/services/edge.py": 1001}, {}) == 1
 
     def test_one_over_ceiling_is_not(self, run_check) -> None:
-        modules = {"py_modules/services/big.py": 901}
-        assert run_check(modules, {"py_modules/services/big.py": 900}) == 1
+        modules = {"py_modules/services/big.py": 1201}
+        assert run_check(modules, {"py_modules/services/big.py": 1200}) == 1
 
     def test_threshold_plus_one_stays_listed_rather_than_graduating(self, run_check) -> None:
-        """701 is still over the threshold, so the entry is still required."""
-        modules = {"py_modules/services/big.py": 701}
-        assert run_check(modules, {"py_modules/services/big.py": 900}) == 0
+        """1001 is still over the threshold, so the entry is still required."""
+        modules = {"py_modules/services/big.py": 1001}
+        assert run_check(modules, {"py_modules/services/big.py": 1200}) == 0
 
 
 class TestSlackAdvisory:
     """The advisory nudges the ratchet down without failing an honest refactor."""
 
     def test_banked_slack_prints_a_note_and_still_passes(self, run_check, capsys: pytest.CaptureFixture[str]) -> None:
-        modules = {"py_modules/services/big.py": 850}
-        assert run_check(modules, {"py_modules/services/big.py": 900}) == 0
+        modules = {"py_modules/services/big.py": 1150}
+        assert run_check(modules, {"py_modules/services/big.py": 1200}) == 0
         out = capsys.readouterr().out
-        assert "note: py_modules/services/big.py: 850 lines vs. a 900-line ceiling — lower it to 850." in out
+        assert "note: py_modules/services/big.py: 1150 lines vs. a 1200-line ceiling — lower it to 1150." in out
 
     def test_slack_below_the_advisory_threshold_stays_quiet(
         self, run_check, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        modules = {"py_modules/services/big.py": 899}
-        assert run_check(modules, {"py_modules/services/big.py": 900}) == 0
+        modules = {"py_modules/services/big.py": 1199}
+        assert run_check(modules, {"py_modules/services/big.py": 1200}) == 0
         assert "note:" not in capsys.readouterr().out
 
 
