@@ -79,10 +79,10 @@ async def test_shielded_child_finishes_then_reraises_cancellation_with_fault_sta
 
 @pytest.mark.asyncio
 async def test_shielded_cancelled_child_keeps_the_original_cancellation_state():
-    """A child that is itself cancelled must not replace the captured cancellation.
+    """A child that is itself cancelled must not replace the captured state.
 
     The child's own ``CancelledError`` carries whatever state happens to be
-    attached to it — never what this run captured — so letting it propagate
+    attached to it — never what this run captured — so propagating it unchanged
     would hand the group handler a foreign record of what the child did.
     """
     entered = asyncio.Event()
