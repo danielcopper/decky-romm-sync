@@ -778,14 +778,14 @@ class SyncEngine:
                     "conflicts": list(conflicts),
                 }
         except SaveSyncTimeoutError:
-            # Device gate held past the bounded wait. The reason names that LOCAL wait (#1625); the additive
-            # ``offline`` flag stays as the launch path's drift-warning steer, so Play is never trapped.
+            # Device gate held past the bounded wait — the same LOCAL outcome the other three triggers
+            # report, so it carries the identical busy shape: no reachability reason, no ``offline`` (#1625).
+            # The launch path routes on ``success: False`` alone (→ ``sync_failed``), so Play is not trapped.
             return {
                 "success": False,
                 "reason": SAVE_SYNC_BUSY_REASON,
                 "message": SAVE_SYNC_BUSY,
                 "synced": 0,
-                "offline": True,
             }
         except RommSyncDisabledError:
             # RomM has save sync disabled for this device server-side. Mirror the

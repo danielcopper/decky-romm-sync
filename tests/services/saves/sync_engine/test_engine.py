@@ -1552,8 +1552,8 @@ class TestSaveSyncDeviceGate:
 
     Only one save-sync run is in flight at a time per device. A second
     trigger queues behind the in-flight one; the wait is bounded, so a stuck
-    run never traps the launch path — on expiry each trigger returns its
-    own busy fallthrough, never a server verdict (#1625). The gate sits
+    run never traps the launch path — on expiry every trigger returns the
+    same busy fallthrough, never a server verdict (#1625). The gate sits
     OUTSIDE the per-ROM lock.
     """
 
@@ -1576,10 +1576,10 @@ class TestSaveSyncDeviceGate:
         assert engine._device_gate.is_in_flight() is False
 
     @pytest.mark.asyncio
-    async def test_pre_launch_sync_times_out_to_busy_keeping_the_offline_steer(self, tmp_path, monkeypatch):
-        """#1625: the reason names the local wait; the launch path's ``offline``
-        steer is kept, so a busy gate still routes the launch to its drift
-        warning instead of trapping the Play button."""
+    async def test_pre_launch_sync_times_out_to_busy_not_offline(self, tmp_path, monkeypatch):
+        """#1625: the busy shape is identical on every trigger — the reason names
+        the local wait and no ``offline`` flag rides along. The launch gate routes
+        this on ``success: False`` alone, so the Play button is still not trapped."""
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
@@ -1596,7 +1596,6 @@ class TestSaveSyncDeviceGate:
                 "reason": "sync_busy",
                 "message": "Another save sync is still running",
                 "synced": 0,
-                "offline": True,
             },
         )
         # The gate fired before any sync work — no transfer was attempted.
