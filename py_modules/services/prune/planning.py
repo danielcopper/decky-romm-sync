@@ -63,6 +63,29 @@ class GroupPlannerConfig:
     settings: dict[str, Any]
 
 
+_NO_LIVE_DEFAULT = -1
+
+
+def _unproven_refusal(reasons: set[str], unproven_count: int) -> tuple[str, str]:
+    """Name the most specific reason a group with no live answer is refused.
+
+    Ordered by how much it tells the user: a namespace change and an
+    unconfirmed server both explain *why* no answer could be trusted, and only
+    the generic case is a plain count.
+    """
+    if "server_namespace_changed" in reasons:
+        return (
+            "server_namespace_changed",
+            "The RomM server or user changed during exact-ID proof; nothing was removed.",
+        )
+    if UNCONFIRMED_REASON in reasons:
+        return (
+            UNCONFIRMED_REASON,
+            "RomM's answers could not be confirmed, so a 404 could not be trusted; nothing was removed.",
+        )
+    return "liveness_uncertain", f"RomM could not confirm {unproven_count} group member(s); nothing was removed."
+
+
 class GroupPlanner:
     """Turn one candidate group into a plan, or into the reason there is none."""
 
@@ -75,6 +98,27 @@ class GroupPlanner:
         self._active_downloads = config.active_downloads
         self._drift_probe = config.drift_probe
         self._settings = config.settings
+
+    def _repoint_target(
+        self,
+        rows: list[Rom],
+        bound_row: Rom | None,
+        vanished_ids: set[int],
+        live_ids: set[int],
+        options: PruneOptions,
+    ) -> int | None:
+        """The live row a vanished shortcut should move onto, if it should move.
+
+        ``None`` when no repoint applies at all; ``_NO_LIVE_DEFAULT`` when one
+        does but the group's live rows cannot yield a representative, which is a
+        refusal rather than a no-op.
+        """
+        if bound_row is None or bound_row.rom_id not in vanished_ids or not live_ids:
+            return None
+        if not options.repoint_shortcuts:
+            return None
+        target_id = natural_default(rows, live_ids, self._settings.get("preferred_region", AUTO_REGION))
+        return _NO_LIVE_DEFAULT if target_id is None else target_id
 
     async def plan(
         self,
@@ -115,27 +159,10 @@ class GroupPlanner:
             f"candidates={sorted(candidate_ids)}, bound={bound[0].rom_id if bound else None}"
         )
         if not live_ids and uncertain_ids:
-            reasons = {verdicts[rom_id]["reason"] for rom_id in uncertain_ids}
-            if "server_namespace_changed" in reasons:
-                return self._results.group_result(
-                    rows,
-                    "skipped",
-                    "server_namespace_changed",
-                    "The RomM server or user changed during exact-ID proof; nothing was removed.",
-                )
-            if UNCONFIRMED_REASON in reasons:
-                return self._results.group_result(
-                    rows,
-                    "skipped",
-                    UNCONFIRMED_REASON,
-                    "RomM's answers could not be confirmed, so a 404 could not be trusted; nothing was removed.",
-                )
-            return self._results.group_result(
-                rows,
-                "skipped",
-                "liveness_uncertain",
-                f"RomM could not confirm {len(uncertain_ids)} group member(s); nothing was removed.",
+            reason, message = _unproven_refusal(
+                {verdicts[rom_id]["reason"] for rom_id in uncertain_ids}, len(uncertain_ids)
             )
+            return self._results.group_result(rows, "skipped", reason, message)
 
         delete_ids = selected_prune_ids(
             group_ids=sorted(group_ids),
@@ -146,14 +173,11 @@ class GroupPlanner:
             remove_fully_vanished=options.remove_fully_vanished,
         )
         bound_row = bound[0] if bound else None
-        target_id: int | None = None
-        if bound_row is not None and bound_row.rom_id in vanished_ids and live_ids and options.repoint_shortcuts:
-            target_id = natural_default(rows, live_ids, self._settings.get("preferred_region", AUTO_REGION))
-            if target_id is None:
-                return self._results.group_result(
-                    rows, "skipped", "no_live_default", "No live default could be selected."
-                )
+        target_id = self._repoint_target(rows, bound_row, vanished_ids, live_ids, options)
+        if target_id is _NO_LIVE_DEFAULT:
+            return self._results.group_result(rows, "skipped", "no_live_default", "No live default could be selected.")
         if bound_row is not None and bound_row.rom_id in delete_ids and live_ids and target_id is None:
+            # Deleting the row that owns the shortcut would strand a live game.
             delete_ids.remove(bound_row.rom_id)
 
         whole_game_action = fully_dead and bool(delete_ids)
@@ -176,8 +200,7 @@ class GroupPlanner:
 
         drifted = False
         if bound_row is not None and bound_row.rom_id in vanished_ids and (target_id is not None or whole_game_action):
-            drift = await self._drift_probe(bound_row.rom_id)
-            drifted = bool(drift.get("drifted"))
+            drifted = bool((await self._drift_probe(bound_row.rom_id)).get("drifted"))
             if drifted and not options.create_recovery_bundle:
                 return self._results.group_result(
                     rows,

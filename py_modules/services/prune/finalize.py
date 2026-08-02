@@ -22,6 +22,8 @@ from services.prune._models import cancellation_state, shielded
 if TYPE_CHECKING:
     import logging
 
+    from models.prune import SourceClaim
+
     from domain.rom import Rom
     from services.protocols import (
         ActiveDownloadRomIdsFn,
@@ -147,42 +149,19 @@ class GroupFinalizer:
                     handle,
                     app_id,
                 )
-            if handle is not None:
-                state_matches = await self._loop.run_in_executor(
-                    None,
-                    self._recovery.state_matches,
-                    handle.snapshot,
-                    sorted(recovery_ids),
-                    committed_action,
+            if handle is not None and not await self._recovery_still_matches(
+                handle, recovery_inventory, recovery_ids, plan, committed_action, launch_options
+            ):
+                return self._results.ledger_or_guard_result(
+                    ledger,
+                    rows,
+                    (
+                        "recovery_state_changed",
+                        "Local state no longer matches the sealed recovery bundle; source data was retained.",
+                    ),
+                    handle,
                     app_id,
-                    target_id,
-                    launch_options,
                 )
-                sources_match = await self._loop.run_in_executor(
-                    None,
-                    partial(self._recovery_store.validate_sources, handle.bundle_path, handle.bundle_digest),
-                )
-                backend_matches = True
-                if committed_action == "remove_shortcut" and app_id is not None and handle.steam_backend is not None:
-                    backend_matches = await self._loop.run_in_executor(
-                        None, self._steam_recovery.validate_state, app_id, handle.steam_backend
-                    )
-                if (
-                    recovery_inventory != handle.save_inventory
-                    or not state_matches
-                    or not sources_match
-                    or not backend_matches
-                ):
-                    return self._results.ledger_or_guard_result(
-                        ledger,
-                        rows,
-                        (
-                            "recovery_state_changed",
-                            "Local state no longer matches the sealed recovery bundle; source data was retained.",
-                        ),
-                        handle,
-                        app_id,
-                    )
 
             delete_inventory = await self._save_locks.inventory(sorted(delete_ids))
             delete_locks = {int(value) for value in delete_inventory.get("lock_rom_ids", delete_ids)}
@@ -224,6 +203,42 @@ class GroupFinalizer:
             self._logger.warning(f"Removed-game cleanup final progress delivery failed: {exc}")
         return result
 
+    async def _recovery_still_matches(
+        self,
+        handle: RecoveryHandle,
+        recovery_inventory: dict[str, Any],
+        recovery_ids: set[int],
+        plan: GroupPlan,
+        committed_action: str | None,
+        launch_options: str | None,
+    ) -> bool:
+        """Whether every sealed thing still matches what is on disk right now.
+
+        Four independent proofs, all required: the save inventory under the held
+        locks, the database state the snapshot recorded, the bundle's own source
+        bytes, and — when a shortcut was removed — the Steam-side identity.
+        """
+        state_matches = await self._loop.run_in_executor(
+            None,
+            self._recovery.state_matches,
+            handle.snapshot,
+            sorted(recovery_ids),
+            committed_action,
+            plan.app_id,
+            plan.target_id,
+            launch_options,
+        )
+        sources_match = await self._loop.run_in_executor(
+            None,
+            partial(self._recovery_store.validate_sources, handle.bundle_path, handle.bundle_digest),
+        )
+        backend_matches = True
+        if committed_action == "remove_shortcut" and plan.app_id is not None and handle.steam_backend is not None:
+            backend_matches = await self._loop.run_in_executor(
+                None, self._steam_recovery.validate_state, plan.app_id, handle.steam_backend
+            )
+        return recovery_inventory == handle.save_inventory and state_matches and sources_match and backend_matches
+
     async def _commit(
         self,
         *,
@@ -235,147 +250,183 @@ class GroupFinalizer:
         delete_inventory: dict[str, Any],
         ledger: MutationLedger,
     ) -> dict[str, Any]:
-        delete_ids = plan.delete_ids
-        target_id = plan.target_id
-        app_id = plan.app_id
-        acted_app_id = app_id if committed_action is not None else None
+        """Run the cascade in its contracted order, stopping at the first refusal.
+
+        Saves are quarantined before content is removed, artifacts before Steam
+        state, and the rows only once the filesystem is clean and their absence
+        has been re-proven. Each step reports the reason it stopped; the ledger
+        it has been updating is what keeps the resulting verdict truthful.
+        """
+        acted_app_id = plan.app_id if committed_action is not None else None
         warnings = self._save_locks.inventory_warnings(delete_inventory)
-        quarantine = await self._loop.run_in_executor(
-            None,
-            self._save_coordinator.quarantine_prune_saves,
-            delete_inventory["exclusive"],
-            handle.source_claims if handle is not None else delete_inventory.get("source_claims"),
-        )
-        raw_moved = quarantine.get("moved")
-        moved = [str(path) for path in raw_moved] if isinstance(raw_moved, list) else []
-        if moved:
-            ledger.mutations.append("save_quarantine")
-        if quarantine.get("ambiguous") and "save_quarantine" not in ledger.ambiguous_mutations:
-            ledger.ambiguous_mutations.append("save_quarantine")
-        if not quarantine.get("success"):
+
+        def retained(failure: tuple[str, object], *, uncommitted_status: str = "failed") -> dict[str, Any]:
             return self._retained(
                 rows,
-                "save_quarantine_failed",
-                quarantine.get("message", "Save quarantine failed."),
+                failure[0],
+                failure[1],
                 plan=plan,
                 committed_action=committed_action,
                 handle=handle,
                 ledger=ledger,
                 warnings=warnings,
                 acted_app_id=acted_app_id,
+                uncommitted_status=uncommitted_status,
             )
 
-        for rom_id in sorted(delete_ids):
-            claims = handle.source_claims if handle is not None else None
-            removal = await self._loop.run_in_executor(None, self._remove_installed_files, rom_id, claims)
-            if removal.get("changed") and "installed_rom_content" not in ledger.mutations:
-                ledger.mutations.append("installed_rom_content")
-            if removal.get("ambiguous") and "installed_rom_content" not in ledger.ambiguous_mutations:
-                ledger.ambiguous_mutations.append("installed_rom_content")
-            if removal.get("success"):
-                continue
-            if removal.get("reason") == "not_installed":
-                continue
-            return self._retained(
-                rows,
-                "rom_removal_failed",
-                removal.get("message", "ROM removal failed."),
-                plan=plan,
-                committed_action=committed_action,
-                handle=handle,
-                ledger=ledger,
-                warnings=warnings,
-                acted_app_id=acted_app_id,
-            )
-        try:
-            claims = handle.source_claims if handle is not None else None
-            artifact_outcome = await self._loop.run_in_executor(
-                None, self._prune_artifacts.remove, sorted(delete_ids), claims
-            )
-            if artifact_outcome.get("changed"):
-                ledger.mutations.append("plugin_artifacts")
-            if artifact_outcome.get("ambiguous"):
-                ledger.ambiguous_mutations.append("plugin_artifacts")
-            if not artifact_outcome.get("success"):
-                raise RuntimeError(artifact_outcome.get("message", "Plugin artifact cleanup failed"))
-            if committed_action == "remove_shortcut" and app_id is not None and handle is not None:
-                if handle.steam_backend is None:
-                    raise RuntimeError("Steam recovery identity was not captured")
-                steam_outcome = await self._loop.run_in_executor(
-                    None, self._steam_recovery.remove_state, app_id, handle.steam_backend, handle.source_claims
-                )
-                if steam_outcome.get("changed"):
-                    ledger.mutations.append("steam_files")
-                if steam_outcome.get("ambiguous"):
-                    ledger.ambiguous_mutations.append("steam_files")
-                if not steam_outcome.get("success"):
-                    raise RuntimeError(steam_outcome.get("message", "Steam state cleanup failed"))
-        except Exception as exc:
-            return self._retained(
-                rows,
-                "artifact_cleanup_failed",
-                str(exc),
-                plan=plan,
-                committed_action=committed_action,
-                handle=handle,
-                ledger=ledger,
-                warnings=warnings,
-                acted_app_id=acted_app_id,
-            )
+        claims = handle.source_claims if handle is not None else None
+        failure = await self._quarantine_saves(delete_inventory, claims, ledger)
+        if failure is not None:
+            return retained(failure)
+        failure = await self._remove_installed_content(plan.delete_ids, claims, ledger)
+        if failure is not None:
+            return retained(failure)
+        failure = await self._remove_artifacts(plan, committed_action, handle, ledger)
+        if failure is not None:
+            return retained(failure)
+        failure = await self._confirm_absences(delete_inventory)
+        if failure is not None:
+            return retained(failure)
 
-        absence_claims = delete_inventory.get("source_claims")
-        if not isinstance(absence_claims, dict) or not await self._loop.run_in_executor(
-            None, self._save_coordinator.validate_prune_absences, absence_claims
-        ):
-            return self._retained(
-                rows,
-                "save_state_changed",
-                "A previously absent save appeared before finalization; the aggregate was retained.",
-                plan=plan,
-                committed_action=committed_action,
-                handle=handle,
-                ledger=ledger,
-                warnings=warnings,
-                acted_app_id=acted_app_id,
-            )
-
-        try:
-            deleted = await self._loop.run_in_executor(
-                None, self._registry.delete_rows, rows, delete_ids, target_id, expected_app_id, plan.fully_dead
-            )
-        except Exception:
-            ledger.mutations.append("database_rows_ambiguous")
-            raise
+        deleted = await self._delete_rows(rows, plan, expected_app_id, ledger)
         if not deleted:
-            return self._retained(
-                rows,
-                "local_state_changed",
-                "Final local revalidation failed after filesystem cleanup.",
-                plan=plan,
-                committed_action=committed_action,
-                handle=handle,
-                ledger=ledger,
-                warnings=warnings,
-                acted_app_id=acted_app_id,
+            return retained(
+                ("local_state_changed", "Final local revalidation failed after filesystem cleanup."),
                 uncommitted_status="skipped",
             )
-        ledger.mutations.append("database_rows")
-
         return self._results.group_result(
             rows,
             "removed",
             None,
-            f"Removed {len(delete_ids)} confirmed vanished entr{'y' if len(delete_ids) == 1 else 'ies'}.",
-            removed_rom_ids=sorted(delete_ids),
+            f"Removed {len(plan.delete_ids)} confirmed vanished entr{'y' if len(plan.delete_ids) == 1 else 'ies'}.",
+            removed_rom_ids=sorted(plan.delete_ids),
             app_id=acted_app_id,
-            removed_app_id=app_id if committed_action == "remove_shortcut" else None,
+            removed_app_id=plan.app_id if committed_action == "remove_shortcut" else None,
             bundle_path=handle.bundle_path if handle else None,
             committed_action=committed_action,
             mutations=ledger.mutations,
             ambiguous_mutations=ledger.ambiguous_mutations,
             warnings=warnings,
-            target_rom_id=target_id,
+            target_rom_id=plan.target_id,
         )
+
+    async def _quarantine_saves(
+        self,
+        delete_inventory: dict[str, Any],
+        claims: dict[str, SourceClaim] | None,
+        ledger: MutationLedger,
+    ) -> tuple[str, object] | None:
+        """Move the exclusively-owned saves aside, recording what actually moved."""
+        quarantine = await self._loop.run_in_executor(
+            None,
+            self._save_coordinator.quarantine_prune_saves,
+            delete_inventory["exclusive"],
+            claims if claims is not None else delete_inventory.get("source_claims"),
+        )
+        raw_moved = quarantine.get("moved")
+        if isinstance(raw_moved, list) and raw_moved:
+            ledger.mutations.append("save_quarantine")
+        if quarantine.get("ambiguous") and "save_quarantine" not in ledger.ambiguous_mutations:
+            ledger.ambiguous_mutations.append("save_quarantine")
+        if quarantine.get("success"):
+            return None
+        return "save_quarantine_failed", quarantine.get("message", "Save quarantine failed.")
+
+    async def _remove_installed_content(
+        self,
+        delete_ids: set[int],
+        claims: dict[str, SourceClaim] | None,
+        ledger: MutationLedger,
+    ) -> tuple[str, object] | None:
+        """Delete each row's installed ROM files; a ROM that was never installed is fine."""
+        for rom_id in sorted(delete_ids):
+            removal = await self._loop.run_in_executor(None, self._remove_installed_files, rom_id, claims)
+            if removal.get("changed") and "installed_rom_content" not in ledger.mutations:
+                ledger.mutations.append("installed_rom_content")
+            if removal.get("ambiguous") and "installed_rom_content" not in ledger.ambiguous_mutations:
+                ledger.ambiguous_mutations.append("installed_rom_content")
+            if removal.get("success") or removal.get("reason") == "not_installed":
+                continue
+            return "rom_removal_failed", removal.get("message", "ROM removal failed.")
+        return None
+
+    async def _remove_artifacts(
+        self,
+        plan: GroupPlan,
+        committed_action: str | None,
+        handle: RecoveryHandle | None,
+        ledger: MutationLedger,
+    ) -> tuple[str, object] | None:
+        """Clear the plugin's own caches, then the Steam files a removal orphaned."""
+        try:
+            claims = handle.source_claims if handle is not None else None
+            artifact_outcome = await self._loop.run_in_executor(
+                None, self._prune_artifacts.remove, sorted(plan.delete_ids), claims
+            )
+            self._record_outcome(artifact_outcome, "plugin_artifacts", ledger)
+            if not artifact_outcome.get("success"):
+                raise RuntimeError(artifact_outcome.get("message", "Plugin artifact cleanup failed"))
+            if committed_action == "remove_shortcut" and plan.app_id is not None and handle is not None:
+                await self._remove_steam_state(plan.app_id, handle, ledger)
+        except Exception as exc:
+            return "artifact_cleanup_failed", str(exc)
+        return None
+
+    async def _remove_steam_state(self, app_id: int, handle: RecoveryHandle, ledger: MutationLedger) -> None:
+        """Drop the Steam-side files for a shortcut this run removed."""
+        if handle.steam_backend is None:
+            raise RuntimeError("Steam recovery identity was not captured")
+        steam_outcome = await self._loop.run_in_executor(
+            None, self._steam_recovery.remove_state, app_id, handle.steam_backend, handle.source_claims
+        )
+        self._record_outcome(steam_outcome, "steam_files", ledger)
+        if not steam_outcome.get("success"):
+            raise RuntimeError(steam_outcome.get("message", "Steam state cleanup failed"))
+
+    @staticmethod
+    def _record_outcome(outcome: dict[str, Any], label: str, ledger: MutationLedger) -> None:
+        """Write one mutation's changed/ambiguous flags into the ledger."""
+        if outcome.get("changed"):
+            ledger.mutations.append(label)
+        if outcome.get("ambiguous"):
+            ledger.ambiguous_mutations.append(label)
+
+    async def _confirm_absences(self, delete_inventory: dict[str, Any]) -> tuple[str, object] | None:
+        """Require every quarantined save to still be absent before the rows go."""
+        absence_claims = delete_inventory.get("source_claims")
+        if isinstance(absence_claims, dict) and await self._loop.run_in_executor(
+            None, self._save_coordinator.validate_prune_absences, absence_claims
+        ):
+            return None
+        return (
+            "save_state_changed",
+            "A previously absent save appeared before finalization; the aggregate was retained.",
+        )
+
+    async def _delete_rows(
+        self,
+        rows: list[Rom],
+        plan: GroupPlan,
+        expected_app_id: int | None,
+        ledger: MutationLedger,
+    ) -> bool:
+        """Remove the aggregate rows, marking the ledger ambiguous if that raises."""
+        try:
+            deleted = await self._loop.run_in_executor(
+                None,
+                self._registry.delete_rows,
+                rows,
+                plan.delete_ids,
+                plan.target_id,
+                expected_app_id,
+                plan.fully_dead,
+            )
+        except Exception:
+            ledger.mutations.append("database_rows_ambiguous")
+            raise
+        if deleted:
+            ledger.mutations.append("database_rows")
+        return bool(deleted)
 
     def _retained(
         self,
