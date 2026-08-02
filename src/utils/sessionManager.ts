@@ -9,15 +9,7 @@
  */
 
 import { toaster } from "@decky/api";
-import {
-  recordSessionStart,
-  getAppIdRomIdMap,
-  finalizeGameSession,
-  logInfo,
-  logWarn,
-  logError,
-  debugLog,
-} from "../api/backend";
+import { recordSessionStart, getAppIdRomIdMap, finalizeGameSession, logInfo, logError, debugLog } from "../api/backend";
 import { saveSyncToastBody } from "./saveSyncToast";
 import { setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
@@ -26,15 +18,9 @@ import { detach } from "./detach";
 import { readRunningApps, type RunningApp } from "./runningApps";
 import { delay } from "./pacedOps";
 
-// Active session tracking — ONE slot, deliberately (#1621). The slot records the
-// Steam app that opened the session alongside the rom, so a lifecycle stop can be
-// matched against it; a second RomM game starting displaces the first. Turning
-// the slot into a per-rom map is a deliberate non-goal, not an oversight: it
-// would ripple into the breadcrumb, both adoption branches, and every
-// `isSessionActive()` consumer — including the launch gate's already-running
-// guard, which is save-safety machinery. Concurrent RomM games are rare, and
-// scoping the stop to its own app already removes the dangerous behaviour
-// (finalizing the wrong session, post-exit save sync against a running game).
+// Active session tracking — ONE ENTRY PER RUNNING APP (#1624). Two RomM games at
+// once each hold their own entry, so a second start no longer displaces the
+// first (which dropped its playtime and its post-exit save sync entirely).
 interface ActiveSession {
   /** The Steam app that opened the session — what a lifecycle stop is matched against. */
   appId: number;
@@ -43,7 +29,17 @@ interface ActiveSession {
   startMs: number;
 }
 
-let activeSession: ActiveSession | null = null;
+// Keyed by appId, because that is what every write path is handed: the lifetime
+// notification's `unAppID` on both edges, and the running-app reading at
+// adoption. The stop path in particular must match against the appId RECORDED
+// WITH THE SESSION (#1621) — a romId key would force a reverse lookup through
+// the `appId → romId` map, which can go stale mid-session and would then drop a
+// live session instead of an unrelated one.
+//
+// `const` + `clear()` on teardown: the binding is never reassigned, so a handler
+// already queued on the lifecycle chain cannot end up writing into a map that
+// has been swapped out from under it.
+const activeSessions = new Map<number, ActiveSession>();
 
 // Serialization chain — ensures lifecycle events don't interleave
 let lifecycleChain: Promise<void> = Promise.resolve();
@@ -85,7 +81,10 @@ export function getAppIdRomIdMapSnapshot(): Record<string, number> {
  * button, to seed and self-heal its Resume overlay.
  */
 export function isSessionActive(romId: number): boolean {
-  return activeSession?.romId === romId;
+  for (const session of activeSessions.values()) {
+    if (session.romId === romId) return true;
+  }
+  return false;
 }
 
 async function refreshAppIdMap(): Promise<void> {
@@ -96,56 +95,84 @@ async function refreshAppIdMap(): Promise<void> {
   }
 }
 
-// Durable attestation of the open session — survives a plugin reload so the
-// re-initialized manager can adopt the still-running game and finalize its
-// stop. A single versioned localStorage row; every access is wrapped so a
+// Durable attestation of the open sessions — survives a plugin reload so the
+// re-initialized manager can adopt the still-running games and finalize their
+// stops. A single versioned localStorage row; every access is wrapped so a
 // storage failure degrades to the no-attestation path instead of throwing.
 const SESSION_BREADCRUMB_KEY = "decky-romm-sync:active-session";
-const SESSION_BREADCRUMB_VERSION = 1;
+const SESSION_BREADCRUMB_VERSION = 2;
 
-interface SessionBreadcrumb {
-  v: number;
-  appId: number;
-  romId: number;
-  startMs: number;
+/** Read one stored entry into the current shape, or `null` if it isn't one. */
+function toSessionEntry(value: unknown): ActiveSession | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { appId, romId, startMs } = value as Record<string, unknown>;
+  if (typeof appId !== "number" || typeof romId !== "number" || typeof startMs !== "number") return null;
+  return { appId, romId, startMs };
 }
 
-function isSessionBreadcrumb(value: unknown): value is SessionBreadcrumb {
-  if (typeof value !== "object" || value === null) return false;
-  const c = value as Record<string, unknown>;
-  return (
-    c.v === SESSION_BREADCRUMB_VERSION &&
-    typeof c.appId === "number" &&
-    typeof c.romId === "number" &&
-    typeof c.startMs === "number"
-  );
-}
-
-function readSessionBreadcrumb(): SessionBreadcrumb | null {
+/**
+ * The sessions the durable row attests, or an empty list when it attests none.
+ *
+ * The stored version is branched on FIRST, before any field is looked at, and
+ * every version a released build could have written gets its own lift into the
+ * current shape. Validating version and fields in one expression would make
+ * every row written by the previous version fail — and a failed validation is
+ * indistinguishable from "no attestation", so the live session's pre-upgrade
+ * span would be silently discarded on the first reload after an upgrade.
+ *
+ * Entries are read individually: one malformed entry never voids its siblings.
+ */
+function readSessionBreadcrumbs(): ActiveSession[] {
   try {
     const raw = localStorage.getItem(SESSION_BREADCRUMB_KEY);
-    if (raw === null) return null;
+    if (raw === null) return [];
     const parsed: unknown = JSON.parse(raw);
-    return isSessionBreadcrumb(parsed) ? parsed : null;
+    if (typeof parsed !== "object" || parsed === null) return [];
+    const crumb = parsed as Record<string, unknown>;
+    if (crumb.v === 2) {
+      if (!Array.isArray(crumb.sessions)) return [];
+      return crumb.sessions.map(toSessionEntry).filter((s) => s !== null);
+    }
+    if (crumb.v === 1) {
+      // v1 carried a single session inline — lift it into a one-entry list. No
+      // writer emits v1 any more; the next persist rewrites the row as v2.
+      const lifted = toSessionEntry(crumb);
+      return lifted === null ? [] : [lifted];
+    }
+    // Unknown version: written by a build this one knows nothing about, so its
+    // fields cannot be trusted. Same standing as no attestation at all.
+    return [];
   } catch (e) {
     logError(`Failed to read session breadcrumb: ${e}`);
-    return null;
+    return [];
   }
 }
 
-function writeSessionBreadcrumb(crumb: SessionBreadcrumb): void {
+/**
+ * Rewrite the durable row from the session map.
+ *
+ * A projection, never a read-modify-write: the map is the source of truth and
+ * the whole row is rewritten after every mutation, before any await. A failed
+ * write leaves the previous row intact (`setItem` is atomic per key) and
+ * self-heals at the next mutation.
+ *
+ * An empty map removes the row rather than storing an empty list, so "no live
+ * session" stays the absent state every reader already understands.
+ */
+function persistSessions(): void {
+  if (activeSessions.size === 0) {
+    try {
+      localStorage.removeItem(SESSION_BREADCRUMB_KEY);
+    } catch (e) {
+      logError(`Failed to clear session breadcrumb: ${e}`);
+    }
+    return;
+  }
   try {
-    localStorage.setItem(SESSION_BREADCRUMB_KEY, JSON.stringify(crumb));
+    const row = { v: SESSION_BREADCRUMB_VERSION, sessions: [...activeSessions.values()] };
+    localStorage.setItem(SESSION_BREADCRUMB_KEY, JSON.stringify(row));
   } catch (e) {
     logError(`Failed to write session breadcrumb: ${e}`);
-  }
-}
-
-function clearSessionBreadcrumb(): void {
-  try {
-    localStorage.removeItem(SESSION_BREADCRUMB_KEY);
-  } catch (e) {
-    logError(`Failed to clear session breadcrumb: ${e}`);
   }
 }
 
@@ -163,21 +190,11 @@ async function handleGameStart(appId: number): Promise<void> {
   if (!romId) return; // Not a RomM shortcut
 
   logInfo(`Session start: romId=${romId}, appId=${appId}`);
-  if (activeSession && activeSession.romId !== romId) {
-    // Two RomM games at once, and the single slot holds one. The displaced session
-    // is dropped rather than given a fabricated end — its stop was never observed,
-    // the same rule an orphaned breadcrumb follows. Rare enough to keep the slot
-    // single (see the state block), loud enough to leave a trace when it happens.
-    logWarn(
-      `Session start for romId=${romId} displaces still-active romId=${activeSession.romId} — its playtime is dropped`,
-    );
-  }
-  const session: ActiveSession = { appId, romId, startMs: Date.now() };
-  activeSession = session;
+  activeSessions.set(appId, { appId, romId, startMs: Date.now() });
   dispatchSessionChanged(true, appId, romId);
 
-  // Attest the open session so a reload mid-game can adopt and finalize it.
-  writeSessionBreadcrumb({ v: SESSION_BREADCRUMB_VERSION, appId, romId, startMs: session.startMs });
+  // Attest the open sessions so a reload mid-game can adopt and finalize them.
+  persistSessions();
 
   // Record session start for playtime tracking
   try {
@@ -189,28 +206,23 @@ async function handleGameStart(appId: number): Promise<void> {
 }
 
 /**
- * Finalize the active session, but only when `stoppedAppId` is the app that
- * opened it.
+ * Finalize the session the stopped app opened, if it opened one.
  *
  * `RegisterForAppLifetimeNotifications` fires for EVERY app Steam tracks, so an
- * unrelated app's exit reaches here too (#1621). The comparison is against the
- * appId RECORDED WITH THE SESSION, never a fresh `getRomIdForApp` lookup: the
- * cached map can be stale at stop time, and a stale miss would drop a real
- * session — recording no playtime and skipping the post-exit sync entirely.
+ * unrelated app's exit reaches here too (#1621). The lookup is by the appId
+ * RECORDED WITH THE SESSION, never a fresh `getRomIdForApp` lookup: the cached
+ * map can be stale at stop time, and a stale miss would drop a real session —
+ * recording no playtime and skipping the post-exit sync entirely.
+ *
+ * Any other app's exit — a foreign app, or a concurrent RomM game — leaves every
+ * open session untouched. Finalizing one of those would record its playtime
+ * early AND run the post-exit save sync while its emulator still holds the save
+ * file open, capturing a half-written file.
  */
 async function handleGameStop(stoppedAppId: number): Promise<void> {
-  const session = activeSession;
-  if (!session) return;
-
-  if (session.appId !== stoppedAppId) {
-    // Some other app stopped. The live session stays open — finalizing here would
-    // record its playtime early AND run the post-exit save sync while the emulator
-    // still holds the save file open, capturing a half-written file.
-    detach(
-      debugLog(
-        `Session stop ignored: appId=${stoppedAppId} is not the active session (appId=${session.appId}, romId=${session.romId})`,
-      ),
-    );
+  const session = activeSessions.get(stoppedAppId);
+  if (!session) {
+    detach(debugLog(`Session stop ignored: appId=${stoppedAppId} opened no session`));
     return;
   }
 
@@ -221,10 +233,11 @@ async function handleGameStop(stoppedAppId: number): Promise<void> {
   // session itself, so this needs no reverse-map lookup.
   dispatchSessionChanged(false, appId, romId);
 
-  // Clear active session immediately to avoid double-processing. The breadcrumb
-  // goes with it — the stop is observed, so there is nothing left to adopt.
-  activeSession = null;
-  clearSessionBreadcrumb();
+  // Drop this session immediately to avoid double-processing, and rewrite the
+  // row before the finalize await — the stop is observed, so there is nothing
+  // left to adopt for this app; any concurrent session stays attested.
+  activeSessions.delete(appId);
+  persistSessions();
 
   try {
     const result = await finalizeGameSession(romId);
@@ -333,30 +346,27 @@ async function adoptOrphanedSession(): Promise<void> {
       : `adoption: no running app after ${waitedMs}ms [${diagnostics}]`,
   );
   const runningRomId = running ? getRomIdForApp(running.appid) : null;
-  const crumb = readSessionBreadcrumb();
+  const crumbs = readSessionBreadcrumbs();
+  const crumb = crumbs[0] ?? null;
 
   if (running && runningRomId !== null) {
     const appId = running.appid;
     if (crumb && crumb.appId === appId && crumb.romId === runningRomId) {
       // (a) The breadcrumb attests this exact running session. Restore the
-      // in-memory state and leave the durable marker untouched — re-stamping it
-      // would discard the pre-reload playtime the backend already holds.
-      activeSession = { appId, romId: runningRomId, startMs: crumb.startMs };
+      // in-memory state, keeping the attested startMs — re-stamping the durable
+      // marker would discard the pre-reload playtime the backend already holds.
+      activeSessions.set(appId, { appId, romId: runningRomId, startMs: crumb.startMs });
+      persistSessions();
       dispatchSessionChanged(true, appId, runningRomId);
       logInfo(`Adopted running session from breadcrumb: romId=${runningRomId}, appId=${appId}`);
     } else {
       // (a′) A game is running but no usable breadcrumb (missing / mismatched /
       // corrupt). Adopt it and re-stamp the marker to a truthful lower bound
-      // from now, then attest with a fresh breadcrumb so a later reload adopts
-      // via (a) rather than re-stamping again.
+      // from now, then attest it so a later reload adopts via (a) rather than
+      // re-stamping again.
       const adopted: ActiveSession = { appId, romId: runningRomId, startMs: Date.now() };
-      activeSession = adopted;
-      writeSessionBreadcrumb({
-        v: SESSION_BREADCRUMB_VERSION,
-        appId,
-        romId: runningRomId,
-        startMs: adopted.startMs,
-      });
+      activeSessions.set(appId, adopted);
+      persistSessions();
       dispatchSessionChanged(true, appId, runningRomId);
       try {
         await recordSessionStart(runningRomId);
@@ -372,7 +382,7 @@ async function adoptOrphanedSession(): Promise<void> {
   // here names a session whose stop we never saw — a truthful finalize is
   // impossible without an observed end, so drop it rather than fabricate one.
   if (crumb) {
-    clearSessionBreadcrumb();
+    persistSessions();
     logInfo(`Session orphaned — playtime not recorded (romId=${crumb.romId})`);
   }
 }
@@ -438,7 +448,7 @@ export function destroySessionManager(): void {
     lifetimeHook = null;
   }
 
-  activeSession = null;
+  activeSessions.clear();
   lifecycleChain = Promise.resolve();
   // Signal any in-flight adoption poll to abort instead of mutating torn-down state.
   sessionEpoch++;

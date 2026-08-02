@@ -102,6 +102,35 @@ function stubNothingRunning(): void {
   vi.stubGlobal("SteamUIStore", { RunningApps: [] });
 }
 
+// The durable attestation: one versioned localStorage row holding EVERY open
+// session. `seedSessions` writes the current (v2) shape; a few tests seed a
+// literal v1 row instead, so the in-place upgrade stays covered where it
+// actually happens. `readSessions` is the shape assertion most tests want (the
+// attested list, or null for "no row"); `readCrumb` exposes the raw row for the
+// version itself.
+const BREADCRUMB_KEY = "decky-romm-sync:active-session";
+
+function seedSessions(sessions: { appId: number; romId: number; startMs: number }[]): void {
+  localStorage.setItem(BREADCRUMB_KEY, JSON.stringify({ v: 2, sessions }));
+}
+
+/** A row in the pre-#1624 (v1) shape — one session inline, no `sessions` list. */
+function seedV1Session(session: { appId: number; romId: number; startMs: number }): void {
+  localStorage.setItem(BREADCRUMB_KEY, JSON.stringify({ v: 1, ...session }));
+}
+
+function readCrumb(): unknown {
+  const raw = localStorage.getItem(BREADCRUMB_KEY);
+  return raw === null ? null : JSON.parse(raw);
+}
+
+function readSessions(): unknown[] | null {
+  const crumb = readCrumb();
+  if (crumb === null) return null;
+  const sessions = (crumb as { sessions?: unknown }).sessions;
+  return Array.isArray(sessions) ? sessions : null;
+}
+
 // The session manager registers only the lifecycle hook — suspend/resume
 // tracking was removed (#1148: the Steam hooks never fired on-device; playtime
 // now excludes suspend via the backend monotonic clock). Re-stub after the
@@ -374,16 +403,6 @@ describe("sessionManager post-exit save-sync toast (#1481)", () => {
 });
 
 describe("sessionManager reload adoption", () => {
-  const BREADCRUMB_KEY = "decky-romm-sync:active-session";
-
-  const seedBreadcrumb = (crumb: { v: number; appId: number; romId: number; startMs: number }) =>
-    localStorage.setItem(BREADCRUMB_KEY, JSON.stringify(crumb));
-
-  const readCrumb = (): unknown => {
-    const raw = localStorage.getItem(BREADCRUMB_KEY);
-    return raw === null ? null : JSON.parse(raw);
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
@@ -401,7 +420,7 @@ describe("sessionManager reload adoption", () => {
   });
 
   it("adopts a matching breadcrumb without re-stamping the marker, then finalizes on stop", async () => {
-    seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
+    seedSessions([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
     stubRunningApp(APP_ID);
 
     await initSessionManager();
@@ -426,12 +445,13 @@ describe("sessionManager reload adoption", () => {
     // a later reload adopts via case (a) instead of re-stamping again.
     expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
     expect(backend.recordSessionStart).toHaveBeenCalledWith(ROM_ID);
-    expect(readCrumb()).toMatchObject({ v: 1, appId: APP_ID, romId: ROM_ID });
+    expect(readSessions()).toEqual([expect.objectContaining({ appId: APP_ID, romId: ROM_ID })]);
   });
 
   it("adopts and re-stamps when the breadcrumb names a different app than the running game", async () => {
-    // Stale breadcrumb for a different app; the running game is authoritative.
-    seedBreadcrumb({ v: 1, appId: 555, romId: 99, startMs: 5_000 });
+    // Stale breadcrumb for a different app, in the pre-#1624 shape; the running
+    // game is authoritative.
+    seedV1Session({ appId: 555, romId: 99, startMs: 5_000 });
     stubRunningApp(APP_ID);
 
     await initSessionManager();
@@ -439,11 +459,11 @@ describe("sessionManager reload adoption", () => {
     expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
     expect(backend.recordSessionStart).toHaveBeenCalledWith(ROM_ID);
     // The stale breadcrumb is overwritten with a fresh one for the live game.
-    expect(readCrumb()).toMatchObject({ v: 1, appId: APP_ID, romId: ROM_ID });
+    expect(readSessions()).toEqual([expect.objectContaining({ appId: APP_ID, romId: ROM_ID })]);
   });
 
   it("clears the breadcrumb and does not adopt when nothing is running", async () => {
-    seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
+    seedSessions([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
     stubNothingRunning();
 
     // Nothing ever runs → the poll times out and the breadcrumb is orphan-cleared.
@@ -545,28 +565,87 @@ describe("sessionManager reload adoption", () => {
     expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
   });
 
-  it("treats a wrong-version breadcrumb as unusable and re-stamps (a′)", async () => {
-    // A breadcrumb from a future schema (v2) fails isSessionBreadcrumb.
-    seedBreadcrumb({ v: 2, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
+  // #1624: the durable row is versioned, and the version is branched on BEFORE
+  // any field is read. A row written by the PREVIOUS release must upgrade in
+  // place — treating it as unusable would silently discard the pre-upgrade span
+  // of a session that is still running, on the very first reload after an update.
+  it("upgrades a v1 breadcrumb in place: adopted via (a), marker untouched, row rewritten as v2", async () => {
+    seedV1Session({ appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
+    stubRunningApp(APP_ID);
+
+    await initSessionManager();
+
+    // The pre-upgrade start survives: no re-stamp, and the rewritten row carries
+    // the ORIGINAL startMs rather than "now".
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    expect(readCrumb()).toEqual({ v: 2, sessions: [{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }] });
+
+    const lifetime = captureLifetimeCb();
+    await stopGame(lifetime);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
+  });
+
+  it("keeps the sound entries of a v2 row when one entry is malformed", async () => {
+    // Per-entry tolerance: a single corrupt entry must not void its siblings.
+    localStorage.setItem(
+      BREADCRUMB_KEY,
+      JSON.stringify({
+        v: 2,
+        sessions: [
+          { appId: "not-a-number", romId: ROM_ID },
+          { appId: APP_ID, romId: ROM_ID, startMs: 5_000 },
+        ],
+      }),
+    );
+    stubRunningApp(APP_ID);
+
+    await initSessionManager();
+
+    // The good entry still attests the running session — adopted via (a).
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    expect(readSessions()).toEqual([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
+  });
+
+  it("treats a future-version breadcrumb as unusable and re-stamps (a′)", async () => {
+    // A row from a schema this build knows nothing about: its fields cannot be
+    // trusted even if they happen to look right.
+    localStorage.setItem(BREADCRUMB_KEY, JSON.stringify({ v: 3, sessions: [{ appId: APP_ID, romId: ROM_ID }] }));
     stubRunningApp(APP_ID);
 
     await initSessionManager();
 
     expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
     expect(backend.recordSessionStart).toHaveBeenCalledWith(ROM_ID);
-    // Overwritten with a fresh v1 breadcrumb.
-    expect(readCrumb()).toMatchObject({ v: 1, appId: APP_ID, romId: ROM_ID });
+    // Overwritten with a fresh row in the current shape.
+    expect(readCrumb()).toEqual({ v: 2, sessions: [{ appId: APP_ID, romId: ROM_ID, startMs: 0 }] });
+  });
+
+  it("treats a v2 row whose sessions are missing or not a list as unusable and re-stamps (a′)", async () => {
+    localStorage.setItem(BREADCRUMB_KEY, JSON.stringify({ v: 2 }));
+    stubRunningApp(APP_ID);
+
+    await initSessionManager();
+
+    expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
+
+    destroySessionManager();
+    vi.clearAllMocks();
+    localStorage.setItem(BREADCRUMB_KEY, JSON.stringify({ v: 2, sessions: { appId: APP_ID } }));
+
+    await initSessionManager();
+
+    expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
   });
 
   it("treats a non-object breadcrumb JSON as unusable and re-stamps (a′)", async () => {
-    // Valid JSON but not an object — isSessionBreadcrumb rejects it.
+    // Valid JSON but not an object — no version to branch on.
     localStorage.setItem(BREADCRUMB_KEY, JSON.stringify(42));
     stubRunningApp(APP_ID);
 
     await initSessionManager();
 
     expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
-    expect(readCrumb()).toMatchObject({ v: 1, appId: APP_ID, romId: ROM_ID });
+    expect(readSessions()).toEqual([expect.objectContaining({ appId: APP_ID, romId: ROM_ID })]);
   });
 
   it("survives a rejected recordSessionStart during adoption", async () => {
@@ -579,14 +658,14 @@ describe("sessionManager reload adoption", () => {
 
     // The breadcrumb is written before the failing call, and the session is
     // still adopted — a subsequent stop finalizes the original rom.
-    expect(readCrumb()).toMatchObject({ v: 1, appId: APP_ID, romId: ROM_ID });
+    expect(readSessions()).toEqual([expect.objectContaining({ appId: APP_ID, romId: ROM_ID })]);
     const lifetime = captureLifetimeCb();
     await stopGame(lifetime);
     expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
   });
 
   it("clears a live breadcrumb when a non-RomM app is in the foreground", async () => {
-    seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
+    seedSessions([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
     stubRunningApp(999, "Other");
 
     await initSessionManager();
@@ -650,7 +729,7 @@ describe("sessionManager reload adoption", () => {
     // SteamUIStore intentionally not stubbed — on a build/timing where the
     // global is genuinely absent, a bare read would throw ReferenceError out of
     // the poll. Adoption must still reach its ordinary timeout verdict.
-    seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
+    seedSessions([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
 
     const init = initSessionManager();
     await vi.advanceTimersByTimeAsync(ADOPTION_POLL_MAX_MS);
@@ -667,7 +746,7 @@ describe("sessionManager reload adoption", () => {
   // EMPTY running-app list for several seconds while the game is still running,
   // so a one-shot read wrongly orphaned a live session. Adoption now polls.
   it("adopts a matching breadcrumb once the store reports the app mid-poll, no orphan log", async () => {
-    seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
+    seedSessions([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
     stubNothingRunning();
 
     const init = initSessionManager();
@@ -692,7 +771,7 @@ describe("sessionManager reload adoption", () => {
   });
 
   it("orphan-clears the breadcrumb after the poll times out with nothing running", async () => {
-    seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
+    seedSessions([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
     stubNothingRunning();
 
     await initDrainingAdoptionPoll();
@@ -716,7 +795,7 @@ describe("sessionManager reload adoption", () => {
   });
 
   it("queues a racing stop behind the poll so it finalizes after adoption", async () => {
-    seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 1_000 });
+    seedSessions([{ appId: APP_ID, romId: ROM_ID, startMs: 1_000 }]);
     stubNothingRunning();
 
     const init = initSessionManager();
@@ -768,7 +847,6 @@ describe("sessionManager reload adoption", () => {
 // sessionManager dispatches it (running:true on start + reload-adoption,
 // running:false on stop) with the appId+romId the button matches on.
 describe("sessionManager session-changed dispatch (#1313)", () => {
-  const BREADCRUMB_KEY = "decky-romm-sync:active-session";
   let sessionEvents: { running: boolean; appId: number; romId: number }[];
   let sessionListener: (e: WindowEventMap["romm_session_changed"]) => void;
 
@@ -828,6 +906,7 @@ describe("sessionManager session-changed dispatch (#1313)", () => {
   });
 
   it("dispatches running:true when adopting a running session via a matching breadcrumb", async () => {
+    // A v1 row, extra keys and all — the lift ignores what it does not know.
     localStorage.setItem(
       BREADCRUMB_KEY,
       JSON.stringify({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000, pausedMs: 0 }),
@@ -859,12 +938,6 @@ describe("sessionManager session-changed dispatch (#1313)", () => {
 // Finalizing on a foreign app's exit recorded the wrong playtime AND ran the
 // post-exit save sync against a game still holding its save file open.
 describe("sessionManager stop scoping (#1621)", () => {
-  const BREADCRUMB_KEY = "decky-romm-sync:active-session";
-  const readCrumb = (): unknown => {
-    const raw = localStorage.getItem(BREADCRUMB_KEY);
-    return raw === null ? null : JSON.parse(raw);
-  };
-
   // finalizeGameSession is the single callable behind BOTH the playtime write and
   // the post-exit save sync, so "not called" is the direct assertion that neither
   // ran. total_seconds makes the playtime display write observable too.
@@ -917,6 +990,8 @@ describe("sessionManager stop scoping (#1621)", () => {
     await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
 
+    // Times are absolute and the adoption poll already drained to 15s.
+    vi.setSystemTime(20_000);
     await startGame(lifetime);
     vi.setSystemTime(30_000);
     await stopApp(lifetime, UNRELATED_APP_ID);
@@ -929,16 +1004,16 @@ describe("sessionManager stop scoping (#1621)", () => {
 
     // The session is still open: its breadcrumb survives and its own app's stop
     // still finalizes it, at the real end time.
-    expect(readCrumb()).toMatchObject({ v: 1, appId: APP_ID, romId: ROM_ID });
+    expect(readSessions()).toEqual([{ appId: APP_ID, romId: ROM_ID, startMs: 20_000 }]);
     vi.setSystemTime(60_000);
     await stopApp(lifetime, APP_ID);
     expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
     expect(updatePlaytimeDisplay).toHaveBeenCalledWith(APP_ID, 99);
   });
 
-  it("ignores a stop for a second RomM game that is not the active session", async () => {
+  it("ignores a stop for a second RomM game that opened no session", async () => {
     // The stopping app maps to a real rom, so a fresh map lookup would happily
-    // resolve one — only the appId RECORDED with the session rejects it.
+    // resolve one — only its absence from the session map rejects it.
     await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
 
@@ -949,29 +1024,44 @@ describe("sessionManager stop scoping (#1621)", () => {
     expect(dataChanged).toEqual([]);
   });
 
-  it("warns and drops the displaced session when a second game takes the slot", async () => {
+  // #1624: a second RomM game used to displace the first, which then recorded no
+  // playtime and ran no post-exit save sync at all — its stop found a slot that
+  // no longer held it. Both now stand on their own.
+  it("keeps both sessions when a second RomM game starts, finalizing each on its own app's exit", async () => {
     await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
 
+    // Times are absolute and the adoption poll already drained to 15s.
+    vi.setSystemTime(20_000);
     await startGame(lifetime);
     vi.setSystemTime(30_000);
     await startApp(lifetime, OTHER_APP_ID);
 
-    // The displaced session leaves a trace and is dropped, not finalized with a
-    // fabricated end — its stop was never observed.
-    const warning = vi.mocked(backend.logWarn).mock.calls.map((c) => c[0]);
-    expect(warning).toContainEqual(expect.stringContaining(`romId=${OTHER_ROM_ID}`));
-    expect(warning).toContainEqual(expect.stringContaining(`romId=${ROM_ID}`));
-    expect(backend.finalizeGameSession).not.toHaveBeenCalled();
+    // Two open markers, two attested sessions, nothing finalized yet.
+    expect(backend.recordSessionStart).toHaveBeenCalledWith(ROM_ID);
     expect(backend.recordSessionStart).toHaveBeenCalledWith(OTHER_ROM_ID);
-
-    // The displaced app's exit is now a no-op; the live session finalizes on its
-    // own app's exit — the exact ordering from the device log in #1621.
-    await stopApp(lifetime, APP_ID);
     expect(backend.finalizeGameSession).not.toHaveBeenCalled();
-    await stopApp(lifetime, OTHER_APP_ID);
+    expect(readSessions()).toEqual([
+      { appId: APP_ID, romId: ROM_ID, startMs: 20_000 },
+      { appId: OTHER_APP_ID, romId: OTHER_ROM_ID, startMs: 30_000 },
+    ]);
+
+    // The first game exits: only its rom is finalized, and the sibling session
+    // survives — both in memory and in the rewritten row.
+    vi.setSystemTime(60_000);
+    await stopApp(lifetime, APP_ID);
     expect(backend.finalizeGameSession).toHaveBeenCalledTimes(1);
-    expect(backend.finalizeGameSession).toHaveBeenCalledWith(OTHER_ROM_ID);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
+    expect(updatePlaytimeDisplay).toHaveBeenCalledWith(APP_ID, 99);
+    expect(readSessions()).toEqual([{ appId: OTHER_APP_ID, romId: OTHER_ROM_ID, startMs: 30_000 }]);
+
+    // The second game exits: its own rom is finalized, at its own end time.
+    vi.setSystemTime(90_000);
+    await stopApp(lifetime, OTHER_APP_ID);
+    expect(backend.finalizeGameSession).toHaveBeenCalledTimes(2);
+    expect(backend.finalizeGameSession).toHaveBeenLastCalledWith(OTHER_ROM_ID);
+    expect(updatePlaytimeDisplay).toHaveBeenCalledWith(OTHER_APP_ID, 99);
+    expect(readCrumb()).toBeNull();
   });
 
   it("finalizes the live session even when the app map went stale mid-session", async () => {
@@ -1016,7 +1106,7 @@ describe("sessionManager stop scoping (#1621)", () => {
   });
 
   it("scopes the stop after adopting a session from a matching breadcrumb", async () => {
-    localStorage.setItem(BREADCRUMB_KEY, JSON.stringify({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 }));
+    seedSessions([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
     stubRunningApp(APP_ID);
 
     await initSessionManager();
