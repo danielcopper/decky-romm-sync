@@ -288,6 +288,12 @@ unconfirmed removal is reported as ambiguous and its local rows are retained for
 group's explicit action removes its confirmed shortcut and every confirmed-404 row and file, regardless of the
 individual-row toggle.
 
+The shortcut's Steam-side files — grid artwork, the per-app Steam Input roots, and the `localconfig.vdf` controller
+entry — are removed only when a recovery bundle captured them, because the capture is where their claims are taken and
+no claim means no mutation. With recovery off, the shortcut, rows, ROM content, and plugin caches are still removed, but
+those Steam files stay behind: the existing orphaned-artwork cleanup collects the grid images later, while the Steam
+Input files and controller value linger harmlessly under an appId no shortcut uses.
+
 ## Run outcomes
 
 Groups execute serially, and an ordinary group failure does not stop unrelated groups. Recovery, path, disk-space,

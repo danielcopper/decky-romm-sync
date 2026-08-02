@@ -306,9 +306,9 @@ removal), so foreign keys are deliberately sparse:
   `rom_installs` and every other child remain until the parent cascade, so a failed filesystem phase leaves retryable
   aggregate state. A confirmed shortcut removal is reconciled to an unbound row before finalization, making a later
   safety refusal an explicit committed partial rather than a stale binding. The automatic sync never `DELETE`s a `roms`
-  row. Collection completion stamps whose `member_rom_ids` intersect a purged id are deleted in that same UoW. Ordinary
-  row cleanup preserves the platform completion stamp; a fully vanished game clears its affected platform stamp so one
-  later complete fetch can rebuild platform truth.
+  row. Collection completion stamps whose `member_rom_ids` intersect a purged id are deleted in that same UoW. The
+  platform completion stamp is deliberately preserved — the stamp's own `rom_count` guard already forces a re-fetch
+  after a server-side removal; the reasoning lives in [removed-game-cleanup.md](removed-game-cleanup.md#discovery).
   - **Caveat — writes to a cascade parent (`roms`) MUST UPSERT, never `INSERT OR REPLACE`/`REPLACE`.** In SQLite
     `REPLACE` resolves a PK conflict by _delete-then-insert_ of the parent row, and that DELETE fires the
     `ON DELETE CASCADE` above — silently wiping every per-ROM child on a re-save (a normal library re-sync, where the
