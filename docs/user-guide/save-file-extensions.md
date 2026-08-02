@@ -9,9 +9,10 @@ informs the implementation of [#196](https://github.com/danielcopper/decky-romm-
     [Save sync support matrix](save-sync-support-matrix.md), with the rationale in
     [Save sync coverage](../architecture/save-sync-coverage.md). It **revisits some assumptions on this page** —
     notably that Saturn (Beetle Saturn writes `.bkr`/`.bcr`/`.smpc`, not `.srm`), Neo Geo Pocket (`.flash`/`.ngf`),
-    and Pokémon Mini (`.eep`) are _not_ standard `.srm`. Those rows are documented by libretro but still await
-    on-device confirmation ([#237](https://github.com/danielcopper/decky-romm-sync/issues/237)). Treat the matrix as
-    the broader, current view; this page remains the record of the original `.srm`/`.dsv`/`.brm` decision.
+    and Pokémon Mini (`.eep`) are _not_ standard `.srm`. All three have since been confirmed on-device by the
+    [emu-atlas](https://github.com/danielcopper/emu-atlas) core audit — content-keyed files in the standard save
+    directory on RetroDECK 0.10.9b. Treat the matrix as the broader, current view; this page remains the record of the
+    original `.srm`/`.dsv`/`.brm` decision.
 
 ## How RetroArch Save Extensions Work
 
