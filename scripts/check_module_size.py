@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Hold the line on module size: no new god classes, no growth in the old ones.
 
-CLAUDE.md sets a decomposition threshold for ``services/`` and an explicit
-split trigger for ``bootstrap/``. Both lived in prose, and prose drifted:
-``sync_orchestrator.py`` was 901 lines when #999 wrote it down and kept
-growing. Nothing failed in between, because nothing was watching.
+CLAUDE.md sets a decomposition threshold for every first-party backend tree —
+``services/``, ``bootstrap/``, ``adapters/``, ``domain/``, ``lib/`` and
+``models/``. It lived in prose, and prose drifted: ``sync_orchestrator.py`` was
+901 lines when #999 wrote it down and kept growing. Nothing failed in between,
+because nothing was watching.
 
 This gate watches. Every in-scope module above the threshold carries a ceiling
 in ``ALLOWLIST`` — the size it had when it was recorded. That buys the property
@@ -44,10 +45,27 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 THRESHOLD = 1000
 SLACK_ADVISORY = 50
 
-# Trees the threshold governs. ``main.py`` is deliberately absent: it owns the
-# Decky lifecycle plus one ``async def`` per callable, so it grows with the
-# callable surface by design (CLAUDE.md, "Process boundaries").
-SCOPE_DIRS = ("py_modules/bootstrap", "py_modules/services")
+# Trees the threshold governs — every first-party backend tree. What is absent
+# is absent on purpose, not by oversight:
+#   ``main.py`` owns the Decky lifecycle plus one ``async def`` per callable,
+#     so it grows with the callable surface by design (CLAUDE.md, "Process
+#     boundaries").
+#   ``py_modules/_vendor`` is a checksum-pinned verbatim copy; its size is
+#     upstream's decision (.claude/rules/vendored-assets.md).
+#   ``tests/`` is one file per source module by rule
+#     (.claude/rules/testing-backend.md), so a large test file is that rule
+#     working — gating it here would put two of our own rules in conflict.
+#   ``scripts/`` is developer tooling that never ships.
+#   ``src/`` has the same god-class problem and no enforcement, but needs a
+#     per-scope glob first: ``in_scope`` hardcodes ``*.py``.
+SCOPE_DIRS = (
+    "py_modules/adapters",
+    "py_modules/bootstrap",
+    "py_modules/domain",
+    "py_modules/lib",
+    "py_modules/models",
+    "py_modules/services",
+)
 
 # Modules that were already over the threshold when this gate landed, each
 # pinned at the size it had that day. Entries come out when the module drops

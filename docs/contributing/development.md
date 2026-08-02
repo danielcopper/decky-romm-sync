@@ -250,12 +250,14 @@ literal appears anywhere except its owning adapter (`adapters/persistence.py`); 
 keeps all settings writes in the single crash-safe owner.
 
 `mise run lint` (and CI) also runs `scripts/check_module_size.py`, the decomposition-threshold ratchet: no module in
-`services/` or `bootstrap/` may cross the ~1000-LOC threshold, and the modules that were already over it when the gate
-landed are pinned at their exact size, so they cannot grow. The pin list lives in the script and only ever gets shorter
-— a module that drops back under the threshold has to leave it, and a module that banks 50+ lines of slack gets a
-non-fatal note asking for its ceiling to be lowered. `main.py` is deliberately out of scope: it grows with the callable
-surface by design. There is deliberately no `--update` flag — re-baselining should be a reviewable diff, never a command
-someone runs to get back to green.
+`services/`, `bootstrap/`, `adapters/`, `domain/`, `lib/` or `models/` may cross the ~1000-LOC threshold, and the
+modules that were already over it when the gate landed are pinned at their exact size, so they cannot grow. The pin list
+lives in the script and only ever gets shorter — a module that drops back under the threshold has to leave it, and a
+module that banks 50+ lines of slack gets a non-fatal note asking for its ceiling to be lowered. What the gate does not
+walk is listed at `SCOPE_DIRS` with the reason for each: `main.py` grows with the callable surface by design, `_vendor/`
+is a checksum-pinned copy, a large file under `tests/` is the one-file-per-source-module rule working, `scripts/` never
+ships, and `src/` needs a per-scope glob before it can be added. There is deliberately no `--update` flag —
+re-baselining should be a reviewable diff, never a command someone runs to get back to green.
 
 See [Backend Architecture](../architecture/backend-architecture.md) for details.
 

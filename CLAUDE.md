@@ -184,9 +184,10 @@ Format: **invariant** — tier — enforced by.
   same path** — check — `scripts/check_uow_seam_nesting.py`
 - **Services never call clocks / sleep / uuid / random directly (inject the Protocol)** — check —
   `scripts/check_cosmic_call_bans.sh`
-- **No module in `services/` or `bootstrap/` crosses the ~1000-LOC decomposition threshold, and the ones already over it
-  may not grow** — check — `scripts/check_module_size.py` (the modules that predate the gate are grandfathered at their
-  exact size; that list only ever gets shorter)
+- **No module in `services/`, `bootstrap/`, `adapters/`, `domain/`, `lib/` or `models/` crosses the ~1000-LOC
+  decomposition threshold, and the ones already over it may not grow** — check — `scripts/check_module_size.py` (the
+  modules that predate the gate are grandfathered at their exact size; that list only ever gets shorter. `main.py`,
+  `_vendor/`, `tests/`, `scripts/` and `src/` are out of scope, each for a reason recorded at `SCOPE_DIRS`)
 - **Service-independence contract list stays complete** — check — `scripts/check_service_independence_contract.py`
 - **Layer import direction (services ↛ adapters, adapters ↛ services, …)** — check — `.importlinter` (`lint-imports`)
 - **No bare `# type: ignore` / blanket suppressions** — check — `scripts/check_no_bare_ignores.sh`

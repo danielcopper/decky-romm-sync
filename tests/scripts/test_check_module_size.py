@@ -8,8 +8,9 @@ real walk and the real comparison logic run against a controlled layout.
 Coverage centres on the ratchet's four failure modes — an unlisted module over
 the threshold, a listed module that grew, a listed module that graduated, and a
 stale entry — plus the boundary conditions, where an off-by-one would silently
-widen or narrow the gate, and the code-line counting itself, where counting
-comments would quietly turn every ceiling into a budget shared with prose.
+widen or narrow the gate, the code-line counting itself, where counting
+comments would quietly turn every ceiling into a budget shared with prose, and
+the walked scope, where a tree left out fails nothing at all.
 """
 
 from __future__ import annotations
@@ -122,13 +123,37 @@ class TestHappyPath:
         modules = {"py_modules/services/big.py": 1200}
         assert run_check(modules, {"py_modules/services/big.py": 1200}) == 0
 
-    def test_bootstrap_package_is_in_scope_via_scope_dirs(self, run_check, capsys: pytest.CaptureFixture[str]) -> None:
-        assert run_check({"py_modules/bootstrap/services.py": 1200}, {}) == 1
-        assert "py_modules/bootstrap/services.py: 1200 lines exceeds" in capsys.readouterr().err
+
+class TestScope:
+    """Which trees the walk reaches. A tree left out of ``SCOPE_DIRS`` fails nothing, silently."""
+
+    @pytest.mark.parametrize(
+        "tree",
+        [
+            "py_modules/adapters",
+            "py_modules/bootstrap",
+            "py_modules/domain",
+            "py_modules/lib",
+            "py_modules/models",
+            "py_modules/services",
+        ],
+    )
+    def test_governed_tree_is_walked(self, tree: str, run_check, capsys: pytest.CaptureFixture[str]) -> None:
+        assert run_check({f"{tree}/big.py": 1200}, {}) == 1
+        assert f"{tree}/big.py: 1200 lines exceeds" in capsys.readouterr().err
+
+    def test_subpackages_are_walked(self, run_check, capsys: pytest.CaptureFixture[str]) -> None:
+        """The walk recurses — the largest modules in scope live in subpackages."""
+        assert run_check({"py_modules/adapters/romm/big.py": 1200}, {}) == 1
+        assert "py_modules/adapters/romm/big.py: 1200 lines exceeds" in capsys.readouterr().err
 
     def test_main_py_is_out_of_scope(self, run_check) -> None:
         """``main.py`` grows with the callable surface by design — never flagged."""
         assert run_check({"main.py": 5000}, {}) == 0
+
+    def test_vendored_code_is_out_of_scope(self, run_check) -> None:
+        """``_vendor/`` sits beside the governed trees but its size is upstream's decision."""
+        assert run_check({"py_modules/_vendor/big.py": 5000}, {}) == 0
 
 
 class TestCodeLinesNotPhysicalLines:
@@ -226,6 +251,26 @@ class TestRealRepository:
     def test_gate_passes_on_the_real_tree(self, capsys: pytest.CaptureFixture[str]) -> None:
         assert check.main() == 0
         capsys.readouterr()
+
+    def test_every_scope_dir_exists(self) -> None:
+        """A misspelled scope entry governs nothing: ``rglob`` on a missing directory just yields nothing."""
+        missing = [d for d in check.SCOPE_DIRS if not (check.ROOT / d).is_dir()]
+        assert not missing, f"SCOPE_DIRS entries that do not exist: {missing}"
+
+    def test_every_backend_package_with_python_is_governed(self) -> None:
+        """The mirror of the entry-exists check: a new package under ``py_modules/`` must not escape the gate.
+
+        ``_vendor/`` is the one deliberate exemption — a checksum-pinned verbatim copy whose size is upstream's
+        decision, not ours (the reasoning is recorded beside ``SCOPE_DIRS``). Every other package holding Python
+        belongs in scope, so do not widen this exemption to silence a failure.
+        """
+        governed = {d.split("/", 1)[1] for d in check.SCOPE_DIRS if d.startswith("py_modules/")}
+        ungoverned = sorted(
+            d.name
+            for d in (check.ROOT / "py_modules").iterdir()
+            if d.is_dir() and d.name not in governed and d.name != "_vendor" and any(d.rglob("*.py"))
+        )
+        assert not ungoverned, f"py_modules packages holding Python but outside SCOPE_DIRS: {ungoverned}"
 
     def test_allowlist_has_no_entry_at_or_below_the_threshold(self) -> None:
         too_small = {name: n for name, n in check.ALLOWLIST.items() if n <= check.THRESHOLD}
