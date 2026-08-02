@@ -179,3 +179,58 @@ async def test_shielded_without_on_cancel_still_waits_the_child_out():
 
     assert finished == ["committed"]
     assert cancellation_state(caught.value).child_result == "committed"
+
+
+class _ExitRequest(BaseException):
+    """Stands in for KeyboardInterrupt/SystemExit.
+
+    A real one would abort the pytest session rather than be asserted on; this
+    exercises the same branch — a BaseException that is not an Exception.
+    """
+
+
+@pytest.mark.asyncio
+async def test_shielded_lets_an_interpreter_level_exit_through():
+    """An exit request is not a fault this run reports — it takes the process.
+
+    The fault capture exists so a group can say what its child did. An exit
+    request is not that: absorbing it into a group result would keep the
+    interpreter alive on the strength of a cleanup handler.
+    """
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def child():
+        entered.set()
+        await release.wait()
+        raise _ExitRequest
+
+    task = asyncio.create_task(shielded(child()))
+    await entered.wait()
+    task.cancel()
+    release.set()
+
+    with pytest.raises(_ExitRequest):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_shielded_still_captures_an_ordinary_child_fault():
+    """The converse: an ordinary error is captured, and the cancellation wins."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def child():
+        entered.set()
+        await release.wait()
+        raise OSError("child failed")
+
+    task = asyncio.create_task(shielded(child()))
+    await entered.wait()
+    task.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await task
+
+    assert isinstance(cancellation_state(caught.value).child_fault, OSError)

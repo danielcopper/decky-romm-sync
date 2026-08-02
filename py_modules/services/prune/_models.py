@@ -161,11 +161,15 @@ async def shielded(awaitable: Awaitable[Any], *, on_cancel: Callable[[], None] |
             state.child_result = await task
             state.child_completed = True
         except asyncio.CancelledError:
-            # The child was cancelled too. Its CancelledError carries no
-            # captured state, and callers read that state off whatever
-            # propagates to decide what the group actually did — so the
-            # original cancellation is re-raised instead of this one.
-            pass
-        except BaseException as child_fault:
+            # The child was cancelled too. Its CancelledError carries none of
+            # the state callers read to decide what the group actually did, so
+            # the original cancellation is the one that propagates — re-raised
+            # here explicitly rather than by falling through, so the propagation
+            # is visible exactly where the child's cancellation is discarded.
+            raise exc from None
+        except Exception as child_fault:
+            # Only a fault the run can report: an interpreter-level exit
+            # (KeyboardInterrupt, SystemExit) is not this group's to absorb into
+            # a result, so it stays uncaught and takes the process down.
             state.child_fault = child_fault
         raise

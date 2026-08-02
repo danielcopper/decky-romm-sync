@@ -204,7 +204,7 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
             close_error: BaseException | None = None
             try:
                 lease_stack.close()
-            except BaseException as exc:
+            except Exception as exc:
                 close_error = exc
             try:
                 _restore_claim(parent_fd, name, temporary)
@@ -244,7 +244,7 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
             removal_error = exc
         try:
             lease_stack.close()
-        except BaseException as exc:
+        except Exception as exc:
             return _outcome(
                 success=False,
                 changed=True,

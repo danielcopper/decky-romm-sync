@@ -97,7 +97,7 @@ class RecoveryBundleAdapter:
         """Verify that every sealed source set and source byte stream is unchanged."""
         try:
             self._validated_source_claims(bundle_path, bundle_digest)
-        except (OSError, RuntimeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             return False
         return True
 
@@ -319,7 +319,7 @@ class RecoveryBundleAdapter:
                 cleanup = remove_current(cleanup_path, self._root)
                 if not cleanup["success"]:
                     raise RuntimeError(cleanup["message"])
-            except BaseException as cleanup_exc:
+            except Exception as cleanup_exc:
                 raise RuntimeError(
                     "Recovery bundle failed and unsafe staging was preserved at "
                     f"{cleanup_path} because cleanup failed: {cleanup_exc}"

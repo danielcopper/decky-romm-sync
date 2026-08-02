@@ -345,7 +345,7 @@ class SteamRecoveryAdapter:
                                     cleanup_outcome = SteamRecoveryAdapter._preserved_controller_outcome(
                                         config_dir, preserved, cause=exc
                                     )
-                    except BaseException as cleanup_exc:
+                    except Exception as cleanup_exc:
                         cleanup_outcome = {
                             "success": False,
                             "changed": source_claimed,

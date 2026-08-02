@@ -116,9 +116,14 @@ class PruneRegistry:
         with self._uow_factory() as uow:
             if not self._deletion_state_matches(uow, expected_rows, delete_ids, target_id, app_id, fully_dead):
                 return False
-            for stamp in list(uow.collection_sync_state.iter_all()):
-                if delete_ids.intersection(stamp.member_rom_ids):
-                    uow.collection_sync_state.delete(stamp.collection_id, stamp.collection_kind)
+            # Selected before any deletion: the repository hands back an
+            # Iterator, which promises nothing about surviving a mutation of the
+            # collection it walks.
+            orphaned = [
+                stamp for stamp in uow.collection_sync_state.iter_all() if delete_ids.intersection(stamp.member_rom_ids)
+            ]
+            for stamp in orphaned:
+                uow.collection_sync_state.delete(stamp.collection_id, stamp.collection_kind)
             for rom_id in delete_ids:
                 uow.roms.delete(rom_id)
         return True
