@@ -265,23 +265,26 @@ the apply path as before. The fingerprint is only ever advanced when the cache i
 old fingerprint and the change is retried next sync. A cover-only change never re-applies the shortcut itself (that
 apply path writes launch options under the ADR-0025 invariant — pure churn for a cover).
 
-**`url_cover` fallback on a 404 RomM asset (#1450).** When the RomM-local cover asset returns a definitive HTTP 404 (the
-server's own cover resources are missing while its web UI still renders from `url_cover`), the cover download retries
-**once** against the ROM's `url_cover` — an external metadata-provider CDN (SteamGridDB / IGDB / …) — before giving up.
-The retry lives in `ArtworkService._download_cover_atomic`: only a `RommNotFoundError` (404) with a non-empty
-`url_cover` triggers it, so a transient transport error keeps today's retry-ladder behaviour and never falls back, and
-an empty/absent `url_cover` is exactly today's failure (warning, gray tile). The fallback fetch goes through a
-**separate, bearer-free** adapter seam (`RommRomReader.download_cover_from_url` → `RommHttpAdapter.download_external`):
-the host-bound RomM bearer must never reach a third-party origin, so only the plugin `User-Agent` is attached (the CDN
-behind Cloudflare Bot Fight Mode also 403s the default `Python-urllib` UA). Because `url_cover` is untrusted
-server-supplied input, `download_external` scheme-allowlists it to `http`/`https` before any fetch — a
-`file:`/`data:`/`ftp:`/scheme-relative URL is rejected with a `RommApiError` so a `file:///etc/passwd` never reaches
-`urlopen` (the broader bounded-SSRF hardening — post-DNS private/link-local IP blocking and per-redirect-hop
-revalidation — is deferred to #1182). The fingerprint records the source **actually applied** — `url_cover` on a
-fallback, threaded back through the `download_artwork` `applied_sources` accumulator (sync path) or the direct persist
-(`refresh_changed_covers` / `refresh_cover`) — so the compare stays truthful: because the fresh RomM `path_cover` string
-never equals the stored `url_cover`, a later fixed RomM asset (or a changed `url_cover`) is always re-checked, at the
-cost of re-downloading the fallback ROM's cover each sync until the RomM asset is repaired.
+**`url_cover` fallback on a 404 RomM asset (#1450).** When the RomM-local cover asset returns an HTTP 404 (the server's
+own cover resources are missing while its web UI still renders from `url_cover`), the cover download retries **once**
+against the ROM's `url_cover` — an external metadata-provider CDN (SteamGridDB / IGDB / …) — before giving up. The retry
+lives in `ArtworkService._download_cover_atomic`: only a `RommNotFoundError` (404) with a non-empty `url_cover` triggers
+it, so a transient transport error keeps today's retry-ladder behaviour and never falls back, and an empty/absent
+`url_cover` is exactly today's failure (warning, gray tile). The cover routes are exactly why the entity-verdict rule in
+[what makes a 404 an entity verdict](#rommhttpadapter-notes-what-makes-a-404-an-entity-verdict) carves them out: a
+static-mount miss answers with the generic route-404 body, so demanding an entity answer there would disarm this
+fallback. The fallback fetch goes through a **separate, bearer-free** adapter seam
+(`RommRomReader.download_cover_from_url` → `RommHttpAdapter.download_external`): the host-bound RomM bearer must never
+reach a third-party origin, so only the plugin `User-Agent` is attached (the CDN behind Cloudflare Bot Fight Mode also
+403s the default `Python-urllib` UA). Because `url_cover` is untrusted server-supplied input, `download_external`
+scheme-allowlists it to `http`/`https` before any fetch — a `file:`/`data:`/`ftp:`/scheme-relative URL is rejected with
+a `RommApiError` so a `file:///etc/passwd` never reaches `urlopen` (the broader bounded-SSRF hardening — post-DNS
+private/link-local IP blocking and per-redirect-hop revalidation — is deferred to #1182). The fingerprint records the
+source **actually applied** — `url_cover` on a fallback, threaded back through the `download_artwork` `applied_sources`
+accumulator (sync path) or the direct persist (`refresh_changed_covers` / `refresh_cover`) — so the compare stays
+truthful: because the fresh RomM `path_cover` string never equals the stored `url_cover`, a later fixed RomM asset (or a
+changed `url_cover`) is always re-checked, at the cost of re-downloading the fallback ROM's cover each sync until the
+RomM asset is repaired.
 
 **Conditional-request revalidation on a ts-only change (#1454).** A server-side rescan re-stamps every ROM's
 `updated_at` — and thus the `?ts=` in every cover path — without touching the cover files, so the `cover_source`
@@ -1171,6 +1174,40 @@ Adapters own all I/O and implement the Protocols defined in `services/protocols/
 | `hostname.py` / `path_probe.py` / `plugin_metadata.py` / `debug_logger.py` | hostname, path-exists probe, `package.json` version reader, settings-aware debug logger                                                                                                                                                                                                |
 | `renderer_rss.py` / `renderer_gc.py`                                       | `RendererRssFn` — max `steamwebhelper` `VmRSS` from `/proc`; `RendererGcFn` (`HeapProfiler.collectGarbage`) over the CEF debugger. The session-budget measure + settle seams (ADR-0024). The "free memory" action is a frontend `SteamClient.User.StartRestart`, not a backend adapter |
 | `game_process.py`                                                          | `GameProcessControl` — resolves a flatpak app's live instances via the per-user registry (`info` / `bwrapinfo.json`) plus the `/proc` child walk, reporting each tree's PIDs and argv separately, and signals them. Direct reads + `os.kill`, no subprocess; fail-soft on every read   |
+
+#### RommHttpAdapter notes: what makes a 404 an entity verdict
+
+`RommNotFoundError` means "RomM's entity layer says this entity does not exist", and downstream that reading is
+authority: the removed-game cleanup deletes on it, the version picker marks a version vanished on it, save-sync drops a
+stale device registration on it. A bare HTTP 404 does not carry that meaning on its own — FastAPI answers a
+misconfigured path prefix with the same status and a generic `{"detail": "Not Found"}` body, and a reverse proxy in
+front of RomM (Cloudflare Tunnel, Traefik) answers a misroute with an HTML or empty one. So on the **API routes** the
+adapter raises `RommNotFoundError` only for a response that proves it came from RomM's entity layer: a JSON content type
+whose body parses to an object carrying a `detail` string that is neither blank nor FastAPI's stock `Not Found` (matched
+case-insensitively — a real entity answer always names the entity, so it is never the bare phrase). The requested id is
+deliberately **not** parsed back out of that detail — its wording moves between RomM releases while the generic default
+stays put, so blocklisting the default is the robust test. Every other 404 shape degrades to a plain `RommApiError`,
+which `classify_error` maps to `server_unreachable`, so infrastructure can no longer authorize a deletion and each
+caller fails **open** on it instead.
+
+The **byte-stream routes** — `download`, `download_conditional`, `download_external` — opt out via
+`translate_http_error(..., asset_route=True)` and keep the plain status mapping. Their 404 answers about a _file_, not
+an entity, so it is never deletion-authority grade; and it has to keep raising `RommNotFoundError`, because RomM serves
+its cover resources from a static mount where a genuinely missing cover answers with exactly that generic route-404
+body, and the sole consumer reacts by refetching from the ROM's `url_cover` (the fallback above) — non-destructive and
+self-correcting rather than a deletion. Each of the three call sites carries that constraint as a comment: a future
+unification of the two classes would silently disarm the fallback, so both sides are pinned by tests.
+
+Every deletion-authority probe reaches the network through the **JSON-API** entry points, never a byte-stream one:
+`get_rom` / `get_rom_once` (`request` / `request_once`) behind the version picker's liveness and vanished probes,
+`list_saves` (`request`) behind the save-status, copies and slot-setup reads, and `update_device` (`put_json`) behind
+the device re-registration. The one consumer that branches on a byte-stream 404 is the `url_cover` fallback.
+
+The entity-answer shape is captured from RomM 5.1.0; the supported floor is 4.9.0. If a 4.9.x entity-404 ever carries a
+different body shape (no JSON content type, no `detail` string), every entity-404 on that server degrades to
+`server_unreachable`: the cleanup never confirms a ROM gone, no version is marked vanished, no stale device registration
+is dropped. That is the fail-open direction by design — if a 4.9.x user reports exactly that symptom set, this paragraph
+is the explanation, and the fix is a version-aware entity check, never a return to trusting the bare status.
 
 #### PersistenceAdapter notes
 

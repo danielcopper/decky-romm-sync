@@ -29,12 +29,34 @@ from lib.errors import (
     RommTimeoutError,
     RommUnprocessableEntityError,
     TokenHostMismatchError,
+    classify_error,
 )
+from lib.list_result import ErrorCode
 
 # conftest.py patches decky before this import
 from main import Plugin
 from services.connection import ConnectionService, ConnectionServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
+
+
+def _http_error(
+    code: int,
+    reason: str,
+    *,
+    content_type: str | None = None,
+    body: bytes | None = None,
+    url: str = "http://romm.local/api/roms/4375",
+) -> urllib.error.HTTPError:
+    """Build an ``HTTPError`` the way a real response arrives: headers plus a readable body."""
+    hdrs = http.client.HTTPMessage()
+    if content_type is not None:
+        hdrs["Content-Type"] = content_type
+    return urllib.error.HTTPError(url, code, reason, hdrs, io.BytesIO(body) if body is not None else None)
+
+
+def _entity_404(detail: str = "Rom with id '4375' not found") -> urllib.error.HTTPError:
+    """RomM's entity layer answering "this entity does not exist"."""
+    return _http_error(404, "Not Found", content_type="application/json", body=json.dumps({"detail": detail}).encode())
 
 
 @pytest.fixture
@@ -468,13 +490,12 @@ class TestUnauthenticatedPostJson:
         # The 404 body's ``detail`` must ride along on the typed error so the
         # adapter can distinguish the two 404s the exchange returns.
         plugin.settings["romm_url"] = "http://romm.local"
-        body = json.dumps({"detail": "Token no longer exists"}).encode()
-        exc = urllib.error.HTTPError(
-            "http://romm.local/api/client-tokens/exchange",
+        exc = _http_error(
             404,
             "Not Found",
-            http.client.HTTPMessage(),
-            io.BytesIO(body),
+            content_type="application/json",
+            body=json.dumps({"detail": "Token no longer exists"}).encode(),
+            url="http://romm.local/api/client-tokens/exchange",
         )
         with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommNotFoundError) as exc_info:
             plugin._http_adapter.unauthenticated_post_json(self._ENDPOINT, {"code": "X"})
@@ -881,8 +902,9 @@ class TestTranslateHttpError:
         assert result.status_code == 403
 
     def test_404_becomes_not_found_error(self, plugin):
-        exc = urllib.error.HTTPError("url", 404, "Not Found", http.client.HTTPMessage(), None)
-        result = plugin._http_adapter.translate_http_error(exc, "http://romm.local/api/x")
+        # RomM's own entity answer — the only 404 shape that is entity authority
+        # (TestNotFoundDiscrimination pins every other shape).
+        result = plugin._http_adapter.translate_http_error(_entity_404(), "http://romm.local/api/x")
         assert isinstance(result, RommNotFoundError)
         assert result.status_code == 404
 
@@ -998,6 +1020,84 @@ class TestTranslateHttpError:
         assert "Unexpected error: bad value" in str(result)
 
 
+class TestNotFoundDiscrimination:
+    """Only RomM's entity layer may raise ``RommNotFoundError`` (#1570).
+
+    ``RommNotFoundError`` is deletion authority downstream, so a 404 that a
+    reverse proxy or FastAPI's route table produced must degrade to the
+    transport class instead — every caller then fails OPEN.
+    """
+
+    _URL = "http://romm.local/api/roms/4375"
+
+    def _translate(self, plugin, exc, **kwargs):
+        return plugin._http_adapter.translate_http_error(exc, self._URL, "GET", **kwargs)
+
+    def test_entity_answer_is_not_found(self, plugin):
+        result = self._translate(plugin, _entity_404())
+        assert isinstance(result, RommNotFoundError)
+        assert classify_error(result)[0] == ErrorCode.NOT_FOUND.value
+
+    def test_content_type_parameters_are_tolerated(self, plugin):
+        exc = _http_error(
+            404,
+            "Not Found",
+            content_type="application/json; charset=utf-8",
+            body=json.dumps({"detail": "Save with id '9' not found"}).encode(),
+        )
+        assert isinstance(self._translate(plugin, exc), RommNotFoundError)
+
+    def test_any_non_generic_detail_counts_as_an_entity_answer(self, plugin):
+        # The detail wording is RomM-version-dependent and is never parsed for
+        # the requested id — only the generic default is blocklisted.
+        exc = _entity_404("Firmware file for platform 3 is gone")
+        assert isinstance(self._translate(plugin, exc), RommNotFoundError)
+
+    @pytest.mark.parametrize(
+        ("case", "exc_kwargs"),
+        [
+            # FastAPI's route table answering — a misconfigured path prefix.
+            ("generic route 404", {"content_type": "application/json", "body": b'{"detail":"Not Found"}'}),
+            # A reverse proxy (Cloudflare / Traefik) answering instead of RomM.
+            ("html body", {"content_type": "text/html; charset=utf-8", "body": b"<html>404 not found</html>"}),
+            ("empty body", {"content_type": "application/json", "body": b""}),
+            ("malformed json", {"content_type": "application/json", "body": b'{"detail": '}),
+            ("no content type", {"body": b'{"detail":"Rom with id \'1\' not found"}'}),
+            ("unreadable body", {"content_type": "application/json"}),
+            ("detail is not a string", {"content_type": "application/json", "body": b'{"detail":["a","b"]}'}),
+            ("detail is absent", {"content_type": "application/json", "body": b'{"error":"nope"}'}),
+            ("detail is blank", {"content_type": "application/json", "body": b'{"detail":"   "}'}),
+            # A rephrased default is still the default: a real entity answer
+            # NAMES the entity, so it is never the bare phrase in any casing.
+            ("generic detail, lowercase", {"content_type": "application/json", "body": b'{"detail":"not found"}'}),
+            (
+                "generic detail, upper + padded",
+                {"content_type": "application/json", "body": b'{"detail":" NOT FOUND "}'},
+            ),
+            ("body is not an object", {"content_type": "application/json", "body": b'["Not Found"]'}),
+        ],
+    )
+    def test_infrastructure_404_is_not_entity_authority(self, plugin, case, exc_kwargs):
+        result = self._translate(plugin, _http_error(404, "Not Found", **exc_kwargs))
+        assert not isinstance(result, RommNotFoundError), case
+        assert isinstance(result, RommApiError), case
+        # Fails open: the catch-all sites read this as an unreachable server,
+        # never as "RomM confirmed the entity is gone".
+        assert classify_error(result)[0] == ErrorCode.SERVER_UNREACHABLE.value, case
+
+    def test_degraded_404_keeps_the_status_line_and_request_context(self, plugin):
+        result = self._translate(plugin, _http_error(404, "Not Found", content_type="text/html", body=b"<html>"))
+        assert "HTTP 404" in str(result)
+        assert result.url == self._URL
+        assert result.method == "GET"
+
+    def test_asset_route_keeps_the_plain_status_mapping(self, plugin):
+        # Cover assets come off a static mount whose miss looks exactly like a
+        # generic route-404; the #1450 fallback must still see RommNotFoundError.
+        exc = _http_error(404, "Not Found", content_type="application/json", body=b'{"detail":"Not Found"}')
+        assert isinstance(self._translate(plugin, exc, asset_route=True), RommNotFoundError)
+
+
 # ============================================================================
 # HTTP methods raise structured errors
 # ============================================================================
@@ -1056,9 +1156,20 @@ class TestRommJsonRequestErrors:
 
     def test_404_raises_not_found(self, plugin):
         _setup_plugin(plugin)
-        exc = urllib.error.HTTPError("http://romm.local/api/saves", 404, "Not Found", http.client.HTTPMessage(), None)
-        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommNotFoundError):
+        exc = _entity_404("Save with id '7' not found")
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommNotFoundError) as exc_info:
             plugin._http_adapter.post_json("/api/saves", {"data": 1})
+        assert exc_info.value.detail == "Save with id '7' not found"
+
+    def test_generic_404_degrades_but_keeps_its_detail(self, plugin):
+        # The detail-attaching path discriminates like the plain one, and the
+        # body it read still rides along for a caller that wants to log it.
+        _setup_plugin(plugin)
+        exc = _http_error(404, "Not Found", content_type="application/json", body=b'{"detail":"Not Found"}')
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommApiError) as exc_info:
+            plugin._http_adapter.post_json("/api/saves", {"data": 1})
+        assert not isinstance(exc_info.value, RommNotFoundError)
+        assert exc_info.value.detail == "Not Found"
 
     def test_timeout_raises_timeout_error(self, plugin):
         _setup_plugin(plugin)
@@ -1076,6 +1187,18 @@ class TestRommDownloadErrors:
         )
         dest = str(tmp_path / "rom.zip")
         with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommForbiddenError):
+            plugin._http_adapter.download("/assets/rom.zip", dest)
+
+    def test_generic_route_404_still_raises_not_found(self, plugin, tmp_path):
+        # A byte fetch answers about a file, not an entity, so its 404 keeps the
+        # plain mapping and never has to prove an entity answer. Unifying this
+        # with the API routes must fail here rather than pass silently.
+        _setup_plugin(plugin)
+        exc = _http_error(
+            404, "Not Found", content_type="application/json", body=b'{"detail":"Not Found"}', url="http://romm.local/x"
+        )
+        dest = str(tmp_path / "rom.zip")
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommNotFoundError):
             plugin._http_adapter.download("/assets/rom.zip", dest)
 
 
@@ -2118,6 +2241,21 @@ class TestDownloadExternal:
         # A definitive 404 is not retryable — a single attempt.
         assert mock_open.call_count == 1
 
+    def test_generic_route_404_still_raises_not_found(self, tmp_path):
+        # The CDN has no entity layer at all, so this byte fetch's 404 keeps the
+        # plain mapping instead of proving an entity answer it could never give.
+        adapter = self._adapter_with_token()
+        dest = str(tmp_path / "cover.png")
+        exc = _http_error(
+            404,
+            "Not Found",
+            content_type="application/json",
+            body=b'{"detail":"Not Found"}',
+            url="https://cdn.example.com/x.png",
+        )
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommNotFoundError):
+            adapter.download_external("https://cdn.example.com/x.png", dest)
+
     @pytest.mark.parametrize(
         "url",
         [
@@ -2250,5 +2388,22 @@ class TestDownloadConditional:
         adapter = _resume_adapter()
         dest = str(tmp_path / "c.png")
         exc = urllib.error.HTTPError("http://romm.local/c.png", 404, "Not Found", http.client.HTTPMessage(), None)
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommNotFoundError):
+            adapter.download_conditional("/c.png?ts=1", dest, etag='"v1"')
+
+    def test_generic_route_404_still_raises_not_found(self, tmp_path):
+        # RomM's cover resources come off a static mount, so a missing cover
+        # answers with FastAPI's generic route-404 body. The asset routes keep
+        # the plain mapping precisely so the #1450 url_cover fallback still fires
+        # on it — the entity-answer proof applies to the API routes only.
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "c.png")
+        exc = _http_error(
+            404,
+            "Not Found",
+            content_type="application/json",
+            body=b'{"detail":"Not Found"}',
+            url="http://romm.local/c.png",
+        )
         with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommNotFoundError):
             adapter.download_conditional("/c.png?ts=1", dest, etag='"v1"')

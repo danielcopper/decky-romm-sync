@@ -229,6 +229,62 @@ class RommHttpAdapter:
             return None
         return body.get("detail") if isinstance(body, dict) else None
 
+    # FastAPI's stock ``detail`` for a route that does not exist. RomM's own
+    # entity 404s word their detail per version ("Rom with id '42' not found"),
+    # so the requested id is deliberately NOT parsed back out of it — that
+    # wording moves between releases while this one default stays put.
+    # Blocklisting the default is the robust test in the other direction:
+    # anything else carrying a ``detail`` string counts as RomM answering.
+    # Matched case-insensitively: a real entity answer always NAMES the entity,
+    # so it can never be the bare phrase in any casing, while a proxy that
+    # rephrases the default must not slip through as an entity verdict.
+    _GENERIC_NOT_FOUND_DETAIL = "Not Found"
+
+    @staticmethod
+    def _has_json_content_type(exc: urllib.error.HTTPError) -> bool:
+        """Whether the error response announced a JSON body.
+
+        ``HTTPError.headers`` is the header set the response was built with,
+        which is absent on a response that never carried one — hence the
+        truthiness guard the non-optional type annotation does not imply.
+        """
+        headers = exc.headers
+        content_type = headers.get("Content-Type", "") if headers else ""
+        return _CONTENT_TYPE_JSON in content_type.lower()
+
+    @classmethod
+    def _is_entity_not_found(cls, exc: urllib.error.HTTPError, detail: Any) -> bool:
+        """Whether a 404 is RomM's entity layer answering "this entity does not exist".
+
+        True only for a JSON response whose body parsed to an object carrying a
+        ``detail`` string that names something — i.e. neither blank nor
+        :attr:`_GENERIC_NOT_FOUND_DETAIL` in any casing. A missing, unparseable,
+        or non-object body reaches here as ``detail=None`` and is treated
+        exactly like a non-JSON one.
+        """
+        if not cls._has_json_content_type(exc) or not isinstance(detail, str):
+            return False
+        named = detail.strip().casefold()
+        return named not in ("", cls._GENERIC_NOT_FOUND_DETAIL.casefold())
+
+    def _translate_not_found(self, exc: urllib.error.HTTPError, url: str, method: str, *, detail: Any) -> RommApiError:
+        """Map a 404 to :class:`RommNotFoundError` only when RomM answered about an entity.
+
+        ``RommNotFoundError`` is read across the codebase as "RomM says this
+        entity does not exist" — in the removed-game cleanup it is deletion
+        authority — so it may only be raised for a response that came from
+        RomM's entity layer (:meth:`_is_entity_not_found`). A reverse proxy's
+        HTML or empty 404 and FastAPI's generic route-404 (a misconfigured path
+        prefix) carry no entity verdict, so they degrade to a plain
+        :class:`RommApiError`, the transport class every catch-all site
+        classifies as unreachable/unknown. That fails such a caller OPEN rather
+        than letting infrastructure authorize a deletion.
+        """
+        msg = f"HTTP {exc.code}: {exc.reason} ({method} {url})"
+        if self._is_entity_not_found(exc, detail):
+            return self._translate_http_status(exc.code, msg, url, method)
+        return RommApiError(msg, url=url, method=method)
+
     def _translate_unprocessable(
         self, exc: urllib.error.HTTPError, url: str, method: str
     ) -> RommUnprocessableEntityError:
@@ -255,7 +311,11 @@ class RommHttpAdapter:
             return self._translate_unprocessable(exc, url, method)
         detail = self._read_error_detail(exc)
         msg = f"HTTP {exc.code}: {exc.reason} ({method} {url})"
-        error = self._translate_http_status(exc.code, msg, url, method)
+        error = (
+            self._translate_not_found(exc, url, method, detail=detail)
+            if exc.code == 404
+            else self._translate_http_status(exc.code, msg, url, method)
+        )
         error.detail = detail
         return error
 
@@ -270,8 +330,22 @@ class RommHttpAdapter:
             return RommConnectionError(str(exc), url=url, method=method)
         return RommApiError(f"Unexpected error: {exc}", url=url, method=method)
 
-    def translate_http_error(self, exc: Exception, url: str, method: str = "GET") -> RommApiError:
-        """Translate urllib/socket exceptions into RommApiError subclasses."""
+    def translate_http_error(
+        self, exc: Exception, url: str, method: str = "GET", *, asset_route: bool = False
+    ) -> RommApiError:
+        """Translate urllib/socket exceptions into RommApiError subclasses.
+
+        On an API route a 404 must prove it came from RomM's entity layer before
+        it becomes a :class:`RommNotFoundError` (see :meth:`_translate_not_found`).
+        *asset_route* opts the byte-stream fetches out of that proof: they answer
+        about a FILE rather than an entity, so their 404 is never
+        deletion-authority grade. It also has to keep raising
+        :class:`RommNotFoundError` — RomM serves its cover resources from a
+        static mount whose miss is indistinguishable from a generic route-404,
+        and the sole consumer answers that 404 by refetching the cover from the
+        ROM's external ``url_cover``, a non-destructive and self-correcting
+        reaction.
+        """
         if isinstance(exc, urllib.error.HTTPError):
             if exc.code == 422:
                 # A 422 carries a structured validation body (FastAPI's
@@ -279,6 +353,8 @@ class RommHttpAdapter:
                 # entries a batch endpoint rejected (#1312) instead of collapsing
                 # the whole request to a generic error.
                 return self._translate_unprocessable(exc, url, method)
+            if exc.code == 404 and not asset_route:
+                return self._translate_not_found(exc, url, method, detail=self._read_error_detail(exc))
             msg = f"HTTP {exc.code}: {exc.reason} ({method} {url})"
             return self._translate_http_status(exc.code, msg, url, method)
         if isinstance(exc, urllib.error.URLError):
@@ -523,7 +599,10 @@ class RommHttpAdapter:
             except RommApiError:
                 raise
             except Exception as exc:
-                raise self.translate_http_error(exc, url, "GET") from exc
+                # Asset-level 404: a byte fetch answers about a FILE, never about an
+                # entity, so this 404 is never deletion-authority grade and keeps the
+                # plain status mapping. Do not unify it with the API routes' proof.
+                raise self.translate_http_error(exc, url, "GET", asset_route=True) from exc
 
         return self.with_retry(_do_download)
 
@@ -579,7 +658,11 @@ class RommHttpAdapter:
                         etag=exc.headers.get("ETag"),
                         last_modified=exc.headers.get("Last-Modified"),
                     )
-                raise self.translate_http_error(exc, url, "GET") from exc
+                # Asset-level 404: a byte fetch answers about a FILE, never about an
+                # entity, so this 404 is never deletion-authority grade and keeps the
+                # plain status mapping — which is what arms the ``url_cover`` fallback
+                # on a static-mount cover miss. Do not unify it with the API routes.
+                raise self.translate_http_error(exc, url, "GET", asset_route=True) from exc
             except RommApiError:
                 raise
             except Exception as exc:
@@ -639,7 +722,11 @@ class RommHttpAdapter:
             except RommApiError:
                 raise
             except Exception as exc:
-                raise self.translate_http_error(exc, encoded_url, "GET") from exc
+                # Asset-level 404: a byte fetch answers about a FILE, never about an
+                # entity — and this one is a third-party CDN, which has no entity
+                # layer at all. Never deletion-authority grade; keeps the plain
+                # status mapping. Do not unify it with the API routes.
+                raise self.translate_http_error(exc, encoded_url, "GET", asset_route=True) from exc
 
         return self.with_retry(_do_download)
 
