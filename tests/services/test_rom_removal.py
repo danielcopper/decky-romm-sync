@@ -150,8 +150,9 @@ class TestDeleteRomFiles:
         rom_files.dirs.add(nested)
         rom_files.files[f"{nested}/other.z64"] = b"keep"
 
+        install = _make_install(1, file_path=nested, rom_dir=None)
         with pytest.raises(ValueError, match="Expected installed ROM file"):
-            service._delete_rom_files(_make_install(1, file_path=nested, rom_dir=None))
+            service._delete_rom_files(install)
 
         assert f"{nested}/other.z64" in rom_files.files
         assert rom_files.remove_tree_calls == []
@@ -171,8 +172,9 @@ class TestDeleteRomFiles:
         evil = "/evil/important.txt"
         rom_files.files[evil] = b"do not delete"
 
+        install = _make_install(1, file_path=evil, rom_dir=None)
         with pytest.raises(ValueError, match="outside roms directory"):
-            service._delete_rom_files(_make_install(1, file_path=evil, rom_dir=None))
+            service._delete_rom_files(install)
 
         assert evil in rom_files.files
         assert rom_files.remove_file_calls == []
@@ -182,8 +184,9 @@ class TestDeleteRomFiles:
         evil_dir = "/evil/dir"
         rom_files.files[f"{evil_dir}/file.txt"] = b"important"
 
+        install = _make_install(1, file_path="", rom_dir=evil_dir)
         with pytest.raises(ValueError, match="outside roms directory"):
-            service._delete_rom_files(_make_install(1, file_path="", rom_dir=evil_dir))
+            service._delete_rom_files(install)
 
         assert f"{evil_dir}/file.txt" in rom_files.files
         assert rom_files.remove_tree_calls == []

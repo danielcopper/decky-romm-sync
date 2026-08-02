@@ -42,8 +42,9 @@ async def test_shielded_propagates_a_child_fault_when_nothing_is_cancelled():
     async def child():
         raise OSError("child failed")
 
+    pending = child()
     with pytest.raises(OSError, match="child failed"):
-        await shielded(child())
+        await shielded(pending)
 
 
 @pytest.mark.asyncio

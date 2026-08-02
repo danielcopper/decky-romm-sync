@@ -526,14 +526,16 @@ async def test_recovery_on_repoint_uses_real_save_inventory_filesystem_and_sqlit
     with harness.uow_factory() as uow:
         assert uow.roms.get(41) is None
         bound = uow.roms.get(42)
-        assert bound is not None and bound.shortcut_app_id == app_id
+        assert bound is not None
+        assert bound.shortcut_app_id == app_id
         assert uow.rom_installs.get(41) is None
         assert uow.rom_save_sync_states.get(41) is None
     assert started["success"] is True
     assert not rom_path.exists()
     assert not save_path.exists()
     backups = list((save_path.parent / ".romm-backup").glob("Removed Game_*.srm"))
-    assert len(backups) == 1 and backups[0].read_bytes() == b"local save"
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == b"local save"
     complete = [call.args[1] for call in harness.emit.await_args_list if call.args[0] == "prune_complete"][-1]
     result = complete["results"][0]
     assert result["status"] == "removed"

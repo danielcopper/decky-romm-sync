@@ -194,7 +194,8 @@ class TestPlans:
         assert plan.whole_game_action is True
         assert plan.target_id is None
         assert plan.app_id == 0x8001
-        assert plan.bound_row is not None and plan.bound_row.rom_id == 1
+        assert plan.bound_row is not None
+        assert plan.bound_row.rom_id == 1
 
     async def test_a_vanished_bound_row_with_a_live_sibling_plans_a_repoint(self):
         rows = [_rom(1, app_id=0x8001), _rom(2, main=True)]

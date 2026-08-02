@@ -69,7 +69,8 @@ def test_repointed_group_delete_revalidates_and_invalidates_collection_only() ->
     assert deleted is True
     assert uow.roms.get(1) is None
     retained = uow.roms.get(2)
-    assert retained is not None and retained.shortcut_app_id == app_id
+    assert retained is not None
+    assert retained.shortcut_app_id == app_id
     assert uow.collection_sync_state.get("5", "standard") is None
     assert uow.platform_sync_state.get("gba") is not None
 

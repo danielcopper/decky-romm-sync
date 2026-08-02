@@ -122,7 +122,8 @@ class TestCaptureSnapshot:
 
         _, result = await runner.capture_snapshot("run-1", _plan(rows=rows, whole_game=True), MutationLedger(rows))
 
-        assert result is not None and result["reason"] == "steam_snapshot_failed"
+        assert result is not None
+        assert result["reason"] == "steam_snapshot_failed"
 
     async def test_an_already_absent_shortcut_reconciles_the_binding_instead(self):
         rows = [_rom(1, app_id=APP_ID)]
@@ -138,7 +139,8 @@ class TestCaptureSnapshot:
         assert "shortcut_binding" in ledger.mutations
         with uow:
             row = uow.roms.get(1)
-        assert row is not None and row.shortcut_app_id is None
+        assert row is not None
+        assert row.shortcut_app_id is None
 
 
 class TestRepoint:
@@ -164,7 +166,8 @@ class TestRepoint:
 
         _, _, result = await runner.repoint("run-1", _plan(rows=rows, target_id=2), ledger, None, 1, 1)
 
-        assert result is not None and result["status"] == "failed"
+        assert result is not None
+        assert result["status"] == "failed"
         assert ledger.committed_action is None
         assert ledger.action_ambiguous is False
         assert requested == [], "Steam is never asked once the switch itself failed"
@@ -199,7 +202,8 @@ class TestRepoint:
 
         _, _, result = await runner.repoint("run-1", _plan(rows=rows, target_id=2), MutationLedger(rows), None, 1, 1)
 
-        assert result is not None and result["reason"] == "steam_action_failed"
+        assert result is not None
+        assert result["reason"] == "steam_action_failed"
 
 
 class TestRemove:
@@ -218,7 +222,8 @@ class TestRemove:
         assert requested == ["remove_shortcut"]
         with uow:
             row = uow.roms.get(1)
-        assert row is not None and row.shortcut_app_id is None
+        assert row is not None
+        assert row.shortcut_app_id is None
 
     async def test_a_claimed_but_unconfirmed_removal_retains_source_data(self):
         rows = [_rom(1, app_id=APP_ID)]
@@ -259,10 +264,11 @@ async def test_every_action_refuses_a_plan_without_a_bound_shortcut(call):
     plan = _plan(rows=rows, whole_game=True)
     ledger = MutationLedger(rows)
 
+    if call == "capture_snapshot":
+        pending = runner.capture_snapshot("run-1", plan, ledger)
+    elif call == "repoint":
+        pending = runner.repoint("run-1", plan, ledger, None, 1, 1)
+    else:
+        pending = runner.remove("run-1", plan, ledger, None, None, 1, 1)
     with pytest.raises(RuntimeError):
-        if call == "capture_snapshot":
-            await runner.capture_snapshot("run-1", plan, ledger)
-        elif call == "repoint":
-            await runner.repoint("run-1", plan, ledger, None, 1, 1)
-        else:
-            await runner.remove("run-1", plan, ledger, None, None, 1, 1)
+        await pending

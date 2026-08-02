@@ -59,8 +59,9 @@ async def test_missing_prune_wiring_fails_loud() -> None:
         async def mutate(self):
             return {"success": True}
 
+    unwired = Unwired()
     with pytest.raises(RuntimeError, match="_prune_service is unwired"):
-        await Unwired().mutate()
+        await unwired.mutate()
 
 
 @pytest.mark.asyncio

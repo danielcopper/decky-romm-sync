@@ -79,8 +79,9 @@ class TestStableLocks:
         alternating = [{"lock_rom_ids": [1]}, {"lock_rom_ids": [1, 2]}] * 6
         locks, saves = _coordinator(alternating)
 
+        stable = locks.stable_locks({1})
         with pytest.raises(RuntimeError, match="Save ownership kept changing"):
-            async with locks.stable_locks({1}):
+            async with stable:
                 pytest.fail("the body must never run on an unstable ownership set")
 
         assert saves.held is None, "every attempt's lock is released"
@@ -95,8 +96,9 @@ class TestStableLocks:
     async def test_releases_the_lock_when_the_body_raises(self):
         locks, saves = _coordinator([{"lock_rom_ids": [1]}])
 
+        stable = locks.stable_locks({1})
         with pytest.raises(ValueError, match="body failed"):
-            async with locks.stable_locks({1}):
+            async with stable:
                 raise ValueError("body failed")
 
         assert saves.released == [[1]]

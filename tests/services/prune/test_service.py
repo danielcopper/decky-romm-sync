@@ -221,7 +221,8 @@ class EventSink:
         self.events: list[tuple[str, dict[str, Any]]] = []
 
     async def __call__(self, event: str, /, *args: object) -> None:
-        assert len(args) == 1 and isinstance(args[0], dict)
+        assert len(args) == 1
+        assert isinstance(args[0], dict)
         payload = cast("dict[str, Any]", args[0])
         self.events.append((event, payload))
 
@@ -1185,7 +1186,8 @@ async def test_partially_live_group_repoints_and_removes_under_every_toggle(harn
     assert complete["removed_rom_ids"] == [1]
     assert harness.uow.roms.get(1) is None
     retained = harness.uow.roms.get(2)
-    assert retained is not None and retained.shortcut_app_id == app_id
+    assert retained is not None
+    assert retained.shortcut_app_id == app_id
 
 
 @pytest.mark.asyncio
@@ -1668,8 +1670,10 @@ async def test_installed_file_failure_preserves_all_rows_and_reports_prior_mutat
     assert result["status"] == "partial"
     assert result["reason"] == "rom_removal_failed"
     assert result["mutations"] == ["installed_rom_content"]
-    assert harness.uow.roms.get(1) is not None and harness.uow.roms.get(2) is not None
-    assert harness.uow.rom_installs.get(1) is not None and harness.uow.rom_installs.get(2) is not None
+    assert harness.uow.roms.get(1) is not None
+    assert harness.uow.roms.get(2) is not None
+    assert harness.uow.rom_installs.get(1) is not None
+    assert harness.uow.rom_installs.get(2) is not None
 
 
 @pytest.mark.asyncio

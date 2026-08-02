@@ -42,8 +42,9 @@ class TestLockPruneRoms:
         svc, _ = make_service(tmp_path)
         support = svc.prune_support
 
+        locked = support.lock_prune_roms([4, 5])
         with pytest.raises(RuntimeError, match="body failed"):
-            async with support.lock_prune_roms([4, 5]):
+            async with locked:
                 raise RuntimeError("body failed")
 
         # A second acquisition can only complete if the first released.

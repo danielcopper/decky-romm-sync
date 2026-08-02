@@ -150,13 +150,17 @@ def test_rejects_path_escape_symlink_and_duplicate_identity(tmp_path):
         adapter.measure_path(str(link), str(safe))
     with pytest.raises(ValueError, match="outside"):
         adapter.measure_path(str(outside), str(safe))
+    snapshot = _snapshot()
+    readme = _readme_context()
     with pytest.raises(ValueError, match="unsafe recovery bundle id"):
-        adapter.seal_bundle("../escape", _snapshot(), [], _readme_context(), "playtime")
+        adapter.seal_bundle("../escape", snapshot, [], readme, "playtime")
 
     bundle_id = "TestGame_2026-07-24_same"
     adapter.seal_bundle(bundle_id, _snapshot(), [], _readme_context(), "playtime")
+    snapshot = _snapshot()
+    readme = _readme_context()
     with pytest.raises(FileExistsError):
-        adapter.seal_bundle(bundle_id, _snapshot(), [], _readme_context(), "playtime")
+        adapter.seal_bundle(bundle_id, snapshot, [], readme, "playtime")
 
 
 def test_failed_copy_cleans_staging_without_touching_existing_bundle(tmp_path, monkeypatch):
@@ -170,12 +174,14 @@ def test_failed_copy_cleans_staging_without_touching_existing_bundle(tmp_path, m
         raise OSError("disk full")
 
     monkeypatch.setattr(adapter, "_copy_opened_source", fail_copy)
+    snapshot = _snapshot()
+    readme = _readme_context()
     with pytest.raises(OSError, match="disk full"):
         adapter.seal_bundle(
             "TestGame_2026-07-24_failure",
-            _snapshot(),
+            snapshot,
             [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
-            _readme_context(),
+            readme,
             "playtime",
         )
     staging = Path(adapter.root()) / "staging"
@@ -261,12 +267,14 @@ def test_source_replacement_with_symlink_fails_at_open_time(tmp_path, monkeypatc
         return original(path, safe_root)
 
     monkeypatch.setattr(adapter, "_open_regular_beneath", replace_before_open)
+    snapshot = _snapshot()
+    readme = _readme_context()
     with pytest.raises((OSError, ValueError)):
         adapter.seal_bundle(
             "TestGame_2026-07-24_replaced",
-            _snapshot(),
+            snapshot,
             [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
-            _readme_context(),
+            readme,
             "playtime",
         )
 
@@ -281,8 +289,10 @@ def test_real_directory_fsync_failure_aborts_sealing(tmp_path, monkeypatch):
         original(fd)
 
     monkeypatch.setattr("adapters.recovery_bundle.os.fsync", fail_directory)
+    snapshot = _snapshot()
+    readme = _readme_context()
     with pytest.raises(OSError, match="directory fsync failed"):
-        adapter.seal_bundle("TestGame_2026-07-24_fsync", _snapshot(), [], _readme_context(), "playtime")
+        adapter.seal_bundle("TestGame_2026-07-24_fsync", snapshot, [], readme, "playtime")
 
 
 def test_symlinked_recovery_root_is_rejected(tmp_path):
@@ -345,8 +355,10 @@ def test_post_rename_fsync_failure_marks_bundle_durability_uncertain(tmp_path, m
 
     monkeypatch.setattr("adapters.recovery_bundle.os.fsync", fail_final_sync)
     bundle_id = "TestGame_2026-07-24_uncertain"
+    snapshot = _snapshot()
+    readme = _readme_context()
     with pytest.raises(OSError, match="durability is uncertain"):
-        adapter.seal_bundle(bundle_id, _snapshot(), [], _readme_context(), "playtime")
+        adapter.seal_bundle(bundle_id, snapshot, [], readme, "playtime")
 
     assert not (bundles / bundle_id).exists()
     assert (bundles / f"{bundle_id}.durability-uncertain").is_dir()
@@ -369,8 +381,10 @@ def test_recovery_bundle_parent_replacement_is_not_reauthorized(tmp_path, monkey
 
     monkeypatch.setattr(adapter, "_copy_artifacts", swap_parent)
 
+    snapshot = _snapshot()
+    readme = _readme_context()
     with pytest.raises(OSError, match="durability is uncertain") as caught:
-        adapter.seal_bundle("TestGame_2026-07-24_swapped", _snapshot(), [], _readme_context(), "playtime")
+        adapter.seal_bundle("TestGame_2026-07-24_swapped", snapshot, [], readme, "playtime")
 
     assert list(outside.iterdir()) == []
     preserved = Path(str(caught.value).split(": ", 1)[1])
@@ -401,8 +415,10 @@ def test_failed_seal_preserves_staging_instead_of_crossing_nested_mount(tmp_path
     monkeypatch.setattr("adapters.descriptor_paths._mount_id", fake_mount_id)
     monkeypatch.setattr(adapter, "_verify_staging_checksums", add_mount_transition_then_fail)
 
+    snapshot = _snapshot()
+    readme = _readme_context()
     with pytest.raises(RuntimeError, match="unsafe staging was preserved") as caught:
-        adapter.seal_bundle("TestGame_2026-07-24_mounted", _snapshot(), [], _readme_context(), "playtime")
+        adapter.seal_bundle("TestGame_2026-07-24_mounted", snapshot, [], readme, "playtime")
 
     assert staging_path is not None
     assert str(staging_path) in str(caught.value)
@@ -550,8 +566,10 @@ def test_unrenamable_uncertain_bundle_is_reported_and_kept_where_it_is(tmp_path,
     monkeypatch.setattr("adapters.recovery_bundle.os.rename", refuse_marker_rename)
     monkeypatch.setattr(RecoveryBundleAdapter, "_require_layout_attached", fail_attachment)
 
+    snapshot = _snapshot()
+    readme = _readme_context()
     with pytest.raises(OSError, match="durability is uncertain") as caught:
-        adapter.seal_bundle(bundle_id, _snapshot(), [], _readme_context(), "playtime")
+        adapter.seal_bundle(bundle_id, snapshot, [], readme, "playtime")
 
     assert str(bundles / bundle_id) in str(caught.value)
     assert ".durability-uncertain" not in str(caught.value)
@@ -578,12 +596,14 @@ def test_destination_replacement_cannot_modify_outside_file(tmp_path, monkeypatc
 
     monkeypatch.setattr(adapter, "_copy_opened_source", replace_copied_destination)
 
+    snapshot = _snapshot()
+    readme = _readme_context()
     with pytest.raises(RuntimeError, match="unsafe staging was preserved"):
         adapter.seal_bundle(
             "TestGame_2026-07-24_destination",
-            _snapshot(),
+            snapshot,
             [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
-            _readme_context(),
+            readme,
             "playtime",
         )
 
@@ -617,12 +637,15 @@ class TestCooperativeAbort:
         source_root = self._sources(tmp_path)
         adapter = _adapter(tmp_path)
 
+        snapshot = _snapshot()
+        readme = _readme_context()
+        artifacts = self._artifacts(source_root)
         with pytest.raises(OperationAbortedError):
             adapter.seal_bundle(
                 "TestGame_2026-07-24_abc123",
-                _snapshot(),
-                self._artifacts(source_root),
-                _readme_context(),
+                snapshot,
+                artifacts,
+                readme,
                 "playtime",
                 lambda: True,
             )
@@ -641,12 +664,15 @@ class TestCooperativeAbort:
             checks["count"] += 1
             return checks["count"] > 3
 
+        snapshot = _snapshot()
+        readme = _readme_context()
+        artifacts = self._artifacts(source_root)
         with pytest.raises(OperationAbortedError):
             adapter.seal_bundle(
                 "TestGame_2026-07-24_abc123",
-                _snapshot(),
-                self._artifacts(source_root),
-                _readme_context(),
+                snapshot,
+                artifacts,
+                readme,
                 "playtime",
                 should_abort,
             )
@@ -695,12 +721,15 @@ class TestCooperativeAbort:
             lambda path, root: {"success": False, "changed": False, "ambiguous": True, "message": "staging is stuck"},
         )
 
+        snapshot = _snapshot()
+        readme = _readme_context()
+        artifacts = self._artifacts(source_root)
         with pytest.raises(RuntimeError, match="unsafe staging was preserved"):
             adapter.seal_bundle(
                 "TestGame_2026-07-24_abc123",
-                _snapshot(),
-                self._artifacts(source_root),
-                _readme_context(),
+                snapshot,
+                artifacts,
+                readme,
                 "playtime",
                 lambda: True,
             )
