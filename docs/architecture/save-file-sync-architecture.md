@@ -1410,7 +1410,7 @@ Triggered automatically when a game stops (if `sync_after_exit` is enabled).
 
 1. `RegisterForAppLifetimeNotifications` fires with `bRunning: false`. The notification arrives for **every** app Steam
    tracks, so `handleGameStop(unAppID)` finalizes only when the stopping app is the one that opened the active session —
-   see [Session scoping](#session-scoping-one-slot-keyed-by-its-app). A stop for any other app returns before the
+   see [Session scoping](#session-scoping-one-entry-per-running-app). A stop for any other app returns before the
    `finalizeGameSession` call, so the post-exit sync never runs against a game that is still holding its save file open.
 2. `sessionManager.handleGameStop` makes a single `finalizeGameSession(romId)` call; the backend
    `SessionLifecycleService.finalize` orchestrates playtime record → post-exit save sync → migration refresh and returns
@@ -1530,60 +1530,99 @@ newest-wins / conflict / `.romm-backup` machinery. The server dedupes on `(user_
 a re-POST of a queued session is idempotent; the outbox dequeues on a `created` or `duplicate` result and stays queued
 only on `error` (ADR-0018).
 
-### Session scoping: one slot, keyed by its app
+### Session scoping: one entry per running app
 
-`sessionManager` tracks **one** active session: `{appId, romId, startMs}`, opened on a game start and on either
-reload-adoption branch, and always with the appId set alongside the rom.
+`sessionManager` tracks active sessions in a map keyed by Steam appId, each entry `{appId, romId, startMs}`, opened on a
+game start and on adoption. Two RomM games at once hold two entries and each records its own playtime and runs its own
+post-exit sync (#1624). Before that the manager held a single slot, and the second game to start displaced the first —
+the displaced session was dropped outright: no playtime for the span already played, and no post-exit save sync when
+that game eventually exited, because its stop found a slot that no longer held it.
 
-The appId is what a stop is matched against. `RegisterForAppLifetimeNotifications` fires for every app Steam tracks —
-another non-Steam shortcut, a regular Steam game, a second RomM game — so the stop path checks the stopping app against
-the **appId recorded with the session**, never a fresh `appId → romId` map lookup (the cached map can be stale at stop
-time, and a stale miss would drop a real session instead of an unrelated one). A stop for any other app is a debug-level
-no-op: no playtime write, no post-exit sync, and the session stays open until its own app exits. Before #1621 the stop
-path took no appId at all and finalized whatever was in the slot, which recorded a wrong (early) duration and — the part
-that mattered — ran the post-exit save sync against a game whose emulator still held the save file open, capturing a
+The key is the appId, not the romId, for two reasons. Every write path is handed an appId — the lifetime notification's
+`unAppID` on both edges, and the running-app reading at adoption. And the stop path must match against the **appId
+recorded with the session**, never a fresh `appId → romId` map lookup: `RegisterForAppLifetimeNotifications` fires for
+every app Steam tracks (another non-Steam shortcut, a regular Steam game, a second RomM game), and the cached map can be
+stale at stop time, so a stale miss would drop a real session instead of an unrelated one. A romId key would force
+exactly that reverse lookup back into the path. A stop for an app with no entry is a debug-level no-op: no playtime
+write, no post-exit sync, and every open session stays open until its own app exits. Before #1621 the stop path took no
+appId at all and finalized whatever was in the slot, which recorded a wrong (early) duration and — the part that
+mattered — ran the post-exit save sync against a game whose emulator still held the save file open, capturing a
 half-written file that the real exit then diverged from.
 
-Two RomM games at once still exceed the single slot: the second start displaces the first, and the displaced session is
-**dropped**, logged at warning with both rom ids. Its stop was never observed, so it gets no fabricated end — the same
-rule an orphaned breadcrumb follows (see below).
+**A start for an app that already has an entry is ignored** (#1589) — the entry keeps its earlier `startMs` and
+`record_session_start` is **not** called again. The backend RE-OPENS the marker rather than extending it, so a second
+call silently discards the span already played; the re-open is deliberate (adoption depends on it), so the guard belongs
+frontend-side. The duplicate start still re-dispatches `romm_session_changed` with `running: true`, so a surface that
+missed the first event self-heals. The guard is checked before the rom lookup, so a map that emptied mid-session cannot
+drop a live entry.
 
-Keeping the slot single is a deliberate decision, not an oversight. A per-rom map would ripple into the breadcrumb, both
-adoption branches, and every `getActiveSessionRomId()` consumer — including the launch gate's already-running guard,
-which is save-safety machinery. Concurrent RomM games are rare, and scoping the stop to its own app removes the
-dangerous behaviour without touching that surface. Revisit only if concurrent play stops being an edge case.
+Liveness is exposed to the launch surfaces as `isSessionActive(romId)` — a predicate over the map, which is what all
+five call sites were asking anyway.
+
+**Concurrency of the post-exit work is deliberately not per-app.** Lifecycle events run on one serialized chain, and the
+post-exit save syncs behind them serialize further on a **device-wide** gate (`services/saves/sync_engine/_gate.py`, 60s
+budget) — RomM's `negotiate` is device-scoped and the engine's layout state is shared mutable state, so parallel syncs
+are not safe. Two games exiting close together therefore sync one after the other; if the first overruns the budget the
+second is skipped and retried at its next sync. Playtime is unaffected either way — it is recorded before the sync runs.
+Per-app sync chains are a non-goal, not an oversight.
+
+Known rough edge in that skip: a gate timeout is currently classified as `server_unreachable`, so the skipped sync
+surfaces the "Server offline — saves will sync next time" toast even though the server is fine. The wait was local. No
+data is at risk (the sync is simply retried), but the copy is misleading, and concurrent exits are the first thing that
+makes the path reachable.
 
 ### Surviving a plugin reload mid-session
 
-`destroySessionManager` wipes the in-memory session on unload, so a plugin reload while a game is running would leave
+`destroySessionManager` wipes the in-memory sessions on unload, so a plugin reload while a game is running would leave
 the next game-stop with nothing to finalize — the pre-reload playtime is lost and the post-exit sync never runs. Two
-signals let the re-initialized `sessionManager` recover it:
+signals let the re-initialized `sessionManager` recover them:
 
-- **Steam running-state (liveness).** A guarded reader (`utils/runningApps`) is the authority for _whether_ the game is
-  still running at re-init — the durable marker (`last_session_start`) is written by `recordSessionStart` precisely so
-  it survives the reload, but only Steam can attest the session has not already ended. Its one surface is
+- **Steam running-state (liveness).** A guarded reader (`utils/runningApps`) is the authority for _whether_ the games
+  are still running at re-init — the durable marker (`last_session_start`) is written by `recordSessionStart` precisely
+  so it survives the reload, but only Steam can attest a session has not already ended. Its one surface is
   `SteamUIStore.RunningApps`, read through a guard (an absent store, a `null` store or a throwing getter degrades to
   "nothing running", never a throw). A single read is not trusted: after a full `plugin_loader` restart the store
   reports an **empty** list for several seconds with the game still running (#1054 / #1148 round 2), so the read is
   **polled** (every 500ms for up to 15s), not one-shot, and a timed-out round logs the `diagnostics` note that tells an
-  absent store, an empty list and a throwing getter apart.
-- **A localStorage breadcrumb (attestation).** A single versioned row (`decky-romm-sync:active-session` →
-  `{v, appId, romId, startMs}`) is written at start and removed at stop. It is **not** cleared by
+  absent store, an empty list and a throwing getter apart. The poll settles once something is running **and every
+  attested app has surfaced**: the store omits apps whose overview has not loaded, so a reading listing one concurrent
+  game can still be missing its sibling, and stopping at the first non-empty round would orphan it.
+- **A localStorage breadcrumb (attestation).** One versioned row (`decky-romm-sync:active-session` →
+  `{v: 2, sessions: [{appId, romId, startMs}, …]}`) holds **every** open session. It is **not** cleared by
   `destroySessionManager`, so it outlives the reload. Every localStorage access is wrapped — a storage failure degrades
   to the no-attestation path, never throws.
 
-At `initSessionManager` the recovery runs on the lifecycle chain (so a stop event racing the liveness poll serializes
-after adoption — adopt first, then finalize):
+  Writes are a **projection**: the map is the source of truth and the whole row is rewritten after each mutation, before
+  any await, never read-modify-written. `setItem` is atomic per key, so a failed write leaves the previous row intact
+  and self-heals at the next mutation. An empty map removes the row, so "no live session" stays the absent state.
 
-- **Game running + breadcrumb matches** → adopt in-memory state from the breadcrumb (`sessionStartTime`) and leave the
-  durable marker untouched. Re-stamping would discard the pre-reload span the backend already holds.
-- **Game running, no / mismatched / corrupt breadcrumb** → adopt and re-stamp the marker to a truthful lower bound
-  (`recordSessionStart`), then write a fresh breadcrumb so a subsequent reload adopts via the matching case instead of
-  re-stamping again.
-- **Breadcrumb present but nothing running once the liveness poll times out** (or a non-RomM app is foreground) → the
-  session ended while the plugin was down; a truthful finalize is impossible without an observed end, so the breadcrumb
-  is dropped and the session is logged as orphaned — never a fabricated end time. A stale breadcrumb left by a reboot
-  resolves the same way at the next init; no expiry timers.
+  The reader branches on the stored **version first, before any field**, and each version a released build could have
+  written gets its own lift into the current shape — a v1 row (one session inline) becomes a one-entry list and is
+  rewritten as v2 at the next persist. Validating version and fields in one expression would fail every v1 row, and a
+  failed validation is indistinguishable from no attestation, so a running session's pre-upgrade span would be silently
+  discarded on the first reload after an update. Entries are read individually: one corrupt entry never voids its
+  siblings. An unknown (future) version is unusable — same standing as no row at all.
+
+At `initSessionManager` the recovery runs on the lifecycle chain (so a stop event racing the liveness poll serializes
+after adoption — adopt first, then finalize). The attested set and the running set are then reconciled **per app**, so
+any number of concurrent games recovers together:
+
+- **Attested + running** → adopted as attested, durable marker untouched. Re-stamping would discard the pre-reload span
+  the backend already holds. The **breadcrumb's own romId** is adopted, never the one the `appId → romId` map resolves
+  now: the binding is 1:1 at any instant but not stable over time (a version switch moves a shortcut to a different rom
+  row), and the open marker belongs to the rom the start opened — re-stamping the current one would open a second marker
+  and leave the original dangling.
+- **Running + ours + unattested** → adopted with the marker re-stamped to a truthful lower bound (`recordSessionStart`),
+  then attested so a subsequent reload adopts it as attested instead of re-stamping again.
+- **Attested but not running** once the poll settles → the session ended while the plugin was down; a truthful finalize
+  is impossible without an observed end, so the entry is dropped and logged as orphaned — never a fabricated end time. A
+  stale breadcrumb left by a reboot resolves the same way at the next init; no expiry timers.
+- **Running but not ours** → ignored entirely. A foreign app is never adopted, and never a reason to orphan anything
+  else. Before #1624 adoption read only the head of the running list, so a foreign app in the foreground orphaned a RomM
+  game still running behind it.
+
+An app whose session a start notification already opened is skipped by both passes, so adoption never re-opens a live
+session (#1589).
 
 **Attestation invariant:** every finalize fold uses a marker stamped by a start we actually observed (either the
 original `recordSessionStart` or an adoption re-stamp) — the client never invents an end time for a session whose stop
@@ -1765,12 +1804,12 @@ shows no Steam "already running" dialog, which dissolves the mid-session-sync pr
 defending against it. (`SteamClient.Apps.RaiseWindowForGame` — the earlier approach — is a **desktop-overlay** call:
 native only acts on it when `SteamUIStore.GetOverlayInstances(appId)` is non-empty, which it never is in gamescope Game
 Mode, so it reports `Success` but silently does nothing. Hence the switch to the store-navigation path.) A click first
-runs a **liveness gate**: if nothing is actually running (`isAppRunning(appId)` / `getActiveSessionRomId()` both say no
-— a stale overlay from a session that ended without a stop event reaching the button), it clears the overlay and falls
+runs a **liveness gate**: if nothing is actually running (`isAppRunning(appId)` / `isSessionActive(romId)` both say no —
+a stale overlay from a session that ended without a stop event reaching the button), it clears the overlay and falls
 through to the normal launch funnel (self-heal). If `NavigateToRunningApp` is absent on an older SteamUI build, the
 foreground falls back to `Navigation.Navigate("/apprunning")` after the `SetRunningApp` selection (same visible effect).
 
-Detection is **reactive, not polled**: the overlay is seeded synchronously at mount from `getActiveSessionRomId()` /
+Detection is **reactive, not polled**: the overlay is seeded synchronously at mount from `isSessionActive(romId)` /
 `isAppRunning(appId)` (so a page opened mid-session — or after a reload-adoption — shows Resume immediately) and flipped
 live by the `romm_session_changed` DOM event, which `sessionManager` dispatches on game start (`running: true`), game
 stop (`running: false`), and both reload-adoption branches (`running: true`). The already-running guards from #1148 /
