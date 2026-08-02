@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
     from models.prune import MutationOutcome, SourceClaim
 
+    from domain.rom_install import RomInstall
     from services.protocols import Clock, RetroDeckPaths, SaveFileStore, UnitOfWorkFactory
     from services.saves.rom_info import RomInfoService
     from services.saves.sync_engine import SyncEngine
@@ -41,6 +42,15 @@ def _save_identity(platform_slug: str, content_path: str) -> tuple[str, str]:
     ``fs_name``; only its basename stem is read, so the two are interchangeable.
     """
     return (platform_slug, os.path.splitext(os.path.basename(content_path))[0])
+
+
+def _is_plain_basename(filename: str) -> bool:
+    """Whether a tracked filename is a bare name safe to project onto a saves dir."""
+    return filename not in {"", ".", ".."} and os.path.basename(filename) == filename and "\x00" not in filename
+
+
+def _current_save_artifact(path: str, saves_root: str, rom_id: int) -> dict[str, object]:
+    return {"source_path": path, "safe_root": saves_root, "kind": "current_save", "rom_id": rom_id}
 
 
 @dataclass(frozen=True)
@@ -83,6 +93,12 @@ class PruneSaveSupport:
         a file the replacement still reads.
         """
         purge_ids = {int(value) for value in purge_rom_ids}
+        installs, persisted_names, uninstalled_by_identity = self._local_save_state()
+        ownership, expected_by_id = self._project_ownership(installs, persisted_names, uninstalled_by_identity)
+        return self._inventory_for(purge_ids, ownership, expected_by_id)
+
+    def _local_save_state(self) -> tuple[list[RomInstall], dict[int, list[str]], dict[tuple[str, str], set[int]]]:
+        """Read, in one short UoW, everything path projection needs from SQLite."""
         with self._uow_factory() as uow:
             installs = list(uow.rom_installs.iter_all())
             installed_ids = {install.rom_id for install in installs}
@@ -99,32 +115,54 @@ class PruneSaveSupport:
                     continue
                 identity = _save_identity(rom.platform_slug, rom.fs_name)
                 uninstalled_by_identity.setdefault(identity, set()).add(rom.rom_id)
+        return installs, persisted_names, uninstalled_by_identity
 
+    def _project_ownership(
+        self,
+        installs: list[RomInstall],
+        persisted_names: dict[int, list[str]],
+        uninstalled_by_identity: dict[tuple[str, str], set[int]],
+    ) -> tuple[dict[str, set[int]], dict[int, list[dict[str, str]]]]:
+        """Map every projected save path to the full set of rows that land on it."""
         ownership: dict[str, set[int]] = {}
         expected_by_id: dict[int, list[dict[str, str]]] = {}
         for install in installs:
             rom_id = install.rom_id
-            expected = self._rom_info.expected_save_files(rom_id)
-            if expected:
-                saves_dir = expected[0]["saves_dir"]
-                known = {item["filename"] for item in expected}
-                for filename in persisted_names.get(rom_id, []):
-                    if (
-                        filename not in known
-                        and filename not in {"", ".", ".."}
-                        and os.path.basename(filename) == filename
-                        and "\x00" not in filename
-                    ):
-                        expected.append(
-                            {"path": os.path.join(saves_dir, filename), "filename": filename, "saves_dir": saves_dir}
-                        )
+            expected = self._expected_save_files(rom_id, persisted_names.get(rom_id, []))
             expected_by_id[rom_id] = expected
             owners = {rom_id} | uninstalled_by_identity.get(
                 _save_identity(install.platform_slug, install.file_path), set()
             )
             for item in expected:
                 ownership.setdefault(self._save_file_store.canonical_path(item["path"]), set()).update(owners)
+        return ownership, expected_by_id
 
+    def _expected_save_files(self, rom_id: int, persisted: list[str]) -> list[dict[str, str]]:
+        """The ROM's projected save files, plus any tracked name discovery missed.
+
+        A filename the aggregate recorded but discovery no longer projects (the
+        ROM was renamed on the server) still names a real file on disk, so it is
+        carried — but only when it is a plain basename, since a tracked value is
+        server-derived and must never widen the path set.
+        """
+        expected = self._rom_info.expected_save_files(rom_id)
+        if not expected:
+            return expected
+        saves_dir = expected[0]["saves_dir"]
+        known = {item["filename"] for item in expected}
+        for filename in persisted:
+            if filename in known or not _is_plain_basename(filename):
+                continue
+            expected.append({"path": os.path.join(saves_dir, filename), "filename": filename, "saves_dir": saves_dir})
+        return expected
+
+    def _inventory_for(
+        self,
+        purge_ids: set[int],
+        ownership: dict[str, set[int]],
+        expected_by_id: dict[int, list[dict[str, str]]],
+    ) -> dict[str, Any]:
+        """Classify every purge-set save path into the recovery/quarantine buckets."""
         saves_root = self._retrodeck_paths.saves_path()
         artifacts: list[dict[str, object]] = []
         exclusive: list[dict[str, str]] = []
@@ -144,34 +182,14 @@ class PruneSaveSupport:
                     continue
                 owners = ownership.get(self._save_file_store.canonical_path(path), {rom_id})
                 lock_ids.update(owners)
-                exists = self._save_file_store.is_file(path)
                 if owners <= purge_ids:
-                    artifacts.append(
-                        {"source_path": path, "safe_root": saves_root, "kind": "current_save", "rom_id": rom_id}
-                    )
+                    artifacts.append(_current_save_artifact(path, saves_root, rom_id))
                     exclusive.append(item)
                     source_claims[path] = self._save_file_store.claim_source(path, saves_root)
-                elif exists:
-                    artifacts.append(
-                        {"source_path": path, "safe_root": saves_root, "kind": "current_save", "rom_id": rom_id}
-                    )
+                elif self._save_file_store.is_file(path):
+                    artifacts.append(_current_save_artifact(path, saves_root, rom_id))
                     shared.append(path)
-                backup_dir = os.path.join(item["saves_dir"], ".romm-backup")
-                if self._save_file_store.is_symlink(backup_dir) or not self._save_file_store.is_within(
-                    backup_dir, saves_root
-                ):
-                    raise ValueError(f"ROM {rom_id}: save backup directory is unsafe: {backup_dir}")
-                for entry in self._save_file_store.listdir(backup_dir):
-                    backup_path = os.path.join(backup_dir, entry)
-                    if is_backup_for(item["filename"], entry) and self._save_file_store.is_file(backup_path):
-                        artifacts.append(
-                            {
-                                "source_path": backup_path,
-                                "safe_root": saves_root,
-                                "kind": "save_backup",
-                                "rom_id": rom_id,
-                            }
-                        )
+                artifacts.extend(self._backup_artifacts(item, rom_id, saves_root))
         return {
             "artifacts": artifacts,
             "exclusive": exclusive,
@@ -180,6 +198,20 @@ class PruneSaveSupport:
             "lock_rom_ids": sorted(lock_ids),
             "source_claims": source_claims,
         }
+
+    def _backup_artifacts(self, item: dict[str, str], rom_id: int, saves_root: str) -> list[dict[str, object]]:
+        """Every ``.romm-backup`` history file belonging to one projected save."""
+        backup_dir = os.path.join(item["saves_dir"], ".romm-backup")
+        if self._save_file_store.is_symlink(backup_dir) or not self._save_file_store.is_within(backup_dir, saves_root):
+            raise ValueError(f"ROM {rom_id}: save backup directory is unsafe: {backup_dir}")
+        found: list[dict[str, object]] = []
+        for entry in self._save_file_store.listdir(backup_dir):
+            backup_path = os.path.join(backup_dir, entry)
+            if is_backup_for(item["filename"], entry) and self._save_file_store.is_file(backup_path):
+                found.append(
+                    {"source_path": backup_path, "safe_root": saves_root, "kind": "save_backup", "rom_id": rom_id}
+                )
+        return found
 
     def quarantine_prune_saves(
         self, files: list[dict[str, str]], claims: dict[str, SourceClaim] | None = None

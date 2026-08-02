@@ -54,6 +54,15 @@ if TYPE_CHECKING:
     from services.prune.registry import PruneRegistry
 
 
+def _steam_action_planned(plan: GroupPlan) -> bool:
+    """Whether this group will ask the frontend to touch Steam at all."""
+    return (
+        plan.app_id is not None
+        and plan.bound_row is not None
+        and (plan.target_id is not None or plan.whole_game_action)
+    )
+
+
 @dataclass(frozen=True)
 class PruneExecutorConfig:
     """Dependencies for one cleanup run's per-group state machine."""
@@ -345,11 +354,9 @@ class PruneExecutor:
         planned = await self._planner.plan(run_id, initial_rows, preview_candidate_ids, options, index, total, ledger)
         if not isinstance(planned, GroupPlan):
             return planned
-        rows = planned.rows
         bound_row = planned.bound_row
         app_id = planned.app_id
         target_id = planned.target_id
-        delete_ids = planned.delete_ids
 
         frontend_steam: dict[str, object] | None = None
         if planned.whole_game_action and app_id is not None and options.create_recovery_bundle:
@@ -357,7 +364,7 @@ class PruneExecutor:
             if result is not None:
                 return result
 
-        recovery_ids = set(delete_ids)
+        recovery_ids = set(planned.delete_ids)
         if target_id is not None and bound_row is not None:
             recovery_ids.add(bound_row.rom_id)
             recovery_ids.add(target_id)
@@ -369,92 +376,19 @@ class PruneExecutor:
             if result is not None:
                 return result
 
-        if self._active_downloads() & delete_ids:
-            return self._results.group_result(rows, "skipped", "download_in_progress", "Cancel active downloads first.")
-        proof_ids = set(delete_ids)
-        if target_id is not None:
-            proof_ids.add(target_id)
-            if bound_row is not None:
-                proof_ids.add(bound_row.rom_id)
-        refreshed = await self._liveness.probe_many(proof_ids)
-        guard = liveness_guard(
-            refreshed,
-            delete_ids,
-            target_id,
-            bound_row.rom_id if target_id is not None and bound_row is not None else None,
+        armed = await self._armed_to_mutate(planned, recovery_ids, handle)
+        if armed is not None:
+            return armed
+
+        launch_options, committed_action, result = await self._mutate_steam(
+            run_id, planned, ledger, handle, frontend_steam, index, total
         )
-        if guard is not None:
-            return self._results.group_result(
-                rows,
-                "skipped",
-                guard[0],
-                guard[1],
-                bundle_path=handle.bundle_path if handle else None,
-            )
+        if result is not None:
+            return result
 
-        # This early revalidation exists to protect the Steam action below, which
-        # the finalizer's identical pre-mutation check runs too late to precede.
-        # Without a planned Steam action nothing irreversible happens in between,
-        # so that later check is the pre-mutation gate and this one only repeats
-        # the same full source rehash.
-        steam_action_planned = (
-            app_id is not None and bound_row is not None and (target_id is not None or planned.whole_game_action)
-        )
-        if handle is not None and steam_action_planned:
-            recovery_guard = await self._recovery_guard(
-                handle,
-                recovery_ids,
-                committed_action=None,
-                app_id=app_id,
-                target_id=target_id,
-                launch_options=None,
-            )
-            if recovery_guard is not None:
-                return self._results.group_result(
-                    rows,
-                    "skipped",
-                    "recovery_state_changed",
-                    recovery_guard,
-                    bundle_path=handle.bundle_path,
-                )
-
-        committed_action: Literal["repoint_shortcut", "remove_shortcut"] | None = None
-        launch_options: str | None = None
-        if target_id is not None and app_id is not None and bound_row is not None:
-            launch_options, committed_action, result = await self._steam.repoint(
-                run_id, planned, ledger, handle, index, total
-            )
-            if result is not None:
-                return result
-        elif planned.whole_game_action and app_id is not None and bound_row is not None:
-            committed_action, result = await self._steam.remove(
-                run_id, planned, ledger, handle, frontend_steam, index, total
-            )
-            if result is not None:
-                return result
-
-        if target_id is not None and not delete_ids:
-            final_proof = await self._liveness.probe_many(
-                {bound_row.rom_id, target_id} if bound_row is not None else {target_id}
-            )
-            final_guard = liveness_guard(
-                final_proof,
-                set(),
-                target_id,
-                bound_row.rom_id if bound_row is not None else None,
-            )
-            if final_guard is not None:
-                return self._results.ledger_result(ledger, final_guard[0], final_guard[1])
-            return self._results.group_result(
-                rows,
-                "repointed",
-                None,
-                "Repointed the shortcut to the live Default.",
-                app_id=app_id,
-                bundle_path=handle.bundle_path if handle else None,
-                committed_action=committed_action,
-                target_rom_id=target_id,
-            )
+        repointed = await self._repoint_only_result(planned, ledger, handle, committed_action)
+        if repointed is not None:
+            return repointed
 
         return await self._finalizer.finish(
             run_id=run_id,
@@ -469,6 +403,127 @@ class PruneExecutor:
             ledger=ledger,
             vanished_source_id=bound_row.rom_id if target_id is not None and bound_row is not None else None,
         )
+
+    async def _mutate_steam(
+        self,
+        run_id: str,
+        plan: GroupPlan,
+        ledger: MutationLedger,
+        handle: RecoveryHandle | None,
+        frontend_steam: dict[str, object] | None,
+        index: int,
+        total: int,
+    ) -> tuple[str | None, Literal["repoint_shortcut", "remove_shortcut"] | None, dict[str, Any] | None]:
+        """Run the one Steam mutation this group planned, if it planned one.
+
+        Exactly one of the two is reachable: a repoint needs a live target to
+        move onto, a removal needs the whole game gone. A group with neither
+        changes nothing in Steam and falls straight through.
+        """
+        if plan.target_id is not None and plan.app_id is not None and plan.bound_row is not None:
+            return await self._steam.repoint(run_id, plan, ledger, handle, index, total)
+        if plan.whole_game_action and plan.app_id is not None and plan.bound_row is not None:
+            committed, result = await self._steam.remove(run_id, plan, ledger, handle, frontend_steam, index, total)
+            return None, committed, result
+        return None, None, None
+
+    async def _repoint_only_result(
+        self,
+        plan: GroupPlan,
+        ledger: MutationLedger,
+        handle: RecoveryHandle | None,
+        committed_action: str | None,
+    ) -> dict[str, Any] | None:
+        """Terminal verdict for a group that moved a shortcut and removes nothing.
+
+        There is no cascade to run, so this is the last chance to notice that the
+        binding it just moved no longer holds — hence one more proof of the
+        source and the target before reporting success.
+        """
+        if plan.target_id is None or plan.delete_ids:
+            return None
+        bound_row = plan.bound_row
+        ids = {bound_row.rom_id, plan.target_id} if bound_row is not None else {plan.target_id}
+        final_proof = await self._liveness.probe_many(ids)
+        final_guard = liveness_guard(
+            final_proof, set(), plan.target_id, bound_row.rom_id if bound_row is not None else None
+        )
+        if final_guard is not None:
+            return self._results.ledger_result(ledger, final_guard[0], final_guard[1])
+        return self._results.group_result(
+            plan.rows,
+            "repointed",
+            None,
+            "Repointed the shortcut to the live Default.",
+            app_id=plan.app_id,
+            bundle_path=handle.bundle_path if handle else None,
+            committed_action=committed_action,
+            target_rom_id=plan.target_id,
+        )
+
+    async def _armed_to_mutate(
+        self,
+        plan: GroupPlan,
+        recovery_ids: set[int],
+        handle: RecoveryHandle | None,
+    ) -> dict[str, Any] | None:
+        """Re-prove everything the Steam action depends on, or refuse the group.
+
+        Runs after the bundle is sealed and before anything irreversible: a
+        download that started meanwhile, liveness that no longer holds, and — when
+        a Steam action is actually planned — a sealed recovery state that no
+        longer matches. Returns the terminal result that refuses the group, or
+        ``None`` when it may proceed.
+        """
+        if self._active_downloads() & plan.delete_ids:
+            return self._results.group_result(
+                plan.rows, "skipped", "download_in_progress", "Cancel active downloads first."
+            )
+        guard = await self._reprove_liveness(plan)
+        if guard is not None:
+            return self._results.group_result(
+                plan.rows,
+                "skipped",
+                guard[0],
+                guard[1],
+                bundle_path=handle.bundle_path if handle else None,
+            )
+        # This early revalidation exists to protect the Steam action below, which
+        # the finalizer's identical pre-mutation check runs too late to precede.
+        # Without a planned Steam action nothing irreversible happens in between,
+        # so that later check is the pre-mutation gate and this one only repeats
+        # the same full source rehash.
+        if handle is None or not _steam_action_planned(plan):
+            return None
+        recovery_guard = await self._recovery_guard(
+            handle,
+            recovery_ids,
+            committed_action=None,
+            app_id=plan.app_id,
+            target_id=plan.target_id,
+            launch_options=None,
+        )
+        if recovery_guard is None:
+            return None
+        return self._results.group_result(
+            plan.rows,
+            "skipped",
+            "recovery_state_changed",
+            recovery_guard,
+            bundle_path=handle.bundle_path,
+        )
+
+    async def _reprove_liveness(self, plan: GroupPlan) -> tuple[str, str] | None:
+        """Re-probe the ids this group's plan turns on, and guard on the answers."""
+        proof_ids = set(plan.delete_ids)
+        vanished_source_id: int | None = None
+        if plan.target_id is not None:
+            proof_ids.add(plan.target_id)
+            if plan.bound_row is not None:
+                proof_ids.add(plan.bound_row.rom_id)
+                vanished_source_id = plan.bound_row.rom_id
+        refreshed = await self._liveness.probe_many(proof_ids)
+        return liveness_guard(refreshed, plan.delete_ids, plan.target_id, vanished_source_id)
 
     async def _arm_recovery(
         self,
