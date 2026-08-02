@@ -9,15 +9,18 @@ Individual completed sessions are not entities once ingested — only their star
 (while open), their folded-in result, and the still-unsent outbox rows persist.
 RomM's native play-session store is the shared additive record (ADR-0018); this
 aggregate is the local durable + cumulative read model that reconciles with it.
-The module also holds the pure kernels that gate the outbox (``is_ingestable_session``
-— what may enter it) and heal it (``rejected_session_indices`` — which entries a
-whole-request 422 flagged).
+The module also holds the pure kernels over play-session data: the two that gate
+the outbox (``is_ingestable_session`` — what may enter it) and heal it
+(``rejected_session_indices`` — which entries a whole-request 422 flagged), and the
+two that read the server's session rows back for reconcile (``coerce_duration_ms``
+and ``latest_end_time`` — the summed total and the newest end time the reconcile
+verbs clamp against).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from domain._aggregate import cosmic_aggregate
 from domain.iso_time import parse_iso
@@ -103,6 +106,57 @@ def _session_index_from_loc(loc: object) -> int | None:
             if isinstance(nxt, int) and not isinstance(nxt, bool):
                 return nxt
     return None
+
+
+def coerce_duration_ms(row: object) -> int:
+    """Return a server play-session row's ``duration_ms`` as an int, else ``0``.
+
+    The cross-device union spans every Device-Sync client, so a stored row may
+    carry ``duration_ms: null`` or a non-numeric value (or not be a dict at all).
+    Coercing defensively keeps one malformed row from crashing the whole reconcile
+    sum — this never raises. Booleans are treated as non-numeric so ``True`` does
+    not silently count as 1ms.
+    """
+    if not isinstance(row, dict):
+        return 0
+    value = row.get("duration_ms")
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    return 0
+
+
+def latest_end_time(sessions: list[Any]) -> str | None:
+    """Return the newest parseable ``end_time`` across server play-session rows, else ``None``.
+
+    Mirrors ``coerce_duration_ms``'s defensive coercion: a row that is not a
+    dict, lacks a string ``end_time``, or carries an unparseable timestamp is
+    skipped, so one malformed row never crashes the reconcile. Compared by
+    parsed datetime (never lexically), and a naive/aware mismatch between two
+    server rows is skipped rather than raised. The original string of the newest
+    row is returned so the stored ``last_played`` keeps the server's format.
+    """
+    latest_raw: str | None = None
+    latest_dt = None
+    for row in sessions:
+        if not isinstance(row, dict):
+            continue
+        raw = row.get("end_time")
+        if not isinstance(raw, str):
+            continue
+        parsed = parse_iso(raw)
+        if parsed is None:
+            continue
+        if latest_dt is None:
+            latest_raw, latest_dt = raw, parsed
+            continue
+        try:
+            if parsed > latest_dt:
+                latest_raw, latest_dt = raw, parsed
+        except TypeError:  # naive/aware mismatch between rows — skip the outlier
+            continue
+    return latest_raw
 
 
 @dataclass(frozen=True, slots=True)

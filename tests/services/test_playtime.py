@@ -20,12 +20,7 @@ from lib.errors import (
     RommNotFoundError,
     RommUnprocessableEntityError,
 )
-from services.playtime import (
-    _MAX_INGEST_ATTEMPTS,
-    PlaytimeService,
-    PlaytimeServiceConfig,
-    _coerce_duration_ms,
-)
+from services.playtime import _MAX_INGEST_ATTEMPTS, PlaytimeService, PlaytimeServiceConfig
 
 
 class FakeDeviceIdProvider:
@@ -773,37 +768,6 @@ def _verdict_by_start(verdicts: dict[str, str]):
         return {"results": results, "created_count": 0, "skipped_count": 0}
 
     return _ingest
-
-
-# ---------------------------------------------------------------------------
-# TestCoerceDurationMs — FIX 1
-# ---------------------------------------------------------------------------
-
-
-class TestCoerceDurationMs:
-    def test_real_int_returns_value(self):
-        assert _coerce_duration_ms({"duration_ms": 5000}) == 5000
-
-    def test_float_is_truncated_to_int(self):
-        assert _coerce_duration_ms({"duration_ms": 1999.9}) == 1999
-
-    def test_none_returns_zero(self):
-        assert _coerce_duration_ms({"duration_ms": None}) == 0
-
-    def test_string_returns_zero(self):
-        assert _coerce_duration_ms({"duration_ms": "nope"}) == 0
-
-    def test_missing_key_returns_zero(self):
-        assert _coerce_duration_ms({"id": 1}) == 0
-
-    def test_non_dict_row_returns_zero(self):
-        assert _coerce_duration_ms("not-a-dict") == 0
-        assert _coerce_duration_ms(None) == 0
-        assert _coerce_duration_ms([1, 2]) == 0
-
-    def test_bool_is_not_counted(self):
-        # bool is an int subclass — must NOT count True as 1ms.
-        assert _coerce_duration_ms({"duration_ms": True}) == 0
 
 
 # ---------------------------------------------------------------------------

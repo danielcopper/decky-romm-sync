@@ -19,7 +19,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.iso_time import parse_iso
-from domain.playtime import Playtime, is_ingestable_session, rejected_session_indices
+from domain.playtime import (
+    Playtime,
+    coerce_duration_ms,
+    is_ingestable_session,
+    latest_end_time,
+    rejected_session_indices,
+)
 from lib.errors import RommForbiddenError, RommNotFoundError, RommUnprocessableEntityError
 from lib.list_result import ErrorCode
 
@@ -85,57 +91,6 @@ def _empty_reconcile_result(*, server_query_failed: bool) -> dict[str, Any]:
         "last_played": None,
         "server_query_failed": server_query_failed,
     }
-
-
-def _coerce_duration_ms(row: object) -> int:
-    """Return a server play-session row's ``duration_ms`` as an int, else ``0``.
-
-    The cross-device union spans every Device-Sync client, so a stored row may
-    carry ``duration_ms: null`` or a non-numeric value (or not be a dict at all).
-    Coercing defensively keeps one malformed row from crashing the whole reconcile
-    sum — this never raises. Booleans are treated as non-numeric so ``True`` does
-    not silently count as 1ms.
-    """
-    if not isinstance(row, dict):
-        return 0
-    value = row.get("duration_ms")
-    if isinstance(value, bool):
-        return 0
-    if isinstance(value, (int, float)):
-        return int(value)
-    return 0
-
-
-def _latest_end_time(sessions: list[Any]) -> str | None:
-    """Return the newest parseable ``end_time`` across server play-session rows, else ``None``.
-
-    Mirrors ``_coerce_duration_ms``'s defensive coercion: a row that is not a
-    dict, lacks a string ``end_time``, or carries an unparseable timestamp is
-    skipped, so one malformed row never crashes the reconcile. Compared by
-    parsed datetime (never lexically), and a naive/aware mismatch between two
-    server rows is skipped rather than raised. The original string of the newest
-    row is returned so the stored ``last_played`` keeps the server's format.
-    """
-    latest_raw: str | None = None
-    latest_dt = None
-    for row in sessions:
-        if not isinstance(row, dict):
-            continue
-        raw = row.get("end_time")
-        if not isinstance(raw, str):
-            continue
-        parsed = parse_iso(raw)
-        if parsed is None:
-            continue
-        if latest_dt is None:
-            latest_raw, latest_dt = raw, parsed
-            continue
-        try:
-            if parsed > latest_dt:
-                latest_raw, latest_dt = raw, parsed
-        except TypeError:  # naive/aware mismatch between rows — skip the outlier
-            continue
-    return latest_raw
 
 
 def _session_debug_line(
@@ -858,9 +813,9 @@ class PlaytimeService:
         # duration, the row count, and the newest session end. All three fold into
         # the aggregate via monotonic reconcile verbs so a fresh device restores
         # total_seconds AND session_count AND last_played, not the total alone (#903).
-        server_total_seconds = sum(_coerce_duration_ms(s) for s in sessions) // 1000
+        server_total_seconds = sum(coerce_duration_ms(s) for s in sessions) // 1000
         server_session_count = len(sessions)
-        server_last_played = _latest_end_time(sessions)
+        server_last_played = latest_end_time(sessions)
 
         try:
             with self._uow_factory() as uow:
