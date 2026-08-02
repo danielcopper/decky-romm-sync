@@ -60,6 +60,9 @@ new code in it.
   checked; the reflex to fix the upstream artifact instead of the copy is not.
 - `testing-backend.md` — test tiers, gate tests, vendored conformance vectors.
 - `testing-frontend.md` — the `@decky/api` event harness, non-vacuous catch assertions.
+- `comments.md` — an inline comment is the exception: only an outside-world fact, a road not taken, or a constraint the
+  code cannot express. Re-read the comment on the line you touch — a stale one is worse than none, because it is
+  believed and nothing in the toolchain contradicts it. **No mechanical check exists.**
 
 ## Documentation
 
