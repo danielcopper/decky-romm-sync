@@ -12,7 +12,6 @@ vi.mock("../api/backend", () => ({
   getAppIdRomIdMap: vi.fn(),
   finalizeGameSession: vi.fn(),
   logInfo: vi.fn(),
-  logWarn: vi.fn(),
   logError: vi.fn(),
   debugLog: vi.fn(),
 }));
@@ -1272,14 +1271,62 @@ describe("sessionManager stop scoping (#1621)", () => {
     expect(readCrumb()).toBeNull();
   });
 
-  it("does not warn when the same game re-opens its own session", async () => {
+  // #1589: `record_session_start` RE-OPENS the durable marker instead of
+  // extending it, so a second start for a live session discards the span already
+  // played. The observed symptom was a launch inside the plugin's startup window
+  // being stamped twice, ~1.3s apart, and measured short by the gap.
+  it("does not re-open a live session when the same game reports a second start", async () => {
     await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
 
+    vi.setSystemTime(20_000);
     await startGame(lifetime);
+    vi.setSystemTime(50_000);
     await startGame(lifetime);
 
-    expect(backend.logWarn).not.toHaveBeenCalled();
+    // One marker, still stamped at the FIRST start — the 30s in between survives.
+    expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
+    expect(readSessions()).toEqual([{ appId: APP_ID, romId: ROM_ID, startMs: 20_000 }]);
+    expect(backend.debugLog).toHaveBeenCalledWith(expect.stringContaining("Session start ignored"));
+  });
+
+  it("re-announces the live session on a duplicate start so a stale surface self-heals", async () => {
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+    await startGame(lifetime);
+
+    const sessionEvents: unknown[] = [];
+    const listener = (e: WindowEventMap["romm_session_changed"]) => sessionEvents.push(e.detail);
+    globalThis.addEventListener("romm_session_changed", listener);
+    try {
+      await startGame(lifetime);
+      expect(sessionEvents).toEqual([{ running: true, appId: APP_ID, romId: ROM_ID }]);
+    } finally {
+      globalThis.removeEventListener("romm_session_changed", listener);
+    }
+  });
+
+  it("does not re-stamp the marker when the real start notification follows an adoption", async () => {
+    // The #1589 device ordering: adoption opens the session at init, then the
+    // launch's own notification arrives a second later.
+    seedSessions([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
+    stubRunningApp(APP_ID);
+
+    await initSessionManager();
+    const lifetime = captureLifetimeCb();
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+
+    vi.setSystemTime(20_000);
+    await startGame(lifetime);
+
+    // The adopted span is kept and the marker is left alone.
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    expect(readSessions()).toEqual([{ appId: APP_ID, romId: ROM_ID, startMs: 5_000 }]);
+
+    // The session is still the adopted one — its stop finalizes normally.
+    vi.setSystemTime(60_000);
+    await stopGame(lifetime);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
   });
 
   it("scopes the stop after adopting a session from a matching breadcrumb", async () => {

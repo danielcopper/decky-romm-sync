@@ -185,7 +185,29 @@ function dispatchSessionChanged(running: boolean, appId: number, romId: number):
   globalThis.dispatchEvent(new CustomEvent("romm_session_changed", { detail: { running, appId, romId } }));
 }
 
+/**
+ * Open a session for the app that just started — unless it already has one.
+ *
+ * The idempotency is load-bearing (#1589). `record_session_start` RE-OPENS the
+ * durable marker rather than extending it, so a second call for a live session
+ * silently discards the span already played. Steam can report an app as started
+ * twice (notably when a launch lands inside the plugin's own startup window and
+ * reload-adoption has already opened the session), and the re-open is deliberate
+ * backend behaviour that adoption relies on — so the guard belongs here.
+ *
+ * It is keyed on the appId and checked BEFORE the romId lookup: a map that
+ * emptied mid-session must not be able to drop a live entry.
+ */
 async function handleGameStart(appId: number): Promise<void> {
+  const open = activeSessions.get(appId);
+  if (open) {
+    detach(debugLog(`Session start ignored: appId=${appId} already has an open session (romId=${open.romId})`));
+    // Re-announce it — a surface that missed the first event self-heals, and the
+    // earlier startMs is kept.
+    dispatchSessionChanged(true, open.appId, open.romId);
+    return;
+  }
+
   const romId = getRomIdForApp(appId);
   if (!romId) return; // Not a RomM shortcut
 
@@ -373,11 +395,15 @@ async function adoptOrphanedSessions(): Promise<void> {
   const adopted: ActiveSession[] = [];
   const orphans: ActiveSession[] = [];
   for (const crumb of crumbs) {
+    // A start notification for this app already opened its session — leave it be
+    // rather than re-opening it over the top (#1589).
+    if (activeSessions.has(crumb.appId)) continue;
     (running.has(crumb.appId) ? adopted : orphans).push(crumb);
   }
 
   const restamped: ActiveSession[] = [];
   for (const app of reading.apps) {
+    if (activeSessions.has(app.appid)) continue;
     if (adopted.some((session) => session.appId === app.appid)) continue;
     const romId = getRomIdForApp(app.appid);
     if (romId === null) continue;
