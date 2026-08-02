@@ -327,7 +327,7 @@ export const ADOPTION_POLL_MAX_MS = 15_000;
  * surfaced. Stopping at the first non-empty reading is not enough — the store
  * omits apps whose overview has not loaded yet, so a reading that already lists
  * one concurrent game can still be missing its sibling, which would then be
- * orphaned. The wait for a stragglers shares the one existing budget.
+ * orphaned. The wait for stragglers shares the one existing budget.
  */
 async function pollForRunningApps(wanted: Set<number>): Promise<RunningAppsReading> {
   const started = Date.now();
@@ -391,12 +391,21 @@ async function adoptOrphanedSessions(): Promise<void> {
       : `adoption: no running app after ${waitedMs}ms [${reading.diagnostics}]`,
   );
 
+  // Both passes skip an app that already has an open session, so adoption can
+  // never re-open one a start notification opened first (#1589).
+  //
+  // UNREACHABLE as currently wired, deliberately kept: adoption and every
+  // notification handler run on the one serialized `lifecycleChain`, adoption is
+  // enqueued in the same synchronous block that registers the hook, and a
+  // teardown clears the map — so a fresh init always reconciles an empty map. Two
+  // wiring changes would make these live: taking adoption off that chain (giving
+  // a notification a window to complete during the up-to-15s poll), or a handler
+  // that acts directly instead of enqueueing. Do not delete these as dead code
+  // without making one of those orderings impossible instead.
   const running = new Set(reading.apps.map((app) => app.appid));
   const adopted: ActiveSession[] = [];
   const orphans: ActiveSession[] = [];
   for (const crumb of crumbs) {
-    // A start notification for this app already opened its session — leave it be
-    // rather than re-opening it over the top (#1589).
     if (activeSessions.has(crumb.appId)) continue;
     (running.has(crumb.appId) ? adopted : orphans).push(crumb);
   }

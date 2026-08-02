@@ -1162,6 +1162,38 @@ describe("sessionManager stop scoping (#1621)", () => {
     expect(dataChanged).toContainEqual({ type: "save_sync", rom_id: ROM_ID });
   });
 
+  it("drops the session and rewrites the row before awaiting the finalize", async () => {
+    // Ordering invariant: the stop is OBSERVED the moment it arrives, so the
+    // entry and its attestation must be gone before the long finalize await —
+    // not after it. Persisting afterwards would leave the row live for the whole
+    // post-exit sync, and a reload landing in that window would adopt a session
+    // whose stop was already seen, re-opening its marker over a closed span.
+    let releaseFinalize!: (result: typeof FINALIZE_WITH_PLAYTIME) => void;
+    vi.mocked(backend.finalizeGameSession).mockImplementation(
+      () => new Promise((resolve) => (releaseFinalize = resolve)),
+    );
+
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+    vi.setSystemTime(20_000);
+    await startGame(lifetime);
+    expect(readSessions()).not.toBeNull();
+
+    vi.setSystemTime(60_000);
+    await stopApp(lifetime, APP_ID);
+
+    // The finalize is in flight and has NOT resolved yet.
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
+    expect(updatePlaytimeDisplay).not.toHaveBeenCalled();
+    // Already forgotten, both in memory and on disk.
+    expect(isSessionActive(ROM_ID)).toBe(false);
+    expect(readCrumb()).toBeNull();
+
+    releaseFinalize({ ...FINALIZE_WITH_PLAYTIME });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(updatePlaytimeDisplay).toHaveBeenCalledWith(APP_ID, 99);
+  });
+
   it("ignores a stop for an unrelated app and leaves the session open", async () => {
     await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
