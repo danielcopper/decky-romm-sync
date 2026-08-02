@@ -29,7 +29,7 @@ from services.prune._models import (
 from services.prune.finalize import GroupFinalizer, GroupFinalizerConfig
 from services.prune.liveness import LivenessProber, LivenessProberConfig
 from services.prune.planning import GroupPlan, GroupPlanner, GroupPlannerConfig
-from services.prune.results import MutationLedger, PruneResultReporter, PruneResultReporterConfig
+from services.prune.results import GroupOutcome, MutationLedger, PruneResultReporter, PruneResultReporterConfig
 from services.prune.save_locks import SaveLockCoordinator, SaveLockCoordinatorConfig
 from services.prune.steam_actions import SteamActionRunner, SteamActionRunnerConfig
 
@@ -455,10 +455,12 @@ class PruneExecutor:
             "repointed",
             None,
             "Repointed the shortcut to the live Default.",
-            app_id=plan.app_id,
-            bundle_path=handle.bundle_path if handle else None,
-            committed_action=committed_action,
-            target_rom_id=plan.target_id,
+            GroupOutcome(
+                app_id=plan.app_id,
+                bundle_path=handle.bundle_path if handle else None,
+                committed_action=committed_action,
+                target_rom_id=plan.target_id,
+            ),
         )
 
     async def _armed_to_mutate(
@@ -486,7 +488,7 @@ class PruneExecutor:
                 "skipped",
                 guard[0],
                 guard[1],
-                bundle_path=handle.bundle_path if handle else None,
+                GroupOutcome(bundle_path=handle.bundle_path if handle else None),
             )
         # This early revalidation exists to protect the Steam action below, which
         # the finalizer's identical pre-mutation check runs too late to precede.
@@ -510,7 +512,7 @@ class PruneExecutor:
             "skipped",
             "recovery_state_changed",
             recovery_guard,
-            bundle_path=handle.bundle_path,
+            GroupOutcome(bundle_path=handle.bundle_path),
         )
 
     async def _reprove_liveness(self, plan: GroupPlan) -> tuple[str, str] | None:

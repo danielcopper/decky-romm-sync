@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from services.prune._models import cancellation_state, shielded
+from services.prune.results import GroupOutcome
 
 if TYPE_CHECKING:
     from domain.rom import Rom
@@ -97,17 +98,7 @@ class SteamActionRunner:
         try:
             switch = await shielded(self._switch_version(app_id, target_id, plan.drifted and handle is not None))
         except asyncio.CancelledError as exc:
-            state = cancellation_state(exc)
-            if state.child_completed and isinstance(state.child_result, dict):
-                _, state.group_result = self._switch_outcome(
-                    state.child_result, rows, ledger, target_id, app_id, handle
-                )
-                if state.group_result is None:
-                    state.group_result = self._results.ledger_result(
-                        ledger,
-                        "cancelled",
-                        "Cleanup was cancelled after the version binding changed; later groups were not started.",
-                    )
+            self._record_switch_cancellation(exc, rows, ledger, target_id, app_id, handle)
             raise
         launch_options, result = self._switch_outcome(switch, rows, ledger, target_id, app_id, handle)
         if result is not None:
@@ -134,17 +125,41 @@ class SteamActionRunner:
                 plan.group_ids,
             )
         except asyncio.CancelledError as exc:
-            state = cancellation_state(exc)
-            if state.action_result is not None:
-                state.group_result = self._repoint_action_outcome(state.action_result, ledger)
-                if state.group_result is None:
-                    state.group_result = self._results.ledger_result(
-                        ledger,
-                        "cancelled",
-                        "Cleanup was cancelled after Steam confirmed the repoint; later groups were not started.",
-                    )
+            self._record_repoint_cancellation(exc, ledger)
             raise
         return launch_options, "repoint_shortcut", self._repoint_action_outcome(action, ledger)
+
+    def _record_switch_cancellation(
+        self,
+        exc: asyncio.CancelledError,
+        rows: list[Rom],
+        ledger: MutationLedger,
+        target_id: int,
+        app_id: int,
+        handle: RecoveryHandle | None,
+    ) -> None:
+        """Keep a version switch that finished as the cancelled run's outcome."""
+        state = cancellation_state(exc)
+        if state.child_completed and isinstance(state.child_result, dict):
+            _, state.group_result = self._switch_outcome(state.child_result, rows, ledger, target_id, app_id, handle)
+            if state.group_result is None:
+                state.group_result = self._results.ledger_result(
+                    ledger,
+                    "cancelled",
+                    "Cleanup was cancelled after the version binding changed; later groups were not started.",
+                )
+
+    def _record_repoint_cancellation(self, exc: asyncio.CancelledError, ledger: MutationLedger) -> None:
+        """Keep a repoint Steam confirmed as the cancelled run's outcome."""
+        state = cancellation_state(exc)
+        if state.action_result is not None:
+            state.group_result = self._repoint_action_outcome(state.action_result, ledger)
+            if state.group_result is None:
+                state.group_result = self._results.ledger_result(
+                    ledger,
+                    "cancelled",
+                    "Cleanup was cancelled after Steam confirmed the repoint; later groups were not started.",
+                )
 
     async def remove(
         self,
@@ -260,7 +275,7 @@ class SteamActionRunner:
                 "failed",
                 switch.get("reason", "repoint_failed"),
                 switch.get("message", "Repoint failed."),
-                bundle_path=handle.bundle_path if handle else None,
+                GroupOutcome(bundle_path=handle.bundle_path if handle else None),
             )
         launch_options = switch.get("launch_options")
         if switch.get("rom_id") != target_id or switch.get("app_id") != app_id or not isinstance(launch_options, str):
@@ -315,7 +330,7 @@ class SteamActionRunner:
                 "failed",
                 "steam_action_failed",
                 action.get("message", "Shortcut removal failed."),
-                bundle_path=handle.bundle_path if handle else None,
+                GroupOutcome(bundle_path=handle.bundle_path if handle else None),
             )
         ledger.app_id = app_id
         ledger.committed_action = "remove_shortcut"
@@ -357,10 +372,12 @@ class SteamActionRunner:
             "partial",
             "local_state_changed",
             "Steam removed the shortcut, but its local binding changed before reconciliation.",
-            app_id=app_id,
-            removed_app_id=app_id,
-            bundle_path=handle.bundle_path if handle else None,
-            committed_action="remove_shortcut",
+            GroupOutcome(
+                app_id=app_id,
+                removed_app_id=app_id,
+                bundle_path=handle.bundle_path if handle else None,
+                committed_action="remove_shortcut",
+            ),
         )
 
 

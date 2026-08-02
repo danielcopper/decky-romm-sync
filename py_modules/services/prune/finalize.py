@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.prune import liveness_guard
 from services.prune._models import cancellation_state, shielded
+from services.prune.results import GroupOutcome
 
 if TYPE_CHECKING:
     import logging
@@ -299,15 +300,17 @@ class GroupFinalizer:
             "removed",
             None,
             f"Removed {len(plan.delete_ids)} confirmed vanished entr{'y' if len(plan.delete_ids) == 1 else 'ies'}.",
-            removed_rom_ids=sorted(plan.delete_ids),
-            app_id=acted_app_id,
-            removed_app_id=plan.app_id if committed_action == "remove_shortcut" else None,
-            bundle_path=handle.bundle_path if handle else None,
-            committed_action=committed_action,
-            mutations=ledger.mutations,
-            ambiguous_mutations=ledger.ambiguous_mutations,
-            warnings=warnings,
-            target_rom_id=plan.target_id,
+            GroupOutcome(
+                removed_rom_ids=sorted(plan.delete_ids),
+                app_id=acted_app_id,
+                removed_app_id=plan.app_id if committed_action == "remove_shortcut" else None,
+                bundle_path=handle.bundle_path if handle else None,
+                committed_action=committed_action,
+                mutations=ledger.mutations,
+                ambiguous_mutations=ledger.ambiguous_mutations,
+                warnings=warnings,
+                target_rom_id=plan.target_id,
+            ),
         )
 
     async def _quarantine_saves(
@@ -453,14 +456,16 @@ class GroupFinalizer:
             "partial" if ledger.has_commit() else uncommitted_status,
             reason,
             message,
-            app_id=acted_app_id,
-            removed_app_id=plan.app_id if committed_action == "remove_shortcut" else None,
-            bundle_path=handle.bundle_path if handle else None,
-            committed_action=committed_action,
-            mutations=ledger.mutations,
-            ambiguous_mutations=ledger.ambiguous_mutations,
-            warnings=warnings,
-            target_rom_id=plan.target_id,
+            GroupOutcome(
+                app_id=acted_app_id,
+                removed_app_id=plan.app_id if committed_action == "remove_shortcut" else None,
+                bundle_path=handle.bundle_path if handle else None,
+                committed_action=committed_action,
+                mutations=ledger.mutations,
+                ambiguous_mutations=ledger.ambiguous_mutations,
+                warnings=warnings,
+                target_rom_id=plan.target_id,
+            ),
         )
 
 

@@ -114,17 +114,34 @@ class RecoveryCoordinator:
         projected = {key: expected.get(key) for key in keys}
         raw_roms = projected.get("roms")
         if isinstance(raw_roms, list) and committed_action is not None and app_id is not None:
-            roms = [dict(row) if isinstance(row, dict) else row for row in raw_roms]
-            for row in roms:
-                if not isinstance(row, dict):
-                    continue
-                if row.get("shortcut_app_id") == app_id:
-                    row["shortcut_app_id"] = None
-                if committed_action == "repoint_shortcut" and row.get("rom_id") == target_id:
-                    row["shortcut_app_id"] = app_id
-                    row["applied_launch_options"] = launch_options
-            projected["roms"] = roms
+            projected["roms"] = self._project_committed_rows(
+                raw_roms, committed_action, app_id, target_id, launch_options
+            )
         return all(current.get(key) == projected.get(key) for key in keys)
+
+    @staticmethod
+    def _project_committed_rows(
+        raw_roms: list[Any],
+        committed_action: str,
+        app_id: int,
+        target_id: int | None,
+        launch_options: str | None,
+    ) -> list[Any]:
+        """Replay an already-committed Steam action onto the sealed rows.
+
+        The database has moved on by exactly that action, so comparing against
+        the sealed rows verbatim would report drift the run itself caused.
+        """
+        roms = [dict(row) if isinstance(row, dict) else row for row in raw_roms]
+        for row in roms:
+            if not isinstance(row, dict):
+                continue
+            if row.get("shortcut_app_id") == app_id:
+                row["shortcut_app_id"] = None
+            if committed_action == "repoint_shortcut" and row.get("rom_id") == target_id:
+                row["shortcut_app_id"] = app_id
+                row["applied_launch_options"] = launch_options
+        return roms
 
     def seal(
         self,
@@ -247,6 +264,46 @@ class RecoveryCoordinator:
         return lines or ["No local playtime was recorded for these games."]
 
     @staticmethod
+    def _playtime_entry_lines(entry: dict[str, Any], names: dict[int, str] | None) -> list[str]:
+        """Write out one ROM's recorded playtime field by field, machine-readable."""
+        raw_state = entry.get("state")
+        state: dict[str, object] = raw_state if isinstance(raw_state, dict) else {}
+        pending_sessions = state.get("pending_sessions")
+        pending_count = len(pending_sessions) if isinstance(pending_sessions, dict) else 0
+        rom_id = entry.get("rom_id")
+        named = (names or {}).get(rom_id) if isinstance(rom_id, int) else None
+        lines = [
+            f"ROM {rom_id}" + (f" — {named}" if named else ""),
+            f"  total_seconds: {state.get('total_seconds', 0)}",
+            f"  session_count: {state.get('session_count', 0)}",
+            f"  last_played: {state.get('last_played')}",
+            f"  last_session_duration_sec: {state.get('last_session_duration_sec')}",
+            f"  open_session_start: {state.get('last_session_start')}",
+            f"  open_session_monotonic: {state.get('last_session_start_monotonic')}",
+            f"  pending_sessions: {pending_count}",
+        ]
+        if isinstance(pending_sessions, dict):
+            lines.extend(RecoveryCoordinator._pending_session_lines(pending_sessions))
+        return lines
+
+    @staticmethod
+    def _pending_session_lines(pending_sessions: dict[Any, Any]) -> list[str]:
+        """Write out every session recorded locally that RomM never accepted."""
+        lines: list[str] = []
+        for start_time, raw_session in sorted(pending_sessions.items()):
+            session = raw_session if isinstance(raw_session, dict) else {}
+            lines.extend(
+                [
+                    f"    start_time: {start_time}",
+                    f"      device_id: {session.get('device_id')}",
+                    f"      end_time: {session.get('end_time')}",
+                    f"      duration_ms: {session.get('duration_ms')}",
+                    f"      attempts: {session.get('attempts')}",
+                ]
+            )
+        return lines
+
+    @staticmethod
     def _playtime_text(snapshot: dict[str, object], names: dict[int, str] | None = None) -> str:
         lines = ["Local playtime snapshot", ""]
         entries = snapshot.get("playtime")
@@ -256,36 +313,7 @@ class RecoveryCoordinator:
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
-            raw_state = entry.get("state")
-            state: dict[str, object] = raw_state if isinstance(raw_state, dict) else {}
-            pending_sessions = state.get("pending_sessions")
-            pending_count = len(pending_sessions) if isinstance(pending_sessions, dict) else 0
-            rom_id = entry.get("rom_id")
-            named = (names or {}).get(rom_id) if isinstance(rom_id, int) else None
-            lines.extend(
-                [
-                    f"ROM {rom_id}" + (f" — {named}" if named else ""),
-                    f"  total_seconds: {state.get('total_seconds', 0)}",
-                    f"  session_count: {state.get('session_count', 0)}",
-                    f"  last_played: {state.get('last_played')}",
-                    f"  last_session_duration_sec: {state.get('last_session_duration_sec')}",
-                    f"  open_session_start: {state.get('last_session_start')}",
-                    f"  open_session_monotonic: {state.get('last_session_start_monotonic')}",
-                    f"  pending_sessions: {pending_count}",
-                ]
-            )
-            if isinstance(pending_sessions, dict):
-                for start_time, raw_session in sorted(pending_sessions.items()):
-                    session = raw_session if isinstance(raw_session, dict) else {}
-                    lines.extend(
-                        [
-                            f"    start_time: {start_time}",
-                            f"      device_id: {session.get('device_id')}",
-                            f"      end_time: {session.get('end_time')}",
-                            f"      duration_ms: {session.get('duration_ms')}",
-                            f"      attempts: {session.get('attempts')}",
-                        ]
-                    )
+            lines.extend(RecoveryCoordinator._playtime_entry_lines(entry, names))
         steam = snapshot.get("steam")
         if isinstance(steam, dict):
             lines.extend(

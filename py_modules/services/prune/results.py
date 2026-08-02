@@ -45,6 +45,29 @@ class MutationLedger:
         )
 
 
+@dataclass(frozen=True)
+class GroupOutcome:
+    """What one group's cleanup did, beyond the status it ended in.
+
+    Every field is optional because most outcomes are a refusal that changed
+    nothing, and a field reaches the completion frame only when it happened.
+    """
+
+    removed_rom_ids: list[int] | None = None
+    app_id: int | None = None
+    removed_app_id: int | None = None
+    bundle_path: str | None = None
+    committed_action: str | None = None
+    mutations: list[str] | None = None
+    ambiguous_mutations: list[str] | None = None
+    warnings: list[str] | None = None
+    action_ambiguous: bool = False
+    target_rom_id: int | None = None
+
+
+_NOTHING_COMMITTED = GroupOutcome()
+
+
 def _removed_count(results: list[dict[str, Any]]) -> int:
     """How many rows the run removed, counting each group's own tally."""
     return sum(int(result.get("removed_count", len(result.get("removed_rom_ids", [])))) for result in results)
@@ -235,15 +258,17 @@ class PruneResultReporter:
             "partial",
             reason,
             message,
-            app_id=ledger.app_id,
-            removed_app_id=removed_app_id,
-            bundle_path=ledger.bundle_path,
-            committed_action=ledger.committed_action,
-            mutations=ledger.mutations,
-            ambiguous_mutations=ledger.ambiguous_mutations,
-            warnings=warnings,
-            action_ambiguous=ledger.action_ambiguous,
-            target_rom_id=ledger.target_rom_id,
+            GroupOutcome(
+                app_id=ledger.app_id,
+                removed_app_id=removed_app_id,
+                bundle_path=ledger.bundle_path,
+                committed_action=ledger.committed_action,
+                mutations=ledger.mutations,
+                ambiguous_mutations=ledger.ambiguous_mutations,
+                warnings=warnings,
+                action_ambiguous=ledger.action_ambiguous,
+                target_rom_id=ledger.target_rom_id,
+            ),
         )
 
     def ledger_or_guard_result(
@@ -271,8 +296,7 @@ class PruneResultReporter:
             "skipped",
             guard[0],
             guard[1],
-            bundle_path=handle.bundle_path if handle else None,
-            warnings=warnings,
+            GroupOutcome(bundle_path=handle.bundle_path if handle else None, warnings=warnings),
         )
 
     def fault_result(self, ledger: MutationLedger, rows: list[Rom], error: BaseException) -> dict[str, Any]:
@@ -286,18 +310,10 @@ class PruneResultReporter:
         status: str,
         reason: str | None,
         message: object,
-        *,
-        removed_rom_ids: list[int] | None = None,
-        app_id: int | None = None,
-        removed_app_id: int | None = None,
-        bundle_path: str | None = None,
-        committed_action: str | None = None,
-        mutations: list[str] | None = None,
-        ambiguous_mutations: list[str] | None = None,
-        warnings: list[str] | None = None,
-        action_ambiguous: bool = False,
-        target_rom_id: int | None = None,
+        outcome: GroupOutcome = _NOTHING_COMMITTED,
     ) -> dict[str, Any]:
+        removed_rom_ids = outcome.removed_rom_ids
+        warnings = outcome.warnings
         raw_group_id = rows[0].sibling_group_key or f"rom:{rows[0].rom_id}"
         all_rom_ids = [row.rom_id for row in rows]
         bounded_removed = (removed_rom_ids or [])[:_COMPLETION_IDS_PER_GROUP]
@@ -328,19 +344,22 @@ class PruneResultReporter:
             result["removed_rom_ids"] = bounded_removed
             result["removed_count"] = len(removed_rom_ids)
             result["removed_rom_ids_truncated"] = len(removed_rom_ids) > _COMPLETION_IDS_PER_GROUP
-        if app_id is not None:
-            result["app_id"] = app_id
-        if removed_app_id is not None:
-            result["removed_app_id"] = removed_app_id
-        if bundle_path is not None:
+        if outcome.app_id is not None:
+            result["app_id"] = outcome.app_id
+        if outcome.removed_app_id is not None:
+            result["removed_app_id"] = outcome.removed_app_id
+        if outcome.bundle_path is not None:
+            bundle_path = outcome.bundle_path
             result["bundle_path"] = bundle_path[:_COMPLETION_PATH_CHARS]
             result["bundle_path_truncated"] = len(bundle_path) > _COMPLETION_PATH_CHARS
-        if committed_action is not None:
-            result["committed_action"] = committed_action
-        if mutations:
-            result["mutations"] = [str(item)[:_COMPLETION_REASON_CHARS] for item in mutations]
-        if ambiguous_mutations:
-            result["ambiguous_mutations"] = [str(item)[:_COMPLETION_REASON_CHARS] for item in ambiguous_mutations]
+        if outcome.committed_action is not None:
+            result["committed_action"] = outcome.committed_action
+        if outcome.mutations:
+            result["mutations"] = [str(item)[:_COMPLETION_REASON_CHARS] for item in outcome.mutations]
+        if outcome.ambiguous_mutations:
+            result["ambiguous_mutations"] = [
+                str(item)[:_COMPLETION_REASON_CHARS] for item in outcome.ambiguous_mutations
+            ]
         if warnings:
             bounded_warnings = [
                 str(item)[:_COMPLETION_WARNING_CHARS] for item in warnings[:_COMPLETION_WARNINGS_PER_GROUP]
@@ -351,8 +370,8 @@ class PruneResultReporter:
             result["warnings_truncated"] = any(
                 len(str(item)) > _COMPLETION_WARNING_CHARS for item in warnings[:_COMPLETION_WARNINGS_PER_GROUP]
             )
-        if action_ambiguous:
+        if outcome.action_ambiguous:
             result["action_ambiguous"] = True
-        if target_rom_id is not None:
-            result["target_rom_id"] = target_rom_id
+        if outcome.target_rom_id is not None:
+            result["target_rom_id"] = outcome.target_rom_id
         return result

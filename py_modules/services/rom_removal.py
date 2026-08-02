@@ -83,20 +83,26 @@ class RomRemovalService:
                 raise ValueError(f"Refusing to delete path outside roms directory: {rom_dir}")
             if self._rom_file_store.exists(rom_dir) and not self._rom_file_store.is_dir(rom_dir):
                 raise ValueError(f"Expected installed ROM directory, found another file type: {rom_dir}")
-            claim = claims.get(rom_dir) if claims is not None else None
-            if claim is None:
-                claim = self._rom_file_store.claim_source(rom_dir, roms_base)
-            return self._rom_file_store.remove_claimed(rom_dir, roms_base, claim)
+            return self._remove_under_claim(rom_dir, roms_base, claims)
         if file_path:
             if not is_safe_rom_path(file_path, roms_base):
                 raise ValueError(f"Refusing to delete path outside roms directory: {file_path}")
             if self._rom_file_store.is_dir(file_path):
                 raise ValueError(f"Expected installed ROM file, found a directory: {file_path}")
-            claim = claims.get(file_path) if claims is not None else None
-            if claim is None:
-                claim = self._rom_file_store.claim_source(file_path, roms_base)
-            return self._rom_file_store.remove_claimed(file_path, roms_base, claim)
+            return self._remove_under_claim(file_path, roms_base, claims)
         return {"success": True, "changed": False, "ambiguous": False, "message": "No installed path recorded"}
+
+    def _remove_under_claim(self, path: str, roms_base: str, claims: dict[str, SourceClaim] | None) -> MutationOutcome:
+        """Remove one already-guarded path under the claim that authorizes it.
+
+        A run that sealed the claim earlier hands it in, so the removal is
+        authorized by what the preview proved; anything else claims the source
+        here and is authorized by that.
+        """
+        claim = claims.get(path) if claims is not None else None
+        if claim is None:
+            claim = self._rom_file_store.claim_source(path, roms_base)
+        return self._rom_file_store.remove_claimed(path, roms_base, claim)
 
     def delete_rom_files(self, rom_id: int, claims: dict[str, SourceClaim] | None = None) -> dict[str, Any]:
         """Delete only installed content, leaving every database row untouched."""

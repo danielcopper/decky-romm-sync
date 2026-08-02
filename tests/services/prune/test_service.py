@@ -26,6 +26,7 @@ from domain.version_metadata import VersionMetadata
 from lib.errors import OperationAbortedError, RommConnectionError, RommNotFoundError
 from services.prune import PruneService, PruneServiceConfig
 from services.prune._models import cancellation_state
+from services.prune.results import GroupOutcome
 
 if TYPE_CHECKING:
     from models.prune import MutationOutcome, RecoveryArtifact, SourceClaim, SteamRecoverySnapshot
@@ -1617,7 +1618,7 @@ def test_one_large_group_result_is_explicitly_bounded(harness):
         "removed",
         None,
         "x" * 2000,
-        removed_rom_ids=list(range(1, 61)),
+        GroupOutcome(removed_rom_ids=list(range(1, 61))),
     )
     assert len(result["rom_ids"]) == 50
     assert result["rom_count"] == 60
