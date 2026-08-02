@@ -34,7 +34,7 @@ import {
 import { getMigrationState, setMigrationStatus } from "./migrationStore";
 import { reportServerReachable } from "./connectionState";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
-import { getAppIdRomIdMapSnapshot, getActiveSessionRomId } from "./sessionManager";
+import { getAppIdRomIdMapSnapshot, isSessionActive } from "./sessionManager";
 import { isAppRunning } from "./runningApps";
 import { runLaunchGate, markLaunchSkipped, consumeLaunchSkip } from "./launchGate";
 import type { GateVerdict, LaunchGateOps, PreLaunchSyncOutcome } from "./launchGate";
@@ -303,9 +303,8 @@ export function registerLaunchInterceptor(): void {
       // "already running" anyway, so the cancel+re-sync is pure damage. Skip the
       // whole funnel when this appId is our live session OR any Steam running-app
       // source reports it running; Steam surfaces its own "already running" popup.
-      const activeRomId = getActiveSessionRomId();
-      const activeAppRomId = getAppIdRomIdMapSnapshot()[String(appId)];
-      if ((activeRomId !== null && activeAppRomId === activeRomId) || isAppRunning(appId)) {
+      const pressedRomId = getAppIdRomIdMapSnapshot()[String(appId)];
+      if ((pressedRomId !== undefined && isSessionActive(pressedRomId)) || isAppRunning(appId)) {
         logInfo(`Launch interceptor: appId=${appId} already running — skipping pre-launch sync`);
         return;
       }

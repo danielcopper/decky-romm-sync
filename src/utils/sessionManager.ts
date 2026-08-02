@@ -31,7 +31,7 @@ import { delay } from "./pacedOps";
 // matched against it; a second RomM game starting displaces the first. Turning
 // the slot into a per-rom map is a deliberate non-goal, not an oversight: it
 // would ripple into the breadcrumb, both adoption branches, and every
-// `getActiveSessionRomId()` consumer — including the launch gate's already-running
+// `isSessionActive()` consumer — including the launch gate's already-running
 // guard, which is save-safety machinery. Concurrent RomM games are rare, and
 // scoping the stop to its own app already removes the dangerous behaviour
 // (finalizing the wrong session, post-exit save sync against a running game).
@@ -77,14 +77,15 @@ export function getAppIdRomIdMapSnapshot(): Record<string, number> {
 }
 
 /**
- * The romId of the session this manager currently tracks as live, or `null` when
- * none is open. The launch interceptor reads it synchronously to skip its
- * cancel-then-gate funnel for a Play press on an already-running game (#1148
- * round 2) — re-syncing mid-session would upload the save while the emulator
- * holds the file open, and Steam blocks the relaunch as "already running" anyway.
+ * Does this manager currently track a live session for `romId`? Read
+ * synchronously by the launch interceptor, to skip its cancel-then-gate funnel
+ * for a Play press on an already-running game (#1148 round 2) — re-syncing
+ * mid-session would upload the save while the emulator holds the file open, and
+ * Steam blocks the relaunch as "already running" anyway — and by the Play
+ * button, to seed and self-heal its Resume overlay.
  */
-export function getActiveSessionRomId(): number | null {
-  return activeSession?.romId ?? null;
+export function isSessionActive(romId: number): boolean {
+  return activeSession?.romId === romId;
 }
 
 async function refreshAppIdMap(): Promise<void> {

@@ -63,7 +63,7 @@ vi.mock("../utils/migrationStore", () => ({
 // CustomPlayButton is the only in-graph importer of either module, so a full mock
 // exposing just the guard's two functions is safe.
 vi.mock("../utils/sessionManager", () => ({
-  getActiveSessionRomId: vi.fn(() => null),
+  isSessionActive: vi.fn(() => false),
 }));
 vi.mock("../utils/runningApps", () => ({
   isAppRunning: vi.fn(() => false),
@@ -91,7 +91,7 @@ import { setRommConnectionState, reportServerReachable, getRommConnectionState }
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { markLaunchSkipped, consumeLaunchSkip } from "../utils/launchGate";
 import { getMigrationState } from "../utils/migrationStore";
-import { getActiveSessionRomId } from "../utils/sessionManager";
+import { isSessionActive } from "../utils/sessionManager";
 import { isAppRunning } from "../utils/runningApps";
 import { showOfflineDriftModal } from "../components/OfflineDriftModal";
 import { showFallbackLaunchModal } from "../components/FallbackLaunchModal";
@@ -738,7 +738,7 @@ describe("CustomPlayButton — already-running guard (#1148 round 2)", () => {
     vi.mocked(getCachedGameDetail).mockReset();
     vi.mocked(toaster.toast).mockReset();
     // Guard defaults: no live session, nothing running (overridden per test).
-    vi.mocked(getActiveSessionRomId).mockReturnValue(null);
+    vi.mocked(isSessionActive).mockReturnValue(false);
     vi.mocked(isAppRunning).mockReturnValue(false);
     // Gate predecessors so the NORMAL path can reach preLaunchSync when the guard
     // is inert; the guard tests assert these are never touched.
@@ -771,7 +771,7 @@ describe("CustomPlayButton — already-running guard (#1148 round 2)", () => {
     const playBtn = await findByText("Play");
     // The session starts after render, before the click — the render→click race
     // the handlePlay guard exists to catch.
-    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    vi.mocked(isSessionActive).mockReturnValue(true);
     await act(async () => {
       playBtn.click();
     });
@@ -1914,7 +1914,7 @@ describe("CustomPlayButton — pre-launch relaunch re-confirm (#1150)", () => {
 // (SetRunningApp + NavigateToRunningApp) — Steam's own gamescope "Resume Game"
 // path, NOT the pre-launch sync funnel and NOT the desktop-only RaiseWindowForGame
 // (which silently no-ops in Game Mode). Detection is reactive: seeded at mount from
-// getActiveSessionRomId()/isAppRunning and flipped live by the romm_session_changed
+// isSessionActive(romId)/isAppRunning and flipped live by the romm_session_changed
 // DOM event. The #1148/#1308 already-running guards stay intact as backstops.
 // ---------------------------------------------------------------------------
 describe("CustomPlayButton — state-aware Resume (#1313)", () => {
@@ -1926,7 +1926,7 @@ describe("CustomPlayButton — state-aware Resume (#1313)", () => {
     vi.mocked(getCachedGameDetail).mockReset();
     vi.mocked(toaster.toast).mockReset();
     // Detection defaults: not running (overridden per test).
-    vi.mocked(getActiveSessionRomId).mockReturnValue(null);
+    vi.mocked(isSessionActive).mockReturnValue(false);
     vi.mocked(isAppRunning).mockReturnValue(false);
     // Gate predecessors so the self-heal fall-through can reach the full funnel.
     vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "default" });
@@ -1962,7 +1962,7 @@ describe("CustomPlayButton — state-aware Resume (#1313)", () => {
   });
 
   it("renders Resume (not Play) and foregrounds via SteamUIStore when this rom is the live session — no gate/sync/RunGame", async () => {
-    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    vi.mocked(isSessionActive).mockReturnValue(true);
 
     const { findByText, queryByText } = render(<CustomPlayButton appId={100} />);
 
@@ -1986,7 +1986,7 @@ describe("CustomPlayButton — state-aware Resume (#1313)", () => {
   });
 
   it("renders Resume and foregrounds when a running-app source reports the appId — no gate/sync/RunGame", async () => {
-    vi.mocked(getActiveSessionRomId).mockReturnValue(null);
+    vi.mocked(isSessionActive).mockReturnValue(false);
     vi.mocked(isAppRunning).mockReturnValue(true);
 
     const { findByText, queryByText } = render(<CustomPlayButton appId={100} />);
@@ -2029,7 +2029,7 @@ describe("CustomPlayButton — state-aware Resume (#1313)", () => {
   });
 
   it("flips back to Play when the session-stop event for this rom arrives", async () => {
-    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    vi.mocked(isSessionActive).mockReturnValue(true);
 
     const { findByText, queryByText } = render(<CustomPlayButton appId={100} />);
     await findByText("Resume");
@@ -2115,7 +2115,7 @@ describe("CustomPlayButton — state-aware Resume (#1313)", () => {
 
   it("self-heals a stale overlay: falls through to the launch funnel when nothing is actually running", async () => {
     // Seed Resume via the session-start EVENT while the live sources stay false
-    // (getActiveSessionRomId null, isAppRunning false), so the liveness gate in
+    // (isSessionActive false, isAppRunning false), so the liveness gate in
     // handleResumeGame sees nothing running and falls through to handlePlay — the
     // already-running guard there is inert, so the FULL funnel runs (self-heal).
     const { findByText } = render(<CustomPlayButton appId={100} />);
@@ -2141,7 +2141,7 @@ describe("CustomPlayButton — state-aware Resume (#1313)", () => {
   });
 
   it("falls back to Navigation.Navigate('/apprunning') when NavigateToRunningApp is missing (API drift)", async () => {
-    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    vi.mocked(isSessionActive).mockReturnValue(true);
     // Older SteamUI: SetRunningApp present, NavigateToRunningApp absent.
     vi.stubGlobal("SteamUIStore", { SetRunningApp: setRunningApp });
 
@@ -2161,7 +2161,7 @@ describe("CustomPlayButton — state-aware Resume (#1313)", () => {
   });
 
   it("falls back to Navigation.Navigate('/apprunning') when SteamUIStore.SetRunningApp throws (present-but-broken store)", async () => {
-    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    vi.mocked(isSessionActive).mockReturnValue(true);
     // Present store, but SetRunningApp is a throwing getter/method — the exact
     // present-but-broken failure class this whole PR was born from. Without the
     // guard the async fn rejects, detach() swallows it, and the route fallback is
@@ -2193,7 +2193,7 @@ describe("CustomPlayButton — state-aware Resume (#1313)", () => {
   });
 
   it("navigates directly when SteamUIStore is absent (extreme API drift)", async () => {
-    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    vi.mocked(isSessionActive).mockReturnValue(true);
     // No SteamUIStore at all — the last-resort route nav still foregrounds.
     vi.stubGlobal("SteamUIStore", undefined);
 
@@ -2225,7 +2225,7 @@ describe("CustomPlayButton — Stop Game", () => {
     vi.mocked(showContextMenu).mockReset();
     vi.mocked(toaster.toast).mockReset();
     // Live session for appId 100 / rom 42 → the running overlay renders.
-    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    vi.mocked(isSessionActive).mockReturnValue(true);
     vi.mocked(isAppRunning).mockReturnValue(true);
     vi.mocked(getCachedGameDetail).mockResolvedValue({
       found: true,
@@ -2379,7 +2379,7 @@ describe("CustomPlayButton — Stop Game", () => {
   it("self-heals a stale overlay without confirming or calling the backend", async () => {
     // Overlay seeded by the session-start EVENT while the live sources say
     // nothing is running — the same stale-overlay case handleResumeGame heals.
-    vi.mocked(getActiveSessionRomId).mockReturnValue(null);
+    vi.mocked(isSessionActive).mockReturnValue(false);
     vi.mocked(isAppRunning).mockReturnValue(false);
 
     const utils = render(<CustomPlayButton appId={100} />);
@@ -2591,7 +2591,7 @@ describe("CustomPlayButton — Stop Game", () => {
   it("resets a stuck Launching state on a successful stop", async () => {
     // The session-start path sets isRunning but leaves state === "launching";
     // clearing only the overlay would expose a stale "Launching..." label.
-    vi.mocked(getActiveSessionRomId).mockReturnValue(null);
+    vi.mocked(isSessionActive).mockReturnValue(false);
     vi.mocked(isAppRunning).mockReturnValue(false);
     vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "default" });
     vi.mocked(backend.checkCoreChange).mockResolvedValue({ changed: false });
@@ -2613,7 +2613,7 @@ describe("CustomPlayButton — Stop Game", () => {
     });
     // The launch left the state at "launching"; the session-start event raises
     // the overlay on top of it, and the live sources now report the session.
-    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    vi.mocked(isSessionActive).mockReturnValue(true);
     vi.mocked(isAppRunning).mockReturnValue(true);
     act(() => {
       globalThis.dispatchEvent(
@@ -2643,7 +2643,7 @@ describe("CustomPlayButton — version switch (#1298)", () => {
     vi.mocked(getCachedGameDetail).mockReset();
     // Prior describes leave the running-overlay stubs live (Resume button) —
     // reset to "nothing running" so the button lands on Play/Download.
-    vi.mocked(getActiveSessionRomId).mockReturnValue(null);
+    vi.mocked(isSessionActive).mockReturnValue(false);
     vi.mocked(isAppRunning).mockReturnValue(false);
   });
 

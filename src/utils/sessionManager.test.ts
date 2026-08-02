@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { toaster } from "@decky/api";
 import * as backend from "../api/backend";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
-import { initSessionManager, destroySessionManager, ADOPTION_POLL_MAX_MS } from "./sessionManager";
+import { initSessionManager, destroySessionManager, isSessionActive, ADOPTION_POLL_MAX_MS } from "./sessionManager";
 
 // sessionManager talks to the backend callable surface and the migration
 // stores. Mock both so the test observes only what `handleGameStop` forwards
@@ -230,6 +230,58 @@ describe("sessionManager lifecycle forwarding", () => {
     } finally {
       globalThis.removeEventListener("romm_data_changed", listener);
     }
+  });
+});
+
+// The liveness predicate both launch surfaces read synchronously — the Play
+// button to seed and self-heal its Resume overlay, the interceptor to skip its
+// cancel-then-gate funnel for an already-running game. It must discriminate by
+// rom: answering "yes" for a rom that is not the live one would skip the
+// pre-launch sync for a game that is not running.
+describe("sessionManager isSessionActive", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    localStorage.clear();
+    stubLifecycleSteamClient();
+    stubNothingRunning();
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({
+      [String(APP_ID)]: ROM_ID,
+      [String(OTHER_APP_ID)]: OTHER_ROM_ID,
+    });
+    vi.mocked(backend.finalizeGameSession).mockResolvedValue({ ...IDLE_FINALIZE });
+  });
+
+  afterEach(() => {
+    destroySessionManager();
+    vi.useRealTimers();
+  });
+
+  it("is false with no session open", async () => {
+    await initDrainingAdoptionPoll();
+
+    expect(isSessionActive(ROM_ID)).toBe(false);
+  });
+
+  it("is true for the live rom and false for any other", async () => {
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+
+    await startApp(lifetime, APP_ID);
+
+    expect(isSessionActive(ROM_ID)).toBe(true);
+    expect(isSessionActive(OTHER_ROM_ID)).toBe(false);
+  });
+
+  it("goes false again once the session's own app stops", async () => {
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+
+    await startApp(lifetime, APP_ID);
+    await stopApp(lifetime, APP_ID);
+
+    expect(isSessionActive(ROM_ID)).toBe(false);
   });
 });
 
