@@ -140,6 +140,11 @@ class TestLatestEndTime:
         ]
         assert latest_end_time(sessions) == "2026-07-04T12:00:00Z"
 
+    def test_offsets_are_compared_as_instants_not_as_text(self):
+        # 13:00+05:00 is 08:00Z — earlier than 10:00Z, but the larger string.
+        sessions = [{"end_time": "2026-07-04T13:00:00+05:00"}, {"end_time": "2026-07-04T10:00:00Z"}]
+        assert latest_end_time(sessions) == "2026-07-04T10:00:00Z"
+
     def test_returns_the_servers_string_verbatim(self):
         # The newest instant is the +02:00 row; its original string is kept so the
         # stored last_played carries the server's format, not a normalized one.
