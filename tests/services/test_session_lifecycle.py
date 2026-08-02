@@ -437,6 +437,68 @@ class TestFinalizeSyncToasts:
         assert result.sync.offline is False
         assert result.sync.failure_toast != "Failed to sync saves after exit"
 
+    def test_save_sync_busy_renders_the_busy_toast_not_the_offline_one(self, event_loop, logger):
+        """#1625: a skipped run behind a busy device gate says so, never "Server offline".
+
+        The gate wait is local — the post-exit run never contacted the server —
+        so the body names the real cause and the offline flag stays down.
+        """
+        post = FakePostExitSync(
+            payload={
+                "success": False,
+                "reason": "sync_busy",
+                "message": "Another save sync is still running",
+                "synced": 0,
+            }
+        )
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.sync.failure_toast == "Another save sync was still running — saves will sync next time"
+        assert result.sync.offline is False
+        # Neither the offline copy nor the generic fallback.
+        assert result.sync.failure_toast != "Server offline — saves will sync next time"
+        assert result.sync.failure_toast != "Failed to sync saves after exit"
+
+    def test_unreachable_server_still_renders_the_offline_toast(self, event_loop, logger):
+        """#1625 regression guard: the busy and offline bodies must not re-collapse.
+
+        A genuinely unreachable server (``offline=True`` +
+        ``reason=server_unreachable``) keeps the offline copy — the honest
+        busy copy is reserved for the local gate wait.
+        """
+        post = FakePostExitSync(
+            payload={
+                "success": False,
+                "offline": True,
+                "reason": "server_unreachable",
+                "message": "Server offline",
+                "synced": 0,
+            }
+        )
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.sync.offline is True
+        assert result.sync.failure_toast == "Server offline — saves will sync next time"
+        assert result.sync.failure_toast != "Another save sync was still running — saves will sync next time"
+
     def test_failure_without_message_falls_back_to_generic_body(self, event_loop, logger):
         """A failure with no ``message`` key falls back to the generic failure body."""
         post = FakePostExitSync(payload={"success": False, "synced": 0})

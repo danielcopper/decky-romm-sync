@@ -3,7 +3,7 @@
 One in-flight save-sync run per device: a second trigger waits (queue
 semantics) for the in-flight run to finish rather than running alongside
 it, and the wait is bounded so a stuck run never traps the launch path —
-on expiry the caller gets a timeout it can turn into an offline/busy
+on expiry the caller gets a timeout it can turn into its busy
 fallthrough. The :class:`asyncio.Lock` IS the serializer/queue; this
 module owns only the bounded-acquire discipline around it.
 
@@ -44,7 +44,8 @@ class SaveSyncTimeoutError(Exception):
     """Raised when a save-sync run cannot acquire the device gate in time.
 
     Signals that another run is in flight and the bounded wait elapsed — the
-    caller turns this into its trigger-specific offline/busy fallthrough.
+    caller turns this into its trigger-specific busy fallthrough. It is a
+    LOCAL scheduling outcome: no caller may report it as a server verdict.
     """
 
 

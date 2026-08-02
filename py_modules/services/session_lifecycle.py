@@ -39,12 +39,19 @@ if TYPE_CHECKING:
 _TOAST_BODY_OFFLINE = "Server offline — saves will sync next time"
 _TOAST_BODY_FAILED = "Failed to sync saves after exit"
 _TOAST_BODY_SYNC_DISABLED = "Save sync is disabled for this device on the RomM server"
+_TOAST_BODY_SYNC_BUSY = "Another save sync was still running — saves will sync next time"
 
 # Reason slug the saves engine returns when RomM's per-device sync-disabled switch
 # stops the post-exit run (#1489). Mirrored here as a literal — a service must not
 # import another service's module — kept in step with the saves engine's
 # ``DEVICE_SYNC_DISABLED_REASON``.
 _DEVICE_SYNC_DISABLED_REASON = "device_sync_disabled"
+
+# Reason slug the saves engine returns when the device-wide save-sync gate was
+# still held by another run at the end of the bounded wait, so this post-exit run
+# was skipped (#1625). Mirrored as a literal for the same reason as above; kept in
+# step with the saves engine's ``SAVE_SYNC_BUSY_REASON``.
+_SAVE_SYNC_BUSY_REASON = "sync_busy"
 
 
 @dataclass(frozen=True)
@@ -136,11 +143,15 @@ def _render_failure_toast(
     The directional success toast is presentation the frontend renders from the
     transfer counts (``saveSyncToastBody``), so a successful run returns ``None``
     here. Offline wins over the generic failure body; the per-device
-    sync-disabled policy stop (#1489) gets its own dedicated copy; a classified
-    ``message`` (e.g. "Authentication failed — sign in again", #971) names the
-    cause instead of the generic fallback, keeping the post-exit toast consistent
-    with the pre-launch fallback modal. The #239 content-dir benign skip is
-    suppressed by its caller before this is reached.
+    sync-disabled policy stop (#1489) and the busy-gate skip (#1625) each get
+    their own dedicated copy, keyed on the reason; a classified ``message``
+    (e.g. "Authentication failed — sign in again", #971) names the cause instead
+    of the generic fallback, keeping the post-exit toast consistent with the
+    pre-launch fallback modal. The #239 content-dir benign skip is suppressed by
+    its caller before this is reached.
+
+    A busy gate is a LOCAL wait, never a server verdict — it must not reach the
+    offline body, which would send the user debugging a reachable server.
     """
     if offline:
         return _TOAST_BODY_OFFLINE
@@ -148,6 +159,8 @@ def _render_failure_toast(
         return None
     if reason == _DEVICE_SYNC_DISABLED_REASON:
         return _TOAST_BODY_SYNC_DISABLED
+    if reason == _SAVE_SYNC_BUSY_REASON:
+        return _TOAST_BODY_SYNC_BUSY
     return message or _TOAST_BODY_FAILED
 
 

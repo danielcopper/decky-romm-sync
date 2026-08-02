@@ -1553,7 +1553,8 @@ class TestSaveSyncDeviceGate:
     Only one save-sync run is in flight at a time per device. A second
     trigger queues behind the in-flight one; the wait is bounded, so a stuck
     run never traps the launch path — on expiry each trigger returns its
-    own offline/busy fallthrough. The gate sits OUTSIDE the per-ROM lock.
+    own busy fallthrough, never a server verdict (#1625). The gate sits
+    OUTSIDE the per-ROM lock.
     """
 
     async def _assert_timeout_fallthrough(self, svc, monkeypatch, const_name, trigger, expected):
@@ -1575,7 +1576,10 @@ class TestSaveSyncDeviceGate:
         assert engine._device_gate.is_in_flight() is False
 
     @pytest.mark.asyncio
-    async def test_pre_launch_sync_times_out_to_offline(self, tmp_path, monkeypatch):
+    async def test_pre_launch_sync_times_out_to_busy_keeping_the_offline_steer(self, tmp_path, monkeypatch):
+        """#1625: the reason names the local wait; the launch path's ``offline``
+        steer is kept, so a busy gate still routes the launch to its drift
+        warning instead of trapping the Play button."""
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
@@ -1589,8 +1593,8 @@ class TestSaveSyncDeviceGate:
             lambda: svc.pre_launch_sync(42),
             {
                 "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE.value,
-                "message": "Save-sync busy — treating as offline",
+                "reason": "sync_busy",
+                "message": "Another save sync is still running",
                 "synced": 0,
                 "offline": True,
             },
@@ -1599,7 +1603,10 @@ class TestSaveSyncDeviceGate:
         assert not any(c[0] in ("download_save", "list_saves", "heartbeat") for c in fake.call_log)
 
     @pytest.mark.asyncio
-    async def test_post_exit_sync_times_out_to_offline(self, tmp_path, monkeypatch):
+    async def test_post_exit_sync_times_out_to_busy_not_offline(self, tmp_path, monkeypatch):
+        """#1625: a busy gate is a local wait — no ``offline`` flag and no
+        reachability reason, so the session-end toast stops claiming the server
+        is down while it is plainly reachable."""
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
@@ -1613,13 +1620,45 @@ class TestSaveSyncDeviceGate:
             lambda: svc.post_exit_sync(42),
             {
                 "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE.value,
-                "message": "Save-sync busy — skipping post-exit sync",
+                "reason": "sync_busy",
+                "message": "Another save sync is still running",
                 "synced": 0,
-                "offline": True,
             },
         )
         assert not any(c[0] in ("upload_save", "heartbeat") for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_busy_gate_and_unreachable_server_stay_distinguishable(self, tmp_path, monkeypatch):
+        """#1625 regression guard: the two post-exit skips must not re-collapse.
+
+        A busy gate and an unreachable server are different events with
+        different user remedies, so their reason slugs and their ``offline``
+        flags must differ. Collapsing the busy reason back onto
+        ``SERVER_UNREACHABLE`` fails here.
+        """
+        busy_svc, _ = make_service(tmp_path / "busy")
+        busy_svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(busy_svc, "test-device")
+        monkeypatch.setattr("services.saves.sync_engine.engine.POST_EXIT_GATE_TIMEOUT", 0.01)
+        gate = busy_svc._sync_engine._device_gate
+        await gate._lock.acquire()
+        try:
+            busy = await busy_svc.post_exit_sync(42)
+        finally:
+            gate._lock.release()
+
+        offline_svc, offline_fake = make_service(tmp_path / "offline")
+        offline_svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(offline_svc, "test-device")
+        _install_rom(offline_svc, tmp_path / "offline")
+        offline_fake.heartbeat_raises = RommConnectionError("Connection refused")
+        offline = await offline_svc.post_exit_sync(42)
+
+        assert busy["reason"] != offline["reason"]
+        assert busy["reason"] != ErrorCode.SERVER_UNREACHABLE.value
+        assert "offline" not in busy
+        assert offline["reason"] == ErrorCode.SERVER_UNREACHABLE.value
+        assert offline["offline"] is True
 
     @pytest.mark.asyncio
     async def test_sync_rom_saves_times_out_to_busy(self, tmp_path, monkeypatch):
@@ -1637,7 +1676,7 @@ class TestSaveSyncDeviceGate:
             {
                 "success": False,
                 "reason": "sync_busy",
-                "message": "Another save-sync run is in progress",
+                "message": "Another save sync is still running",
                 "synced": 0,
                 "errors": [],
                 "conflicts": [],
@@ -1662,7 +1701,7 @@ class TestSaveSyncDeviceGate:
             {
                 "success": False,
                 "reason": "sync_busy",
-                "message": "Another save-sync run is in progress",
+                "message": "Another save sync is still running",
                 "synced": 0,
                 "conflicts": 0,
                 "conflicts_list": [],

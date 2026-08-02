@@ -196,6 +196,11 @@ sync" message. When more than one save file fails in the same sync, the toast sh
 a "(+N more)" count so the message stays short. If you see an authentication message, re-enter your server URL and sign
 in again in the plugin settings.
 
+One more thing "Server offline" is never used for: syncs run one at a time on your Deck, so if you exit two games within
+moments of each other, the second one's sync waits for the first. If that wait runs long the second sync is skipped, and
+it says so — "Another save sync was still running — saves will sync next time". Your local save is untouched and is
+picked up by the next launch or by a manual **Sync All Saves Now**; nothing about your server is wrong.
+
 After a failed sync the game-detail save panel reflects the honest state right away: a file whose upload failed shows a
 yellow **Local changes** badge (not a green "synced"), and its "Last synced" line keeps the time of the last
 _successful_ sync — a green checkmark appears only once a sync actually succeeds. A separate "Checked" line shows when
