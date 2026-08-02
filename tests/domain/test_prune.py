@@ -1,10 +1,38 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
-from domain.prune import group_rows, recovery_bundle_id, sanitize_package_name, selected_prune_ids
+from domain.prune import (
+    _READABLE_KINDS,
+    group_rows,
+    recovery_bundle_id,
+    render_bundle_readme,
+    sanitize_package_name,
+    selected_prune_ids,
+)
 from domain.rom import Rom
 from domain.version_metadata import VersionMetadata
+
+if TYPE_CHECKING:
+    from domain.prune import BundleReadmeContext
+
+# Every kind a producer stamps onto a RecoveryArtifact, by producer site:
+# PruneSaveSupport (services/saves/prune_support.py) emits current_save and
+# save_backup, RecoveryCoordinator (services/prune/recovery.py) installed_rom,
+# SteamRecoveryAdapter (adapters/steam_recovery.py) steam_grid and steam_input,
+# PruneArtifactAdapter (adapters/prune_artifacts.py) the three cache kinds.
+_PRODUCED_KINDS = {
+    "current_save",
+    "save_backup",
+    "installed_rom",
+    "steam_grid",
+    "steam_input",
+    "cover_cache",
+    "cover_validator",
+    "sgdb_cache",
+}
 
 
 def _rom(rom_id: int, group: str | None) -> Rom:
@@ -17,6 +45,23 @@ def _rom(rom_id: int, group: str | None) -> Rom:
         synced_at="now",
         version=VersionMetadata(sibling_group_key=group),
     )
+
+
+def _readme_context() -> BundleReadmeContext:
+    return {
+        "bundle_id": "TestGame_2026-07-24_abc123",
+        "created_at": "2026-07-24T12:00:00+00:00",
+        "games": [
+            {
+                "rom_id": 7,
+                "name": "Test Game",
+                "fs_name": "Test Game.chd",
+                "platform_slug": "dc",
+                "role": "removed by this cleanup",
+            }
+        ],
+        "playtime_lines": ["Test Game (ROM 7): 894 seconds — 0h 14m 54s"],
+    }
 
 
 def test_package_name_sanitization_and_fallback():
@@ -52,6 +97,26 @@ def test_bundle_name_cannot_escape_or_hide_its_directory():
     assert recovery_bundle_id("../../etc/passwd", "2026-07-24", "abcd").startswith("etc-passwd")
     assert recovery_bundle_id("...hidden", "2026-07-24", "abcd").startswith("hidden")
     assert len(recovery_bundle_id("N" * 500, "2026-07-24", "abcd")) < 100
+
+
+def test_readable_kinds_match_the_kinds_the_producers_emit():
+    # A produced kind with no entry renders as its raw slug; an entry nothing
+    # produces outlived its producer. Both drift silently, because the README is
+    # only ever read months later by a person restoring by hand.
+    assert set(_READABLE_KINDS) == _PRODUCED_KINDS
+
+
+def test_readme_names_every_artifact_kind_in_plain_words():
+    records = [
+        {"destination": f"files/{index:06d}", "source_path": f"/sources/file{index}", "size": 1024, "kind": kind}
+        for index, kind in enumerate(sorted(_PRODUCED_KINDS), start=1)
+    ]
+
+    readme = render_bundle_readme(_readme_context(), records)
+
+    for kind in sorted(_PRODUCED_KINDS):
+        assert _READABLE_KINDS[kind] in readme
+        assert kind not in readme
 
 
 def test_null_group_keys_are_independent_singletons():

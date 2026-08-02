@@ -44,16 +44,18 @@ _SAFE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$", re.ASCII)
 _SAFE_SHORT_ID = re.compile(r"^[A-Za-z0-9]{4,32}$", re.ASCII)
 _MAX_BUNDLE_NAME_CHARS = 64
 
-# Artifact kinds as the machine layer names them, in the words a person reading
-# the folder would use.
+# Every artifact kind the recovery producers emit, in the words a person reading
+# the folder would use. An unmapped kind degrades to its raw slug in the README,
+# so a new producer kind must land here in the same change.
 _READABLE_KINDS = {
     "current_save": "current save file",
-    "save_history": "previous save (.romm-backup history)",
+    "save_backup": "previous save (.romm-backup history)",
     "installed_rom": "downloaded ROM content",
-    "artwork_cache": "cached artwork",
     "steam_grid": "Steam grid artwork",
     "steam_input": "Steam Input configuration",
-    "plugin_artifact": "plugin cache file",
+    "cover_cache": "cached cover image from RomM",
+    "cover_validator": "cover freshness sidecar (ETag / Last-Modified)",
+    "sgdb_cache": "cached SteamGridDB artwork",
 }
 
 
