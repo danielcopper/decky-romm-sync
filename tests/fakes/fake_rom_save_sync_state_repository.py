@@ -35,6 +35,12 @@ class FakeRomSaveSyncStateRepository:
         self.save_count += 1
         self._states[rom_id] = copy.deepcopy(state)
 
+    def delete(self, rom_id: int) -> None:
+        # Not on RomSaveSyncStateRepository — SQLite reaps this row through the
+        # roms cascade. FakeUnitOfWork has no FKs, so it models that cascade by
+        # calling this after deleting the parent.
+        self._states.pop(rom_id, None)
+
     def iter_all(self) -> Iterator[tuple[int, RomSaveSyncState]]:
         return iter([(rom_id, copy.deepcopy(state)) for rom_id, state in self._states.items()])
 

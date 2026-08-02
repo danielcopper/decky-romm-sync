@@ -225,22 +225,26 @@ class TestFakeRomMetadataRepository:
 
 
 class TestFakePlaytimeRepository:
-    def test_round_trip_iter(self):
+    def test_round_trip_iter_delete(self):
         repo = FakePlaytimeRepository()
         repo.save(1, Playtime(total_seconds=10))
         assert repo.get(1) is not None
         assert repo.get(2) is None
         assert dict(repo.iter_all())[1].total_seconds == 10
+        repo.delete(1)
+        assert repo.get(1) is None
 
 
 class TestFakeRomSaveSyncStateRepository:
-    def test_round_trip_iter(self):
+    def test_round_trip_iter_delete(self):
         repo = FakeRomSaveSyncStateRepository()
         state = RomSaveSyncState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")})
         repo.save(1, state)
         assert repo.get(1) == state
         assert repo.get(2) is None
         assert set(dict(repo.iter_all())) == {1}
+        repo.delete(1)
+        assert repo.get(1) is None
 
     def test_get_returns_deep_copy_so_nested_list_mutations_dont_leak(self):
         repo = FakeRomSaveSyncStateRepository()

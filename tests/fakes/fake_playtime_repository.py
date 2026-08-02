@@ -27,6 +27,12 @@ class FakePlaytimeRepository:
         self.save_count += 1
         self._playtime[rom_id] = copy.deepcopy(playtime)
 
+    def delete(self, rom_id: int) -> None:
+        # Not on PlaytimeRepository — SQLite reaps this row through the roms
+        # cascade. FakeUnitOfWork has no FKs, so it models that cascade by
+        # calling this after deleting the parent.
+        self._playtime.pop(rom_id, None)
+
     def iter_all(self) -> Iterator[tuple[int, Playtime]]:
         return iter([(rom_id, copy.deepcopy(playtime)) for rom_id, playtime in self._playtime.items()])
 
