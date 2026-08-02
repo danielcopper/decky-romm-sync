@@ -247,8 +247,9 @@ remain descriptor-anchored through copy, metadata application, hashing, cross-di
 both-parent fsync. Failure cleanup uses the same mount-aware descriptor-relative remover; if cleanup cannot prove a safe
 tree, it leaves and reports the full anchored staging path instead of recursively entering uncertain data. Adapter
 outcomes carry actual and durability-ambiguous changes into the mutation ledger even when a later item or parent fsync
-fails. The final SQLite delete is one short UoW that revalidates complete row/binding state, invalidates intersecting
-collection stamps, and clears platform stamps only for fully vanished games.
+fails. The final SQLite delete is one short UoW that revalidates complete row/binding state and invalidates intersecting
+collection stamps; platform stamps are deliberately preserved
+([removed-game-cleanup.md](removed-game-cleanup.md#discovery)).
 
 Frontend Steam events use a claim/complete protocol. A claim checks the run, token, discriminant, appId, target, exact
 single-binding group, and current binding before the frontend rechecks the live `rom-launcher` executable and mutates
