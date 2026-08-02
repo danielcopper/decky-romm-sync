@@ -45,6 +45,40 @@ class MutationLedger:
         )
 
 
+def _removed_count(results: list[dict[str, Any]]) -> int:
+    """How many rows the run removed, counting each group's own tally."""
+    return sum(int(result.get("removed_count", len(result.get("removed_rom_ids", [])))) for result in results)
+
+
+def _is_partial(results: list[dict[str, Any]], removed_count: int, *, failed: bool) -> bool:
+    """Whether the run changed something without finishing what it set out to do.
+
+    A group reporting ``partial`` makes the run partial outright; so does any
+    committed change in a run that also failed, was cancelled, or skipped a
+    group — reporting that as a clean success would hide the mutation.
+    """
+    if any(result["status"] == "partial" for result in results):
+        return True
+    committed = bool(removed_count) or any(
+        result.get("committed_action")
+        or result.get("action_ambiguous")
+        or result.get("mutations")
+        or result.get("ambiguous_mutations")
+        for result in results
+    )
+    return committed and failed
+
+
+def _needs_publication(result: dict[str, Any]) -> bool:
+    """Whether a group's confirmed repoint leaves Steam needing a publish."""
+    return (
+        result.get("committed_action") == "repoint_shortcut"
+        and not result.get("action_ambiguous")
+        and type(result.get("app_id")) is int
+        and type(result.get("target_rom_id")) is int
+    )
+
+
 @dataclass(frozen=True)
 class PruneResultReporterConfig:
     """Event dependency for one cleanup run's published frames."""
@@ -102,27 +136,9 @@ class PruneResultReporter:
         message: str | None,
     ) -> None:
         failures = [result for result in results if result["status"] in {"failed", "skipped", "partial"}]
-        removed_count = sum(
-            int(result.get("removed_count", len(result.get("removed_rom_ids", [])))) for result in results
-        )
-        committed = bool(removed_count) or any(
-            result.get("committed_action")
-            or result.get("action_ambiguous")
-            or result.get("mutations")
-            or result.get("ambiguous_mutations")
-            for result in results
-        )
-        run_failed = cancelled or reason is not None
-        partial = any(result["status"] == "partial" for result in results) or bool(
-            committed and (failures or run_failed)
-        )
-        publication_required = any(
-            result.get("committed_action") == "repoint_shortcut"
-            and not result.get("action_ambiguous")
-            and type(result.get("app_id")) is int
-            and type(result.get("target_rom_id")) is int
-            for result in results
-        )
+        removed_count = _removed_count(results)
+        partial = _is_partial(results, removed_count, failed=bool(failures) or cancelled or reason is not None)
+        publication_required = any(_needs_publication(result) for result in results)
         bounded_reason = reason[:_COMPLETION_REASON_CHARS] if reason is not None else None
         bounded_message = message[:_COMPLETION_TEXT_CHARS] if message is not None else None
         chunks: list[list[dict[str, Any]]] = []

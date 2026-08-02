@@ -20,6 +20,20 @@ class PruneRegistryConfig:
     uow_factory: UnitOfWorkFactory
 
 
+def _bindings_unchanged(expected_rows: list[Rom], current_group: list[Rom]) -> bool:
+    """Whether the group still carries exactly the shortcut bindings it was read with.
+
+    More than one binding is refused outright: the run's whole model is that a
+    group owns at most one shortcut, and a second one appearing means something
+    else has been editing the registry.
+    """
+    expected_app_ids = {row.shortcut_app_id for row in expected_rows if row.shortcut_app_id is not None}
+    current_app_ids = {row.shortcut_app_id for row in current_group if row.shortcut_app_id is not None}
+    if current_app_ids != expected_app_ids:
+        return False
+    return sum(row.shortcut_app_id is not None for row in current_group) <= 1
+
+
 class PruneRegistry:
     """Own the short SQLite reads and final delete for a cleanup run."""
 
@@ -142,26 +156,14 @@ class PruneRegistry:
         expected = {row.rom_id: row for row in expected_rows}
         if not delete_ids <= expected.keys():
             return False
-        group_key = expected_rows[0].sibling_group_key
-        if group_key is not None:
-            current_group = list(uow.roms.iter_by_group_key(group_key))
-            if {row.rom_id for row in current_group} != expected.keys():
-                return False
-        else:
-            singleton = uow.roms.get(expected_rows[0].rom_id)
-            if singleton is None:
-                return False
-            current_group = [singleton]
-        expected_app_ids = {row.shortcut_app_id for row in expected_rows if row.shortcut_app_id is not None}
-        current_app_ids = {row.shortcut_app_id for row in current_group if row.shortcut_app_id is not None}
-        if current_app_ids != expected_app_ids or sum(row.shortcut_app_id is not None for row in current_group) > 1:
+        current_group = PruneRegistry._current_group(uow, expected_rows[0])
+        if current_group is None or {row.rom_id for row in current_group} != expected.keys():
             return False
-        current_rows: list[Rom] = []
-        for rom_id in delete_ids:
-            row = uow.roms.get(rom_id)
-            if row is None or row != expected[rom_id]:
-                return False
-            current_rows.append(row)
+        if not _bindings_unchanged(expected_rows, current_group):
+            return False
+        current_rows = PruneRegistry._unchanged_rows(uow, delete_ids, expected)
+        if current_rows is None:
+            return False
         bound_app_ids = {row.shortcut_app_id for row in current_rows if row.shortcut_app_id is not None}
         if target_id is not None:
             target = uow.roms.get(target_id)
@@ -169,3 +171,22 @@ class PruneRegistry:
         if fully_dead:
             return bound_app_ids == ({app_id} if app_id is not None else set())
         return not bound_app_ids
+
+    @staticmethod
+    def _current_group(uow: UnitOfWork, anchor: Rom) -> list[Rom] | None:
+        """The group as it stands now, read the same way it was grouped originally."""
+        if anchor.sibling_group_key is not None:
+            return list(uow.roms.iter_by_group_key(anchor.sibling_group_key))
+        singleton = uow.roms.get(anchor.rom_id)
+        return None if singleton is None else [singleton]
+
+    @staticmethod
+    def _unchanged_rows(uow: UnitOfWork, delete_ids: set[int], expected: dict[int, Rom]) -> list[Rom] | None:
+        """Every row to be deleted, re-read, or ``None`` if any of them moved."""
+        current_rows: list[Rom] = []
+        for rom_id in delete_ids:
+            row = uow.roms.get(rom_id)
+            if row is None or row != expected[rom_id]:
+                return None
+            current_rows.append(row)
+        return current_rows

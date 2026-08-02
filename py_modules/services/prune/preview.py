@@ -16,7 +16,9 @@ _PREVIEW_WARNING_CHARS = 1024
 _PREVIEW_BUDGET_BYTES = 48 * 1024
 
 if TYPE_CHECKING:
-    from services.protocols import RecoveryBundleStore, RetroDeckPaths, UnitOfWorkFactory
+    from domain.rom import Rom
+    from domain.rom_install import RomInstall
+    from services.protocols import RecoveryBundleStore, RetroDeckPaths, UnitOfWork, UnitOfWorkFactory
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,55 @@ class PreviewBuilderConfig:
     settings: dict[str, Any]
 
 
+def _explicit_candidate(uow: UnitOfWork, explicit_rom_id: int | None) -> set[int]:
+    """The single row an explicit per-ROM cleanup names, if it still exists."""
+    if explicit_rom_id is None or not uow.roms.get(explicit_rom_id):
+        return set()
+    return {explicit_rom_id}
+
+
+def _discovered_candidates(uow: UnitOfWork, rows: list[Rom]) -> set[int]:
+    """Every row absent from its own platform's last completed fetch."""
+    platform_rows: dict[str, list[Rom]] = {}
+    for row in rows:
+        platform_rows.setdefault(row.platform_slug, []).append(row)
+    candidate_ids: set[int] = set()
+    for slug, candidates in platform_rows.items():
+        candidate_ids.update(prune_candidate_ids(candidates, uow.platform_sync_state.get(slug)))
+    return candidate_ids
+
+
+def _preview_entry(
+    row: Rom,
+    *,
+    group_id: str,
+    group_size: int,
+    bound_count: int,
+    candidate: bool,
+    install: RomInstall | None,
+    size: int | None,
+    warning: str | None,
+) -> dict[str, Any]:
+    """One disclosure row, with every server-supplied string bounded for the wire."""
+    return {
+        "rom_id": row.rom_id,
+        "name": row.name[:_PREVIEW_TEXT_CHARS],
+        "name_truncated": len(row.name) > _PREVIEW_TEXT_CHARS,
+        "fs_name": row.fs_name[:_PREVIEW_TEXT_CHARS],
+        "fs_name_truncated": len(row.fs_name) > _PREVIEW_TEXT_CHARS,
+        "platform_slug": row.platform_slug,
+        "group_id": group_id[:_PREVIEW_TEXT_CHARS],
+        "group_id_truncated": len(group_id) > _PREVIEW_TEXT_CHARS,
+        "group_size": group_size,
+        "bound_count": bound_count,
+        "candidate": candidate,
+        "installed": install is not None,
+        "installed_bytes": size,
+        "warning": warning[:_PREVIEW_WARNING_CHARS] if warning is not None else None,
+        "warning_truncated": warning is not None and len(warning) > _PREVIEW_WARNING_CHARS,
+    }
+
+
 class PreviewBuilder:
     """Build immutable candidate snapshots without contacting RomM."""
 
@@ -38,21 +89,22 @@ class PreviewBuilder:
         self._retrodeck_paths = config.retrodeck_paths
         self._settings = config.settings
 
+    def _installed_size(self, install: RomInstall | None, roms_root: str) -> tuple[int | None, str | None]:
+        """Measured bytes of a row's installed content, or why they could not be read."""
+        if install is None:
+            return None, None
+        try:
+            return self._recovery_store.measure_path(install.rom_dir or install.file_path, roms_root), None
+        except (OSError, ValueError) as exc:
+            return None, str(exc)
+
     def build(self, preview_id: str, scope: Literal["bulk", "rom"], explicit_rom_id: int | None) -> PrunePreview:
         with self._uow_factory() as uow:
             rows = list(uow.roms.iter_all())
             installs = {install.rom_id: install for install in uow.rom_installs.iter_all()}
-            if scope == "rom":
-                candidate_ids = (
-                    {explicit_rom_id} if explicit_rom_id is not None and uow.roms.get(explicit_rom_id) else set()
-                )
-            else:
-                candidate_ids: set[int] = set()
-                platform_rows: dict[str, list[Any]] = {}
-                for row in rows:
-                    platform_rows.setdefault(row.platform_slug, []).append(row)
-                for slug, candidates in platform_rows.items():
-                    candidate_ids.update(prune_candidate_ids(candidates, uow.platform_sync_state.get(slug)))
+            candidate_ids = (
+                _explicit_candidate(uow, explicit_rom_id) if scope == "rom" else _discovered_candidates(uow, rows)
+            )
 
             relevant_groups = [
                 group for group in group_rows(rows) if candidate_ids.intersection(r.rom_id for r in group)
@@ -62,39 +114,22 @@ class PreviewBuilder:
         roms_root = self._retrodeck_paths.roms_path()
         entries: list[dict[str, Any]] = []
         for group in relevant_groups:
-            group_id = group[0].sibling_group_key or f"rom:{group[0].rom_id}"
+            group_id = str(group[0].sibling_group_key or f"rom:{group[0].rom_id}")
             bound_count = sum(row.shortcut_app_id is not None for row in group)
             for row in group:
                 install = installs.get(row.rom_id)
-                size: int | None = None
-                warning: str | None = None
-                if install is not None:
-                    source = install.rom_dir or install.file_path
-                    try:
-                        size = self._recovery_store.measure_path(source, roms_root)
-                    except (OSError, ValueError) as exc:
-                        warning = str(exc)
-                raw_name = row.name
-                raw_fs_name = row.fs_name
-                raw_group_id = str(group_id)
+                size, warning = self._installed_size(install, roms_root)
                 entries.append(
-                    {
-                        "rom_id": row.rom_id,
-                        "name": raw_name[:_PREVIEW_TEXT_CHARS],
-                        "name_truncated": len(raw_name) > _PREVIEW_TEXT_CHARS,
-                        "fs_name": raw_fs_name[:_PREVIEW_TEXT_CHARS],
-                        "fs_name_truncated": len(raw_fs_name) > _PREVIEW_TEXT_CHARS,
-                        "platform_slug": row.platform_slug,
-                        "group_id": raw_group_id[:_PREVIEW_TEXT_CHARS],
-                        "group_id_truncated": len(raw_group_id) > _PREVIEW_TEXT_CHARS,
-                        "group_size": len(group),
-                        "bound_count": bound_count,
-                        "candidate": row.rom_id in candidate_ids,
-                        "installed": install is not None,
-                        "installed_bytes": size,
-                        "warning": warning[:_PREVIEW_WARNING_CHARS] if warning is not None else None,
-                        "warning_truncated": warning is not None and len(warning) > _PREVIEW_WARNING_CHARS,
-                    }
+                    _preview_entry(
+                        row,
+                        group_id=group_id,
+                        group_size=len(group),
+                        bound_count=bound_count,
+                        candidate=row.rom_id in candidate_ids,
+                        install=install,
+                        size=size,
+                        warning=warning,
+                    )
                 )
         # Candidates first, so the paged list opens on the rows a run can actually
         # remove and the retained siblings read as the subordinate disclosure they
