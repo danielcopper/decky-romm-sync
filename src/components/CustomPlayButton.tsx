@@ -38,6 +38,7 @@ import {
   stopRunningGame,
 } from "../api/backend";
 import { getRommConnectionState, onRommConnectionChange, reportServerReachable } from "../utils/connectionState";
+import { isBoundVanished, onBoundVanishedChange } from "../utils/vanishedBinding";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getEventTarget } from "../utils/events";
 import { applyLaunchGateSetupOutcome, resolveSaveSetupOutcome } from "../utils/saveSetup";
@@ -124,6 +125,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   const [actionPending, setActionPending] = useState(false);
   const [dlProgress, setDlProgress] = useState<DownloadProgress | null>(null);
   const [isOffline, setIsOffline] = useState(getRommConnectionState() === "offline");
+  // Positive-knowledge only: set solely when RomM 404s the bound id, so an
+  // unreachable server never reaches this state (#1570 F20).
+  const [boundVanished, setBoundVanishedState] = useState(() => isBoundVanished(appId));
   // Running overlay (#1313): when the game is already running, the button shows
   // Resume (top precedence over install/conflict/download) and brings the game to
   // front instead of running the launch funnel. Seeded synchronously at init and
@@ -378,6 +382,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     // recovery probe reconnects, so Download/Play re-enable without a page
     // re-entry (the device symptom of Download staying blocked after reconnect).
     const unsubscribeConnection = onRommConnectionChange((s) => setIsOffline(s === "offline"));
+    const unsubscribeVanished = onBoundVanishedChange(() => setBoundVanishedState(isBoundVanished(appId)));
 
     // Session start/stop (#1313) — flip the running overlay so the button shows
     // Resume for the live session and returns to Play when it ends. Matches on
@@ -403,6 +408,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       globalThis.removeEventListener("romm_rom_uninstalled", onUninstall);
       globalThis.removeEventListener("romm_data_changed", onDataChanged);
       unsubscribeConnection();
+      unsubscribeVanished();
       globalThis.removeEventListener("romm_session_changed", onSessionChanged);
     };
   }, [appId]);
@@ -1243,6 +1249,12 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     // section; idle/starting keeps the full pill radius. The pulse animation
     // lives on the container (romm-dl-active-group) so it spans the whole
     // control — button + action — as one cohesive pulsing group.
+    // Only the idle Download action is blocked: a vanished bound ROM cannot be
+    // fetched, so offering it can only produce the not_found toast. The button
+    // stays visible rather than disappearing, matching how the picker shows a
+    // vanished version dimmed instead of hiding it. An in-flight download keeps
+    // its controls — that is a different action and out of scope.
+    const downloadBlockedByVanished = boundVanished && !downloading && !paused && !extracting;
     const downloadBtn = (
       <DialogButton
         // romm-btn-download-idle carries the blue hover/focus highlight, which is
@@ -1260,7 +1272,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         onClick={() => {
           detach(handleDownload());
         }}
-        disabled={actionPending || isOffline}
+        disabled={actionPending || isOffline || downloadBlockedByVanished}
       >
         {/* Progress fill bar — kept at its frozen width while paused. */}
         {downloading && (

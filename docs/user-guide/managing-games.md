@@ -59,6 +59,10 @@ separate label _"No longer available on RomM"_. Its **active** and **Downloaded*
 what the shortcut and local files still refer to, but it never receives the **Default** badge. If the shortcut is still
 active on that unavailable id, choose any live alternative in the same list to recover the game.
 
+When the version the shortcut is bound to is the one confirmed gone, the **Download** button is greyed out as well — it
+stays visible, like the version row, but downloading it could only ever fail. Pick a live version in the version list,
+or remove the local data, to get the button back.
+
 This availability check is fresh each time the version list loads and is not saved in the plugin database. Only a 404
 for that exact ROM id establishes that it is gone. Timeouts, sign-in/permission errors, server errors, and malformed
 responses fail open: the plugin does not disable a version merely because it could not get a trustworthy answer. A

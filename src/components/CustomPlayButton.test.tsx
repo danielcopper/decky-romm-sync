@@ -98,6 +98,7 @@ import { showFallbackLaunchModal } from "../components/FallbackLaunchModal";
 import { handleConflicts } from "../components/SyncConflictModal";
 import { showStopGameModal } from "../components/StopGameModal";
 import { mountPruneLeasePlugin, releaseAllPruneLeases } from "../utils/pruneLease";
+import { resetBoundVanished, setBoundVanished } from "../utils/vanishedBinding";
 import type { SyncConflict, SaveStatus } from "../types";
 
 function mockCachedDetail(overrides: Partial<CachedGameDetail> = {}): void {
@@ -114,6 +115,63 @@ function mockCachedDetail(overrides: Partial<CachedGameDetail> = {}): void {
 // persists across tests) so the default render path is "connected" (#1345).
 beforeEach(() => {
   setRommConnectionState("connected");
+  resetBoundVanished();
+});
+
+describe("CustomPlayButton — vanished bound ROM (#1570 F20)", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(backend.startDownload).mockReset();
+  });
+
+  const downloadButton = (container: HTMLElement): HTMLButtonElement =>
+    container.querySelector<HTMLButtonElement>("button.romm-btn-download")!;
+
+  it("disables Download once RomM confirms the bound ROM is gone", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const { findByText, container } = render(<CustomPlayButton appId={100} />);
+    await findByText("Download");
+    expect(downloadButton(container).disabled).toBe(false);
+
+    act(() => setBoundVanished(100, true));
+
+    // The download can only ever come back not_found, so stop offering it.
+    expect(downloadButton(container).disabled).toBe(true);
+  });
+
+  it("starts no download when a vanished button is activated anyway", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const { findByText, container } = render(<CustomPlayButton appId={100} />);
+    await findByText("Download");
+    act(() => setBoundVanished(100, true));
+
+    downloadButton(container).click();
+    await act(async () => Promise.resolve());
+
+    expect(backend.startDownload).not.toHaveBeenCalled();
+  });
+
+  it("keeps Download enabled when the server could not be reached", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const { findByText, container } = render(<CustomPlayButton appId={100} />);
+    await findByText("Download");
+
+    // A failed query reports bound_vanished:false — uncertainty must never
+    // disable the download. Fail-open is the whole feature's rule.
+    act(() => setBoundVanished(100, false));
+
+    expect(downloadButton(container).disabled).toBe(false);
+  });
+
+  it("does not disable a different game's Download", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const { findByText, container } = render(<CustomPlayButton appId={100} />);
+    await findByText("Download");
+
+    act(() => setBoundVanished(999, true));
+
+    expect(downloadButton(container).disabled).toBe(false);
+  });
 });
 
 describe("CustomPlayButton — download_failed listener", () => {

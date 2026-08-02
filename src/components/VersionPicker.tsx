@@ -51,6 +51,7 @@ import { reportServerReachable } from "../utils/connectionState";
 import { applyCommittedVersionSwitch } from "../utils/versionSwitchApplication";
 import { showUnsyncedSavesModal } from "./UnsyncedSavesSwitchModal";
 import { getEventTarget } from "../utils/events";
+import { setBoundVanished } from "../utils/vanishedBinding";
 import { detach } from "../utils/detach";
 import {
   capturePruneLeaseAdmission,
@@ -179,6 +180,11 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         // direction into the global store. A single/unbound group carries no
         // reachability signal.
         reportVersionListReachability(result);
+        // Publish the bound-id verdict for the play button, which sits beside
+        // this picker and cannot see its state. Only a positive `bound_vanished`
+        // is knowledge — a failed query reports false, so an offline session
+        // never disables the download (#1570 F20).
+        setBoundVanished(appId, result.bound_vanished);
         memberIdsRef.current = new Set((result.versions ?? []).map((v) => v.rom_id));
         setVersionList(result);
       } catch (e) {
