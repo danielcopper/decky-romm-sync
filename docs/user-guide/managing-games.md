@@ -163,14 +163,16 @@ to remove stays listed and disabled, with no trash icon.
 
 While a cleanup runs, the Danger Zone shows a progress bar under the entry point — the game being worked on, the phase
 in words (checking with RomM, backing up, backup complete, updating or removing the Steam shortcut, removing local data,
-done) and how many games are done — and the scan button stays unavailable, so you can close the dialog and still see
-what is happening. Both the dialog and the Danger Zone offer **Stop Cleanup**. It stops at the next safe moment: a
-backup still being written is abandoned and that game is left completely untouched, while a game whose removal has
-already begun finishes and reports what it changed. Backing up a large game can take minutes, so being able to walk away
-from one is the difference between stopping now and waiting it out. While the run winds down the button says
-**Stopping** so a second press is never needed. Nothing already done is undone — stopping is not an undo, and the report
-afterwards lists exactly what was committed. If a game's backup finished before the run stopped, the report says so and
-names the folder, so a recovery bundle that removed nothing is never a mystery.
+done) and which game of how many it is on — and the scan button stays unavailable, so you can close the dialog and still
+see what is happening. The bar itself fills with the games already finished, not the one in progress, so it reaches the
+end only when the run does: backing up a large game takes a while and reports nothing while it copies, and a full bar
+sitting over it would say the run was done when it was not. Both the dialog and the Danger Zone offer **Stop Cleanup**.
+It stops at the next safe moment: a backup still being written is abandoned and that game is left completely untouched,
+while a game whose removal has already begun finishes and reports what it changed. Backing up a large game can take
+minutes, so being able to walk away from one is the difference between stopping now and waiting it out. While the run
+winds down the button says **Stopping** so a second press is never needed. Nothing already done is undone — stopping is
+not an undo, and the report afterwards lists exactly what was committed. If a game's backup finished before the run
+stopped, the report says so and names the folder, so a recovery bundle that removed nothing is never a mystery.
 
 If Steam changes before local cleanup can finish, the report can show a **partial** group with the concrete committed
 action and failure message. A confirmed shortcut removal is reconciled to an unbound retained row; a committed repoint

@@ -893,8 +893,144 @@ describe("RemovedGamesCleanup", () => {
     // A stage slug is not a sentence — the bar and the phase have to be readable.
     expect(modal.container.textContent).toContain("Backing up — Removed Game");
     expect(modal.container.textContent).toContain("1 / 4");
-    expect(modal.container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("25");
+    // The first group is in flight, so nothing is behind the run yet.
+    expect(modal.container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("0");
     expect(modal.container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("false");
+  });
+
+  // The bar answers "how much of this run is behind me", so the group being
+  // worked on is not counted until a later frame moves past it. Filling by the
+  // RUNNING group put a one-group run at 100% from its first frame and parked a
+  // multi-minute content backup under a full bar.
+  it.each([
+    { current: 1, total: 2, fill: "0" },
+    { current: 2, total: 2, fill: "50" },
+    { current: 1, total: 1, fill: "0" },
+  ])("fills the bar with the groups already finished ($current of $total)", ({ current, total, fill }) => {
+    const section = render(createElement(RemovedGamesCleanupSection));
+    act(() => {
+      beginPrunePreview("preview-1");
+      beginPruneRun("run-1", "preview-1");
+      setPruneProgress({
+        run_id: "run-1",
+        preview_id: "preview-1",
+        current,
+        total,
+        stage: "creating_recovery",
+        rom_ids: [7],
+        name: "Removed Game",
+      });
+    });
+
+    expect(section.container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe(fill);
+    expect(section.container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("false");
+    // The caption keeps naming the group in flight — only the bar counts finished ones.
+    expect(section.container.textContent).toContain(`${current} / ${total}`);
+  });
+
+  it.each([
+    { current: 0, total: 2, fill: "0" },
+    { current: 5, total: 2, fill: "100" },
+  ])("keeps an out-of-order frame inside the bar ($current of $total)", ({ current, total, fill }) => {
+    const section = render(createElement(RemovedGamesCleanupSection));
+    act(() => {
+      beginPrunePreview("preview-1");
+      beginPruneRun("run-1", "preview-1");
+      setPruneProgress({
+        run_id: "run-1",
+        preview_id: "preview-1",
+        current,
+        total,
+        stage: "checking",
+        rom_ids: [7],
+        name: "Removed Game",
+      });
+    });
+
+    expect(section.container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe(fill);
+  });
+
+  it("fills the Danger Zone bar only when the run reaches its terminal frame", () => {
+    const section = render(createElement(RemovedGamesCleanupSection));
+    act(() => {
+      beginPrunePreview("preview-1");
+      beginPruneRun("run-1", "preview-1");
+      setPruneProgress({
+        run_id: "run-1",
+        preview_id: "preview-1",
+        current: 2,
+        total: 2,
+        stage: "removing",
+        rom_ids: [7],
+        name: "Removed Game",
+      });
+    });
+
+    expect(section.container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("50");
+
+    act(() => {
+      setPruneComplete({
+        success: true,
+        partial: false,
+        run_id: "run-1",
+        preview_id: "preview-1",
+        removed_rom_ids: [7],
+        affected_app_ids: [],
+        results: [],
+      });
+    });
+
+    // The run is over, so the bar is full — and the summary beside it says how
+    // it ended. A bar that only ever disappears never reports being finished.
+    expect(section.container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("100");
+    expect(section.container.textContent).toContain("1 removed");
+  });
+
+  it("fills the modal bar when the run reaches its terminal frame", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("Cleanup running..."));
+
+    act(() => {
+      setPruneComplete({
+        success: false,
+        partial: true,
+        run_id: "run-1",
+        preview_id: "preview-1",
+        reason: "cancelled",
+        message: "Cleanup was cancelled.",
+        removed_rom_ids: [],
+        affected_app_ids: [],
+        results: [],
+      });
+    });
+
+    // Full means the run has ended, not that it did everything — a cancelled
+    // run gets the same last frame, with its outcome spelled out next to it.
+    expect(modal.container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("100");
+    expect(modal.container.textContent).toContain("cancelled: Cleanup was cancelled.");
+  });
+
+  it("keeps the bar indeterminate while the run has no group total", () => {
+    const section = render(createElement(RemovedGamesCleanupSection));
+    act(() => {
+      beginPrunePreview("preview-1");
+      beginPruneRun("run-1", "preview-1");
+      setPruneProgress({
+        run_id: "run-1",
+        preview_id: "preview-1",
+        current: 0,
+        total: 0,
+        stage: "checking",
+        rom_ids: [],
+        name: "",
+      });
+    });
+
+    // Nothing to divide by: an empty bar would claim a run that has not started.
+    expect(section.container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("true");
+    expect(section.container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("undefined");
   });
 
   // Every stage services/prune/executor.py emits, from its emit_progress call

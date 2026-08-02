@@ -106,6 +106,20 @@ function stageLabel(stage: string): string {
   return STAGE_LABELS[stage] ?? stage.replace(/_/g, " ");
 }
 
+/**
+ * How full the bar is: the groups already behind the run, not the one in it.
+ *
+ * `current` names the group being worked on, so it is finished only once a later
+ * frame moves past it. Counting it as done filled a one-group run before its
+ * first byte moved, and a group publishes nothing during its longest phase — a
+ * multi-hundred-megabyte content backup — so the bar sat at full for the whole
+ * of it. Clamped: a frame that arrives late or out of order must not push the
+ * fill past either end.
+ */
+function finishedGroupsPercent(current: number, total: number): number {
+  return Math.min(100, Math.max(0, ((current - 1) / total) * 100));
+}
+
 /** Caption + bar for a running cleanup, shared by the modal and the Danger Zone. */
 const CleanupProgress: FC<{ progress: PruneProgress }> = ({ progress }) => (
   <div style={{ width: "100%" }}>
@@ -119,10 +133,19 @@ const CleanupProgress: FC<{ progress: PruneProgress }> = ({ progress }) => (
     </div>
     <ProgressBar
       indeterminate={progress.total <= 0}
-      {...(progress.total > 0 ? { nProgress: (progress.current / progress.total) * 100 } : {})}
+      {...(progress.total > 0 ? { nProgress: finishedGroupsPercent(progress.current, progress.total) } : {})}
     />
   </div>
 );
+
+/**
+ * The bar's last frame, rendered beside the run's summary.
+ *
+ * Full means the run is over, not that it succeeded — the summary next to it
+ * says how it ended. Without it the running bar, which stops one group short of
+ * full, would simply vanish when the terminal frame lands.
+ */
+const FinishedCleanupBar: FC = () => <ProgressBar nProgress={100} />;
 
 /** How many rows a group actually removed, however the frame reported it. */
 function removedInGroup(item: { removed_count?: number; removed_rom_ids?: number[] }): number {
@@ -635,6 +658,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
         )}
         {complete && (
           <div style={{ marginTop: "10px", color: complete.success ? "#8fd18b" : "#ffcc66" }}>
+            <FinishedCleanupBar />
             <div role="status" aria-live="polite">
               {complete.removed_count ?? complete.removed_rom_ids.length} removed;{" "}
               {complete.problem_count ??
@@ -834,19 +858,24 @@ export const RemovedGamesCleanupSection: FC = () => {
         </>
       )}
       {complete && (
-        <PanelSectionRow>
-          <Field
-            label={`${complete.removed_count ?? complete.removed_rom_ids.length} removed; ${complete.problem_count ?? complete.results.filter((item) => ["partial", "failed", "skipped"].includes(item.status)).length} skipped, partial, or failed`}
-            description={[
-              complete.message,
-              ...complete.results
-                .filter((item) => item.status !== "removed" || (item.warnings?.length ?? 0) > 0)
-                .flatMap((item) => [item.message, ...(item.warnings ?? []).map((warning) => `Warning: ${warning}`)]),
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          />
-        </PanelSectionRow>
+        <>
+          <PanelSectionRow>
+            <FinishedCleanupBar />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <Field
+              label={`${complete.removed_count ?? complete.removed_rom_ids.length} removed; ${complete.problem_count ?? complete.results.filter((item) => ["partial", "failed", "skipped"].includes(item.status)).length} skipped, partial, or failed`}
+              description={[
+                complete.message,
+                ...complete.results
+                  .filter((item) => item.status !== "removed" || (item.warnings?.length ?? 0) > 0)
+                  .flatMap((item) => [item.message, ...(item.warnings ?? []).map((warning) => `Warning: ${warning}`)]),
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            />
+          </PanelSectionRow>
+        </>
       )}
     </PanelSection>
   );
