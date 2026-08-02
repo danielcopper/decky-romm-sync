@@ -58,6 +58,35 @@ async def test_finalize_fully_suspended_session_counts_zero(harness):
     assert result["total_seconds"] == 0
 
 
+async def test_overlapping_sessions_each_fold_their_own_span(harness):
+    """Two ROMs played at once each record their own duration (#1624).
+
+    The open-session marker is a column on the per-ROM ``rom_playtime`` row, so
+    two ROMs hold independent markers and one session cannot displace or
+    truncate the other. The frontend's per-app session map rests entirely on
+    that independence: it opens a second marker while the first is still open,
+    and finalizes them in whichever order the games exit.
+
+    ROM 1 runs 0s→300s, ROM 2 runs 60s→360s. The starts and exits interleave, so
+    a single shared marker would surface as a wrong span on both.
+    """
+    seed_rom(harness, 1)
+    seed_rom(harness, 2)
+    harness.plugin.settings["save_sync_enabled"] = False
+
+    await harness.plugin.record_session_start(1)
+    harness.clock.advance(60)
+    await harness.plugin.record_session_start(2)  # ROM 1 is still open
+    harness.clock.advance(240)
+
+    first = await harness.plugin.finalize_game_session(1)  # ROM 2 is still open
+    harness.clock.advance(60)
+    second = await harness.plugin.finalize_game_session(2)
+
+    assert first["total_seconds"] == 300
+    assert second["total_seconds"] == 300
+
+
 async def test_finalize_no_active_session_leaves_total_none(harness):
     """No open session → playtime record fails → ``total_seconds`` is ``None``."""
     seed_rom(harness, 1)
