@@ -250,7 +250,7 @@ literal appears anywhere except its owning adapter (`adapters/persistence.py`); 
 keeps all settings writes in the single crash-safe owner.
 
 `mise run lint` (and CI) also runs `scripts/check_module_size.py`, the decomposition-threshold ratchet: no module in
-`services/` or `bootstrap/` may cross the ~700-line threshold, and the modules that were already over it when the gate
+`services/` or `bootstrap/` may cross the ~1000-LOC threshold, and the modules that were already over it when the gate
 landed are pinned at their exact size, so they cannot grow. The pin list lives in the script and only ever gets shorter
 — a module that drops back under the threshold has to leave it, and a module that banks 50+ lines of slack gets a
 non-fatal note asking for its ceiling to be lowered. `main.py` is deliberately out of scope: it grows with the callable

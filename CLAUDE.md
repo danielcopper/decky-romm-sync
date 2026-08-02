@@ -177,7 +177,7 @@ Format: **invariant** — tier — enforced by.
   same path** — check — `scripts/check_uow_seam_nesting.py`
 - **Services never call clocks / sleep / uuid / random directly (inject the Protocol)** — check —
   `scripts/check_cosmic_call_bans.sh`
-- **No module in `services/` or `bootstrap/` crosses the ~700-LOC decomposition threshold, and the ones already over it
+- **No module in `services/` or `bootstrap/` crosses the ~1000-LOC decomposition threshold, and the ones already over it
   may not grow** — check — `scripts/check_module_size.py` (the modules that predate the gate are grandfathered at their
   exact size; that list only ever gets shorter)
 - **Service-independence contract list stays complete** — check — `scripts/check_service_independence_contract.py`
