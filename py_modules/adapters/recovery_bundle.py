@@ -250,6 +250,9 @@ class RecoveryBundleAdapter:
 
     @classmethod
     def _read_beneath(cls, path: str, safe_root: str) -> bytes:
+        # cls dispatch bypasses instance-level monkeypatches of
+        # _open_regular_beneath — a test that must intercept every open has to
+        # patch the class, not the instance.
         fd = cls._open_regular_beneath(path, safe_root)
         try:
             os.lseek(fd, 0, os.SEEK_SET)
@@ -518,6 +521,9 @@ class RecoveryBundleAdapter:
         destination_name: str,
         should_abort: Callable[[], bool] | None = None,
     ) -> tuple[os.stat_result, str, SourceIdentity]:
+        # cls dispatch bypasses instance-level monkeypatches of
+        # _open_regular_beneath — a test that must intercept every open has to
+        # patch the class, not the instance.
         source_fd = cls._open_regular_beneath(source, safe_root)
         try:
             before = os.fstat(source_fd)
