@@ -254,9 +254,7 @@ describe("RemovedGamesCleanup", () => {
     const section = render(createElement(RemovedGamesCleanupSection));
     const button = section.getByRole("button", { name: "Clean Up Removed RomM Games" }) as HTMLButtonElement;
 
-    await act(async () => {
-      fireEvent.click(button);
-    });
+    fireEvent.click(button);
     await waitFor(() =>
       expect(toaster.toast).toHaveBeenCalledWith({
         title: "RomM Sync",

@@ -208,14 +208,11 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
 
     const onDataChanged = (e: Event) => {
       const detail = (e as CustomEvent<RommDataChangedDetail>).detail;
-      if (detail.type === "version_switched" && detail.app_id === appId) {
-        detach(load());
-      } else if (
+      const switched = detail.type === "version_switched" && detail.app_id === appId;
+      const pruned =
         detail.type === "rom_pruned" &&
-        (detail.app_ids.includes(appId) || detail.rom_ids.some((romId) => memberIdsRef.current.has(romId)))
-      ) {
-        detach(load());
-      }
+        (detail.app_ids.includes(appId) || detail.rom_ids.some((romId) => memberIdsRef.current.has(romId)));
+      if (switched || pruned) detach(load());
     };
     globalThis.addEventListener("romm_data_changed", onDataChanged);
 
@@ -362,6 +359,40 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   // always broadcasts version_switched, and the resulting list reload clears the
   // guard once the fresh list lands — so the trigger never re-enables against a
   // stale list.
+  /** Ask what to do about the saves the switch would strand, then do it. */
+  const resolveUnsyncedSaves = async (
+    result: SwitchVersionUnsyncedSaves,
+    target: VersionInfo,
+    admission: PruneLeaseAdmission,
+  ): Promise<void> => {
+    // The soft-block response carries a definitive reachability verdict (#1345).
+    reportServerReachable(result.server_reachable);
+    const choice = await showUnsyncedSavesModal({
+      versionName: result.unsynced_version_name,
+      serverReachable: result.server_reachable,
+    });
+    if (!isPruneLeaseAdmissionCurrent(admission)) return;
+    if (choice === "cancel") {
+      setSwitching(false);
+      return;
+    }
+    if (choice === "sync_and_switch") {
+      // syncThenSwitch owns the guard from here: it clears on abort and leaves
+      // it set on its own success (its reload clears it).
+      await syncThenSwitch(result.unsynced_rom_id, target, admission);
+      return;
+    }
+    // "Switch anyway" — the override skips the stranding gate; strand the
+    // saves on disk (they stay recoverable, they just won't sync until the
+    // user switches back).
+    const forced = await switchVersion(appId, target.rom_id, true);
+    if (forced.success) {
+      await applySwitchSuccess(forced, admission);
+    } else {
+      handleSwitchFailure(forced);
+    }
+  };
+
   const handleSwitch = async (target: VersionInfo): Promise<void> => {
     if (target.active || target.vanished) return;
     // A non-switchable row is a RomM sibling that lives in a different local group
@@ -377,32 +408,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         return;
       }
       if (result.reason === "unsynced_saves") {
-        // The soft-block response carries a definitive reachability verdict (#1345).
-        reportServerReachable(result.server_reachable);
-        const choice = await showUnsyncedSavesModal({
-          versionName: result.unsynced_version_name,
-          serverReachable: result.server_reachable,
-        });
-        if (!isPruneLeaseAdmissionCurrent(admission)) return;
-        if (choice === "cancel") {
-          setSwitching(false);
-          return;
-        }
-        if (choice === "sync_and_switch") {
-          // syncThenSwitch owns the guard from here: it clears on abort and leaves
-          // it set on its own success (its reload clears it).
-          await syncThenSwitch(result.unsynced_rom_id, target, admission);
-          return;
-        }
-        // "Switch anyway" — the override skips the stranding gate; strand the
-        // saves on disk (they stay recoverable, they just won't sync until the
-        // user switches back).
-        const forced = await switchVersion(appId, target.rom_id, true);
-        if (forced.success) {
-          await applySwitchSuccess(forced, admission);
-        } else {
-          handleSwitchFailure(forced);
-        }
+        await resolveUnsyncedSaves(result, target, admission);
         return;
       }
       // Keep the toast body short (Steam truncates it to one line) and put the

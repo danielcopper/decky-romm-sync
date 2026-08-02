@@ -192,6 +192,103 @@ function buildSyncCompleteToast(
   return { body };
 }
 
+const ROMM_COLLECTION_NAME = /^RomM: \[([^\]]+)\]/;
+const COLLECTION_HOST_SUFFIX = /\s\([^)]+\)$/;
+
+/** The platform a "RomM: <platform> (host)" collection is named after. */
+function platformOfCollection(displayName: string): string {
+  return displayName.slice(6).replace(COLLECTION_HOST_SUFFIX, "");
+}
+
+/** Whether a platform collection on this host no longer has a platform behind it. */
+function isStalePlatformCollection(displayName: string, suffix: string, activePlatforms: Set<string>): boolean {
+  if (!displayName.startsWith("RomM: ") || displayName.slice(6).startsWith("[")) return false;
+  if (!displayName.endsWith(suffix)) return false;
+  return !activePlatforms.has(platformOfCollection(displayName).toLowerCase());
+}
+
+/** Whether a "RomM: [name] (host)" collection on this host no longer has a RomM collection behind it. */
+function isStaleRomMCollection(displayName: string, suffix: string, activeNames: Set<string>): boolean {
+  if (!displayName.startsWith("RomM: [") || !displayName.endsWith(suffix)) return false;
+  const match = ROMM_COLLECTION_NAME.exec(displayName);
+  return match ? !activeNames.has(match[1]!.toLowerCase()) : false;
+}
+
+/**
+ * Drop this host's RomM collections whose source is gone. Scoped by the hostname
+ * suffix so a Steam-Cloud-synced collection belonging to another device is never
+ * touched.
+ */
+async function removeStaleCollections(
+  activePlatformNames: string[],
+  activeCollectionNames: string[],
+  signal: AbortSignal,
+): Promise<void> {
+  const hostname = await getHostname();
+  if (isPruneLeaseCancelled(signal)) return;
+  const suffix = ` (${hostname})`;
+  const activePlatforms = new Set(activePlatformNames.map((name) => name.toLowerCase()));
+  for (const collection of collectionStore.userCollections.filter((candidate) =>
+    isStalePlatformCollection(candidate.displayName, suffix, activePlatforms),
+  )) {
+    const platformName = platformOfCollection(collection.displayName);
+    logInfo(`Removing stale platform collection "${collection.displayName}"`);
+    await clearPlatformCollection(platformName, signal);
+    if (isPruneLeaseCancelled(signal)) return;
+  }
+  const activeNames = new Set(activeCollectionNames.map((name) => name.toLowerCase()));
+  for (const collection of collectionStore.userCollections.filter((candidate) =>
+    isStaleRomMCollection(candidate.displayName, suffix, activeNames),
+  )) {
+    logInfo(`Removing stale RomM collection "${collection.displayName}"`);
+    if (isPruneLeaseCancelled(signal)) return;
+    await collection.Delete();
+  }
+}
+
+/** Publish each committed version switch in order, stopping the moment the lease is cancelled. */
+async function publishSwitchesUntilCancelled(
+  pending: Array<{ appId: number; romId: number }>,
+  signal: AbortSignal,
+): Promise<void> {
+  for (const item of pending) {
+    if (isPruneLeaseCancelled(signal)) return;
+    await publishCommittedVersionSwitch(item.appId, item.romId, undefined, signal);
+  }
+}
+
+/** Name a committed shortcut action the way the completion toast says it. */
+function shortcutActionLabel(committedAction: string | undefined): string {
+  return committedAction === "remove_shortcut" ? "Shortcut removal" : "Shortcut repoint";
+}
+
+/**
+ * Say what a finished cleanup run did, leading with anything that committed a
+ * Steam change without finishing: an uncertain outcome and a committed-but-
+ * incomplete one both matter more to the user than the count of rows removed.
+ */
+function buildPruneCompleteToast(completed: PruneComplete): { body: string; subtext: string | undefined } {
+  const ambiguousPartial = completed.results.find((item) => item.status === "partial" && item.action_ambiguous);
+  const committedPartial = completed.results.find((item) => item.status === "partial" && item.committed_action);
+  const subtext = ambiguousPartial?.message ?? committedPartial?.message ?? completed.message;
+  if (ambiguousPartial) {
+    const label = shortcutActionLabel(ambiguousPartial.committed_action);
+    return { body: `${label} outcome is uncertain; source data was retained.`, subtext };
+  }
+  if (committedPartial) {
+    const label = shortcutActionLabel(committedPartial.committed_action);
+    return { body: `${label} committed; local cleanup incomplete.`, subtext };
+  }
+  const removed = completed.removed_count ?? completed.removed_rom_ids.length;
+  if (!removed) return { body: completed.message || "No removed RomM games were cleaned up.", subtext };
+  const skipped =
+    completed.problem_count ??
+    completed.results.filter((item) => ["failed", "skipped", "partial"].includes(item.status)).length;
+  const skippedNote = skipped ? `; ${skipped} group(s) skipped` : "";
+  const plural = removed === 1 ? "y" : "ies";
+  return { body: `Removed ${removed} local entr${plural}${skippedNote}.`, subtext };
+}
+
 /** Register every appId in *map* (values are per-key appId arrays) as RomM-owned. */
 function registerAppIds(map: Record<string, number[]>): void {
   for (const appIds of Object.values(map)) {
@@ -473,39 +570,11 @@ export default definePlugin(() => {
         }
         if (isPruneLeaseCancelled(signal)) return;
         if (!data.cancelled && typeof collectionStore !== "undefined") {
-          const hostname = await getHostname();
-          if (isPruneLeaseCancelled(signal)) return;
-          const suffix = ` (${hostname})`;
-          const activePlatforms = new Set(Object.keys(data.platform_app_ids).map((name) => name.toLowerCase()));
-          for (const collection of collectionStore.userCollections.filter((candidate) => {
-            if (!candidate.displayName.startsWith("RomM: ") || candidate.displayName.slice(6).startsWith("["))
-              return false;
-            if (!candidate.displayName.endsWith(suffix)) return false;
-            return !activePlatforms.has(
-              candidate.displayName
-                .slice(6)
-                .replace(/\s\([^)]+\)$/, "")
-                .toLowerCase(),
-            );
-          })) {
-            const platformName = collection.displayName.slice(6).replace(/\s\([^)]+\)$/, "");
-            logInfo(`Removing stale platform collection "${collection.displayName}"`);
-            await clearPlatformCollection(platformName, signal);
-            if (isPruneLeaseCancelled(signal)) return;
-          }
-          const activeNames = new Set(
-            Object.keys(data.romm_collection_app_ids ?? {}).map((name) => name.toLowerCase()),
+          await removeStaleCollections(
+            Object.keys(data.platform_app_ids),
+            Object.keys(data.romm_collection_app_ids ?? {}),
+            signal,
           );
-          const pattern = /^RomM: \[([^\]]+)\]/;
-          for (const collection of collectionStore.userCollections.filter((candidate) => {
-            if (!candidate.displayName.startsWith("RomM: [") || !candidate.displayName.endsWith(suffix)) return false;
-            const match = pattern.exec(candidate.displayName);
-            return match ? !activeNames.has(match[1]!.toLowerCase()) : false;
-          })) {
-            logInfo(`Removing stale RomM collection "${collection.displayName}"`);
-            if (isPruneLeaseCancelled(signal)) return;
-            await collection.Delete();
-          }
         }
       } catch (e) {
         logError(`Failed to manage RomM collections: ${e}`);
@@ -866,10 +935,7 @@ export default definePlugin(() => {
           try {
             const released = await withTimeout(waitForPruneRelease(runId), 6000);
             if (released.success) {
-              for (const item of pending) {
-                if (isPruneLeaseCancelled(signal)) return;
-                await publishCommittedVersionSwitch(item.appId, item.romId, undefined, signal);
-              }
+              await publishSwitchesUntilCancelled(pending, signal);
               return;
             }
             lastMessage = released.message;
@@ -932,23 +998,7 @@ export default definePlugin(() => {
       // every conflicting callable in the meantime (#1570 F13).
       detach(releasePruneLease(completed.prune_lease_token, "Cleanup completion with nothing to publish"));
     }
-    const removed = completed.removed_count ?? completed.removed_rom_ids.length;
-    const skipped =
-      completed.problem_count ??
-      completed.results.filter((item) => ["failed", "skipped", "partial"].includes(item.status)).length;
-    const ambiguousPartial = completed.results.find((item) => item.status === "partial" && item.action_ambiguous);
-    const committedPartial = completed.results.find((item) => item.status === "partial" && item.committed_action);
-    toaster.toast({
-      title: "RomM Sync",
-      body: ambiguousPartial
-        ? `${ambiguousPartial.committed_action === "remove_shortcut" ? "Shortcut removal" : "Shortcut repoint"} outcome is uncertain; source data was retained.`
-        : committedPartial
-          ? `${committedPartial.committed_action === "remove_shortcut" ? "Shortcut removal" : "Shortcut repoint"} committed; local cleanup incomplete.`
-          : removed
-            ? `Removed ${removed} local entr${removed === 1 ? "y" : "ies"}${skipped ? `; ${skipped} group(s) skipped` : ""}.`
-            : completed.message || "No removed RomM games were cleaned up.",
-      subtext: ambiguousPartial?.message ?? committedPartial?.message ?? completed.message,
-    });
+    toaster.toast({ title: "RomM Sync", ...buildPruneCompleteToast(completed) });
   });
 
   return {

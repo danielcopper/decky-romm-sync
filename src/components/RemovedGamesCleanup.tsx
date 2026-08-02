@@ -138,6 +138,85 @@ function requestFor(
   return { scope, rom_id: romId, preview_id: previewId, offset, limit: PAGE_SIZE };
 }
 
+/**
+ * Why Confirm is unavailable, in the user's words. Several of these conditions
+ * already render a warning somewhere in the dialog, but the dialog scrolls —
+ * a greyed button with its explanation off-screen reads as a dead control, and
+ * a press that does nothing at all is indistinguishable from a broken plugin.
+ */
+function confirmBlockedReason(state: {
+  completed: boolean;
+  runInFlight: boolean;
+  allEntriesLoaded: boolean;
+  total: number;
+  destructiveConfirmed: boolean;
+  insufficientSpace: boolean;
+  unknownSelectedSize: boolean;
+  anyOptionChosen: boolean;
+}): string | null {
+  if (state.completed) return null;
+  if (state.runInFlight) return "A cleanup is already running.";
+  if (!state.allEntriesLoaded) return `Load all ${state.total} entries before confirming.`;
+  if (!state.destructiveConfirmed) return "Confirm you understand there will be no recovery bundle.";
+  if (state.insufficientSpace) {
+    return state.unknownSelectedSize
+      ? "A selected ROM's size can't be measured, so the recovery bundle can't be guaranteed to fit."
+      : "The selected ROM content doesn't fit in the free space at the recovery target.";
+  }
+  if (!state.anyOptionChosen) return "Choose at least one cleanup option above.";
+  return null;
+}
+
+/**
+ * Stage the installed-content opt-ins page by page, chaining each page onto the
+ * selection the previous one opened. A refused page reports itself and stops the
+ * whole Confirm — a partially staged selection must never reach the run.
+ */
+async function stageInstalledSelections(
+  previewId: string,
+  selected: number[],
+  setStatus: (message: string) => void,
+): Promise<{ ok: true; selectionId: string | null } | { ok: false }> {
+  let selectionId: string | null = null;
+  for (let offset = 0; offset < selected.length; offset += SELECTION_PAGE_SIZE) {
+    const page = selected.slice(offset, offset + SELECTION_PAGE_SIZE);
+    const staged: {
+      success: boolean;
+      selection_id?: string;
+      message?: string;
+    } = await withTimeout(
+      stagePruneInstalledSelection({
+        preview_id: previewId,
+        selection_id: selectionId,
+        rom_ids: page,
+        final: offset + page.length >= selected.length,
+      }),
+      PRUNE_CALLABLE_TIMEOUT_MS,
+    );
+    if (!staged.success || !staged.selection_id) {
+      setStatus(staged.message ?? "Installed-content selections could not be staged.");
+      logWarn(`[prune] Confirm aborted while staging installed content: ${staged.message ?? "no message"}`);
+      return { ok: false };
+    }
+    selectionId = staged.selection_id;
+  }
+  return { ok: true, selectionId };
+}
+
+/** What the Confirm button says: pressed, then the run's current stage, then its resting label. */
+function confirmButtonLabel(starting: boolean, progress: PruneProgress | null): string {
+  if (starting) return "Starting...";
+  if (progress) return `${progress.stage.replace(/_/g, " ")}...`;
+  return "Confirm Cleanup";
+}
+
+/** Why the scan button is unavailable, or nothing when it is not. */
+function scanButtonDescription(syncRunning: boolean, runActive: boolean): string | undefined {
+  if (syncRunning) return "Unavailable while a library sync is running.";
+  if (runActive) return "A cleanup is running. Its progress is shown below.";
+  return undefined;
+}
+
 interface CleanupModalProps {
   initial: PrunePreviewResult;
   scope: PruneScope;
@@ -203,23 +282,16 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   // store, and an outright refusal — the backend's idempotency is the safety
   // net behind that, not the mechanism.
   const cancelling = complete === null && cancelRequestedFor !== null && cancelRequestedFor === pruneState.runId;
-  // Why Confirm is unavailable, in the user's words. Several of these conditions
-  // already render a warning somewhere in the dialog, but the dialog scrolls —
-  // a greyed button with its explanation off-screen reads as a dead control, and
-  // a press that does nothing at all is indistinguishable from a broken plugin.
-  const blockedReason = ((): string | null => {
-    if (complete !== null) return null;
-    if (runInFlight) return "A cleanup is already running.";
-    if (!allEntriesLoaded) return `Load all ${total} entries before confirming.`;
-    if (!destructiveConfirmed) return "Confirm you understand there will be no recovery bundle.";
-    if (insufficientSpace) {
-      return unknownSelectedSize
-        ? "A selected ROM's size can't be measured, so the recovery bundle can't be guaranteed to fit."
-        : "The selected ROM content doesn't fit in the free space at the recovery target.";
-    }
-    if (!(repoint || removeRows || removeDeadGames)) return "Choose at least one cleanup option above.";
-    return null;
-  })();
+  const blockedReason = confirmBlockedReason({
+    completed: complete !== null,
+    runInFlight,
+    allEntriesLoaded,
+    total,
+    destructiveConfirmed,
+    insufficientSpace,
+    unknownSelectedSize,
+    anyOptionChosen: repoint || removeRows || removeDeadGames,
+  });
   // Disabled ONLY where a press is unsafe or meaningless: a run is already
   // going, or this dialog is showing a finished one. Every other reason to
   // refuse is explained when pressed — a greyed button whose explanation the
@@ -301,30 +373,8 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
         : "Starting cleanup...",
     );
     try {
-      let selectionId: string | null = null;
-      const selected = [...includedContent];
-      for (let offset = 0; offset < selected.length; offset += SELECTION_PAGE_SIZE) {
-        const page = selected.slice(offset, offset + SELECTION_PAGE_SIZE);
-        const staged: {
-          success: boolean;
-          selection_id?: string;
-          message?: string;
-        } = await withTimeout(
-          stagePruneInstalledSelection({
-            preview_id: initial.preview_id,
-            selection_id: selectionId,
-            rom_ids: page,
-            final: offset + page.length >= selected.length,
-          }),
-          PRUNE_CALLABLE_TIMEOUT_MS,
-        );
-        if (!staged.success || !staged.selection_id) {
-          setStatus(staged.message ?? "Installed-content selections could not be staged.");
-          logWarn(`[prune] Confirm aborted while staging installed content: ${staged.message ?? "no message"}`);
-          return;
-        }
-        selectionId = staged.selection_id;
-      }
+      const staged = await stageInstalledSelections(initial.preview_id, [...includedContent], setStatus);
+      if (!staged.ok) return;
       const result = await withTimeout(
         startPrune({
           preview_id: initial.preview_id,
@@ -333,7 +383,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
           remove_rows: removeRows,
           remove_fully_vanished: removeDeadGames,
           create_recovery_bundle: recovery,
-          installed_selection_id: selectionId,
+          installed_selection_id: staged.selectionId,
         }),
         PRUNE_CALLABLE_TIMEOUT_MS,
       );
@@ -653,7 +703,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
             {runStarted || complete !== null ? "Close" : "Cancel"}
           </DialogButton>
           <DialogButton disabled={pressBlocked} onClick={() => detach(start())}>
-            {starting ? "Starting..." : progress ? `${progress.stage.replace(/_/g, " ")}...` : "Confirm Cleanup"}
+            {confirmButtonLabel(starting, progress)}
           </DialogButton>
         </div>
       </div>
@@ -738,13 +788,7 @@ export const RemovedGamesCleanupSection: FC = () => {
         <ButtonItem
           layout="below"
           disabled={scanning || syncRunning || runActive || progress !== null}
-          description={
-            syncRunning
-              ? "Unavailable while a library sync is running."
-              : runActive
-                ? "A cleanup is running. Its progress is shown below."
-                : undefined
-          }
+          description={scanButtonDescription(syncRunning, runActive)}
           onClick={() => detach(scan())}
         >
           {scanning ? "Scanning..." : "Clean Up Removed RomM Games"}

@@ -1,4 +1,5 @@
 import { getRomRelaunchOptions, logError } from "../api/backend";
+import type { RelaunchOptionsResult } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "./steamShortcuts";
 import {
   capturePruneLeaseAdmission,
@@ -21,6 +22,73 @@ export type RelaunchOptionsReconfirmResult =
   { status: "ready" } | { status: "best_effort_failure" } | { status: "timeout" } | { status: "cancelled" };
 
 /**
+ * Keep watching a re-confirm that timed out: its lease is still held by the
+ * backend, so a late success has to hand it back or it pins the admission gate
+ * until its TTL.
+ */
+function releaseLateReconfirmLease(
+  fetchOutcome: Promise<{ kind: "result"; item: RelaunchOptionsResult } | { kind: "error"; error: unknown }>,
+  context: string,
+): void {
+  void fetchOutcome
+    .then(async (late) => {
+      if (late.kind === "result" && late.item?.success) {
+        await releasePruneLease(late.item.prune_lease_token, `${context}: timed-out launch_options re-confirm`);
+      }
+    })
+    .catch((error: unknown) => logError(`${context}: late launch_options re-confirm cleanup failed: ${error}`));
+}
+
+type FetchedRelaunchOptions =
+  | { kind: "options"; options: Extract<RelaunchOptionsResult, { success: true }> }
+  | { kind: "verdict"; result: RelaunchOptionsReconfirmResult };
+
+/**
+ * Pull the ROM's resolved launch command, bounded by a timeout. Anything that is
+ * not a usable command is already the whole answer: a timeout stops the launch,
+ * a fetch or backend failure lets it proceed best-effort, and a lifecycle
+ * cancellation outranks both.
+ */
+async function fetchRelaunchOptions(
+  romId: number,
+  context: string,
+  admission: PruneLeaseAdmission,
+): Promise<FetchedRelaunchOptions> {
+  const fetchOutcome = getRomRelaunchOptions(romId).then(
+    (item) => ({ kind: "result" as const, item }),
+    (error: unknown) => ({ kind: "error" as const, error }),
+  );
+  let timer!: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), RECONFIRM_FETCH_TIMEOUT_MS);
+  });
+  const outcome = await Promise.race([fetchOutcome, timeout]);
+  if (outcome.kind === "timeout") {
+    logError(`${context}: launch_options re-confirm timed out (launch cancelled)`);
+    releaseLateReconfirmLease(fetchOutcome, context);
+    const status = isPruneLeaseAdmissionCurrent(admission) ? "timeout" : "cancelled";
+    return { kind: "verdict", result: { status } };
+  }
+  clearTimeout(timer);
+  if (outcome.kind === "error") {
+    if (!isPruneLeaseAdmissionCurrent(admission)) return { kind: "verdict", result: { status: "cancelled" } };
+    logError(`${context}: launch_options re-confirm failed (launching anyway): ${outcome.error}`);
+    return { kind: "verdict", result: { status: "best_effort_failure" } };
+  }
+  const item = outcome.item;
+  if (!item) {
+    const status = isPruneLeaseAdmissionCurrent(admission) ? "ready" : "cancelled";
+    return { kind: "verdict", result: { status } };
+  }
+  if (!item.success) {
+    if (!isPruneLeaseAdmissionCurrent(admission)) return { kind: "verdict", result: { status: "cancelled" } };
+    logError(`${context}: launch_options re-confirm failed (launching anyway): ${item.message}`);
+    return { kind: "verdict", result: { status: "best_effort_failure" } };
+  }
+  return { kind: "options", options: item };
+}
+
+/**
  * Heal any mid-session `launch_options` drift on one shortcut right before a
  * launch: pull the ROM's resolved command (`get_rom_relaunch_options`) and
  * confirm-set it onto the shortcut's appId. Ordinary fetch/write failures remain
@@ -34,41 +102,9 @@ export async function reconfirmLaunchOptions(
   admission: PruneLeaseAdmission = capturePruneLeaseAdmission(),
 ): Promise<RelaunchOptionsReconfirmResult> {
   if (!isPruneLeaseAdmissionCurrent(admission)) return { status: "cancelled" };
-  const fetchOutcome = getRomRelaunchOptions(romId).then(
-    (item) => ({ kind: "result" as const, item }),
-    (error: unknown) => ({ kind: "error" as const, error }),
-  );
-  let timer!: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
-    timer = setTimeout(() => resolve({ kind: "timeout" }), RECONFIRM_FETCH_TIMEOUT_MS);
-  });
-  const outcome = await Promise.race([fetchOutcome, timeout]);
-  if (outcome.kind === "timeout") {
-    logError(`${context}: launch_options re-confirm timed out (launch cancelled)`);
-    void fetchOutcome
-      .then(async (late) => {
-        if (late.kind === "result" && late.item?.success) {
-          await releasePruneLease(late.item.prune_lease_token, `${context}: timed-out launch_options re-confirm`);
-        }
-      })
-      .catch((error: unknown) => logError(`${context}: late launch_options re-confirm cleanup failed: ${error}`));
-    return { status: isPruneLeaseAdmissionCurrent(admission) ? "timeout" : "cancelled" };
-  }
-  clearTimeout(timer);
-  if (outcome.kind === "error") {
-    if (!isPruneLeaseAdmissionCurrent(admission)) return { status: "cancelled" };
-    logError(`${context}: launch_options re-confirm failed (launching anyway): ${outcome.error}`);
-    return { status: "best_effort_failure" };
-  }
-  const item = outcome.item;
-  if (!item) {
-    return { status: isPruneLeaseAdmissionCurrent(admission) ? "ready" : "cancelled" };
-  }
-  if (!item.success) {
-    if (!isPruneLeaseAdmissionCurrent(admission)) return { status: "cancelled" };
-    logError(`${context}: launch_options re-confirm failed (launching anyway): ${item.message}`);
-    return { status: "best_effort_failure" };
-  }
+  const fetched = await fetchRelaunchOptions(romId, context, admission);
+  if (fetched.kind === "verdict") return fetched.result;
+  const item = fetched.options;
   try {
     await withPruneLease(
       item.prune_lease_token,

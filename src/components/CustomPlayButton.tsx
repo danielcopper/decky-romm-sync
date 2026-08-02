@@ -127,7 +127,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   const [isOffline, setIsOffline] = useState(getRommConnectionState() === "offline");
   // Positive-knowledge only: set solely when RomM 404s the bound id, so an
   // unreachable server never reaches this state (#1570 F20).
-  const [boundVanished, setBoundVanishedState] = useState(() => isBoundVanished(appId));
+  const [boundVanished, setBoundVanished] = useState(() => isBoundVanished(appId));
   // Running overlay (#1313): when the game is already running, the button shows
   // Resume (top precedence over install/conflict/download) and brings the game to
   // front instead of running the launch funnel. Seeded synchronously at init and
@@ -382,7 +382,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     // recovery probe reconnects, so Download/Play re-enable without a page
     // re-entry (the device symptom of Download staying blocked after reconnect).
     const unsubscribeConnection = onRommConnectionChange((s) => setIsOffline(s === "offline"));
-    const unsubscribeVanished = onBoundVanishedChange(() => setBoundVanishedState(isBoundVanished(appId)));
+    const unsubscribeVanished = onBoundVanishedChange(() => setBoundVanished(isBoundVanished(appId)));
 
     // Session start/stop (#1313) — flip the running overlay so the button shows
     // Resume for the live session and returns to Play when it ends. Matches on

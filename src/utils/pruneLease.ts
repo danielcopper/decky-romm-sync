@@ -210,14 +210,14 @@ export async function withPruneLeases<T>(
   let timedOut = false;
   try {
     return (await boundedContinuation(operationPromise)).result;
-  } catch (caught) {
-    if (caught instanceof UnsettledContinuation) {
+  } catch (error_) {
+    if (error_ instanceof UnsettledContinuation) {
       timedOut = true;
       abortController.abort();
       for (const { token } of releases) void retireLeaseAfterSettlement(token);
-      throw caught.error;
+      throw error_.error;
     }
-    throw caught;
+    throw error_;
   } finally {
     if (!timedOut) await Promise.all(releases.map(({ release }) => release()));
   }

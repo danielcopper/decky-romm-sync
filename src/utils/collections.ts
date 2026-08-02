@@ -37,6 +37,95 @@ function getOverviews(appIds: number[]): AppStoreOverview[] {
   return overviews;
 }
 
+/**
+ * Replace an existing collection's apps. Returns false when the signal aborted
+ * mid-write, so the caller stops the whole run instead of moving to the next
+ * collection.
+ */
+async function replaceCollectionApps(
+  existing: SteamCollection,
+  overviews: AppStoreOverview[],
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const existingApps = existing.allApps;
+  if (existingApps.length > 0) {
+    if (signal?.aborted) return false;
+    existing.AsDragDropCollection().RemoveApps(existingApps);
+  }
+  if (signal?.aborted) return false;
+  existing.AsDragDropCollection().AddApps(overviews);
+  if (signal?.aborted) return false;
+  await existing.Save();
+  return true;
+}
+
+/** Create a new collection holding exactly *overviews*. False means aborted mid-write. */
+async function createCollectionWithApps(
+  collectionName: string,
+  overviews: AppStoreOverview[],
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
+  if (signal?.aborted) return false;
+  collection.AsDragDropCollection().AddApps(overviews);
+  if (signal?.aborted) return false;
+  await collection.Save();
+  return true;
+}
+
+/** Point one collection name at exactly *overviews*, creating it if it is new. */
+async function saveCollection(
+  collectionName: string,
+  noun: string,
+  overviews: AppStoreOverview[],
+  appCount: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  // Case-insensitive match: Steam collapses collection names by a
+  // case-insensitive identity, so a case-variant collection ("RomM: [7 Up]
+  // (host)" vs "RomM: [7 up] (host)") must be UPDATED, not shadowed by a
+  // colliding new create that then overwrites it and loses its games (#1569).
+  const target = collectionName.toLowerCase();
+  const existing = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === target);
+
+  if (existing) {
+    logInfo(`Updating ${noun} "${collectionName}" with ${appCount} apps`);
+    if (!(await replaceCollectionApps(existing, overviews, signal))) return false;
+  } else {
+    logInfo(`Creating ${noun} "${collectionName}" with ${appCount} apps`);
+    if (!(await createCollectionWithApps(collectionName, overviews, signal))) return false;
+  }
+  logInfo(`Successfully saved ${noun} "${collectionName}"`);
+  return true;
+}
+
+/**
+ * Write one family of collections, reporting progress per entry. A failure on
+ * one collection is logged and the rest still run; an abort stops the run.
+ */
+async function saveCollectionFamily(
+  entries: Array<[string, number[]]>,
+  noun: string,
+  collectionNameFor: (source: string) => string,
+  onProgress?: (current: number, total: number, name: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  let idx = 0;
+  for (const [source, appIds] of entries) {
+    if (signal?.aborted) return;
+    idx++;
+    onProgress?.(idx, entries.length, source);
+    const collectionName = collectionNameFor(source);
+    const overviews = getOverviews(appIds);
+
+    try {
+      if (!(await saveCollection(collectionName, noun, overviews, appIds.length, signal))) return;
+    } catch (colErr) {
+      logError(`Failed to save ${noun} "${collectionName}": ${colErr}`);
+    }
+  }
+}
+
 export async function createOrUpdateCollections(
   platformAppIds: Record<string, number[]>,
   onProgress?: (current: number, total: number, name: string) => void,
@@ -54,47 +143,13 @@ export async function createOrUpdateCollections(
       `Creating/updating collections for platforms: ${Object.keys(platformAppIds).join(", ")} (hostname: ${hostname})`,
     );
 
-    const entries = Object.entries(platformAppIds);
-    let idx = 0;
-    for (const [platformName, appIds] of entries) {
-      if (signal?.aborted) return;
-      idx++;
-      onProgress?.(idx, entries.length, platformName);
-      const collectionName = `RomM: ${platformName} (${hostname})`;
-      const overviews = getOverviews(appIds);
-
-      try {
-        // Case-insensitive match: Steam collapses collection names by a
-        // case-insensitive identity, so a case-variant collection ("RomM: [7 Up]
-        // (host)" vs "RomM: [7 up] (host)") must be UPDATED, not shadowed by a
-        // colliding new create that then overwrites it and loses its games (#1569).
-        const target = collectionName.toLowerCase();
-        const existing = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === target);
-
-        if (existing) {
-          logInfo(`Updating collection "${collectionName}" with ${appIds.length} apps`);
-          const existingApps = existing.allApps;
-          if (existingApps.length > 0) {
-            if (signal?.aborted) return;
-            existing.AsDragDropCollection().RemoveApps(existingApps);
-          }
-          if (signal?.aborted) return;
-          existing.AsDragDropCollection().AddApps(overviews);
-          if (signal?.aborted) return;
-          await existing.Save();
-        } else {
-          logInfo(`Creating collection "${collectionName}" with ${appIds.length} apps`);
-          const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
-          if (signal?.aborted) return;
-          collection.AsDragDropCollection().AddApps(overviews);
-          if (signal?.aborted) return;
-          await collection.Save();
-        }
-        logInfo(`Successfully saved collection "${collectionName}"`);
-      } catch (colErr) {
-        logError(`Failed to save collection "${collectionName}": ${colErr}`);
-      }
-    }
+    await saveCollectionFamily(
+      Object.entries(platformAppIds),
+      "collection",
+      (platformName) => `RomM: ${platformName} (${hostname})`,
+      onProgress,
+      signal,
+    );
   } catch (e) {
     logError(`Failed to update collections: ${e}`);
   }
@@ -115,47 +170,13 @@ export async function createOrUpdateRomMCollections(
     if (signal?.aborted) return;
     logInfo(`Creating/updating RomM collections: ${Object.keys(collectionAppIds).join(", ")} (hostname: ${hostname})`);
 
-    const entries = Object.entries(collectionAppIds);
-    let idx = 0;
-    for (const [collName, appIds] of entries) {
-      if (signal?.aborted) return;
-      idx++;
-      onProgress?.(idx, entries.length, collName);
-      const collectionName = `RomM: [${collName}] (${hostname})`;
-      const overviews = getOverviews(appIds);
-
-      try {
-        // Case-insensitive match: Steam collapses collection names by a
-        // case-insensitive identity, so a case-variant collection ("RomM: [7 Up]
-        // (host)" vs "RomM: [7 up] (host)") must be UPDATED, not shadowed by a
-        // colliding new create that then overwrites it and loses its games (#1569).
-        const target = collectionName.toLowerCase();
-        const existing = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === target);
-
-        if (existing) {
-          logInfo(`Updating RomM collection "${collectionName}" with ${appIds.length} apps`);
-          const existingApps = existing.allApps;
-          if (existingApps.length > 0) {
-            if (signal?.aborted) return;
-            existing.AsDragDropCollection().RemoveApps(existingApps);
-          }
-          if (signal?.aborted) return;
-          existing.AsDragDropCollection().AddApps(overviews);
-          if (signal?.aborted) return;
-          await existing.Save();
-        } else {
-          logInfo(`Creating RomM collection "${collectionName}" with ${appIds.length} apps`);
-          const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
-          if (signal?.aborted) return;
-          collection.AsDragDropCollection().AddApps(overviews);
-          if (signal?.aborted) return;
-          await collection.Save();
-        }
-        logInfo(`Successfully saved RomM collection "${collectionName}"`);
-      } catch (colErr) {
-        logError(`Failed to save RomM collection "${collectionName}": ${colErr}`);
-      }
-    }
+    await saveCollectionFamily(
+      Object.entries(collectionAppIds),
+      "RomM collection",
+      (collName) => `RomM: [${collName}] (${hostname})`,
+      onProgress,
+      signal,
+    );
   } catch (e) {
     logError(`Failed to update RomM collections: ${e}`);
   }

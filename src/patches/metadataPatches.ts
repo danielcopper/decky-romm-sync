@@ -188,6 +188,25 @@ function tryWritePlaytime(items: PlaytimeItem[], signal?: AbortSignal): Playtime
   return notWritten;
 }
 
+/** Pair every recorded playtime with the shortcut that shows it, skipping the unshown and the empty. */
+function playtimeItemsToApply(
+  playtimeMap: Record<string, { total_seconds: number }>,
+  appIdMap: Record<string, number>,
+): PlaytimeItem[] {
+  const romIdToAppId: Record<string, number> = {};
+  for (const [appIdStr, romId] of Object.entries(appIdMap)) {
+    romIdToAppId[String(romId)] = Number(appIdStr);
+  }
+  const pending: PlaytimeItem[] = [];
+  for (const [romIdStr, entry] of Object.entries(playtimeMap)) {
+    const appId = romIdToAppId[romIdStr];
+    if (appId && entry.total_seconds > 0) {
+      pending.push({ appId, totalSeconds: entry.total_seconds });
+    }
+  }
+  return pending;
+}
+
 /**
  * Apply playtime data for all known apps from the bulk playtime map.
  * Retries apps whose appStore overview isn't available yet (Steam may
@@ -199,20 +218,7 @@ export async function applyAllPlaytime(
   appIdMap: Record<string, number>,
   signal?: AbortSignal,
 ) {
-  // Build rom_id -> app_id reverse lookup
-  const romIdToAppId: Record<string, number> = {};
-  for (const [appIdStr, romId] of Object.entries(appIdMap)) {
-    romIdToAppId[String(romId)] = Number(appIdStr);
-  }
-
-  // Build list of {appId, totalSeconds} to apply
-  let pending: PlaytimeItem[] = [];
-  for (const [romIdStr, entry] of Object.entries(playtimeMap)) {
-    const appId = romIdToAppId[romIdStr];
-    if (appId && entry.total_seconds > 0) {
-      pending.push({ appId, totalSeconds: entry.total_seconds });
-    }
-  }
+  let pending = playtimeItemsToApply(playtimeMap, appIdMap);
 
   detach(
     debugLog(
