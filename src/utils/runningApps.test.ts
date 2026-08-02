@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { readRunningApps, readPrimaryRunningApp, isAppRunning, isAnyAppRunning } from "./runningApps";
+import { readRunningApps, isAppRunning, isAnyAppRunning } from "./runningApps";
 
 // The util reads the bare Steam SP global `SteamUIStore`. Each test stubs only
 // what it exercises; the global afterEach in test-setup.ts runs
@@ -20,9 +20,11 @@ describe("runningApps — guarded SteamUIStore reader", () => {
       expect(diagnostics).toBe("SteamUIStore.RunningApps=[42]");
     });
 
-    it("preserves store order, so the foreground app stays first", () => {
-      // Steam derives RunningApps from one m_runningAppIDs array whose head is
-      // MainRunningApp — the reader must not reorder it.
+    it("reports every running app, in store order, without reordering", () => {
+      // The reader passes the store's order through untouched. That order is
+      // "most recently foregrounded", NOT launch order — no consumer may read
+      // the head as "the app that just started" — but the reader must not
+      // invent an order of its own either.
       vi.stubGlobal("SteamUIStore", {
         RunningApps: [
           { appid: 100, display_name: "Foreground" },
@@ -124,31 +126,6 @@ describe("runningApps — guarded SteamUIStore reader", () => {
       const { apps, diagnostics } = readRunningApps();
       expect(apps).toEqual([]);
       expect(diagnostics).toBe("SteamUIStore.RunningApps=empty");
-    });
-  });
-
-  describe("readPrimaryRunningApp", () => {
-    it("returns the head of the store's list — the foreground app — plus the diagnostics", () => {
-      vi.stubGlobal("SteamUIStore", {
-        RunningApps: [
-          { appid: 100, display_name: "Foreground" },
-          { appid: 200, display_name: "Background" },
-        ],
-      });
-
-      const { app, diagnostics } = readPrimaryRunningApp();
-      expect(app).toEqual({ appid: 100, display_name: "Foreground" });
-      expect(diagnostics).toBe("SteamUIStore.RunningApps=[100,200]");
-    });
-
-    it("returns null when the store reports nothing running", () => {
-      vi.stubGlobal("SteamUIStore", { RunningApps: [] });
-
-      expect(readPrimaryRunningApp().app).toBeNull();
-    });
-
-    it("returns null and does not throw when the store is absent", () => {
-      expect(readPrimaryRunningApp()).toEqual({ app: null, diagnostics: "SteamUIStore.RunningApps=no-store" });
     });
   });
 

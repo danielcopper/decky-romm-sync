@@ -58,8 +58,9 @@ function captureLifetimeCb(): LifetimeCb {
 /** Drive a start notification for a specific app through the lifecycle chain. */
 async function startApp(cb: LifetimeCb, appId: number): Promise<void> {
   cb({ bRunning: true, unAppID: appId });
-  // handleGameStart is gated behind a delay(500) inside the lifecycle chain.
-  await vi.advanceTimersByTimeAsync(500);
+  // The start path runs straight off the notification — no timer to advance past,
+  // only the chain's microtasks to flush.
+  await vi.advanceTimersByTimeAsync(0);
 }
 
 /** Drive a stop notification for a specific app and flush the chain. */
@@ -90,9 +91,9 @@ async function initDrainingAdoptionPoll(): Promise<void> {
 }
 
 // Liveness comes from `SteamUIStore.RunningApps` — the one running-app surface
-// (#1588). Its head is the foreground app, so a single-entry list seeds a
-// running game and an empty list seeds "the store reports nothing", which is
-// exactly what the post-loader-restart adoption window looks like on-device.
+// (#1588). It is a membership set, so a single-entry list seeds a running game
+// and an empty list seeds "the store reports nothing", which is exactly what the
+// post-loader-restart adoption window looks like on-device.
 function stubRunningApp(appid: number, displayName = "Game"): void {
   vi.stubGlobal("SteamUIStore", { RunningApps: [{ appid, display_name: displayName }] });
 }
@@ -164,6 +165,38 @@ describe("sessionManager lifecycle forwarding", () => {
 
     expect(backend.recordSessionStart).not.toHaveBeenCalled();
     expect(backend.finalizeGameSession).not.toHaveBeenCalled();
+  });
+
+  // #1624: the start path takes the app id from the notification itself. The
+  // running-app store must not be consulted — see the reader's docstring.
+  it("opens the session for the app the notification names, not the running-app head", async () => {
+    // A DIFFERENT app sits at the head of the store. `RunningApps` is ordered
+    // most-recently-foregrounded and appends fresh arrivals at the tail, so the
+    // head is never the app that just started; trusting it would open a session
+    // on the wrong app and leave this one's stop finalizing nothing.
+    vi.stubGlobal("SteamUIStore", { RunningApps: [{ appid: OTHER_APP_ID, display_name: "Other" }] });
+    await initSessionManager();
+    const lifetime = captureLifetimeCb();
+
+    await startApp(lifetime, APP_ID);
+    expect(backend.recordSessionStart).toHaveBeenCalledWith(ROM_ID);
+
+    vi.setSystemTime(60_000);
+    await stopApp(lifetime, APP_ID);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
+  });
+
+  it("records the start without stalling the lifecycle chain on a timer", async () => {
+    // The 500ms wait existed only so the running-app head could populate. With
+    // that read gone it stalls every queued lifecycle event behind it — advancing
+    // no time at all must already have recorded the start.
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+
+    lifetime({ bRunning: true, unAppID: APP_ID });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(backend.recordSessionStart).toHaveBeenCalledWith(ROM_ID);
   });
 
   it("dispatches romm_data_changed on stop even when the post-exit sync failed (#1334)", async () => {
@@ -801,8 +834,8 @@ describe("sessionManager stop scoping (#1621)", () => {
     });
     vi.mocked(backend.recordSessionStart).mockResolvedValue({ success: true });
     vi.mocked(backend.finalizeGameSession).mockResolvedValue({ ...FINALIZE_WITH_PLAYTIME });
-    // Nothing in the running-app store → handleGameStart resolves the app from
-    // the notification's unAppID, so each start is addressable per app.
+    // Nothing in the running-app store, so reload-adoption is inert here and each
+    // start is addressable per app via its notification's unAppID.
     stubNothingRunning();
     dataChanged = [];
     dataListener = (e: Event) => dataChanged.push((e as CustomEvent).detail);

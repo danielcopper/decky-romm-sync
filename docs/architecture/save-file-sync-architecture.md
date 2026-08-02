@@ -1735,19 +1735,25 @@ The callback receives:
 
 ### Running-app detection (`utils/runningApps`)
 
-After a game starts, there is a brief window where the app ID may not be fully resolved. The session manager waits 500ms
-and then reads the guarded running-app reader for a reliable `appid` and `display_name`, falling back to `unAppID` from
-the notification if nothing is reported. The reader has one surface, `SteamUIStore.RunningApps` — the only running-app
-page global Steam actually exposes, and there is no second one to add: `Router` is not a page global on any SteamUI
-build, and `@decky/ui`'s `Router` export resolves to the same `SteamUIStore` singleton (#1588). It is read through a
-guard (an absent, `null`, or throwing-getter store degrades to "reported nothing", never a throw) and returns a
-`diagnostics` string distinguishing absent / empty / threw / the appids found. The list's head is the foreground app —
-Steam derives `RunningApps` and its own `MainRunningApp` from one private array, with `MainRunningApp` defined as
-`RunningApps[0]` — so no second surface is needed to identify it. The store is not reliable across timing, though: after
-a `plugin_loader` restart it reports an empty list for several seconds while the game runs (#1054 / #1148 round 2), so
-the adoption path **polls** the reader (every 500ms up to 15s) instead of reading once, and a failed round logs what the
-store reported. The same reader backs the already-running skip on both launch surfaces — the interceptor and the Play
-button ([ADR-0015](../adr/0015-single-launch-gate-cancel-then-relaunch.md)).
+The reader has one surface, `SteamUIStore.RunningApps` — the only running-app page global Steam actually exposes, and
+there is no second one to add: `Router` is not a page global on any SteamUI build, and `@decky/ui`'s `Router` export
+resolves to the same `SteamUIStore` singleton (#1588). It is read through a guard (an absent, `null`, or throwing-getter
+store degrades to "reported nothing", never a throw) and returns a `diagnostics` string distinguishing absent / empty /
+threw / the appids found.
+
+**It answers membership, never identity.** The list is the store's private running-appid array mapped through the app
+store with unloaded overviews dropped, so its head is not even reliably Steam's own `MainRunningApp` — the two diverge
+during exactly the post-launch window this plugin cares about. The order it does carry is "most recently foregrounded"
+(`SetRunningApp` removes and unshifts), while the reconciler that notices a newly-launched process appends it at the
+tail. So the head is never the app that just started, and nothing reads it to identify one: the session manager takes
+the starting app's id from the lifetime notification's own `unAppID` (#1624 — it previously waited 500ms and read the
+head, which both mis-attributed a start while another game was running and stalled the serialized lifecycle chain).
+
+The store is also not reliable across timing: after a `plugin_loader` restart it reports an empty list for several
+seconds while the game runs (#1054 / #1148 round 2), so the adoption path **polls** the reader (every 500ms up to 15s)
+instead of reading once, and a failed round logs what the store reported. The same reader backs the already-running skip
+on both launch surfaces — the interceptor and the Play button
+([ADR-0015](../adr/0015-single-launch-gate-cancel-then-relaunch.md)).
 
 ### State-aware Resume button (#1313)
 

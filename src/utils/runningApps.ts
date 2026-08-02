@@ -5,8 +5,17 @@
  * Steam SP global (declared in `types/steam.d.ts`), and the only one there is.
  * Do not add a second: `Router` is not a page global on any SteamUI build (this
  * reader probed it until #1588 and every logged round said `no-Router`), and
- * `@decky/ui`'s `Router` export resolves to this very `SteamUIStore` singleton,
- * whose `MainRunningApp` is defined as `RunningApps[0]`.
+ * `@decky/ui`'s `Router` export resolves to this very `SteamUIStore` singleton.
+ *
+ * The list is a MEMBERSHIP set, not a launch order. The store maps its private
+ * running-appid array through the app store and DROPS entries whose overview has
+ * not loaded yet, so the head of `RunningApps` is not even reliably Steam's own
+ * `MainRunningApp` — the two diverge exactly during the post-launch window this
+ * plugin cares about. And the ordering it does carry is "most recently
+ * FOREGROUNDED" (`SetRunningApp` removes and unshifts), while the reconciler that
+ * notices a newly-launched process APPENDS it at the tail. The head is therefore
+ * never a way to identify the app that just started — use the appid the lifetime
+ * notification carries. Consumers here ask membership questions only.
  *
  * The read is still guarded. A bare reference to a truly-absent SP global
  * throws `ReferenceError`, so presence is probed with `typeof`; a present store
@@ -102,18 +111,6 @@ export function readRunningApps(): RunningAppsReading {
   } catch (e) {
     return { apps: [], diagnostics: `${SOURCE_LABEL}=threw:${e}` };
   }
-}
-
-/**
- * The foreground running app plus the round's diagnostics. `apps[0]` IS the
- * foreground app: the store derives both `RunningApps` and `MainRunningApp`
- * from one private `m_runningAppIDs` array, with `MainRunningApp` defined as
- * `RunningApps[0]` — so reading the head of the list needs no second Steam
- * surface. `null` means the store reported no running app this round.
- */
-export function readPrimaryRunningApp(): { app: RunningApp | null; diagnostics: string } {
-  const reading = readRunningApps();
-  return { app: reading.apps[0] ?? null, diagnostics: reading.diagnostics };
 }
 
 /** Is a specific `appId` currently running per the store? Never throws. */

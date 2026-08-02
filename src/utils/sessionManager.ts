@@ -3,8 +3,9 @@
  * save sync + playtime tracking via backend callables.
  *
  * Uses SteamClient.GameSessions.RegisterForAppLifetimeNotifications to detect
- * game lifecycle events and the guarded `runningApps` reader
- * (`SteamUIStore.RunningApps`) for reliable app-ID resolution.
+ * game lifecycle events — the notification's own `unAppID` identifies the app on
+ * both edges. The guarded `runningApps` reader (`SteamUIStore.RunningApps`) is
+ * used only for LIVENESS at reload-adoption, never to identify a launching app.
  */
 
 import { toaster } from "@decky/api";
@@ -22,7 +23,7 @@ import { setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { detach } from "./detach";
-import { readPrimaryRunningApp, readRunningApps, type RunningApp } from "./runningApps";
+import { readRunningApps, type RunningApp } from "./runningApps";
 import { delay } from "./pacedOps";
 
 // Active session tracking — ONE slot, deliberately (#1621). The slot records the
@@ -388,10 +389,15 @@ export async function initSessionManager(): Promise<void> {
     lifecycleChain = lifecycleChain
       .then(async () => {
         if (update.bRunning) {
-          // Game started — wait for the running-app surfaces to populate
-          await delay(500);
-          const running = readPrimaryRunningApp().app;
-          const appId = running?.appid ?? update.unAppID;
+          // The notification's own appid identifies the app that started. Do NOT
+          // consult `SteamUIStore.RunningApps` here: its head is the most recently
+          // FOREGROUNDED app and a fresh arrival is appended at the tail, so the
+          // head names some other running game — attributing the start to it opens
+          // a session on the wrong rom and never opens one for this app, whose
+          // stop then finalizes nothing. Reading it also cost a 500ms delay that
+          // stalled the whole serialized lifecycle chain (a stop queued behind a
+          // start waited for it too); both are gone.
+          const appId = update.unAppID;
           if (appId) {
             // Refresh map in case a sync happened since init
             await refreshAppIdMap();
