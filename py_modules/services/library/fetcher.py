@@ -510,31 +510,31 @@ class LibraryFetcher:
         own_user_id = self._settings.get("romm_user_id")
         filter_to_own = self._settings.get("collection_owner_scope") == "own" and own_user_id is not None
 
-        collection_units: list[WorkUnit] = []
-        collection_units.extend(
-            await self._build_standardcollection_units(
+        collection_queue: list[WorkUnit] = []
+        collection_queue.extend(
+            await self._build_standard_collection_units(
                 enabled_standard_ids, own_user_id=own_user_id, filter_to_own=filter_to_own
             )
         )
-        collection_units.extend(
-            await self._build_smartcollection_units(
+        collection_queue.extend(
+            await self._build_smart_collection_units(
                 enabled_smart_ids, own_user_id=own_user_id, filter_to_own=filter_to_own
             )
         )
-        collection_units.extend(await self._build_virtualcollection_units(enabled_virtual_ids))
+        collection_queue.extend(await self._build_virtual_collection_units(enabled_virtual_ids))
         # One short read UoW for every collection at once — after the listing
         # fetches, never across them.
-        units.extend(await self._attach_collection_bound_counts(collection_units))
+        units.extend(await self._attach_collection_bound_counts(collection_queue))
 
         return units
 
-    async def _build_standardcollection_units(
+    async def _build_standard_collection_units(
         self, enabled_ids: set[str], *, own_user_id: int | None = None, filter_to_own: bool = False
     ) -> list[WorkUnit]:
         """Fetch standard collections and emit work units for those whose id is in *enabled_ids*.
 
         Under the "Mine" owner-scope (*filter_to_own*), foreign collections are
-        dropped even when enabled (see :func:`_collection_units`).
+        dropped even when enabled (see :func:`domain.work_unit.collection_units`).
         """
         if not enabled_ids:
             return []
@@ -547,13 +547,13 @@ class LibraryFetcher:
             collections, enabled_ids, "standard", own_user_id=own_user_id, filter_to_own=filter_to_own
         )
 
-    async def _build_smartcollection_units(
+    async def _build_smart_collection_units(
         self, enabled_ids: set[str], *, own_user_id: int | None = None, filter_to_own: bool = False
     ) -> list[WorkUnit]:
         """Fetch smart collections and emit work units for those whose id is in *enabled_ids*.
 
         Under the "Mine" owner-scope (*filter_to_own*), foreign collections are
-        dropped even when enabled (see :func:`_collection_units`).
+        dropped even when enabled (see :func:`domain.work_unit.collection_units`).
         """
         if not enabled_ids:
             return []
@@ -564,7 +564,7 @@ class LibraryFetcher:
             collections = []
         return collection_units(collections, enabled_ids, "smart", own_user_id=own_user_id, filter_to_own=filter_to_own)
 
-    async def _build_virtualcollection_units(self, enabled_ids: set[str]) -> list[WorkUnit]:
+    async def _build_virtual_collection_units(self, enabled_ids: set[str]) -> list[WorkUnit]:
         """Fetch every supported virtual type and emit units for those whose id is in *enabled_ids*.
 
         The ids are globally unique across virtual types (RomM bakes the type
