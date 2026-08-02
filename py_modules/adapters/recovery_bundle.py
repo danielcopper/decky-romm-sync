@@ -112,102 +112,141 @@ class RecoveryBundleAdapter:
             seal_bytes = self._read_beneath(os.path.join(anchor, "SEAL.json"), anchor)
             checksum_bytes = self._read_beneath(os.path.join(anchor, "checksums.sha256"), anchor)
             manifest_bytes = self._read_beneath(os.path.join(anchor, "manifest.json"), anchor)
-            seal = json.loads(seal_bytes)
-            manifest = json.loads(manifest_bytes)
-            if not isinstance(seal, dict) or not isinstance(manifest, dict):
-                raise ValueError("Recovery bundle metadata is invalid")
-            if (
-                seal.get("sealed") is not True
-                or seal.get("bundle_id") != os.path.basename(bundle_path)
-                or type(seal.get("file_count")) is not int
-                or hashlib.sha256(checksum_bytes).hexdigest() != seal.get("checksums_sha256")
-            ):
-                raise ValueError("Recovery bundle seal is invalid")
-            bundle_stat = os.fstat(bundle_fd)
-            digest_payload = {
-                "device": bundle_stat.st_dev,
-                "inode": bundle_stat.st_ino,
-                "mode": bundle_stat.st_mode,
-                "seal": hashlib.sha256(seal_bytes).hexdigest(),
-                "checksums": hashlib.sha256(checksum_bytes).hexdigest(),
-                "manifest": hashlib.sha256(manifest_bytes).hexdigest(),
-            }
-            bundle_digest = hashlib.sha256(
-                json.dumps(digest_payload, ensure_ascii=True, sort_keys=True).encode("ascii")
-            ).hexdigest()
+            seal, manifest = self._require_sealed_metadata(bundle_path, seal_bytes, checksum_bytes, manifest_bytes)
+            bundle_digest = self._bundle_digest(bundle_fd, seal_bytes, checksum_bytes, manifest_bytes)
             if expected_digest is not None and bundle_digest != expected_digest:
                 raise ValueError("Recovery bundle identity changed after claims were decoded")
 
-            checksums: dict[str, str] = {}
-            for raw_line in checksum_bytes.decode("utf-8").splitlines():
-                digest, separator, relative = raw_line.partition("  ")
-                if not separator or not relative or os.path.isabs(relative) or ".." in relative.split("/"):
-                    raise ValueError("Recovery checksum list is invalid")
-                checksums[relative] = digest
-            for relative, digest in checksums.items():
-                fd = self._open_regular_beneath(os.path.join(anchor, *relative.split("/")), anchor)
-                try:
-                    if self._sha256_fd(fd) != digest:
-                        raise ValueError("Recovery bundle checksum mismatch")
-                finally:
-                    os.close(fd)
+            checksums = self._decode_checksums(checksum_bytes)
+            self._verify_bundle_checksums(anchor, checksums)
 
-            source_sets = manifest.get("source_sets")
-            records = manifest.get("artifacts")
-            if not isinstance(source_sets, list) or not isinstance(records, list) or seal["file_count"] != len(records):
-                raise ValueError("Recovery manifest is invalid")
-            claims: dict[str, SourceClaim] = {}
-            sealed_files: dict[str, tuple[str, SourceIdentity, str]] = {}
-            for item in source_sets:
-                if not isinstance(item, dict):
-                    raise ValueError("Recovery manifest source claim is invalid")
-                source_path = item.get("source_path")
-                safe_root = item.get("safe_root")
-                files = item.get("files")
-                raw_identity = item.get("source_identity")
-                raw_sha256 = item.get("sha256")
-                raw_entries = item.get("entries")
-                if (
-                    not isinstance(source_path, str)
-                    or not isinstance(safe_root, str)
-                    or not isinstance(files, list)
-                    or not isinstance(raw_identity, dict)
-                    or (raw_sha256 is not None and not isinstance(raw_sha256, str))
-                    or not isinstance(raw_entries, dict)
-                ):
-                    raise ValueError("Recovery manifest source claim is invalid")
-                claim = self._decode_claim(source_path, safe_root, raw_identity, raw_sha256, raw_entries)
-                if self._files_for_claim(claim) != files or claim_source(source_path, safe_root) != claim:
-                    raise ValueError("Recovery source no longer matches the sealed claim")
-                claims[source_path] = claim
-                sealed_files.update(self._sealed_files_for_claim(claim))
-
-            for record in records:
-                if not isinstance(record, dict):
-                    raise ValueError("Recovery artifact record is invalid")
-                source_path = record.get("source_path")
-                safe_root = record.get("safe_root")
-                digest = record.get("sha256")
-                raw_identity = record.get("source_identity")
-                if (
-                    not isinstance(source_path, str)
-                    or not isinstance(safe_root, str)
-                    or not isinstance(digest, str)
-                    or not isinstance(raw_identity, dict)
-                ):
-                    raise ValueError("Recovery artifact record is invalid")
-                sealed = sealed_files.get(source_path)
-                if (
-                    sealed is None
-                    or sealed[0] != safe_root
-                    or sealed[1] != self._decode_identity(raw_identity)
-                    or sealed[2] != digest
-                ):
-                    raise ValueError("Recovery artifact does not match its verified source claim")
+            source_sets, records = self._require_manifest_shape(seal, manifest)
+            claims, sealed_files = self._decode_source_claims(source_sets)
+            self._require_records_match_claims(records, sealed_files)
             return {"claims": claims, "bundle_digest": bundle_digest}
         finally:
             os.close(bundle_fd)
             self._close_layout(descriptors)
+
+    @staticmethod
+    def _require_sealed_metadata(
+        bundle_path: str, seal_bytes: bytes, checksum_bytes: bytes, manifest_bytes: bytes
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Decode the seal and manifest, refusing a bundle that was never sealed as this one."""
+        seal = json.loads(seal_bytes)
+        manifest = json.loads(manifest_bytes)
+        if not isinstance(seal, dict) or not isinstance(manifest, dict):
+            raise ValueError("Recovery bundle metadata is invalid")
+        if (
+            seal.get("sealed") is not True
+            or seal.get("bundle_id") != os.path.basename(bundle_path)
+            or type(seal.get("file_count")) is not int
+            or hashlib.sha256(checksum_bytes).hexdigest() != seal.get("checksums_sha256")
+        ):
+            raise ValueError("Recovery bundle seal is invalid")
+        return seal, manifest
+
+    @staticmethod
+    def _bundle_digest(bundle_fd: int, seal_bytes: bytes, checksum_bytes: bytes, manifest_bytes: bytes) -> str:
+        """Fingerprint the held bundle directory together with the metadata just read from it."""
+        bundle_stat = os.fstat(bundle_fd)
+        digest_payload = {
+            "device": bundle_stat.st_dev,
+            "inode": bundle_stat.st_ino,
+            "mode": bundle_stat.st_mode,
+            "seal": hashlib.sha256(seal_bytes).hexdigest(),
+            "checksums": hashlib.sha256(checksum_bytes).hexdigest(),
+            "manifest": hashlib.sha256(manifest_bytes).hexdigest(),
+        }
+        return hashlib.sha256(json.dumps(digest_payload, ensure_ascii=True, sort_keys=True).encode("ascii")).hexdigest()
+
+    @staticmethod
+    def _decode_checksums(checksum_bytes: bytes) -> dict[str, str]:
+        """Read the sealed checksum list, refusing any entry that could point outside the bundle."""
+        checksums: dict[str, str] = {}
+        for raw_line in checksum_bytes.decode("utf-8").splitlines():
+            digest, separator, relative = raw_line.partition("  ")
+            if not separator or not relative or os.path.isabs(relative) or ".." in relative.split("/"):
+                raise ValueError("Recovery checksum list is invalid")
+            checksums[relative] = digest
+        return checksums
+
+    def _verify_bundle_checksums(self, anchor: str, checksums: dict[str, str]) -> None:
+        """Re-hash every sealed file below the held bundle directory."""
+        for relative, digest in checksums.items():
+            fd = self._open_regular_beneath(os.path.join(anchor, *relative.split("/")), anchor)
+            try:
+                if self._sha256_fd(fd) != digest:
+                    raise ValueError("Recovery bundle checksum mismatch")
+            finally:
+                os.close(fd)
+
+    @staticmethod
+    def _require_manifest_shape(seal: dict[str, Any], manifest: dict[str, Any]) -> tuple[list[Any], list[Any]]:
+        """Split the manifest into its source sets and artifact records, as the seal counted them."""
+        source_sets = manifest.get("source_sets")
+        records = manifest.get("artifacts")
+        if not isinstance(source_sets, list) or not isinstance(records, list) or seal["file_count"] != len(records):
+            raise ValueError("Recovery manifest is invalid")
+        return source_sets, records
+
+    def _decode_source_claims(
+        self, source_sets: list[Any]
+    ) -> tuple[dict[str, SourceClaim], dict[str, tuple[str, SourceIdentity, str]]]:
+        """Decode each sealed claim and prove the source on disk still matches it exactly."""
+        claims: dict[str, SourceClaim] = {}
+        sealed_files: dict[str, tuple[str, SourceIdentity, str]] = {}
+        for item in source_sets:
+            if not isinstance(item, dict):
+                raise ValueError("Recovery manifest source claim is invalid")
+            source_path = item.get("source_path")
+            safe_root = item.get("safe_root")
+            files = item.get("files")
+            raw_identity = item.get("source_identity")
+            raw_sha256 = item.get("sha256")
+            raw_entries = item.get("entries")
+            if (
+                not isinstance(source_path, str)
+                or not isinstance(safe_root, str)
+                or not isinstance(files, list)
+                or not isinstance(raw_identity, dict)
+                or (raw_sha256 is not None and not isinstance(raw_sha256, str))
+                or not isinstance(raw_entries, dict)
+            ):
+                raise ValueError("Recovery manifest source claim is invalid")
+            claim = self._decode_claim(source_path, safe_root, raw_identity, raw_sha256, raw_entries)
+            if self._files_for_claim(claim) != files or claim_source(source_path, safe_root) != claim:
+                raise ValueError("Recovery source no longer matches the sealed claim")
+            claims[source_path] = claim
+            sealed_files.update(self._sealed_files_for_claim(claim))
+        return claims, sealed_files
+
+    def _require_records_match_claims(
+        self, records: list[Any], sealed_files: dict[str, tuple[str, SourceIdentity, str]]
+    ) -> None:
+        """Refuse any artifact record that is not backed by an already-verified source claim."""
+        for record in records:
+            if not isinstance(record, dict):
+                raise ValueError("Recovery artifact record is invalid")
+            source_path = record.get("source_path")
+            safe_root = record.get("safe_root")
+            digest = record.get("sha256")
+            raw_identity = record.get("source_identity")
+            if (
+                not isinstance(source_path, str)
+                or not isinstance(safe_root, str)
+                or not isinstance(digest, str)
+                or not isinstance(raw_identity, dict)
+            ):
+                raise ValueError("Recovery artifact record is invalid")
+            sealed = sealed_files.get(source_path)
+            if (
+                sealed is None
+                or sealed[0] != safe_root
+                or sealed[1] != self._decode_identity(raw_identity)
+                or sealed[2] != digest
+            ):
+                raise ValueError("Recovery artifact does not match its verified source claim")
 
     @classmethod
     def _read_beneath(cls, path: str, safe_root: str) -> bytes:
@@ -311,24 +350,36 @@ class RecoveryBundleAdapter:
         except BaseException as primary:
             if preserved is not None:
                 raise
-            cleanup_path = os.path.join(
-                bundles_parent if renamed else os.path.join(self._root, "staging"),
-                bundle_id if renamed else staging_name,
-            )
-            try:
-                cleanup = remove_current(cleanup_path, self._root)
-                if not cleanup["success"]:
-                    raise RuntimeError(cleanup["message"])
-            except Exception as cleanup_exc:
-                raise RuntimeError(
-                    "Recovery bundle failed and unsafe staging was preserved at "
-                    f"{cleanup_path} because cleanup failed: {cleanup_exc}"
-                ) from primary
+            self._discard_failed_bundle(bundles_parent, bundle_id, staging_name, renamed=renamed, primary=primary)
             raise
         finally:
             if staging_fd is not None:
                 os.close(staging_fd)
             self._close_layout(descriptors)
+
+    def _discard_failed_bundle(
+        self,
+        bundles_parent: str,
+        bundle_id: str,
+        staging_name: str,
+        *,
+        renamed: bool,
+        primary: BaseException,
+    ) -> None:
+        """Remove what a failed seal left behind, reporting a cleanup that could not finish."""
+        cleanup_path = os.path.join(
+            bundles_parent if renamed else os.path.join(self._root, "staging"),
+            bundle_id if renamed else staging_name,
+        )
+        try:
+            cleanup = remove_current(cleanup_path, self._root)
+            if not cleanup["success"]:
+                raise RuntimeError(cleanup["message"])
+        except Exception as cleanup_exc:
+            raise RuntimeError(
+                "Recovery bundle failed and unsafe staging was preserved at "
+                f"{cleanup_path} because cleanup failed: {cleanup_exc}"
+            ) from primary
 
     @classmethod
     def _preserve_uncertain_bundle(cls, bundles_parent_fd: int, bundles_parent: str, bundle_id: str) -> str | None:
@@ -366,43 +417,8 @@ class RecoveryBundleAdapter:
         free_bytes: int,
         should_abort: Callable[[], bool] | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, object]], dict[str, str]]:
-        expanded: list[tuple[RecoveryArtifact, str]] = []
-        source_sets: list[dict[str, object]] = []
-        seen: set[str] = set()
-        sealed_claims: dict[str, SourceClaim] = {}
-        for artifact in artifacts:
-            raise_if_aborted(should_abort)
-            claim = claim_source(artifact["source_path"], artifact["safe_root"], should_abort)
-            files = self._files_for_claim(claim)
-            sealed_claims[artifact["source_path"]] = claim
-            source_sets.append(
-                {
-                    "source_path": artifact["source_path"],
-                    "safe_root": artifact["safe_root"],
-                    "files": files,
-                    "kind": artifact["kind"],
-                    "source_identity": claim["source_identity"],
-                    "sha256": claim["sha256"],
-                    "entries": claim["entries"],
-                    **({"rom_id": artifact["rom_id"]} if "rom_id" in artifact else {}),
-                }
-            )
-            for file_path in files:
-                lexical = os.path.abspath(file_path)
-                if lexical in seen:
-                    continue
-                seen.add(lexical)
-                expanded.append((artifact, file_path))
-        required = 0
-        for artifact, path in expanded:
-            raise_if_aborted(should_abort)
-            fd = self._open_regular_beneath(path, artifact["safe_root"])
-            try:
-                required += os.fstat(fd).st_size
-            finally:
-                os.close(fd)
-        if free_bytes < required:
-            raise OSError(f"Insufficient recovery space: need {required} bytes")
+        expanded, source_sets, sealed_claims = self._claim_artifact_sources(artifacts, should_abort)
+        self._require_free_space(expanded, free_bytes, should_abort)
 
         os.mkdir("files", 0o700, dir_fd=staging_fd)
         files_fd = self._open_dir_at(staging_fd, "files")
@@ -439,6 +455,59 @@ class RecoveryBundleAdapter:
             if claim_source(source_path, sealed_claim["safe_root"], should_abort) != sealed_claim:
                 raise OSError(f"Recovery source changed while the bundle was sealed: {source_path}")
         return records, source_sets, checksums
+
+    def _claim_artifact_sources(
+        self,
+        artifacts: list[RecoveryArtifact],
+        should_abort: Callable[[], bool] | None,
+    ) -> tuple[list[tuple[RecoveryArtifact, str]], list[dict[str, object]], dict[str, SourceClaim]]:
+        """Seal a claim per artifact and flatten it into the distinct files to copy."""
+        expanded: list[tuple[RecoveryArtifact, str]] = []
+        source_sets: list[dict[str, object]] = []
+        seen: set[str] = set()
+        sealed_claims: dict[str, SourceClaim] = {}
+        for artifact in artifacts:
+            raise_if_aborted(should_abort)
+            claim = claim_source(artifact["source_path"], artifact["safe_root"], should_abort)
+            files = self._files_for_claim(claim)
+            sealed_claims[artifact["source_path"]] = claim
+            source_sets.append(
+                {
+                    "source_path": artifact["source_path"],
+                    "safe_root": artifact["safe_root"],
+                    "files": files,
+                    "kind": artifact["kind"],
+                    "source_identity": claim["source_identity"],
+                    "sha256": claim["sha256"],
+                    "entries": claim["entries"],
+                    **({"rom_id": artifact["rom_id"]} if "rom_id" in artifact else {}),
+                }
+            )
+            for file_path in files:
+                lexical = os.path.abspath(file_path)
+                if lexical in seen:
+                    continue
+                seen.add(lexical)
+                expanded.append((artifact, file_path))
+        return expanded, source_sets, sealed_claims
+
+    def _require_free_space(
+        self,
+        expanded: list[tuple[RecoveryArtifact, str]],
+        free_bytes: int,
+        should_abort: Callable[[], bool] | None,
+    ) -> None:
+        """Refuse the whole bundle up front unless every claimed byte fits."""
+        required = 0
+        for artifact, path in expanded:
+            raise_if_aborted(should_abort)
+            fd = self._open_regular_beneath(path, artifact["safe_root"])
+            try:
+                required += os.fstat(fd).st_size
+            finally:
+                os.close(fd)
+        if free_bytes < required:
+            raise OSError(f"Insufficient recovery space: need {required} bytes")
 
     @classmethod
     def _copy_opened_source(

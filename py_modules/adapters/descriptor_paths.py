@@ -17,13 +17,16 @@ from typing import TYPE_CHECKING
 from lib.errors import OperationAbortedError
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     from models.prune import MutationOutcome, SourceClaim, SourceEntry, SourceIdentity
 
 _F_SETOWN_EX = 15
 _F_OWNER_TID = 0
 _RENAME_NOREPLACE = 1
+_ALREADY_ABSENT = "Source was already absent"
+_EXCLUSION_DRIFT = "Recovery source subtree changed before writer exclusion"
+_CONSUMED_DRIFT = "Recovery source subtree changed while it was consumed"
 
 
 def identity_for_stat(value: os.stat_result, mount_id: int = 0) -> SourceIdentity:
@@ -152,12 +155,12 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
     except FileNotFoundError:
         if expected["exists"]:
             raise RuntimeError(f"Recovery source disappeared after sealing: {path}") from None
-        return _outcome(success=True, changed=False, ambiguous=False, message="Source was already absent")
+        return _outcome(success=True, changed=False, ambiguous=False, message=_ALREADY_ABSENT)
     try:
         current = _stat_name(parent_fd, name)
         _require_identity(path, current, expected)
         if current is None:
-            return _outcome(success=True, changed=False, ambiguous=False, message="Source was already absent")
+            return _outcome(success=True, changed=False, ambiguous=False, message=_ALREADY_ABSENT)
         temporary = f".{name}.romm-prune-{current.st_ino}"
         if _stat_name(parent_fd, temporary) is not None:
             raise FileExistsError(f"Prune staging entry already exists: {temporary}")
@@ -167,79 +170,15 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
         leased_files: dict[str, int] = {}
         try:
             _require_claimed_identity(path, claimed, expected)
-            if stat.S_ISDIR(current.st_mode):
-                directory_fd = _open_child_directory(parent_fd, temporary)
-                try:
-                    _require_same_mount(parent_fd, directory_fd, path)
-                    actual_entries = _inventory_directory(directory_fd, expected["mount_id"])
-                finally:
-                    os.close(directory_fd)
-                if actual_entries != claim["entries"]:
-                    raise RuntimeError(f"Recovery source subtree changed after sealing: {path}")
-                directory_fd = _open_child_directory(parent_fd, temporary)
-                try:
-                    _acquire_directory_leases(
-                        directory_fd,
-                        claim["entries"],
-                        expected["mount_id"],
-                        lease_stack,
-                        leased_files,
-                    )
-                    _validate_claimed_directory(
-                        directory_fd,
-                        claim["entries"],
-                        expected["mount_id"],
-                        leased_files=leased_files,
-                    )
-                finally:
-                    os.close(directory_fd)
-            elif claim["entries"]:
-                raise ValueError(f"Regular-file recovery claim has descendants: {path}")
-            else:
-                file_fd = lease_stack.enter_context(_leased_regular(parent_fd, temporary, path))
-                leased_files[""] = file_fd
-                _require_same_mount(parent_fd, file_fd, path)
-                _require_file_claim(path, file_fd, expected, claim["sha256"], claimed=True)
+            _lease_claimed_source(path, parent_fd, temporary, current, claim, lease_stack, leased_files)
         except Exception:
-            close_error: BaseException | None = None
-            try:
-                lease_stack.close()
-            except Exception as exc:
-                close_error = exc
-            try:
-                _restore_claim(parent_fd, name, temporary)
-            except Exception as restore_exc:
-                return _outcome(
-                    success=False,
-                    changed=True,
-                    ambiguous=True,
-                    message=f"Source validation failed and rollback was uncertain: {restore_exc}",
-                )
-            if close_error is not None:
-                raise RuntimeError(
-                    f"Writer-exclusion teardown failed after source validation: {close_error}"
-                ) from close_error
+            rollback = _roll_back_claim(parent_fd, name, temporary, lease_stack)
+            if rollback is not None:
+                return rollback
             raise
         removal_error: BaseException | None = None
         try:
-            if stat.S_ISDIR(current.st_mode):
-                directory_fd = _open_child_directory(parent_fd, temporary)
-                try:
-                    _delete_claimed_directory(
-                        directory_fd,
-                        claim["entries"],
-                        expected["mount_id"],
-                        leased_files=leased_files,
-                    )
-                finally:
-                    os.close(directory_fd)
-                os.rmdir(temporary, dir_fd=parent_fd)
-            else:
-                file_fd = leased_files[""]
-                _require_file_claim(path, file_fd, expected, claim["sha256"], claimed=True)
-                current_claim = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
-                _require_entry_matches_fd(path, current_claim, _identity_for_fd(file_fd))
-                os.unlink(temporary, dir_fd=parent_fd)
+            _unlink_claimed_source(path, parent_fd, temporary, current, claim, leased_files)
         except Exception as exc:
             removal_error = exc
         try:
@@ -287,24 +226,8 @@ def rename_claimed(src: str, dst: str, safe_root: str, claim: SourceClaim) -> Mu
         current = _stat_name(source_fd, source_name)
         _require_identity(src, current, expected)
         if current is None:
-            return _outcome(success=True, changed=False, ambiguous=False, message="Source was already absent")
-        if stat.S_ISDIR(current.st_mode):
-            directory_fd = _open_child_directory(source_fd, source_name)
-            try:
-                _require_same_mount(source_fd, directory_fd, src)
-                if _inventory_directory(directory_fd, expected["mount_id"]) != claim["entries"]:
-                    raise RuntimeError(f"Recovery source subtree changed after sealing: {src}")
-            finally:
-                os.close(directory_fd)
-        elif claim["entries"]:
-            raise ValueError(f"Regular-file recovery claim has descendants: {src}")
-        else:
-            file_fd = _open_child_regular(source_fd, source_name)
-            try:
-                _require_same_mount(source_fd, file_fd, src)
-                _require_file_claim(src, file_fd, expected, claim["sha256"], claimed=False)
-            finally:
-                os.close(file_fd)
+            return _outcome(success=True, changed=False, ambiguous=False, message=_ALREADY_ABSENT)
+        _require_claim_before_rename(src, source_fd, source_name, current, claim)
         if _stat_name(destination_fd, destination_name) is not None:
             raise FileExistsError(f"Recovery destination already exists: {dst}")
         try:
@@ -314,47 +237,11 @@ def rename_claimed(src: str, dst: str, safe_root: str, claim: SourceClaim) -> Mu
         claimed = _stat_name(destination_fd, destination_name)
         try:
             _require_claimed_identity(src, claimed, expected)
-            if stat.S_ISDIR(current.st_mode):
-                directory_fd = _open_child_directory(destination_fd, destination_name)
-                try:
-                    _require_same_mount(destination_fd, directory_fd, src)
-                    if _inventory_directory(directory_fd, expected["mount_id"]) != claim["entries"]:
-                        raise RuntimeError(f"Recovery source subtree changed while it was renamed: {src}")
-                finally:
-                    os.close(directory_fd)
-            else:
-                file_fd = _open_child_regular(destination_fd, destination_name)
-                try:
-                    _require_same_mount(destination_fd, file_fd, src)
-                    _require_file_claim(src, file_fd, expected, claim["sha256"], claimed=True)
-                finally:
-                    os.close(file_fd)
+            _require_claim_after_rename(src, destination_fd, destination_name, current, claim)
         except Exception as exc:
-            reoccupied = False
-            try:
-                reoccupied = _stat_name(source_fd, source_name) is not None
-                if not reoccupied:
-                    rename_noreplace_at(destination_fd, destination_name, source_fd, source_name)
-                    os.fsync(source_fd)
-                    if destination_fd != source_fd:
-                        os.fsync(destination_fd)
-            except Exception as restore_exc:
-                return _outcome(
-                    success=False,
-                    changed=True,
-                    ambiguous=True,
-                    message=f"Rename validation failed and rollback was uncertain: {restore_exc}",
-                )
-            if reoccupied:
-                return _outcome(
-                    success=False,
-                    changed=True,
-                    ambiguous=True,
-                    message=(
-                        f"Rename validation failed and the source is still at {dst} "
-                        f"because its original path was re-occupied: {exc}"
-                    ),
-                )
+            rollback = _roll_back_rename(dst, source_fd, source_name, destination_fd, destination_name, exc)
+            if rollback is not None:
+                return rollback
             raise
         try:
             os.fsync(source_fd)
@@ -650,6 +537,199 @@ def _restore_claim(parent_fd: int, name: str, temporary: str) -> None:
     os.fsync(parent_fd)
 
 
+def _lease_claimed_source(
+    path: str,
+    parent_fd: int,
+    temporary: str,
+    current: os.stat_result,
+    claim: SourceClaim,
+    lease_stack: contextlib.ExitStack,
+    leased_files: dict[str, int],
+) -> None:
+    """Hold writer exclusion over the claimed source and refuse any drift since sealing."""
+    expected = claim["source_identity"]
+    if stat.S_ISDIR(current.st_mode):
+        directory_fd = _open_child_directory(parent_fd, temporary)
+        try:
+            _require_same_mount(parent_fd, directory_fd, path)
+            actual_entries = _inventory_directory(directory_fd, expected["mount_id"])
+        finally:
+            os.close(directory_fd)
+        if actual_entries != claim["entries"]:
+            raise RuntimeError(f"Recovery source subtree changed after sealing: {path}")
+        directory_fd = _open_child_directory(parent_fd, temporary)
+        try:
+            _acquire_directory_leases(
+                directory_fd,
+                claim["entries"],
+                expected["mount_id"],
+                lease_stack,
+                leased_files,
+            )
+            _validate_claimed_directory(
+                directory_fd,
+                claim["entries"],
+                expected["mount_id"],
+                leased_files=leased_files,
+            )
+        finally:
+            os.close(directory_fd)
+    elif claim["entries"]:
+        raise ValueError(f"Regular-file recovery claim has descendants: {path}")
+    else:
+        file_fd = lease_stack.enter_context(_leased_regular(parent_fd, temporary, path))
+        leased_files[""] = file_fd
+        _require_same_mount(parent_fd, file_fd, path)
+        _require_file_claim(path, file_fd, expected, claim["sha256"], claimed=True)
+
+
+def _unlink_claimed_source(
+    path: str,
+    parent_fd: int,
+    temporary: str,
+    current: os.stat_result,
+    claim: SourceClaim,
+    leased_files: dict[str, int],
+) -> None:
+    """Delete the claimed source, each regular file re-proved immediately before its unlink."""
+    expected = claim["source_identity"]
+    if stat.S_ISDIR(current.st_mode):
+        directory_fd = _open_child_directory(parent_fd, temporary)
+        try:
+            _delete_claimed_directory(
+                directory_fd,
+                claim["entries"],
+                expected["mount_id"],
+                leased_files=leased_files,
+            )
+        finally:
+            os.close(directory_fd)
+        os.rmdir(temporary, dir_fd=parent_fd)
+    else:
+        file_fd = leased_files[""]
+        _require_file_claim(path, file_fd, expected, claim["sha256"], claimed=True)
+        current_claim = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
+        _require_entry_matches_fd(path, current_claim, _identity_for_fd(file_fd))
+        os.unlink(temporary, dir_fd=parent_fd)
+
+
+def _require_claim_before_rename(
+    src: str,
+    source_fd: int,
+    source_name: str,
+    current: os.stat_result,
+    claim: SourceClaim,
+) -> None:
+    """Refuse a rename whose source drifted from the sealed claim."""
+    expected = claim["source_identity"]
+    if stat.S_ISDIR(current.st_mode):
+        directory_fd = _open_child_directory(source_fd, source_name)
+        try:
+            _require_same_mount(source_fd, directory_fd, src)
+            if _inventory_directory(directory_fd, expected["mount_id"]) != claim["entries"]:
+                raise RuntimeError(f"Recovery source subtree changed after sealing: {src}")
+        finally:
+            os.close(directory_fd)
+    elif claim["entries"]:
+        raise ValueError(f"Regular-file recovery claim has descendants: {src}")
+    else:
+        file_fd = _open_child_regular(source_fd, source_name)
+        try:
+            _require_same_mount(source_fd, file_fd, src)
+            _require_file_claim(src, file_fd, expected, claim["sha256"], claimed=False)
+        finally:
+            os.close(file_fd)
+
+
+def _require_claim_after_rename(
+    src: str,
+    destination_fd: int,
+    destination_name: str,
+    current: os.stat_result,
+    claim: SourceClaim,
+) -> None:
+    """Refuse a rename whose source drifted while it was moved."""
+    expected = claim["source_identity"]
+    if stat.S_ISDIR(current.st_mode):
+        directory_fd = _open_child_directory(destination_fd, destination_name)
+        try:
+            _require_same_mount(destination_fd, directory_fd, src)
+            if _inventory_directory(directory_fd, expected["mount_id"]) != claim["entries"]:
+                raise RuntimeError(f"Recovery source subtree changed while it was renamed: {src}")
+        finally:
+            os.close(directory_fd)
+    else:
+        file_fd = _open_child_regular(destination_fd, destination_name)
+        try:
+            _require_same_mount(destination_fd, file_fd, src)
+            _require_file_claim(src, file_fd, expected, claim["sha256"], claimed=True)
+        finally:
+            os.close(file_fd)
+
+
+def _roll_back_rename(
+    dst: str,
+    source_fd: int,
+    source_name: str,
+    destination_fd: int,
+    destination_name: str,
+    exc: Exception,
+) -> MutationOutcome | None:
+    """Move a refused rename back. ``None`` means the refusal itself must surface."""
+    reoccupied = False
+    try:
+        reoccupied = _stat_name(source_fd, source_name) is not None
+        if not reoccupied:
+            rename_noreplace_at(destination_fd, destination_name, source_fd, source_name)
+            os.fsync(source_fd)
+            if destination_fd != source_fd:
+                os.fsync(destination_fd)
+    except Exception as restore_exc:
+        return _outcome(
+            success=False,
+            changed=True,
+            ambiguous=True,
+            message=f"Rename validation failed and rollback was uncertain: {restore_exc}",
+        )
+    if reoccupied:
+        return _outcome(
+            success=False,
+            changed=True,
+            ambiguous=True,
+            message=(
+                f"Rename validation failed and the source is still at {dst} "
+                f"because its original path was re-occupied: {exc}"
+            ),
+        )
+    return None
+
+
+def _roll_back_claim(
+    parent_fd: int,
+    name: str,
+    temporary: str,
+    lease_stack: contextlib.ExitStack,
+) -> MutationOutcome | None:
+    """Give a refused claim back. ``None`` means the refusal itself must surface."""
+    close_error: BaseException | None = None
+    try:
+        lease_stack.close()
+    except Exception as exc:
+        close_error = exc
+    try:
+        _restore_claim(parent_fd, name, temporary)
+    except Exception as restore_exc:
+        return _outcome(
+            success=False,
+            changed=True,
+            ambiguous=True,
+            message=f"Source validation failed and rollback was uncertain: {restore_exc}",
+        )
+    if close_error is not None:
+        raise RuntimeError(f"Writer-exclusion teardown failed after source validation: {close_error}") from close_error
+    return None
+
+
 def _outcome(*, success: bool, changed: bool, ambiguous: bool, message: str) -> MutationOutcome:
     return {"success": success, "changed": changed, "ambiguous": ambiguous, "message": message}
 
@@ -729,6 +809,34 @@ def _require_file_claim(
         raise RuntimeError(f"Recovery source content changed after sealing: {path}")
 
 
+def _claimed_children(
+    directory_fd: int,
+    entries: dict[str, SourceEntry],
+    prefix: str,
+    drift: str,
+) -> Iterator[tuple[str, str, SourceEntry, os.stat_result]]:
+    """Walk one claimed directory level in name order, refusing it whole on any drift.
+
+    The listing must match the claimed names exactly before a single child is
+    handed out, so a create, unlink, or rename anywhere at this level refuses the
+    subtree instead of letting the caller act on the entries that still match.
+    """
+    expected_names = {
+        relative[len(prefix) + 1 :].split("/", 1)[0] if prefix else relative.split("/", 1)[0]
+        for relative in entries
+        if not prefix or relative.startswith(prefix + "/")
+    }
+    actual_names = set(os.listdir(directory_fd))
+    if actual_names != expected_names:
+        raise RuntimeError(drift)
+    for name in sorted(actual_names):
+        relative = f"{prefix}/{name}" if prefix else name
+        expected = entries.get(relative)
+        if expected is None:
+            raise RuntimeError(f"{drift}: {relative}")
+        yield name, relative, expected, os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+
+
 def _acquire_directory_leases(
     directory_fd: int,
     entries: dict[str, SourceEntry],
@@ -737,20 +845,7 @@ def _acquire_directory_leases(
     leased_files: dict[str, int],
     prefix: str = "",
 ) -> None:
-    expected_names = {
-        relative[len(prefix) + 1 :].split("/", 1)[0] if prefix else relative.split("/", 1)[0]
-        for relative in entries
-        if not prefix or relative.startswith(prefix + "/")
-    }
-    actual_names = set(os.listdir(directory_fd))
-    if actual_names != expected_names:
-        raise RuntimeError("Recovery source subtree changed before writer exclusion")
-    for name in sorted(actual_names):
-        relative = f"{prefix}/{name}" if prefix else name
-        expected = entries.get(relative)
-        if expected is None:
-            raise RuntimeError(f"Recovery source subtree changed before writer exclusion: {relative}")
-        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    for name, relative, expected, current in _claimed_children(directory_fd, entries, prefix, _EXCLUSION_DRIFT):
         if stat.S_ISDIR(current.st_mode):
             child_fd = _open_child_directory(directory_fd, name)
             try:
@@ -778,20 +873,7 @@ def _delete_claimed_directory(
     *,
     leased_files: dict[str, int],
 ) -> None:
-    expected_names = {
-        relative[len(prefix) + 1 :].split("/", 1)[0] if prefix else relative.split("/", 1)[0]
-        for relative in entries
-        if not prefix or relative.startswith(prefix + "/")
-    }
-    actual_names = set(os.listdir(directory_fd))
-    if actual_names != expected_names:
-        raise RuntimeError("Recovery source subtree changed while it was consumed")
-    for name in sorted(actual_names):
-        relative = f"{prefix}/{name}" if prefix else name
-        expected = entries.get(relative)
-        if expected is None:
-            raise RuntimeError(f"Recovery source subtree changed while it was consumed: {relative}")
-        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    for name, relative, expected, current in _claimed_children(directory_fd, entries, prefix, _CONSUMED_DRIFT):
         if stat.S_ISDIR(current.st_mode):
             child_fd = _open_child_directory(directory_fd, name)
             try:
@@ -835,20 +917,7 @@ def _validate_claimed_directory(
     :func:`_delete_claimed_directory`, which is the authoritative pre-mutation
     validation.
     """
-    expected_names = {
-        relative[len(prefix) + 1 :].split("/", 1)[0] if prefix else relative.split("/", 1)[0]
-        for relative in entries
-        if not prefix or relative.startswith(prefix + "/")
-    }
-    actual_names = set(os.listdir(directory_fd))
-    if actual_names != expected_names:
-        raise RuntimeError("Recovery source subtree changed while it was consumed")
-    for name in sorted(actual_names):
-        relative = f"{prefix}/{name}" if prefix else name
-        expected = entries.get(relative)
-        if expected is None:
-            raise RuntimeError(f"Recovery source subtree changed while it was consumed: {relative}")
-        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    for name, relative, expected, current in _claimed_children(directory_fd, entries, prefix, _CONSUMED_DRIFT):
         if stat.S_ISDIR(current.st_mode):
             child_fd = _open_child_directory(directory_fd, name)
             try:
