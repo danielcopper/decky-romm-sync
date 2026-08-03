@@ -501,7 +501,8 @@ class TestDeviceHealReAddressesPlaytimeOutbox:
         result = await svc.ensure_device_registered()
 
         new_id = result["device_id"]
-        assert new_id and new_id != "server-uuid"
+        assert new_id
+        assert new_id != "server-uuid"
         session = self._pending(svc, 42)["2026-01-01T10:00:00"]
         # Re-addressed to the id the server now knows...
         assert session.device_id == new_id

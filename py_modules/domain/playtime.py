@@ -292,7 +292,7 @@ class Playtime:
         Returns the number of rows re-addressed.
         """
         moved = 0
-        for start_time, session in list(self.pending_sessions.items()):
+        for start_time, session in self.pending_sessions.items():
             if session.device_id == old_device_id:
                 self.pending_sessions[start_time] = replace(session, device_id=new_device_id)
                 moved += 1
