@@ -34,7 +34,7 @@ utilities) / `models/` (data shapes). `import-linter` enforces direction. `[CP]`
   bare-param ctors, no mixed ctors.
 - `[ours]` **Debug logging: inject the `DebugLogger` Protocol.** No per-service `_log_debug` that re-reads settings at
   call time; no `decky.logger.info` to bypass log-level filtering.
-- `[ours]` God-class signal: services > ~700 LOC — decompose into sub-services with constructor injection
+- `[ours]` God-class signal: services > ~1000 LOC — decompose into sub-services with constructor injection
   (`services/saves/` is the reference). Enforced by `scripts/check_module_size.py`: a new module may not cross the
   threshold at all, and the modules that predate the gate are pinned at their exact size and may not grow.
 

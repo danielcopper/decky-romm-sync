@@ -56,6 +56,9 @@ new code in it.
   rather than the behavior, and when a subfolder is justified. **No mechanical check exists for any of it.**
 - `adapters-domain.md` — adapters own I/O, domain is pure, aggregate mutations are verb-named after the event
   (`adopt_baseline`, not `update_baseline`). The field-assignment ban is checked; the naming is not.
+- `romm-http.md` — an unproven 404 must never become `RommNotFoundError`, which is deletion authority downstream: the
+  entity proof is the default and only the three byte-stream fetches opt out. Tests pin both directions; nothing else
+  does.
 - `bootstrap-wiring.md` — the `main.py` / `bootstrap/` split, and which half of `bootstrap/` new wiring belongs in.
 - `callables.md` — the `{success, reason, message}` failure shape and its two carve-outs. Checked.
 - `vendored-assets.md` — `_vendor/`, `native/`, `defaults/` are checksum-pinned verbatim copies. The checksums are
@@ -165,6 +168,10 @@ Format: **invariant** — tier — enforced by.
   bind a verdict key (`reason` / `status` / `recommended_action`) to a hardcoded `SERVER_UNREACHABLE`; route the
   exception through `classify_error`, or peel the 404 off with a sibling `except RommNotFoundError` where the verdict is
   a partial-success flag** — check — `scripts/check_404_not_unreachable.py --check`
+- **A 404 becomes `RommNotFoundError` only when RomM's entity layer is proven to have answered it; only the three
+  byte-stream fetches opt out** — test + prompt-only — `TestNotFoundDiscrimination` plus the per-call-site
+  `test_generic_route_404_still_raises_not_found` trio in `tests/adapters/romm/test_http.py`; a fourth byte-stream
+  fetch's opt-out is prompt-only — `.claude/rules/romm-http.md`
 - **Frontend↔backend callable parity (names + arity)** — check — `scripts/check_callable_manifest.py`
 - **Every backend `emit` event name has a frontend listener, and vice versa** — check — `scripts/check_event_parity.py`
 - **`settings.json` is written only by its owner (`adapters/persistence.py`)** — check —
@@ -177,9 +184,10 @@ Format: **invariant** — tier — enforced by.
   same path** — check — `scripts/check_uow_seam_nesting.py`
 - **Services never call clocks / sleep / uuid / random directly (inject the Protocol)** — check —
   `scripts/check_cosmic_call_bans.sh`
-- **No module in `services/` or `bootstrap/` crosses the ~700-LOC decomposition threshold, and the ones already over it
-  may not grow** — check — `scripts/check_module_size.py` (the modules that predate the gate are grandfathered at their
-  exact size; that list only ever gets shorter)
+- **No module in `services/`, `bootstrap/`, `adapters/`, `domain/`, `lib/` or `models/` crosses the ~1000-LOC
+  decomposition threshold, and the ones already over it may not grow** — check — `scripts/check_module_size.py` (the
+  modules that predate the gate are grandfathered at their exact size; that list only ever gets shorter. `main.py`,
+  `_vendor/`, `tests/`, `scripts/` and `src/` are out of scope, each for a reason recorded at `SCOPE_DIRS`)
 - **Service-independence contract list stays complete** — check — `scripts/check_service_independence_contract.py`
 - **Layer import direction (services ↛ adapters, adapters ↛ services, …)** — check — `.importlinter` (`lint-imports`)
 - **No bare `# type: ignore` / blanket suppressions** — check — `scripts/check_no_bare_ignores.sh`
