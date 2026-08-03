@@ -10,6 +10,13 @@ library into Steam as Non-Steam shortcuts. Games launch through [RetroDECK](http
 
 ![A RomM game's detail page in Steam showing the injected RomM Sync panel](assets/screenshot-game-detail.jpg)
 
+!!! note "Pre-1.0 (v0.x)"
+
+    The feature set isn't complete yet. Save sync covers standard cartridge saves; the memory-card systems —
+    PlayStation, PS2, Dreamcast, GameCube, PSP, 3DS — don't sync their saves yet
+    ([support matrix](user-guide/save-sync-support-matrix.md)). The Decky Store listing comes with v1.0; until then
+    it's a manual install.
+
 ## User Guide
 
 1. **[Getting Started](user-guide/getting-started.md)** — Prerequisites, installation, and first-time setup
@@ -20,10 +27,14 @@ library into Steam as Non-Steam shortcuts. Games launch through [RetroDECK](http
 4. **[Managing Games](user-guide/managing-games.md)** — Game detail panel, downloading ROMs, uninstalling, refreshing
    metadata
 5. **[BIOS Management](user-guide/bios-management.md)** — What BIOS files are, checking status, downloading per-platform
-6. **[RetroDECK Path Migration](user-guide/retrodeck-path-migration.md)** — Moving your RetroDECK installation between
+6. **[Save Sync](user-guide/save-sync.md)** — Auto-sync, conflict resolution modes, manual sync, failed sync retries
+7. **[Save File Extensions](user-guide/save-file-extensions.md)** — Which save file extensions RetroDECK's cores
+   produce, and the record of the original extension decision
+8. **[Save Sync Support Matrix](user-guide/save-sync-support-matrix.md)** — What syncs today, what's planned, and what
+   doesn't fit the per-game model
+9. **[RetroDECK Path Migration](user-guide/retrodeck-path-migration.md)** — Moving your RetroDECK installation between
    storage locations
-7. **[Save Sync](user-guide/save-sync.md)** — Auto-sync, conflict resolution modes, manual sync, failed sync retries
-8. **[Troubleshooting](user-guide/troubleshooting.md)** — Common issues, fixes, Danger Zone explained
+10. **[Troubleshooting](user-guide/troubleshooting.md)** — Common issues, fixes, Danger Zone explained
 
 ## Technical Reference
 

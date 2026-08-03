@@ -4,14 +4,32 @@ Save sync works **per game**: when a game is installed, its save is uploaded to 
 you can carry on across devices. Standard cartridge saves work automatically. A few consoles store saves differently —
 this page shows what syncs for each system today, and what's planned.
 
+## How reliable is this page?
+
+Be aware of what this table is before you plan around it. Most of it is **derived from libretro's documentation and from
+reading core source**, not from watching each core write a save on a real device. A separate project,
+[emu-atlas](https://github.com/danielcopper/emu-atlas), is auditing the same ground with evidence grades per core; at
+the time of writing it has confirmed **17 of RetroDECK's 159 libretro cores**, and none of the 22 standalone emulators.
+
+Two things follow that matter to you:
+
+- **A ❌ often means "not with the settings that ship", not "impossible".** Several cores can write per-game saves if
+  you change a core option — the rows below say which. Turning that on is not yet something the plugin does or detects
+  for you.
+- **Rows are stated for each platform's _default_ core.** You can override the core per system and per game, and a
+  different core can behave differently. RetroArch settings such as `savefiles_in_content_dir` also move saves out of
+  where the plugin looks.
+
+Where the audit has already corrected an earlier assumption, this page reflects the audit.
+
 ## Categories
 
-|    | Meaning                                                                                                                                                                                                                                           |
-| -- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ✅ | **Synced today.** Your saves for this system carry across devices automatically.                                                                                                                                                                  |
-| 🔜 | **Planned.** This save type isn't synced yet, but it fits the model and is on the way in a future release.                                                                                                                                        |
-| ❌ | **Not synced yet.** This system uses a _shared_ memory card (one card for many games) or stores saves outside the per-game save folder, so it doesn't fit per-game sync today — **planned for a later release**, handled differently (see below). |
-| ⚪ | **No save data.** This system's emulator has no in-game save to sync (you can still use save states locally).                                                                                                                                     |
+|    | Meaning                                                                                                                                                                                                                                                        |
+| -- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ✅ | **Synced today.** Your saves for this system carry across devices automatically.                                                                                                                                                                               |
+| 🔜 | **Planned.** This save type isn't synced yet, but it fits the model and is on the way in a future release.                                                                                                                                                     |
+| ❌ | **Not synced yet.** This system's default core writes a _shared_ card (one file for many games), keeps saves outside the per-game save folder, or hasn't been pinned down yet — so it doesn't fit per-game sync today. Handled differently in a later release. |
+| ⚪ | **No save data.** This system's emulator has no in-game save to sync (you can still use save states locally).                                                                                                                                                  |
 
 ## What syncs today ✅
 
@@ -19,31 +37,45 @@ Standard per-game cartridge saves sync automatically. That covers the large majo
 Game Boy / Color / Advance, N64, DS), Sega (Master System, Game Gear, Genesis / Mega Drive, Sega CD), PC Engine /
 TurboGrafx, WonderSwan, Atari Lynx, Virtual Boy, and more.
 
+The systems whose default core has been **watched writing a save on a real RetroDECK install** are Game Boy / Color /
+Advance, N64, Saturn, Neo Geo Pocket (Color) and Pokémon Mini. The rest of the ✅ rows follow the same standard `.srm`
+convention and are expected to behave identically, but haven't been observed one by one.
+
 ## Coming soon 🔜
 
 Per-game saves for these systems fit the sync model and are planned for a future release:
 
-| System                          | Notes |
-| ------------------------------- | ----- |
-| PlayStation — memory-card saves |       |
+| System      | Notes                                                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
+| PlayStation | Memory-card saves. The cores write them per game, but under a name the plugin doesn't probe yet.       |
+| 3DO         | The Opera core writes per-game NVRAM into its own `opera/per_game/` subfolder, under a versioned name. |
+
+!!! warning "3DO was listed as syncing here before — it wasn't"
+
+    Until this revision, 3DO showed as ✅ on the assumption that the Opera core writes a plain `<game>.srm` into the
+    save folder. The core audit disproved that: Opera writes its NVRAM to `opera/per_game/` with a version number in
+    the filename, and exposes no save RAM to RetroArch at all — so there was never a `.srm` for the plugin to find.
+    **If you have 3DO games, your saves have not been backed up to RomM.** Copy them off the device yourself until
+    this is supported.
 
 A few less-common systems (some DOS, PICO-8, ST-V) may also gain support pending confirmation.
 
 ## Not synced yet ❌
 
-These consoles use a **shared memory card** — a single card file holds the saves for _all_ your games — or keep saves
-outside the per-game save folder. A shared card can't be split per game without risking other games' saves, so it
-doesn't fit per-game sync today. We're looking at safe ways to handle these in a future release.
+These systems' default cores write a **shared card** — a single file holding the saves for _all_ your games — keep saves
+outside the per-game save folder, or haven't been pinned down yet. A shared card can't be split per game without risking
+other games' saves, so it doesn't fit per-game sync today. We're looking at safe ways to handle these in a future
+release.
 
-| System                                                     |
-| ---------------------------------------------------------- |
-| Dreamcast — shared VMU card                                |
-| PlayStation 2 — shared memory card                         |
-| GameCube — shared memory card                              |
-| Neo Geo CD — shared save                                   |
-| Nintendo 3DS — saves kept in a separate location           |
-| PSP — saves kept in per-game folders, not single files     |
-| Arcade (MAME) — NVRAM is stored separately by the emulator |
+| System         | Why it doesn't sync today                                                                                                                                                                                          |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Dreamcast      | Flycast ships with **Per-Game VMUs off**, so every game shares `vmu_save_A1.bin` and its siblings in RetroDECK's system folder. The core _can_ write per-game VMUs; the names it uses then aren't pinned down yet. |
+| PlayStation 2  | The LRPS2 core ships with **shared memory cards on** (`Mcd001.ps2` / `Mcd002.ps2`). With that option off it writes one `<game>.ps2` card per game — which would fit per-game sync.                                 |
+| GameCube / Wii | The Dolphin core appears to keep saves under its own subtree rather than the per-game save folder. Not confirmed on-device yet.                                                                                    |
+| Neo Geo CD     | Ships writing one shared save. The core has a per-content mode; which one wins when loading isn't confirmed.                                                                                                       |
+| Nintendo 3DS   | The Azahar core appears to use its own save subtree. Not confirmed on-device yet.                                                                                                                                  |
+| PSP            | Where the PPSSPP core keeps its saves, and whether they are per game, hasn't been established.                                                                                                                     |
+| Arcade (MAME)  | NVRAM is stored separately by the emulator, not as a file named after your ROM.                                                                                                                                    |
 
 ## No save data ⚪
 
@@ -64,7 +96,7 @@ states still work locally). See the full table for specifics.
     | `arcade` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `arcadia` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `astrocde` | ❌ | Saves are stored separately by the emulator (MAME) |
-    | `atomiswave` | ❌ | Not synced |
+    | `atomiswave` | ❌ | Shared VMU card (Flycast default; the core has a per-game mode) |
     | `consolearcade` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `cps` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `cps1` | ❌ | Saves are stored separately by the emulator (MAME) |
@@ -73,13 +105,13 @@ states still work locally). See the full table for specifics.
     | `crvision` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `daphne` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `doom` | ❌ | Not synced |
-    | `dreamcast` | ❌ | Not synced |
+    | `dreamcast` | ❌ | Shared VMU card (Flycast default; the core has a per-game mode) |
     | `easyrpg` | ❌ | Not synced |
     | `fmtowns` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `gamate` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `gameandwatch` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `gamecom` | ❌ | Saves are stored separately by the emulator (MAME) |
-    | `gc` | ❌ | Not synced |
+    | `gc` | ❌ | Dolphin core's own save subtree — not confirmed on-device |
     | `gmaster` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `gx4000` | ❌ | Not synced |
     | `laserdisc` | ❌ | Saves are stored separately by the emulator (MAME) |
@@ -87,21 +119,22 @@ states still work locally). See the full table for specifics.
     | `mame` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `mess` | ❌ | Not synced |
     | `model2` | ❌ | Saves are stored separately by the emulator (MAME) |
-    | `n3ds` | ❌ | Not synced |
-    | `naomi` | ❌ | Not synced |
-    | `naomi2` | ❌ | Not synced |
-    | `naomigd` | ❌ | Not synced |
-    | `neogeocd` | ❌ | Not synced |
-    | `neogeocdjp` | ❌ | Not synced |
-    | `ps2` | ❌ | Not synced |
-    | `psp` | ❌ | Not synced |
+    | `n3ds` | ❌ | Azahar core's own save subtree — not confirmed on-device |
+    | `naomi` | ❌ | Shared VMU card (Flycast default; the core has a per-game mode) |
+    | `naomi2` | ❌ | Shared VMU card (Flycast default; the core has a per-game mode) |
+    | `naomigd` | ❌ | Shared VMU card (Flycast default; the core has a per-game mode) |
+    | `neogeocd` | ❌ | Shared save (the core has a per-content mode) |
+    | `neogeocdjp` | ❌ | Shared save (the core has a per-content mode) |
+    | `ps2` | ❌ | Shared memory card by default (LRPS2); per-game `<game>.ps2` available as a core option |
+    | `psp` | ❌ | Where the PPSSPP core keeps its saves is not established |
     | `pv1000` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `scummvm` | ❌ | Not synced |
     | `scv` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `supracan` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `vsmile` | ❌ | Saves are stored separately by the emulator (MAME) |
-    | `wii` | ❌ | Not synced |
+    | `wii` | ❌ | Dolphin core's own save subtree — not confirmed on-device |
     | `x68000` | ❌ | Not synced |
+    | `3do` | 🔜 | Per-game NVRAM, but in the Opera core's own `opera/per_game/` subfolder with a versioned name |
     | `amiga1200` | 🔜 | Planned |
     | `amiga600` | 🔜 | Planned |
     | `atarijaguar` | 🔜 | Planned |
@@ -117,7 +150,6 @@ states still work locally). See the full table for specifics.
     | `wasm4` | 🔜 | Under review |
     | `windows3x` | 🔜 | Planned |
     | `windows9x` | 🔜 | Planned |
-    | `3do` | ✅ | Synced |
     | `amiga` | ✅ | Synced |
     | `amigacd32` | ✅ | Synced |
     | `atari2600` | ✅ | Synced |
@@ -210,5 +242,6 @@ states still work locally). See the full table for specifics.
 
 ---
 
-_Coverage is reviewed against the emulator cores RetroDECK ships. Some 🔜 entries are awaiting on-device confirmation.
-Last reviewed 2026-06-05._
+_Coverage is reviewed against the emulator cores RetroDECK ships. Most rows still await on-device confirmation; see
+[How reliable is this page?](#how-reliable-is-this-page) above. Last reviewed 2026-08-02, against the
+[emu-atlas](https://github.com/danielcopper/emu-atlas) core audit as of 2026-07-24._

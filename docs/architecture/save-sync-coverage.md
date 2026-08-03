@@ -84,21 +84,47 @@ decides on ambiguity" stance:
 
 - **(a)** — extension-map additions, candidate for incremental delivery; research/verification tracked in
   [#237](https://github.com/danielcopper/decky-romm-sync/issues/237).
-- **(b)** — infix-aware per-game discovery (PS1 multi-card, Flycast per-game VMU); research in
+- **(b)** — infix-aware per-game discovery (PS1 multi-card, Flycast per-game VMU, 3DO NVRAM); research in
   [#237](https://github.com/danielcopper/decky-romm-sync/issues/237), implementation under the save-format epic
   [#255](https://github.com/danielcopper/decky-romm-sync/issues/255).
 - **(c)** — shared/system-dir handling under [#255](https://github.com/danielcopper/decky-romm-sync/issues/255) (save
   formats), [#151](https://github.com/danielcopper/decky-romm-sync/issues/151) (Dreamcast VMU), and
   [#129](https://github.com/danielcopper/decky-romm-sync/issues/129) (standalone emulators) — all v2.0.
 
+## Evidence level, and where the audit has since disagreed
+
+The classification below was a desk audit: libretro documentation plus core source reading, one pass, no per-core
+observation. [emu-atlas](https://github.com/danielcopper/emu-atlas) is auditing the same ground with an explicit
+evidence grade per core (source / binary / live), and as of its 2026-07-24 snapshot has reached **17 of RetroDECK's 159
+libretro cores and none of the 22 standalone emulators**. Treat an unrevised row here as a documented expectation, not a
+verified fact.
+
+Every core the atlas audit has reached and disagreed with, corrected here:
+
+| Core      | Was           | Audit finding                                                                                                                                                                                                                                        |
+| --------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `opera`   | ✅ `.srm`     | Wrong. `RETRO_MEMORY_SAVE_RAM` returns NULL — there is no RetroArch-side `.srm` at all. NVRAM goes to `<save_dir>/opera/per_game/<rom_stem>.<version>.srm`, the version coming from `opera_nvram_version`. Per-game, but subdir + infix → class (b). |
+| `flycast` | 🔴 (c) shared | Shared is the shipped default (`reicast_per_content_vmus=disabled` → `<system_dir>/dc/vmu_save_A1.bin` …). The core is **per-game capable**: the `VMU A1` / `All VMUs` modes root at `savefile_directory`; their filename scheme is unestablished.   |
+| `pcsx2`   | 🔴 (c) shared | Shared is the shipped default (`pcsx2_shared_memory_cards=enabled` → `<system_dir>/pcsx2/memcards/Mcd00{1,2}.ps2`). Disabled, slot 1 is `<save_dir>/<rom_stem>.ps2` — **class (a)**, reachable by an extension-map entry alone.                      |
+| `neocd`   | 🔴 (c) shared | Per-game capable: `path.cpp:137-168` proves a per-content mode alongside the frontend save RAM path. Load precedence between the two is unobserved.                                                                                                  |
+| `ppsspp`  | 🔴 (c) shared | Not established. The shipped sort override is known; the save subtree and its granularity are not.                                                                                                                                                   |
+| `dolphin` | 🔴 (c) `.gci` | Not established. RetroDECK's prepared `dolphin-emu` subtree suggests a different root, but no core-written save has been observed.                                                                                                                   |
+| `azahar`  | absent        | RetroDECK now ships Azahar for `n3ds` where this table still listed Citra. Verdict suspect — prepared save subtree suggests a deviation, nothing observed.                                                                                           |
+
+Two of these are strategically relevant. `pcsx2` and `flycast` are not class (c) by nature — they are class (c) _as
+configured_, which is exactly the "prefer per-game mode" path below, and it makes PS2 the cheapest of the shared-card
+systems to support. The `opera` correction runs the other way: 3DO was published as syncing and does not.
+
+The row set below is also a 2026-06-04 snapshot of RetroDECK's core list and has drifted (Azahar is one instance).
+
 ## Full core reference
 
 Per-core classification from the audit of every RetroArch core RetroDECK can launch. `✅` syncs today · `🟡 (a)`
 per-game, extension not listed yet · `🟠 (b)` per-game with a slot/unit infix · `🔴 (c)` shared / out-of-folder · `⚪`
 no battery save · `❓` unverified. Non-`.srm` rows are libretro-documented and await on-device confirmation. Snapshot:
-2026-06-04.
+2026-06-04, with the rows above revised 2026-08-02.
 
-??? note "All 155 cores, classified"
+??? note "All 156 cores, classified"
 
     | Core | Status | Save file(s) | Naming / dir | Used by (slugs) |
     | --- | --- | --- | --- | --- |
@@ -106,9 +132,6 @@ no battery save · `❓` unverified. Non-`.srm` rows are libretro-documented and
     | `boom3_xp_libretro` | 🔴 (c) | `.save` | system_dir / content | doom |
     | `cannonball_libretro` | 🔴 (c) | `.xml` | shared_fixed_name / system | ports |
     | `cap32_libretro` | 🔴 (c) | `.sna` | single_token_nonstandard / content | amstradcpc, gx4000 |
-    | `citra2018_libretro` | 🔴 (c) | — | system_dir / system | n3ds |
-    | `citra_libretro` | 🔴 (c) | — | system_dir / system | n3ds |
-    | `dolphin_libretro` | 🔴 (c) | `.gci`, `.gcs` | system_dir / saves | gc, wii |
     | `dosbox_svn_libretro` | 🔴 (c) | — | system_dir / saves | dos, pc |
     | `easyrpg_libretro` | 🔴 (c) | `.lsd`, `.lyn`, `.dyn`, `.lgs` | single_token_nonstandard / content | easyrpg |
     | `flycast_libretro` | 🔴 (c) | `.bin` | shared_fixed_name / system | arcade, atomiswave, consolearcade, dreamcast, mame +3 |
@@ -121,7 +144,6 @@ no battery save · `❓` unverified. Non-`.srm` rows are libretro-documented and
     | `neocd_libretro` | 🔴 (c) | `.srm` | shared_fixed_name / saves | neogeocd, neogeocdjp |
     | `openlara_libretro` | 🔴 (c) | `.dat` | shared_fixed_name / saves | ports |
     | `pcsx2_libretro` | 🔴 (c) | `.ps2` | shared_fixed_name / system | ps2 |
-    | `ppsspp_libretro` | 🔴 (c) | — | shared_fixed_name / saves | psp |
     | `prboom_libretro` | 🔴 (c) | `.dsg` | shared_fixed_name / saves | doom |
     | `px68k_libretro` | 🔴 (c) | — | system_dir / system | x68000 |
     | `scummvm_libretro` | 🔴 (c) | — | system_dir / system | scummvm |
@@ -131,6 +153,7 @@ no battery save · `❓` unverified. Non-`.srm` rows are libretro-documented and
     | `vitaquake2_libretro` | 🔴 (c) | — | shared_fixed_name / content | quake |
     | `mednafen_psx_hw_libretro` | 🟠 (b) | `.srm`, `.mcr` | infix / saves | psx |
     | `mednafen_psx_libretro` | 🟠 (b) | `.srm`, `.mcr` | infix / saves | psx |
+    | `opera_libretro` | 🟠 (b) | `.srm` | version infix / saves subdir `opera/per_game` | 3do |
     | `pcsx_rearmed_libretro` | 🟠 (b) | `.srm`, `.mcd` | infix / saves | psx |
     | `swanstation_libretro` | 🟠 (b) | `.mcd`, `.mcr` | infix / saves | psx |
     | `tyrquake_libretro` | 🟠 (b) | `.sav` | infix / saves | quake |
@@ -140,7 +163,12 @@ no battery save · `❓` unverified. Non-`.srm` rows are libretro-documented and
     | `nxengine_libretro` | 🟡 (a) | `.dat` | single_token_nonstandard / saves | ports |
     | `retro8_libretro` | 🟡 (a) | `.p8d.txt` | single_token_nonstandard / saves | pico8 |
     | `ardens_libretro` | ❓ | — | unknown / unknown | arduboy |
+    | `azahar_libretro` | ❓ | — | unknown / unknown | n3ds |
+    | `citra2018_libretro` | ❓ | — | unknown / unknown | n3ds |
+    | `citra_libretro` | ❓ | — | unknown / unknown | n3ds |
+    | `dolphin_libretro` | ❓ | `.gci`, `.gcs` | unknown / unknown | gc, wii |
     | `panda3ds_libretro` | ❓ | — | unknown / unknown | n3ds |
+    | `ppsspp_libretro` | ❓ | — | unknown / unknown | psp |
     | `same_cdi_libretro` | ❓ | — | unknown / unknown | cdimono1 |
     | `wasm4_libretro` | ❓ | — | unknown / unknown | wasm4 |
     | `DoubleCherryGB_libretro` | ✅ | `.srm`, `.rtc` | single_token_default / saves | gb, gbc |
@@ -180,7 +208,6 @@ no battery save · `❓` unverified. Non-`.srm` rows are libretro-documented and
     | `mupen64plus_next_libretro` | ✅ | `.srm` | single_token_default / saves | n64, n64dd |
     | `nestopia_libretro` | ✅ | `.srm` | single_token_default / saves | famicom, fds, nes |
     | `noods_libretro` | ✅ | `.srm` | single_token_default / saves | gba |
-    | `opera_libretro` | ✅ | `.srm` | single_token_default / saves | 3do |
     | `parallel_n64_libretro` | ✅ | `.srm` | single_token_default / saves | n64, n64dd |
     | `picodrive_libretro` | ✅ | `.srm` | single_token_default / saves | gamegear, genesis, mark3, mastersystem, megacd +7 |
     | `pokemini_libretro` | ✅ | `.eep` | single_token_default / saves | pokemini |

@@ -19,7 +19,7 @@ split is binding — no callables in `bootstrap/`, no service wiring in `main.py
 `main.py` grows with the callable surface it describes; that is unavoidable density, not god-class, and it is
 deliberately out of scope for the module-size gate.
 
-`bootstrap/` is **not** exempt. Both modules are governed by the ~700-LOC threshold in `scripts/check_module_size.py`
+`bootstrap/` is **not** exempt. Both modules are governed by the ~1000-LOC threshold in `scripts/check_module_size.py`
 and neither is grandfathered, so each has real headroom and a hard stop. A new adapter goes into `adapters.py`, new
 wiring into `services.py`; when either reaches the threshold the answer is the next split along the same seam (a wiring
 module per service cluster), never an allowlist entry.
