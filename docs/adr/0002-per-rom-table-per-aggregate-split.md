@@ -62,12 +62,19 @@ a deliberate full prune does, and cascading per-ROM state when the ROM is genuin
   multi-table cleanup, no orphan risk.
 - Foreign-key count goes 1 → 5. `PRAGMA foreign_keys=ON` (already locked by the epic, set per-connection by the adapter)
   is required for the cascades to fire.
+
 - This **deviates from the epic's literal wording** ("one `roms` mega-table", "no other FKs"). Both were explicit
   starting points written before the split; #780 is the sanctioned place to finalize the layout, so this is a
   resolution, not a relitigation. ADR-0001's "`platform_slug` as an FK" wording is clarified there to mean a logical
   reference, not a DB constraint.
 - It is **not a one-way door.** Merging back to a mega-table (or splitting a table further) later is an internal
   numbered migration plus a repository SQL rewrite — not a user-facing breaking change.
+
+> **Correction (#1570).** The per-ROM cascade count is **six**, not five. `rom_playtime_sessions` — the outbox of play
+> sessions not yet ingested by RomM, added in migration `006` as the `Playtime` aggregate's second table
+> ([ADR-0018](0018-native-play-session-tracking-additive-ingest.md)) — carries the same `ON DELETE CASCADE` onto `roms`
+> and is missing from the enumeration above. The decision is unaffected: it landed after this ADR and followed its rule
+> rather than deviating from it.
 
 ## Alternatives considered
 
