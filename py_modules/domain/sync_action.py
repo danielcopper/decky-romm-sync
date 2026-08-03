@@ -4,6 +4,24 @@ Given (local_file, server_saves_in_slot, files_state, device_id, local_hash)
 this module returns one ``SyncAction`` describing what the service should do
 for that file: ``Skip``, ``Upload``, ``Download``, or ``Conflict``.
 
+Two halves with different standing
+----------------------------------
+The ``Skip`` / ``Upload`` / ``Download`` / ``Conflict`` dataclasses are the live
+vocabulary of the save-sync vertical: services dispatch on them, and the native
+adapter answers in them.
+
+The two decision functions — :func:`compute_sync_action` and
+:func:`resolve_upload_conflict` — no longer run in production. Both decisions
+are made by the compiled gavel core (``adapters.gavel_native``), which services
+reach through the ``ComputeSyncActionFn`` / ``ResolveUploadConflictFn`` seams.
+They are kept as the **differential oracle**: the vendored gavel vectors run
+against both, and ``tests/adapters/test_gavel_native.py`` crosses the two over
+input shapes no vector covers, so a change in the shipped binary that the
+contract does not mandate fails loudly. They are not a runtime fallback — a
+core that cannot load is fatal at bootstrap, never silently replaced. Keeping
+them honest is the point: an edit here that is not also a contract change breaks
+the differential, which is exactly the alarm it exists to raise.
+
 Why the design looks the way it does
 ------------------------------------
 Newest-server-save-in-slot is picked deterministically by ``max(updated_at)``

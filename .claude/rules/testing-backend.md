@@ -49,12 +49,14 @@ and its boundaries.
 
 ## Gavel conformance vectors — vendored contract tier
 
-Two [romm-gavel](https://github.com/danielcopper/romm-gavel) vector families run against the production save-sync
-kernels: **ladder** against `domain/sync_action.resolve_upload_conflict`, **decision-table** against
-`compute_sync_action`. The vectors are vendored verbatim under `tests/domain/gavel_vectors/` at a pinned upstream commit
-(no submodule, no network in CI), so a contract change lands as a reviewable diff. **Never edit a vector to make the
-kernel pass** — updating means deliberately re-copying the JSON and bumping the commit reference in that folder's
-`README.md`.
+Two [romm-gavel](https://github.com/danielcopper/romm-gavel) vector families guard the save-sync decisions: **ladder**
+(the 409 resolution) and **decision-table** (the full per-file decision). Both decisions run in the compiled core
+(`adapters/gavel_native.py`), so each family runs against the **compiled core** — the production path — and against the
+in-tree `domain/sync_action` kernel, which is retained solely as the differential oracle
+`tests/adapters/test_gavel_native.py` crosses the core against. The vectors are vendored verbatim under
+`tests/domain/gavel_vectors/` at a pinned upstream **release tag** (no submodule, no network in CI), so a contract
+change lands as a reviewable diff. **Never edit a vector to make a kernel pass** — updating means deliberately
+re-copying the JSON and bumping the tag in that folder's `README.md`, in lockstep with the vendored `.so`.
 
 ## emu-atlas conformance vectors — vendored contract tier
 

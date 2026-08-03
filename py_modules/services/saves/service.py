@@ -105,6 +105,7 @@ class SaveService:
                 romm_api=config.romm_api,
                 retry=config.retry,
                 resolve_upload_conflict=config.resolve_upload_conflict,
+                compute_sync_action=config.compute_sync_action,
                 loop=config.loop,
                 logger=config.logger,
                 clock=config.clock,

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 if TYPE_CHECKING:
     from domain.game_instance import GameInstance
+    from domain.sync_action import SyncAction
 
 
 class EventEmitter(Protocol):
@@ -44,6 +45,32 @@ class ResolveUploadConflictFn(Protocol):
         server_content_hash: str | None,
         last_sync_server_hash: str | None,
     ) -> Literal["download", "conflict"]: ...
+
+
+class ComputeSyncActionFn(Protocol):
+    """Decide what to do with one ``(rom, filename, slot)`` triple.
+
+    Given the local file's measurements (``None`` when it does not exist), the
+    slot's server saves as the caller already filtered them, the recorded
+    per-file sync state, this device's id, and the local content hash, returns
+    the ``SyncAction`` to carry out — ``Skip`` / ``Upload`` / ``Download`` /
+    ``Conflict``, with ``Download`` and ``Conflict`` naming the chosen save from
+    the very list that was passed in.
+
+    Backed at runtime by the compiled gavel core
+    (``adapters.gavel_native.GavelNativeAdapter.compute_sync_action``); the
+    in-tree ``domain.sync_action.compute_sync_action`` kernel shares the exact
+    contract and stands in as a trivial fake in service tests.
+    """
+
+    def __call__(
+        self,
+        local_file: dict[str, Any] | None,
+        server_saves_in_slot: list[dict[str, Any]],
+        files_state: dict[str, Any],
+        device_id: str,
+        local_hash: str | None,
+    ) -> SyncAction: ...
 
 
 class DebugLogger(Protocol):

@@ -64,6 +64,7 @@ if TYPE_CHECKING:
 
     from services.protocols import (
         Clock,
+        ComputeSyncActionFn,
         CoreInfoProvider,
         CoreNameProviderFn,
         CoverArtFileStore,
@@ -126,6 +127,7 @@ class AdapterBundle:
     renderer_gc: RendererGcFn
     game_process: GameProcessControl
     resolve_upload_conflict: ResolveUploadConflictFn
+    compute_sync_action: ComputeSyncActionFn
     recovery_store: RecoveryBundleStore
     prune_artifacts: PruneArtifactStore
     steam_recovery: SteamRecoveryStore
@@ -341,11 +343,12 @@ def bootstrap(
     renderer_rss = RendererRssAdapter()
     renderer_gc = RendererGcAdapter(logger=logger)
     game_process = GameProcessAdapter()
-    # The compiled gavel core owns the save-sync upload-409 resolution. Loaded
-    # eagerly so a missing / wrong-architecture artifact is fatal here (like the
-    # SQLite migration gate above) rather than surfacing mid-sync — there is no
-    # Python fallback (GavelNativeLoadError propagates, plugin stays inert).
-    resolve_upload_conflict = GavelNativeAdapter()
+    # The compiled gavel core owns both save-sync decisions — the per-file sync
+    # action and the upload-409 resolution. Loaded eagerly so a missing /
+    # wrong-architecture artifact is fatal here (like the SQLite migration gate
+    # above) rather than surfacing mid-sync — there is no Python fallback
+    # (GavelNativeLoadError propagates, plugin stays inert).
+    gavel = GavelNativeAdapter()
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
     hostname_provider = HostnameAdapter()
@@ -369,7 +372,8 @@ def bootstrap(
         renderer_rss=renderer_rss,
         renderer_gc=renderer_gc,
         game_process=game_process,
-        resolve_upload_conflict=resolve_upload_conflict,
+        resolve_upload_conflict=gavel,
+        compute_sync_action=gavel.compute_sync_action,
         recovery_store=recovery_store,
         prune_artifacts=prune_artifacts,
         steam_recovery=steam_recovery,

@@ -24,14 +24,7 @@ from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_backup import BACKUP_DIR_NAME, backup_name, select_backups_to_prune
 from domain.save_slot import filter_saves_to_slot
-from domain.sync_action import (
-    Conflict,
-    Download,
-    Skip,
-    SyncAction,
-    Upload,
-    compute_sync_action,
-)
+from domain.sync_action import Conflict, Download, Skip, SyncAction, Upload
 from lib.errors import DeviceNotRegisteredError, RommApiError, RommConflictError, classify_error
 from services.saves._helpers import local_save_target
 from services.saves._messages import DEVICE_NOT_REGISTERED
@@ -42,6 +35,7 @@ if TYPE_CHECKING:
 
     from services.protocols import (
         Clock,
+        ComputeSyncActionFn,
         DebugLogger,
         ResolveUploadConflictFn,
         RetryStrategy,
@@ -159,6 +153,7 @@ class MatrixExecutor:
         romm_api: RommSyncApi,
         retry: RetryStrategy,
         resolve_upload_conflict: ResolveUploadConflictFn,
+        compute_sync_action: ComputeSyncActionFn,
         logger: logging.Logger,
         clock: Clock,
         save_file_store: SaveFileStore,
@@ -168,6 +163,7 @@ class MatrixExecutor:
         self._romm_api = romm_api
         self._retry = retry
         self._resolve_upload_conflict = resolve_upload_conflict
+        self._compute_sync_action = compute_sync_action
         self._logger = logger
         self._clock = clock
         self._save_file_store = save_file_store
@@ -832,7 +828,7 @@ class MatrixExecutor:
             # extension's newer server record would win max(updated_at) and the
             # file would be evaluated/dispatched against the wrong save.
             group = [ss for ss in server_in_slot if local_save_target(ss, rom_name) == filename]
-            action = compute_sync_action(
+            action = self._compute_sync_action(
                 local_file=self._build_local_input(local_path, filename),
                 server_saves_in_slot=group,
                 files_state=_file_state_to_dict(file_state),
@@ -862,7 +858,7 @@ class MatrixExecutor:
 
         for target_filename, group in server_only_groups.items():
             file_state = files_state.get(target_filename, FileSyncState())
-            action = compute_sync_action(
+            action = self._compute_sync_action(
                 local_file=None,
                 server_saves_in_slot=group,
                 files_state=_file_state_to_dict(file_state),

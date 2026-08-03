@@ -40,7 +40,7 @@ from adapters.romm.http import RommHttpAdapter
 from adapters.romm.romm_api import RommApiAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.save_layout import InSaveDir
-from domain.sync_action import resolve_upload_conflict
+from domain.sync_action import compute_sync_action, resolve_upload_conflict
 from services.achievements import AchievementsService
 from services.cores import CoreService
 from services.disc import DiscService
@@ -251,6 +251,7 @@ class TestWireServices:
             "renderer_gc": FakeRendererGc(),
             "game_process": FakeGameProcessControlAdapter(),
             "resolve_upload_conflict": resolve_upload_conflict,
+            "compute_sync_action": compute_sync_action,
             "recovery_store": MagicMock(),
             "prune_artifacts": MagicMock(),
             "steam_recovery": MagicMock(),
@@ -307,6 +308,7 @@ class TestWireServices:
                 renderer_gc=deps["renderer_gc"],
                 game_process=deps["game_process"],
                 resolve_upload_conflict=deps["resolve_upload_conflict"],
+                compute_sync_action=deps["compute_sync_action"],
                 recovery_store=deps["recovery_store"],
                 prune_artifacts=deps["prune_artifacts"],
                 steam_recovery=deps["steam_recovery"],

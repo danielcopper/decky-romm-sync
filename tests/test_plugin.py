@@ -1114,6 +1114,7 @@ class TestMainStartupOrdering:
                 renderer_gc=FakeRendererGc(),
                 game_process=FakeGameProcessControlAdapter(),
                 resolve_upload_conflict=MagicMock(),
+                compute_sync_action=MagicMock(),
                 recovery_store=MagicMock(),
                 prune_artifacts=MagicMock(),
                 steam_recovery=MagicMock(),

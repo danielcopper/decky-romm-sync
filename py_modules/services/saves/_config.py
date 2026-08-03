@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         ActiveCoreReader,
         Clock,
+        ComputeSyncActionFn,
         CoreNameProviderFn,
         DebugLogger,
         EventEmitter,
@@ -51,6 +52,11 @@ class SaveServiceConfig:
         backed at runtime by the compiled gavel native core. Threaded down to
         the ``MatrixExecutor`` where the upload-409 backstop calls it to decide
         ``"download"`` vs ``"conflict"`` purely from hashes.
+    compute_sync_action:
+        ``ComputeSyncActionFn`` seam — the per-``(rom, filename, slot)`` sync
+        decision, backed at runtime by the same compiled gavel native core.
+        Threaded down to the ``MatrixExecutor``, which calls it once per file to
+        pick ``Skip`` / ``Upload`` / ``Download`` / ``Conflict``.
     settings:
         Live reference to the main plugin settings dict.
     settings_persister:
@@ -146,6 +152,7 @@ class SaveServiceConfig:
     romm_api: RommSyncApi
     retry: RetryStrategy
     resolve_upload_conflict: ResolveUploadConflictFn
+    compute_sync_action: ComputeSyncActionFn
     settings: dict[str, Any]
     settings_persister: SettingsPersister
     save_file_store: SaveFileStore

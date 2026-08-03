@@ -533,8 +533,13 @@ mutating path — would leave state incomplete forever for users who only ever o
 
 ### Implementation
 
-The algorithm is `compute_sync_action` in `py_modules/domain/sync_action.py`. The `SaveService` aggregate
-(`py_modules/services/saves/`) calls it from two sub-services:
+The algorithm runs in the compiled [romm-gavel](https://github.com/danielcopper/romm-gavel) core, reached through the
+`ComputeSyncActionFn` seam that `GavelNativeAdapter` provides (see
+[GavelNativeAdapter notes](backend-architecture.md#gavelnativeadapter-notes-the-compiled-save-sync-core) for the
+marshalling and the no-fallback posture). It answers in the `SyncAction` dataclasses defined in
+`py_modules/domain/sync_action.py`, alongside the in-tree `compute_sync_action` that is now the core's differential
+oracle in tests rather than runtime code. The `SaveService` aggregate (`py_modules/services/saves/`) calls the seam from
+two sub-services:
 
 - `SyncEngine.do_sync_rom_saves` (`services/saves/sync_engine/`) iterates local files and server-only-in-slot groups,
   dispatching each action via the matrix executor's `_dispatch_sync_action` (POST/GET + state update; the in-place PUT
@@ -551,9 +556,9 @@ cross-contaminates extensions — `Game.srm` is never resolved against a newer `
 
 ## Decision Matrix
 
-The matrix below enumerates every input combination `compute_sync_action` handles. Rows are derived from the algorithm
-and exhaustively cover the cross-product of dimensions. Tests in `tests/domain/test_sync_action.py` map 1:1 to these
-rows.
+The matrix below enumerates every input combination the decision handles. Rows are derived from the algorithm and
+exhaustively cover the cross-product of dimensions. Tests in `tests/domain/test_sync_action.py` map 1:1 to these rows;
+they exercise the in-tree oracle, and `tests/adapters/test_gavel_native.py` proves the shipped core decides identically.
 
 Dimensions:
 

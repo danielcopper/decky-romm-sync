@@ -107,22 +107,28 @@ separate change. See `.claude/rules/testing-backend.md` for the full contract-ti
 ### Gavel conformance vectors
 
 The save-sync decision kernels are also published as a standalone client contract,
-[romm-gavel](https://github.com/danielcopper/romm-gavel), with two vector families run against the production kernel so
-it and the published spec can't silently drift apart. `tests/domain/test_sync_action_gavel_vectors.py` runs the
-**ladder** family (the 409 resolution ladder, `domain/sync_action.resolve_upload_conflict`);
-`tests/domain/test_sync_action_gavel_table_vectors.py` runs the **decision-table** family (the full
-per-`(rom, filename,
-slot)` decision, `domain/sync_action.compute_sync_action`). The vectors are vendored verbatim under
-`tests/domain/gavel_vectors/`, one subdirectory per family mirroring upstream `vectors/` (`ladder/` — a curated
-named-case set plus the exhaustive equivalence classes; `decision-table/` — curated named cases) — there is no submodule
-and no network in CI, so every contract change lands as a reviewable diff. Run them like any other test:
+[romm-gavel](https://github.com/danielcopper/romm-gavel) — and since both decisions now run in gavel's compiled core
+(vendored as `py_modules/native/libgavel-x86_64-linux.so`), the two vector families are what keep the shipped binary,
+the in-tree oracle, and the published spec from silently drifting apart:
+
+- **ladder** (the 409 resolution ladder) — `tests/domain/test_sync_action_gavel_vectors.py` against the in-tree
+  `domain/sync_action.resolve_upload_conflict`, `tests/adapters/test_gavel_native.py` against the compiled core.
+- **decision-table** (the full per-`(rom, filename, slot)` decision) —
+  `tests/domain/test_sync_action_gavel_table_vectors.py` against both kernels.
+
+`tests/adapters/test_gavel_native.py` additionally crosses the two implementations directly over input shapes no vector
+covers. The vectors are vendored verbatim under `tests/domain/gavel_vectors/`, one subdirectory per family mirroring
+upstream `vectors/` (`ladder/` — a curated named-case set plus the exhaustive equivalence classes; `decision-table/` —
+curated named cases) — there is no submodule and no network in CI, so every contract change lands as a reviewable diff.
+Run them like any other test:
 
 ```bash
-python -m pytest tests/domain/test_sync_action_gavel_vectors.py tests/domain/test_sync_action_gavel_table_vectors.py -q
+python -m pytest tests/domain/test_sync_action_gavel_vectors.py tests/domain/test_sync_action_gavel_table_vectors.py tests/adapters/test_gavel_native.py -q
 ```
 
 Updating the vectors means deliberately re-copying the JSON from the matching upstream `vectors/<family>/` directory and
-bumping the commit reference in `tests/domain/gavel_vectors/README.md`; never edit a vector to match the kernel.
+bumping the release tag in `tests/domain/gavel_vectors/README.md` — in lockstep with the `.so`, which is pinned to the
+same release; never edit a vector to match a kernel.
 
 ### emu-atlas conformance vectors
 

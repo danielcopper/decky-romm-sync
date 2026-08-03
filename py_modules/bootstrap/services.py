@@ -177,6 +177,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         romm_api=cfg.adapters.romm_api,
         retry=cfg.adapters.http_adapter,
         resolve_upload_conflict=cfg.adapters.resolve_upload_conflict,
+        compute_sync_action=cfg.adapters.compute_sync_action,
         settings=cfg.stores.settings,
         settings_persister=cfg.callbacks.settings_persister,
         save_file_store=cfg.adapters.save_file_store,

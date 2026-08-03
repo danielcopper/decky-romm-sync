@@ -1,16 +1,22 @@
-"""Tests for the GavelNativeAdapter — the compiled 409-resolution kernel.
+"""Tests for the GavelNativeAdapter — the compiled save-sync decision kernels.
 
-Three tiers guard the shipped shared object:
+Three tiers guard the shipped shared object, for both of the decisions it owns
+(the upload-409 ladder and the full per-file sync action):
 
 * **Unit** — the real vendored ``.so`` loads, decides the canonical cases
-  (including the ``None`` vs ``""`` distinction), and a bad path raises the
-  distinct :class:`GavelNativeLoadError` naming the path.
+  (including the ``None`` vs ``""`` distinction and the marshalling boundaries
+  where an "unknown" must stay a flag rather than become a value), and a bad
+  path raises the distinct :class:`GavelNativeLoadError` naming the path.
 * **Vendored-vector conformance** — every ``ladder`` gavel vector is replayed
   against the adapter, so the shipped binary must satisfy the same normative
   contract the in-tree kernel is held to (``tests/domain/test_sync_action_gavel_vectors.py``).
-* **Differential** — the adapter and ``domain.sync_action.resolve_upload_conflict``
-  agree on every point of the ``6^4`` hash alphabet (``None``, ``""``, four
-  distinct hashes), so the native core and the Python oracle are indistinguishable.
+  The decision-table family runs against both kernels in
+  ``tests/domain/test_sync_action_gavel_table_vectors.py``.
+* **Differential** — the adapter and the in-tree ``domain.sync_action`` kernels
+  agree on every point of a crossed input space: the ``6^4`` hash alphabet for
+  the ladder, and local-file forms crossed with every ``device_syncs`` branch,
+  both timestamp-parseability outcomes, and every baseline combination for the
+  decision table.
 """
 
 from __future__ import annotations
@@ -18,13 +24,22 @@ from __future__ import annotations
 import ctypes.util
 import itertools
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from adapters.gavel_native import GavelNativeAdapter, GavelNativeLoadError
-from domain.sync_action import resolve_upload_conflict
+from domain.sync_action import (
+    Conflict,
+    Download,
+    Skip,
+    SyncAction,
+    Upload,
+    compute_sync_action,
+    resolve_upload_conflict,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -140,3 +155,250 @@ class TestDifferential:
                     f"({local!r}, {last_sync!r}, {server!r}, {last_sync_server!r}): native={native!r} oracle={oracle!r}"
                 )
         assert not mismatches, "native core diverged from the Python kernel:\n" + "\n".join(mismatches)
+
+
+# ---------------------------------------------------------------------------
+# The full sync decision — gavel_compute_sync_action
+# ---------------------------------------------------------------------------
+
+_DEVICE = "device-a"
+_OTHER_DEVICE = "device-b"
+_SERVER_HASH = "server-content-hash"
+_BASELINE_HASH = "baseline-hash"
+_HEAD_UPDATED_AT = "2026-06-02T12:00:00Z"
+_OLDER_UPDATED_AT = "2026-06-01T12:00:00Z"
+_HEAD_EPOCH = datetime.fromisoformat(_HEAD_UPDATED_AT.replace("Z", "+00:00")).timestamp()
+# One hour either side of the head, so the no-entry branch's timestamp
+# fall-through is crossed in both directions.
+_MTIME_NEWER = _HEAD_EPOCH + 3600
+_MTIME_OLDER = _HEAD_EPOCH - 3600
+
+
+def _save(
+    save_id: int,
+    *,
+    updated_at: str,
+    content_hash: str | None = _SERVER_HASH,
+    device_syncs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """A RomM server-save dict in the shape ``list_saves`` returns it.
+
+    ``device_syncs`` is omitted entirely when None, which is a distinct input
+    from an empty list and is what an older RomM payload actually looks like.
+    """
+    save: dict[str, Any] = {"id": save_id, "updated_at": updated_at, "content_hash": content_hash}
+    if device_syncs is not None:
+        save["device_syncs"] = device_syncs
+    return save
+
+
+def _local(*, size: int | None, mtime: float | None) -> dict[str, Any]:
+    """The local-file input shape ``MatrixExecutor._build_local_input`` produces."""
+    return {"filename": "game.srm", "path": "/saves/game.srm", "size": size, "mtime": mtime}
+
+
+def _ours(*, is_current: bool) -> list[dict[str, Any]]:
+    return [{"device_id": _DEVICE, "is_current": is_current}]
+
+
+_THEIRS = [{"device_id": _OTHER_DEVICE, "is_current": True}]
+
+# Every local-file form the executor can hand in, plus the two boundaries the
+# marshalling has to keep apart: a file that exists but could not be measured
+# (present — the pointer says so, not the has_* flags) and a 0-byte one (a real
+# size the corrupt-local guard reacts to, not an absent one).
+_LOCAL_FILES: dict[str, dict[str, Any] | None] = {
+    "missing": None,
+    "empty-dict": {},
+    "unmeasurable": _local(size=None, mtime=None),
+    "newer": _local(size=8192, mtime=_MTIME_NEWER),
+    "older": _local(size=8192, mtime=_MTIME_OLDER),
+    "zero-byte": _local(size=0, mtime=_MTIME_NEWER),
+    "shrunk": _local(size=100, mtime=_MTIME_NEWER),
+}
+
+# All three device_syncs branches, both timestamp-parseability outcomes, a head
+# with no content_hash, and a slot where the head is not the save this device is
+# current on.
+_SLOTS: dict[str, list[dict[str, Any]]] = {
+    "empty": [],
+    "current": [_save(101, updated_at=_HEAD_UPDATED_AT, device_syncs=_ours(is_current=True))],
+    "not-current": [_save(101, updated_at=_HEAD_UPDATED_AT, device_syncs=_ours(is_current=False))],
+    "no-entry": [_save(101, updated_at=_HEAD_UPDATED_AT, device_syncs=_THEIRS)],
+    "no-device-syncs-key": [_save(101, updated_at=_HEAD_UPDATED_AT)],
+    "head-without-content-hash": [
+        _save(101, updated_at=_HEAD_UPDATED_AT, content_hash=None, device_syncs=_ours(is_current=False))
+    ],
+    "current-on-older-save": [
+        _save(100, updated_at=_OLDER_UPDATED_AT, device_syncs=_ours(is_current=True)),
+        _save(101, updated_at=_HEAD_UPDATED_AT, device_syncs=_THEIRS),
+    ],
+    "unparseable-timestamp-first": [
+        _save(102, updated_at="not-a-timestamp", device_syncs=_THEIRS),
+        _save(101, updated_at=_OLDER_UPDATED_AT, device_syncs=_ours(is_current=False)),
+    ],
+}
+
+_LOCAL_HASHES: tuple[str | None, ...] = (None, "", _BASELINE_HASH, _SERVER_HASH, "drifted-hash")
+_LAST_SYNC_HASHES: tuple[str | None, ...] = (None, "", _BASELINE_HASH)
+_LAST_SYNC_SERVER_HASHES: tuple[str | None, ...] = (None, "", _SERVER_HASH)
+_LAST_SYNC_LOCAL_SIZES: tuple[int | None, ...] = (None, 0, 200, 10000)
+
+
+class TestDecisionTable:
+    """The marshalling boundaries a wrong binding would cross silently."""
+
+    def test_empty_slot_uploads_a_present_local_file(self, adapter: GavelNativeAdapter) -> None:
+        action = adapter.compute_sync_action(_local(size=8192, mtime=_MTIME_NEWER), [], {}, _DEVICE, _BASELINE_HASH)
+        assert action == Upload(target_save_id=None)
+
+    def test_empty_slot_without_local_file_has_nothing_to_sync(self, adapter: GavelNativeAdapter) -> None:
+        action = adapter.compute_sync_action(None, [], {}, _DEVICE, None)
+        assert action == Skip(reason="nothing_to_sync", adopt_baseline=False)
+
+    def test_download_carries_the_callers_own_server_save_dict(self, adapter: GavelNativeAdapter) -> None:
+        # The core answers with an id; the adapter has to resolve it back to the
+        # very dict the caller passed, because five downstream sites read the
+        # full save (updated_at, file_size_bytes, content_hash), not just its id.
+        older = _save(100, updated_at=_OLDER_UPDATED_AT, device_syncs=_THEIRS)
+        head = _save(101, updated_at=_HEAD_UPDATED_AT, device_syncs=_THEIRS)
+        action = adapter.compute_sync_action(None, [older, head], {}, _DEVICE, None)
+        assert isinstance(action, Download)
+        assert action.server_save is head
+
+    def test_conflict_carries_the_callers_own_server_save_dict(self, adapter: GavelNativeAdapter) -> None:
+        head = _save(101, updated_at=_HEAD_UPDATED_AT, device_syncs=_ours(is_current=False))
+        action = adapter.compute_sync_action(
+            _local(size=8192, mtime=_MTIME_NEWER),
+            [head],
+            {"last_sync_hash": _BASELINE_HASH},
+            _DEVICE,
+            "drifted-hash",
+        )
+        assert isinstance(action, Conflict)
+        assert action.server_save is head
+
+    def test_unparseable_timestamp_never_wins_head_selection(self, adapter: GavelNativeAdapter) -> None:
+        # The ISO string is parsed on this side of the boundary; "unparseable"
+        # must arrive as a clear has_updated_at flag, never as a substitute
+        # instant that could out-sort a real one.
+        unparseable = _save(102, updated_at="not-a-timestamp", device_syncs=_THEIRS)
+        parseable = _save(101, updated_at=_OLDER_UPDATED_AT, device_syncs=_THEIRS)
+        action = adapter.compute_sync_action(None, [unparseable, parseable], {}, _DEVICE, None)
+        assert isinstance(action, Download)
+        assert action.server_save is parseable
+
+    def test_unmeasurable_local_file_is_present_not_missing(self, adapter: GavelNativeAdapter) -> None:
+        # Presence rides on the pointer alone. A file whose size and mtime are
+        # both unknown still exists — reading the cleared has_* flags as "no
+        # local file" would silently download over it.
+        head = _save(101, updated_at=_HEAD_UPDATED_AT, device_syncs=_ours(is_current=False))
+        action = adapter.compute_sync_action(_local(size=None, mtime=None), [head], {}, _DEVICE, "drifted-hash")
+        assert action == Conflict(server_save=head)
+
+    def test_zero_byte_local_is_a_size_not_an_absent_one(self, adapter: GavelNativeAdapter) -> None:
+        # 0 is exactly what the corrupt-local guard looks for, so it must not be
+        # marshalled as "no size recorded" — that would upload the truncated file.
+        head = _save(101, updated_at=_HEAD_UPDATED_AT, device_syncs=_ours(is_current=True))
+        action = adapter.compute_sync_action(
+            _local(size=0, mtime=_MTIME_NEWER),
+            [head],
+            {"last_sync_hash": _BASELINE_HASH, "last_sync_local_size": 8192},
+            _DEVICE,
+            "drifted-hash",
+        )
+        assert action == Conflict(server_save=head)
+
+    def test_adopt_baseline_survives_the_boundary(self, adapter: GavelNativeAdapter) -> None:
+        head = _save(101, updated_at=_HEAD_UPDATED_AT, device_syncs=_ours(is_current=True))
+        action = adapter.compute_sync_action(_local(size=8192, mtime=_MTIME_NEWER), [head], {}, _DEVICE, _SERVER_HASH)
+        assert action == Skip(reason="synced", adopt_baseline=True)
+
+    def test_upload_echoes_the_superseded_save_id(self, adapter: GavelNativeAdapter) -> None:
+        head = _save(101, updated_at=_HEAD_UPDATED_AT, device_syncs=_ours(is_current=True))
+        action = adapter.compute_sync_action(
+            _local(size=8192, mtime=_MTIME_NEWER),
+            [head],
+            {"last_sync_hash": _BASELINE_HASH},
+            _DEVICE,
+            "drifted-hash",
+        )
+        assert action == Upload(target_save_id=101)
+
+    def test_non_integral_size_is_refused(self, adapter: GavelNativeAdapter) -> None:
+        # An int64_t cannot carry it and rounding would land on 0 — the one
+        # value the corrupt-local guard reacts to. Refuse rather than answer a
+        # different question.
+        with pytest.raises(ValueError, match="whole number of bytes"):
+            adapter.compute_sync_action(_local(size=1.5, mtime=None), [], {}, _DEVICE, None)  # pyright: ignore[reportArgumentType]
+
+    def test_empty_local_file_dict_on_an_empty_slot_is_the_one_known_divergence(
+        self, adapter: GavelNativeAdapter
+    ) -> None:
+        """``local_file={}`` is the single point where the two kernels disagree.
+
+        The core sees a non-NULL pointer — a file that exists and could not be
+        measured — and uploads it. The in-tree kernel's empty-slot branch tests
+        the dict for truthiness, so an empty one reads as no file at all. The
+        core's reading is the correct one; the executor cannot produce this
+        shape (``_build_local_input`` always returns filename + path), so the
+        divergence is unreachable in production and excluded from the
+        differential below.
+        """
+        assert adapter.compute_sync_action({}, [], {}, _DEVICE, None) == Upload(target_save_id=None)
+        assert compute_sync_action({}, [], {}, _DEVICE, None) == Skip(reason="nothing_to_sync")
+
+
+class TestDecisionTableDifferential:
+    def test_adapter_matches_python_kernel_over_crossed_inputs(self, adapter: GavelNativeAdapter) -> None:
+        """The two kernels agree on every crossed input the executor can produce.
+
+        Local-file forms (missing, unmeasurable, 0-byte, shrunk, both mtime
+        directions) crossed with all three ``device_syncs`` branches, parseable
+        and unparseable server timestamps, and every baseline combination —
+        including the ``None`` and ``""`` spellings of "unknown" on each hash.
+        """
+        mismatches: list[str] = []
+        compared = 0
+        for (
+            local_name,
+            slot_name,
+            local_hash,
+            last_sync_hash,
+            last_sync_server_hash,
+            last_sync_local_size,
+        ) in itertools.product(
+            _LOCAL_FILES,
+            _SLOTS,
+            _LOCAL_HASHES,
+            _LAST_SYNC_HASHES,
+            _LAST_SYNC_SERVER_HASHES,
+            _LAST_SYNC_LOCAL_SIZES,
+        ):
+            # The one known divergence, pinned by
+            # TestDecisionTable.test_empty_local_file_dict_on_an_empty_slot_is_the_one_known_divergence.
+            if local_name == "empty-dict" and slot_name == "empty":
+                continue
+            local_file = _LOCAL_FILES[local_name]
+            slot = _SLOTS[slot_name]
+            files_state = {
+                "last_sync_hash": last_sync_hash,
+                "last_sync_server_hash": last_sync_server_hash,
+                "last_sync_local_size": last_sync_local_size,
+            }
+            native: SyncAction = adapter.compute_sync_action(local_file, slot, files_state, _DEVICE, local_hash)
+            oracle = compute_sync_action(local_file, slot, files_state, _DEVICE, local_hash)
+            compared += 1
+            if native != oracle:
+                mismatches.append(
+                    f"local={local_name} slot={slot_name} local_hash={local_hash!r} "
+                    f"last_sync_hash={last_sync_hash!r} last_sync_server_hash={last_sync_server_hash!r} "
+                    f"last_sync_local_size={last_sync_local_size!r}: native={native!r} oracle={oracle!r}"
+                )
+        assert not mismatches, "native core diverged from the Python kernel:\n" + "\n".join(mismatches)
+        # A shrunken product would make the agreement above vacuous, and nothing
+        # else would say so: pin the count the dimensions multiply out to, less
+        # the excluded (empty-dict, empty slot) slice.
+        baselines = len(_LOCAL_HASHES) * len(_LAST_SYNC_HASHES) * len(_LAST_SYNC_SERVER_HASHES)
+        per_slice = baselines * len(_LAST_SYNC_LOCAL_SIZES)
+        assert compared == len(_LOCAL_FILES) * len(_SLOTS) * per_slice - per_slice

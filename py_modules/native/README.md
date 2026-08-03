@@ -10,11 +10,12 @@ fallback, so a missing or mismatched artifact is a fatal, loud failure at bootst
 
 ## libgavel-x86_64-linux.so
 
-The compiled [romm-gavel](https://github.com/danielcopper/romm-gavel) core — the save-sync upload-409 resolution kernel
+The compiled [romm-gavel](https://github.com/danielcopper/romm-gavel) core — both save-sync decision kernels: the full
+per-`(rom, filename, slot)` sync action (`gavel_compute_sync_action`) and the upload-409 resolution fallback
 (`gavel_resolve_upload_conflict`).
 
 - **Upstream:** <https://github.com/danielcopper/romm-gavel>
-- **Release:** `v0.3.0`
+- **Release:** `v0.4.0`
 - **Architecture:** `x86_64` Linux — freestanding (zero library dependencies: no NEEDED entries, no global undefined
   symbols; upstream release CI enforces this), so it loads on any x86_64 Linux regardless of libc flavor or version
 - **Checksum:** pinned in `libgavel-x86_64-linux.so.sha256` (SHA-256)
@@ -34,8 +35,10 @@ The compiled [romm-gavel](https://github.com/danielcopper/romm-gavel) core — t
    ```
 
 3. Bump the **Release** tag above.
-4. Re-run the save-sync conformance + differential tests (`tests/adapters/test_gavel_native.py`) — the shipped binary
-   must still match the in-tree `domain.sync_action` kernel and the vendored gavel ladder vectors.
+4. Re-run the save-sync conformance + differential tests (`tests/adapters/test_gavel_native.py`,
+   `tests/domain/test_sync_action_gavel_table_vectors.py`) — the shipped binary must still match the in-tree
+   `domain.sync_action` kernels and the vendored gavel vectors. A gavel major bump means at least one expected outcome
+   changed, so re-copy the vectors (`tests/domain/gavel_vectors/`) in the same change.
 
 The checksum is re-verified by CI (`.github/workflows/ci.yml`) and the release smoke test asserts the `.so` is present
 in the zip, so both a swapped binary and a dropped artifact fail the pipeline.

@@ -71,6 +71,7 @@ from services.protocols.files import (
     SteamRecoveryStore,
 )
 from services.protocols.infra import (
+    ComputeSyncActionFn,
     DebugLogger,
     DownloadQueueCleanup,
     EventEmitter,
@@ -141,6 +142,7 @@ __all__ = [
     "BiosChecker",
     "BiosFileRepository",
     "Clock",
+    "ComputeSyncActionFn",
     "CoreInfoProvider",
     "CoreNameProviderFn",
     "CoreResolverFn",
