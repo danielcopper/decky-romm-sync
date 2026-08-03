@@ -287,7 +287,7 @@ def _build_bookkeeping(files_state: dict[str, Any], keepalive: list[object]) -> 
     """
     last_sync_hash = _encode(files_state.get("last_sync_hash"))
     last_sync_server_hash = _encode(files_state.get("last_sync_server_hash"))
-    keepalive += [last_sync_hash, last_sync_server_hash]
+    keepalive.extend((last_sync_hash, last_sync_server_hash))
     size, has_size = _optional_size(files_state.get("last_sync_local_size"), "files_state.last_sync_local_size")
     return ctypes.pointer(
         _Bookkeeping(

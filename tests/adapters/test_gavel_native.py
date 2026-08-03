@@ -266,8 +266,9 @@ class TestDecisionTable:
         # this code disagree about the ABI. Conflict is a plausible-looking
         # decision to fall through to, which is exactly why it must not be the
         # fallback — the module's posture is to fail loudly, not substitute.
+        result = _SyncActionResult(action=99)
         with pytest.raises(ValueError, match="unknown action 99"):
-            _decode_action(_SyncActionResult(action=99), {})
+            _decode_action(result, {})
 
     def test_download_carries_the_callers_own_server_save_dict(self, adapter: GavelNativeAdapter) -> None:
         # The core answers with an id; the adapter has to resolve it back to the
@@ -342,8 +343,9 @@ class TestDecisionTable:
         # An int64_t cannot carry it and rounding would land on 0 — the one
         # value the corrupt-local guard reacts to. Refuse rather than answer a
         # different question.
+        local_file = _local(size=1.5, mtime=None)  # pyright: ignore[reportArgumentType]
         with pytest.raises(ValueError, match="whole number of bytes"):
-            adapter.compute_sync_action(_local(size=1.5, mtime=None), [], {}, _DEVICE, None)  # pyright: ignore[reportArgumentType]
+            adapter.compute_sync_action(local_file, [], {}, _DEVICE, None)
 
     def test_empty_local_file_dict_on_an_empty_slot_is_the_one_known_divergence(
         self, adapter: GavelNativeAdapter
