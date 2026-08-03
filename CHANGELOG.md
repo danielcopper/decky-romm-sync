@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.30.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.29.0...decky-romm-sync-v0.30.0) (2026-08-03)
+
+
+### Features
+
+* **assets:** new mark, restructured README, docs palette ([#1566](https://github.com/danielcopper/decky-romm-sync/issues/1566)) ([6d17f8c](https://github.com/danielcopper/decky-romm-sync/commit/6d17f8c25be755009dd338a5c120c500cbee81bc))
+* **brand:** new mark — sync arrows around a button diamond ([#1586](https://github.com/danielcopper/decky-romm-sync/issues/1586)) ([756df33](https://github.com/danielcopper/decky-romm-sync/commit/756df3385d4e97106c097d62458bcdbddb3e1781))
+* **collections:** add a collection naming mode to keep same-named types separate ([#1569](https://github.com/danielcopper/decky-romm-sync/issues/1569)) ([4e54167](https://github.com/danielcopper/decky-romm-sync/commit/4e541678b5b86c0c3751909360425ded286778cd))
+* **collections:** align kind naming with RomM (Standard/Mine) ([c78936b](https://github.com/danielcopper/decky-romm-sync/commit/c78936b48eb06571ce07539778b91002876e17a0))
+* **launch:** stop a running game from the game detail page ([#1612](https://github.com/danielcopper/decky-romm-sync/issues/1612)) ([eeb8fdb](https://github.com/danielcopper/decky-romm-sync/commit/eeb8fdbf011d7756ebb9ca330a4f58a60fa4b3d2)), closes [#1587](https://github.com/danielcopper/decky-romm-sync/issues/1587)
+* **library:** generalize the franchise collection kind to virtual and sync IGDB collections ([46287bd](https://github.com/danielcopper/decky-romm-sync/commit/46287bd57c3aee86a41db30f417c54d222224043))
+* **prune:** add recovery-backed removed game cleanup ([#1577](https://github.com/danielcopper/decky-romm-sync/issues/1577)) ([37fa65b](https://github.com/danielcopper/decky-romm-sync/commit/37fa65b443a8cd35eae0720f3b9b60cc326894aa))
+* **saves:** copy a save into another slot ([#1556](https://github.com/danielcopper/decky-romm-sync/issues/1556)) ([8ea893e](https://github.com/danielcopper/decky-romm-sync/commit/8ea893ed647300dac2043186c3349425ce80d028)), closes [#1523](https://github.com/danielcopper/decky-romm-sync/issues/1523)
+* **saves:** default new save slots to "autosave" to match Argosy and Grout ([f536663](https://github.com/danielcopper/decky-romm-sync/commit/f536663254b5683731f1548011f2b525dae7bd9c)), closes [#1529](https://github.com/danielcopper/decky-romm-sync/issues/1529)
+* **saves:** resolve upload 409s through the gavel native core ([#1518](https://github.com/danielcopper/decky-romm-sync/issues/1518)) ([8774d81](https://github.com/danielcopper/decky-romm-sync/commit/8774d81027ba610cbae087a815b0e926c203e249))
+* **ui:** add Own/All collection owner-scope filter with lazy identity ([#1537](https://github.com/danielcopper/decky-romm-sync/issues/1537)) ([236514e](https://github.com/danielcopper/decky-romm-sync/commit/236514e3add18ee136db3f76b6c6b58ebd07354b)), closes [#1532](https://github.com/danielcopper/decky-romm-sync/issues/1532)
+* **ui:** confirm text-entry modals with the on-screen keyboard's Enter key ([#1563](https://github.com/danielcopper/decky-romm-sync/issues/1563)) ([a8e0677](https://github.com/danielcopper/decky-romm-sync/commit/a8e06779e2990b3dbb8d5c6d7c9519a8512099a5)), closes [#1562](https://github.com/danielcopper/decky-romm-sync/issues/1562)
+* **ui:** make the collections QAM navigable and declutter its panel ([4a0d87c](https://github.com/danielcopper/decky-romm-sync/commit/4a0d87cece8f69649e2227f8a140ea919a2cdf5f))
+* **ui:** show Space Required size on uninstalled games before download ([#1395](https://github.com/danielcopper/decky-romm-sync/issues/1395)) ([#1526](https://github.com/danielcopper/decky-romm-sync/issues/1526)) ([a303ba7](https://github.com/danielcopper/decky-romm-sync/commit/a303ba75297389a2db547d4efe0142761abacbc7))
+
+
+### Bug Fixes
+
+* **errors:** report a definitive 404 as not_found, not server_unreachable ([#1571](https://github.com/danielcopper/decky-romm-sync/issues/1571)) ([50234a5](https://github.com/danielcopper/decky-romm-sync/commit/50234a5d5514c4d39f906beea887a9250292f972))
+* **errors:** require a RomM entity answer before a 404 becomes not-found ([#1622](https://github.com/danielcopper/decky-romm-sync/issues/1622)) ([95ad514](https://github.com/danielcopper/decky-romm-sync/commit/95ad514a14ae4c1cb36bedc7ad97f27fcd99e8d9))
+* **firmware:** surface an "unmanaged" BIOS status for platforms without registry coverage ([#1531](https://github.com/danielcopper/decky-romm-sync/issues/1531)) ([c626f6d](https://github.com/danielcopper/decky-romm-sync/commit/c626f6db7078f6eb50872acac154c408747b8c64)), closes [#1520](https://github.com/danielcopper/decky-romm-sync/issues/1520)
+* **launch:** read running apps only from SteamUIStore ([#1617](https://github.com/danielcopper/decky-romm-sync/issues/1617)) ([9aef5e1](https://github.com/danielcopper/decky-romm-sync/commit/9aef5e1176c8d20eee58eb6cc860d5e9a6da6583)), closes [#1588](https://github.com/danielcopper/decky-romm-sync/issues/1588)
+* **launch:** stop only the RetroDECK instance running the pressed game ([#1620](https://github.com/danielcopper/decky-romm-sync/issues/1620)) ([b9d6f0c](https://github.com/danielcopper/decky-romm-sync/commit/b9d6f0c760632db60703395130c1b504b9a15e5a)), closes [#1619](https://github.com/danielcopper/decky-romm-sync/issues/1619)
+* **playtime:** re-address the pending outbox when a device heals ([#1636](https://github.com/danielcopper/decky-romm-sync/issues/1636)) ([72496e8](https://github.com/danielcopper/decky-romm-sync/commit/72496e88c2f30010573dbdb3903c08905c0f9c33))
+* **saves:** re-register the device when RomM no longer has its id ([#1573](https://github.com/danielcopper/decky-romm-sync/issues/1573)) ([d5b8b56](https://github.com/danielcopper/decky-romm-sync/commit/d5b8b5637ea20416448727731a1e635fc3284e0a))
+* **saves:** report a busy save-sync gate as busy, not as an offline server ([#1628](https://github.com/danielcopper/decky-romm-sync/issues/1628)) ([be98159](https://github.com/danielcopper/decky-romm-sync/commit/be981596859fbad94d01364d4ba0b5ceecb87bae)), closes [#1625](https://github.com/danielcopper/decky-romm-sync/issues/1625)
+* **session:** scope the lifecycle stop to the session's own app ([#1623](https://github.com/danielcopper/decky-romm-sync/issues/1623)) ([7d8761e](https://github.com/danielcopper/decky-romm-sync/commit/7d8761ecd612bbd497e4e8e49057474603d5b474)), closes [#1621](https://github.com/danielcopper/decky-romm-sync/issues/1621)
+* **session:** track one play session per running app ([#1626](https://github.com/danielcopper/decky-romm-sync/issues/1626)) ([889eca5](https://github.com/danielcopper/decky-romm-sync/commit/889eca598eac50e6ee6b3e3cd5def445f1b18f01)), closes [#1624](https://github.com/danielcopper/decky-romm-sync/issues/1624) [#1589](https://github.com/danielcopper/decky-romm-sync/issues/1589)
+* **settings:** harden RomM sign-in and consolidate the connection/SteamGridDB UX ([#1565](https://github.com/danielcopper/decky-romm-sync/issues/1565)) ([283134d](https://github.com/danielcopper/decky-romm-sync/commit/283134df6952b2d91ac0a94bd8a14dce7b09bc25)), closes [#1564](https://github.com/danielcopper/decky-romm-sync/issues/1564)
+* **sync:** price a Force Full Sync's sibling duplicates as updates, not phantom creates ([#1519](https://github.com/danielcopper/decky-romm-sync/issues/1519)) ([ea54e47](https://github.com/danielcopper/decky-romm-sync/commit/ea54e47e45f34db9c4810a9ac67c022ec3edd149)), closes [#1517](https://github.com/danielcopper/decky-romm-sync/issues/1517)
+* **sync:** price the time estimate by composition and separate cover downloads ([#1515](https://github.com/danielcopper/decky-romm-sync/issues/1515)) ([701edd0](https://github.com/danielcopper/decky-romm-sync/commit/701edd0940208a66d029892ba090d9dd9bc91e31)), closes [#1511](https://github.com/danielcopper/decky-romm-sync/issues/1511)
+* **sync:** union same-named collections instead of overwriting in finalize ([#1533](https://github.com/danielcopper/decky-romm-sync/issues/1533)) ([fb67d8a](https://github.com/danielcopper/decky-romm-sync/commit/fb67d8a3b17bc2732efe6cca39e38bdf13c8bfea)), closes [#1503](https://github.com/danielcopper/decky-romm-sync/issues/1503)
+* **tests:** stop conftest leaking temp dirs and being imported twice ([#1559](https://github.com/danielcopper/decky-romm-sync/issues/1559)) ([e3ecbca](https://github.com/danielcopper/decky-romm-sync/commit/e3ecbca01a945bc6b4f011fe63ebe73af17eee6b))
+* **ui:** draw System-page BIOS dividers only between platforms ([#1535](https://github.com/danielcopper/decky-romm-sync/issues/1535)) ([6662280](https://github.com/danielcopper/decky-romm-sync/commit/6662280d9c23d1014bc88fee5fab77a148229473))
+* **ui:** latch the coarse progress bar at its run high-water mark so a weight correction can't retract it ([#1525](https://github.com/danielcopper/decky-romm-sync/issues/1525)) ([f67faae](https://github.com/danielcopper/decky-romm-sync/commit/f67faaea9dd61698b2f3f3a1c5c3c38b6738b136)), closes [#1509](https://github.com/danielcopper/decky-romm-sync/issues/1509)
+* **ui:** render collections controls before the slow list fetch resolves ([51a333c](https://github.com/danielcopper/decky-romm-sync/commit/51a333ccf1d5f8998b27b15b08d825f085c772d2))
+* **version-picker:** disable versions missing from RomM ([#1575](https://github.com/danielcopper/decky-romm-sync/issues/1575)) ([a10e2ab](https://github.com/danielcopper/decky-romm-sync/commit/a10e2ab841556f8aca424adb7fd80437724c8cd9))
+* **version-switch:** refuse vanished targets ([#1576](https://github.com/danielcopper/decky-romm-sync/issues/1576)) ([ee40268](https://github.com/danielcopper/decky-romm-sync/commit/ee40268ff1b0d2855727fc24f19411535d30a9e7))
+
 ## [0.29.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.28.1...decky-romm-sync-v0.29.0) (2026-07-20)
 
 
