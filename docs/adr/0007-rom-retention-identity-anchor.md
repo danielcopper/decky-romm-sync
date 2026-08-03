@@ -27,6 +27,23 @@ and save history **survive a ROM leaving RomM**.
 - **No time-based GC.** `roms` grows with every ROM ever seen; rows are tiny (single-digit MB over years even for a
   heavy curator), and the stable `rom_id` re-links cleanly on re-add. This is accepted over mirroring RomM exactly.
 
+> **Correction (#1570).** The Decision stands — retention is what made the deliberate purge cheap to add — but two of
+> the statements above are wrong as written and a third has been overtaken:
+>
+> - **`rom_id` does not re-link on re-add.** RomM issues a _new_ id when a ROM is deleted and rescanned, so a re-add
+>   produces a **second row in the same sibling group** ([ADR-0022](0022-component-based-sibling-group-key.md)) rather
+>   than reattaching to the retained one. The retained row keeps the local playtime and saves recorded under the old id,
+>   and nothing carries them across on its own. Retention is still right — losing that history to a transient absence
+>   would be worse — but "it re-links" was never the reason.
+> - **There are six per-ROM cascade children, not five.** The Context above lists `rom_installs`, `rom_metadata`,
+>   `rom_playtime`, `rom_save_sync_states` and `rom_save_files`. `rom_playtime_sessions` — the outbox of play sessions
+>   not yet ingested by RomM, added in migration `006` — carries the same `ON DELETE CASCADE` and is missing from the
+>   list. A purge therefore also discards queued sessions that exist nowhere else, which is part of why it captures
+>   playtime before deleting.
+> - **The deliberate purge now exists.** "That action does not exist today" was true when this was written. Removed-game
+>   cleanup ([removed-game-cleanup.md](../architecture/removed-game-cleanup.md)) is that action: explicit, opt-in, and
+>   authorized only by a fresh exact-id 404 from RomM. The cascade FKs are no longer dormant.
+
 ## Consequences
 
 - The cascade FKs are real and correct but **never auto-fire** — a future reader seeing `ON DELETE CASCADE` with no
