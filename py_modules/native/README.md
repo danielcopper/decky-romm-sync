@@ -15,7 +15,9 @@ per-`(rom, filename, slot)` sync action (`gavel_compute_sync_action`) and the up
 (`gavel_resolve_upload_conflict`).
 
 - **Upstream:** <https://github.com/danielcopper/romm-gavel>
-- **Release:** `v0.4.0`
+- **Release:** `v1.0.0` — the first release whose **C ABI is part of the promise**. Struct layouts, signatures and
+  enumerator values cannot change now without a major bump, which is what makes pinning a compiled artifact meaningful
+  rather than hopeful. The binary is byte-identical to `v0.4.0`; only the guarantee attached to it changed.
 - **Architecture:** `x86_64` Linux — freestanding (zero library dependencies: no NEEDED entries, no global undefined
   symbols; upstream release CI enforces this), so it loads on any x86_64 Linux regardless of libc flavor or version
 - **Checksum:** pinned in `libgavel-x86_64-linux.so.sha256` (SHA-256)
