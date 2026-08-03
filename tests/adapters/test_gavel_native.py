@@ -30,7 +30,12 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from adapters.gavel_native import GavelNativeAdapter, GavelNativeLoadError
+from adapters.gavel_native import (
+    GavelNativeAdapter,
+    GavelNativeLoadError,
+    _decode_action,
+    _SyncActionResult,
+)
 from domain.sync_action import (
     Conflict,
     Download,
@@ -256,6 +261,14 @@ class TestDecisionTable:
         action = adapter.compute_sync_action(None, [], {}, _DEVICE, None)
         assert action == Skip(reason="nothing_to_sync", adopt_baseline=False)
 
+    def test_unknown_action_raises_instead_of_decoding_as_conflict(self) -> None:
+        # An action value this adapter does not know means the vendored .so and
+        # this code disagree about the ABI. Conflict is a plausible-looking
+        # decision to fall through to, which is exactly why it must not be the
+        # fallback — the module's posture is to fail loudly, not substitute.
+        with pytest.raises(ValueError, match="unknown action 99"):
+            _decode_action(_SyncActionResult(action=99), {})
+
     def test_download_carries_the_callers_own_server_save_dict(self, adapter: GavelNativeAdapter) -> None:
         # The core answers with an id; the adapter has to resolve it back to the
         # very dict the caller passed, because five downstream sites read the
@@ -397,8 +410,9 @@ class TestDecisionTableDifferential:
                 )
         assert not mismatches, "native core diverged from the Python kernel:\n" + "\n".join(mismatches)
         # A shrunken product would make the agreement above vacuous, and nothing
-        # else would say so: pin the count the dimensions multiply out to, less
-        # the excluded (empty-dict, empty slot) slice.
-        baselines = len(_LOCAL_HASHES) * len(_LAST_SYNC_HASHES) * len(_LAST_SYNC_SERVER_HASHES)
-        per_slice = baselines * len(_LAST_SYNC_LOCAL_SIZES)
-        assert compared == len(_LOCAL_FILES) * len(_SLOTS) * per_slice - per_slice
+        # else would say so. The literal is the point: deriving it from the same
+        # collections that drive the product would hold for any dimension size,
+        # which is exactly the failure this is meant to catch. 7 local files x 8
+        # slots x 5 local hashes x 3 baselines x 3 server baselines x 4 baseline
+        # sizes, less the excluded (empty-dict, empty slot) slice.
+        assert compared == 9900

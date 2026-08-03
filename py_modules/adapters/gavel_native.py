@@ -55,6 +55,7 @@ _BUNDLED_LIB_PATH = os.path.normpath(
 _ACTION_SKIP = 0
 _ACTION_UPLOAD = 1
 _ACTION_DOWNLOAD = 2
+_ACTION_CONFLICT = 3
 _SKIP_REASONS = {0: "synced", 1: "nothing_to_sync"}
 
 
@@ -203,11 +204,13 @@ class GavelNativeAdapter:
         ``Download`` / ``Conflict`` is resolved back through to the caller's own
         save dict.
         """
-        # Every buffer the C structs point at has to outlive the call. ctypes
-        # keeps its own reference for a value passed through a constructor, but
-        # writing into an array element (``arr[i].field = b"…"``) stores a raw
-        # pointer and keeps nothing alive — so each encoded string and each
-        # array is held here until the call has returned.
+        # Every buffer the C structs point at has to outlive the call. CPython's
+        # ctypes does track this itself — a value assigned to a pointer field is
+        # recorded in the container's ``_objects``, including through an array
+        # element (``arr[i].field = b"…"``) — but that is an implementation
+        # detail of one interpreter, not a documented guarantee. Holding each
+        # encoded string and each array here until the call returns is what this
+        # adapter actually relies on.
         keepalive: list[object] = []
         saves, saves_by_id = _build_saves(server_saves_in_slot, keepalive)
         result = _SyncActionResult()
@@ -348,6 +351,12 @@ def _decode_action(result: _SyncActionResult, saves_by_id: dict[int, dict[str, A
         return Skip(reason=_SKIP_REASONS[result.reason], adopt_baseline=bool(result.adopt_baseline))
     if result.action == _ACTION_UPLOAD:
         return Upload(target_save_id=result.target_save_id if result.has_target_save_id else None)
+    if result.action not in (_ACTION_DOWNLOAD, _ACTION_CONFLICT):
+        # An action this adapter does not know means the vendored core and this
+        # code disagree about the ABI. Falling through to Conflict would hide
+        # that behind a plausible-looking decision; the posture everywhere else
+        # in this module is to fail loudly rather than substitute something.
+        raise ValueError(f"gavel native core returned unknown action {result.action}")
     server_save = saves_by_id[result.server_save_id]
     if result.action == _ACTION_DOWNLOAD:
         return Download(server_save=server_save)
