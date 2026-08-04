@@ -3,6 +3,8 @@ import tseslint from "typescript-eslint";
 import react from "eslint-plugin-react";
 import reactHooks from "eslint-plugin-react-hooks";
 import jsxA11y from "eslint-plugin-jsx-a11y";
+import importX, { createNodeResolver } from "eslint-plugin-import-x";
+import { createTypeScriptImportResolver } from "eslint-import-resolver-typescript";
 import eslintConfigPrettier from "eslint-config-prettier";
 import globals from "globals";
 
@@ -24,6 +26,58 @@ export default tseslint.config(
   // react flat configs apply to but that the src-scoped block below never matches.
   // Without it the plugin prints a "React version not specified" warning.
   { settings: { react: { version: "detect" } } },
+  // Direction rules for `src/`. The backend gets this from `.importlinter`, which
+  // is Python-only; without an equivalent here nothing in the frontend toolchain
+  // has an opinion about which module may reach which. The three rules below make
+  // the WRONG seam fail — they cannot certify that a seam is right. A helper
+  // imported by exactly one parent, taking a dozen parameters and doing nothing on
+  // its own, is neither a cycle nor a direction violation and still passes.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    plugins: { "import-x": importX },
+    settings: {
+      // Resolution decides what these rules see. The TS resolver handles path
+      // aliases, index files, and `import type` — which is erased at runtime and
+      // must not count as an edge. A resolver that misses imports would make the
+      // rules quietly permissive.
+      "import-x/resolver-next": [createTypeScriptImportResolver(), createNodeResolver()],
+      // Both of these are load-bearing and neither is the default. `extensions`
+      // ships as ['.js'], so without .ts/.tsx the plugin resolves an import but
+      // never opens the target to read ITS imports — `no-cycle` then walks a graph
+      // one edge deep and reports nothing, on any codebase, forever. `parsers`
+      // supplies the TS parser it needs to do that reading. A probe cycle is the
+      // only way to tell this apart from "no cycles exist"; see
+      // tests/scripts/test_frontend_boundaries.* for the one that stays.
+      "import-x/extensions": [".ts", ".tsx"],
+      "import-x/parsers": { "@typescript-eslint/parser": [".ts", ".tsx"] },
+    },
+    rules: {
+      // A cycle is the signature of the fake split: an extraction whose halves
+      // still call each other back. `service-independence` does this job in the
+      // backend; its literal form does not transfer, because composition means a
+      // component must be allowed to import a component. `ignoreExternal` keeps
+      // the walk inside our own graph, which is the only one we can fix.
+      "import-x/no-cycle": ["error", { ignoreExternal: true }],
+      "import-x/no-restricted-paths": [
+        "error",
+        {
+          zones: [
+            {
+              target: "./src/utils",
+              from: "./src/components",
+              message:
+                "utils/ is the bottom layer and must not reach up into components/. Declare what you need to ask (see LaunchPrompts in utils/launchInterceptor.ts) and let index.tsx supply it.",
+            },
+            {
+              target: "./src/api",
+              from: "./src/components",
+              message: "api/ is the wire layer and has no business reaching into the view.",
+            },
+          ],
+        },
+      ],
+    },
+  },
   {
     files: ["src/**/*.{ts,tsx}"],
     languageOptions: {

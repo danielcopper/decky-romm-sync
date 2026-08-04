@@ -190,6 +190,13 @@ Format: **invariant** — tier — enforced by.
   `_vendor/`, `tests/`, `scripts/` and `src/` are out of scope, each for a reason recorded at `SCOPE_DIRS`)
 - **Service-independence contract list stays complete** — check — `scripts/check_service_independence_contract.py`
 - **Layer import direction (services ↛ adapters, adapters ↛ services, …)** — check — `.importlinter` (`lint-imports`)
+- **Frontend direction: `src/utils/` and `src/api/` never import `src/components/`, and no `src/` module takes part in
+  an import cycle** — check — `eslint.config.js` (`import-x/no-restricted-paths`, `import-x/no-cycle`). These rules go
+  inert rather than loud when misconfigured: `import-x/extensions` ships as `['.js']`, so until it names `.ts`/`.tsx`
+  the plugin resolves an import but never opens the target to read its imports, and `no-cycle` reports nothing on any
+  codebase. `src/eslintBoundaries.test.ts` lints known-bad fixtures through the real config and fails if any of the
+  three stops reporting — a green `pnpm lint` alone proves nothing. Type-only imports are not edges (erased at runtime),
+  which is why the `api/backend.ts` ⇄ `utils/cachedGameDetailStore.ts` back-reference is not a cycle
 - **No bare `# type: ignore` / blanket suppressions** — check — `scripts/check_no_bare_ignores.sh`
 - **Every pinned version in `requirements-*.lock` satisfies its `requirements-*.txt` source constraint** — check —
   `scripts/check_lock_sync.py`

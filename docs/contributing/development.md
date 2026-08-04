@@ -265,6 +265,22 @@ is a checksum-pinned copy, a large file under `tests/` is the one-file-per-sourc
 ships, and `src/` needs a per-scope glob before it can be added. There is deliberately no `--update` flag —
 re-baselining should be a reviewable diff, never a command someone runs to get back to green.
 
+The frontend has no size gate — deliberately, because a threshold only works when something else forbids the cheap way
+of getting under it, and `src/` has no equivalent of `service-independence`. What it has instead is direction rules, in
+`eslint.config.js` via `eslint-plugin-import-x`: `src/utils/` and `src/api/` may not import `src/components/`, and no
+module in `src/` may take part in an import cycle. The cycle rule is the one that matters most, because a cycle is the
+signature of a split whose two halves still call each other — the wrong seam, detectable without judgment. What none of
+them catch is a helper imported by exactly one parent that takes a dozen parameters and does nothing on its own: it is
+neither a cycle nor a direction violation. These rules make the worst seam fail; they do not certify that a seam is
+right.
+
+Two settings in that config are load-bearing and neither is the plugin's default. `import-x/extensions` ships as
+`['.js']`, so until it names `.ts`/`.tsx` the plugin resolves an import but never opens the target file to read _its_
+imports — `no-cycle` then walks a graph one edge deep and reports nothing, on any codebase. `import-x/parsers` supplies
+the parser it needs for that reading. Because the failure mode is silence rather than noise,
+`src/eslintBoundaries.test.ts` lints known-bad fixtures through the real config and fails if any of the three rules
+stops reporting. A green `pnpm lint` on its own does not distinguish a working rule from an inert one.
+
 See [Backend Architecture](../architecture/backend-architecture.md) for details.
 
 ## Full CI gate
