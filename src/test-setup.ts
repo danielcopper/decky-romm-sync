@@ -62,9 +62,16 @@ vi.mock("@decky/api", async () => {
 vi.mock("@decky/ui", () => {
   type AnyProps = Record<string, unknown> & { children?: unknown };
   const passthrough = (tag: string) => (props: AnyProps) => createElement(tag, props, props.children as never);
+  // The modal shells take Steam's own prop vocabulary — closeModal, onOK,
+  // strTitle, bAlertDialog. React puts none of it on a host element: it drops
+  // each one and logs a warning, and a warning on every modal render buries the
+  // next real one. Forwarding only the children leaves the rendered tree
+  // identical, since React was already dropping the rest. Neither shell is ever
+  // handed className or style — every caller wraps its own body in a div.
+  const modalShell = (props: AnyProps) => createElement("div", null, props.children as never);
   return {
-    ConfirmModal: passthrough("div"),
-    ModalRoot: passthrough("div"),
+    ConfirmModal: modalShell,
+    ModalRoot: modalShell,
     DialogButton: ({
       children,
       onClick,

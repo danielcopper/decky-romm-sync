@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor, type RenderResult } from "@testing-library/react";
 import { createElement, type ReactElement } from "react";
 import { toaster } from "@decky/api";
 import { showModal } from "@decky/ui";
@@ -54,6 +54,24 @@ function shownModal(): ReactElement {
   const element = calls[calls.length - 1]?.[0] as ReactElement | undefined;
   if (!element) throw new Error("Expected cleanup modal");
   return element;
+}
+
+/**
+ * The "include installed ROM content" checkbox belonging to `gameName`'s row.
+ *
+ * The dialog's option toggles and its per-row content toggles share one flat
+ * `toggle-input` list, so indexing it ties every row assertion to the number of
+ * options rendered above the list. Throws rather than returning nothing: a row
+ * that has lost its content toggle is the failure, not a silently skipped click.
+ */
+function contentToggleFor(modal: RenderResult, gameName: string): HTMLInputElement {
+  const row = modal.getByText(gameName).parentElement;
+  const toggle = [...(row?.querySelectorAll<HTMLElement>('[data-testid="toggle"]') ?? [])].find((el) =>
+    el.textContent.includes("Include installed ROM content"),
+  );
+  const input = toggle?.querySelector<HTMLInputElement>('[data-testid="toggle-input"]');
+  if (!input) throw new Error(`No installed-content toggle in the row for ${gameName}`);
+  return input;
 }
 
 describe("RemovedGamesCleanup", () => {
@@ -370,10 +388,8 @@ describe("RemovedGamesCleanup", () => {
     });
     await openRemovedGamesCleanupModal();
     const modal = render(shownModal());
-    // The four option toggles come first, then one content toggle per installed row.
-    const toggles = modal.getAllByTestId("toggle-input") as HTMLInputElement[];
-    fireEvent.click(toggles[4]!);
-    fireEvent.click(toggles[5]!);
+    fireEvent.click(contentToggleFor(modal, "Game 11"));
+    fireEvent.click(contentToggleFor(modal, "Game 12"));
 
     fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
     await waitFor(() => expect(backend.startPrune).toHaveBeenCalled());
@@ -400,7 +416,7 @@ describe("RemovedGamesCleanup", () => {
     });
     await openRemovedGamesCleanupModal();
     const modal = render(shownModal());
-    fireEvent.click((modal.getAllByTestId("toggle-input") as HTMLInputElement[])[4]!);
+    fireEvent.click(contentToggleFor(modal, "Removed Game"));
 
     fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
     await waitFor(() => {
@@ -460,6 +476,35 @@ describe("RemovedGamesCleanup", () => {
       expect(logs.warn).toHaveBeenCalledWith(
         expect.stringContaining("Confirm aborted while staging installed content"),
       );
+    });
+
+    it("treats a page that reports success without a selection id as refused", async () => {
+      const setStatus = vi.fn();
+      vi.mocked(backend.stagePruneInstalledSelection).mockResolvedValue({
+        success: true,
+        selected_count: 100,
+        message: "The selection was accepted but not stored.",
+      });
+
+      await expect(stageInstalledSelections("preview-1", romIds, setStatus)).resolves.toEqual({ ok: false });
+
+      // There is nothing to chain the next page onto. Carrying on would open a
+      // second, unrelated selection and stage the remaining ids into it, and the
+      // run would then be started against whichever one Confirm happened to hold.
+      expect(backend.stagePruneInstalledSelection).toHaveBeenCalledTimes(1);
+      expect(setStatus).toHaveBeenCalledExactlyOnceWith("The selection was accepted but not stored.");
+    });
+
+    it("says something of its own when a refusal carries no message", async () => {
+      const setStatus = vi.fn();
+      vi.mocked(backend.stagePruneInstalledSelection).mockResolvedValue({ success: false, reason: "stale_preview" });
+
+      await expect(stageInstalledSelections("preview-1", romIds, setStatus)).resolves.toEqual({ ok: false });
+
+      // Confirm reports through this string alone, so an unexplained refusal
+      // must not surface as a blank line in the dialog.
+      expect(setStatus).toHaveBeenCalledExactlyOnceWith("Installed-content selections could not be staged.");
+      expect(logs.warn).toHaveBeenCalledWith(expect.stringContaining("installed content: no message"));
     });
   });
 
