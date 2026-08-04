@@ -194,8 +194,12 @@ function confirmBlockedReason(state: {
  * Stage the installed-content opt-ins page by page, chaining each page onto the
  * selection the previous one opened. A refused page reports itself and stops the
  * whole Confirm — a partially staged selection must never reach the run.
+ *
+ * Exported so a test can pin the page boundary directly: reaching it through the
+ * dialog needs one rendered row and one click per selected id, which makes the
+ * cost of proving it grow with the boundary it is proving.
  */
-async function stageInstalledSelections(
+export async function stageInstalledSelections(
   previewId: string,
   selected: number[],
   setStatus: (message: string) => void,

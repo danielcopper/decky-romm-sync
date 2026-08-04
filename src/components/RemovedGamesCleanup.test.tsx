@@ -12,7 +12,12 @@ import {
   setPruneComplete,
   setPruneProgress,
 } from "../utils/pruneStore";
-import { openRemovedGamesCleanupModal, RemovedGamesCleanupSection, STAGE_LABELS } from "./RemovedGamesCleanup";
+import {
+  openRemovedGamesCleanupModal,
+  RemovedGamesCleanupSection,
+  stageInstalledSelections,
+  STAGE_LABELS,
+} from "./RemovedGamesCleanup";
 
 const preview: backend.PrunePreviewResult = {
   success: true,
@@ -347,36 +352,116 @@ describe("RemovedGamesCleanup", () => {
     });
   });
 
-  it("stages every installed selection above 256 in bounded pages", async () => {
-    const items = Array.from({ length: 257 }, (_, index) => ({
-      ...preview.items![0]!,
-      rom_id: index + 1,
-      installed_bytes: 0,
-      name: `Game ${index + 1}`,
-    }));
-    vi.mocked(backend.getPrunePreview).mockResolvedValue({ ...preview, items, total: items.length, free_bytes: 1 });
-    vi.mocked(backend.stagePruneInstalledSelection).mockImplementation(async (request) => ({
+  it("stages the checked installed content and carries its selection id into the run", async () => {
+    vi.mocked(backend.getPrunePreview).mockResolvedValue({
+      ...preview,
+      total: 2,
+      free_bytes: 1,
+      items: [
+        { ...preview.items![0]!, rom_id: 11, installed_bytes: 0, name: "Game 11" },
+        { ...preview.items![0]!, rom_id: 12, installed_bytes: 0, name: "Game 12" },
+      ],
+    });
+    vi.mocked(backend.stagePruneInstalledSelection).mockResolvedValue({
       success: true,
-      selection_id: "selection-many",
-      selected_count: request.rom_ids[request.rom_ids.length - 1] ?? 0,
-      finalized: request.final,
-    }));
+      selection_id: "selection-final",
+      selected_count: 2,
+      finalized: true,
+    });
     await openRemovedGamesCleanupModal();
     const modal = render(shownModal());
+    // The four option toggles come first, then one content toggle per installed row.
     const toggles = modal.getAllByTestId("toggle-input") as HTMLInputElement[];
-    act(() => {
-      for (const toggle of toggles.slice(4)) toggle.click();
-    });
+    fireEvent.click(toggles[4]!);
+    fireEvent.click(toggles[5]!);
 
     fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
     await waitFor(() => expect(backend.startPrune).toHaveBeenCalled());
 
-    const pages = vi.mocked(backend.stagePruneInstalledSelection).mock.calls.map(([request]) => request);
-    expect(pages.map((page) => page.rom_ids.length)).toEqual([100, 100, 57]);
-    expect(pages.map((page) => page.selection_id)).toEqual([null, "selection-many", "selection-many"]);
-    expect(pages.map((page) => page.final)).toEqual([false, false, true]);
-    expect(vi.mocked(backend.startPrune).mock.calls[0]?.[0].installed_selection_id).toBe("selection-many");
-  }, 30_000);
+    expect(vi.mocked(backend.stagePruneInstalledSelection)).toHaveBeenCalledExactlyOnceWith({
+      preview_id: "preview-1",
+      selection_id: null,
+      rom_ids: [11, 12],
+      final: true,
+    });
+    expect(vi.mocked(backend.startPrune).mock.calls[0]?.[0].installed_selection_id).toBe("selection-final");
+  });
+
+  it("does not start the run when the staged selection is refused", async () => {
+    vi.mocked(backend.getPrunePreview).mockResolvedValue({
+      ...preview,
+      free_bytes: 1,
+      items: [{ ...preview.items![0]!, installed_bytes: 0 }],
+    });
+    vi.mocked(backend.stagePruneInstalledSelection).mockResolvedValue({
+      success: false,
+      reason: "stale_preview",
+      message: "That cleanup preview is no longer current.",
+    });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    fireEvent.click((modal.getAllByTestId("toggle-input") as HTMLInputElement[])[4]!);
+
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => {
+      expect(modal.container.textContent).toContain("That cleanup preview is no longer current.");
+      // Back at its resting label, so the whole Confirm path has run and the
+      // control is usable for a retry.
+      expect((modal.getByRole("button", { name: "Confirm Cleanup" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    // The run would otherwise execute against a selection the backend never accepted.
+    expect(backend.startPrune).not.toHaveBeenCalled();
+  });
+
+  describe("stageInstalledSelections", () => {
+    // Enough to cross the page boundary twice and leave a short final page. The
+    // dialog would need one rendered row and one click per id to reach it.
+    const romIds = Array.from({ length: 257 }, (_, index) => index + 1);
+
+    it("splits a selection into bounded pages, each chained onto the one before", async () => {
+      let page = 0;
+      vi.mocked(backend.stagePruneInstalledSelection).mockImplementation(async (request) => ({
+        success: true,
+        selection_id: `selection-${++page}`,
+        selected_count: request.rom_ids.length,
+        finalized: request.final,
+      }));
+
+      await expect(stageInstalledSelections("preview-1", romIds, vi.fn())).resolves.toEqual({
+        ok: true,
+        selectionId: "selection-3",
+      });
+
+      const pages = vi.mocked(backend.stagePruneInstalledSelection).mock.calls.map(([request]) => request);
+      expect(pages.map((request) => request.rom_ids.length)).toEqual([100, 100, 57]);
+      expect(pages.map((request) => request.selection_id)).toEqual([null, "selection-1", "selection-2"]);
+      // Only the last page finalizes — an early close would drop the rest.
+      expect(pages.map((request) => request.final)).toEqual([false, false, true]);
+      expect(pages.flatMap((request) => request.rom_ids)).toEqual(romIds);
+    });
+
+    it("stops at a refused page and reports the backend's message", async () => {
+      const setStatus = vi.fn();
+      vi.mocked(backend.stagePruneInstalledSelection)
+        .mockResolvedValueOnce({ success: true, selection_id: "selection-1", selected_count: 100, finalized: false })
+        .mockResolvedValueOnce({
+          success: false,
+          reason: "stale_preview",
+          message: "That cleanup preview is no longer current.",
+        });
+
+      await expect(stageInstalledSelections("preview-1", romIds, setStatus)).resolves.toEqual({ ok: false });
+
+      // The third page is never sent: a partially staged selection must not be
+      // extended past the point the backend stopped accepting it.
+      expect(backend.stagePruneInstalledSelection).toHaveBeenCalledTimes(2);
+      expect(setStatus).toHaveBeenCalledExactlyOnceWith("That cleanup preview is no longer current.");
+      expect(logs.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Confirm aborted while staging installed content"),
+      );
+    });
+  });
 
   it("surfaces bounded save warnings in terminal details", async () => {
     await openRemovedGamesCleanupModal();
