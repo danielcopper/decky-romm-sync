@@ -1,7 +1,7 @@
 # Gavel conformance vectors — vendored
 
 These JSON files are vendored verbatim from [danielcopper/romm-gavel](https://github.com/danielcopper/romm-gavel)
-`vectors/`, at release tag `v1.0.0`. The layout mirrors upstream — one subdirectory per vector family:
+`vectors/`, at release tag `v1.0.1`. The layout mirrors upstream — one subdirectory per vector family:
 
 - `ladder/` — the 409 resolution ladder (`resolve_upload_conflict`), run against the in-tree kernel by
   `tests/domain/test_sync_action_gavel_vectors.py` and against the compiled core by

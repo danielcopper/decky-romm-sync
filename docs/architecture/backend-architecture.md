@@ -1384,10 +1384,10 @@ backstop in `_handle_upload_409` (`services/saves/sync_engine/matrix.py`).
   measured is a real case, distinct from a missing one. The core answers with the chosen `server_save_id`, which the
   adapter resolves back to the caller's own save dict so `Download` / `Conflict` carry the full record their consumers
   read.
-- **What ships**: `py_modules/native/libgavel-x86_64-linux.so` (romm-gavel `v1.0.0`, a freestanding build with zero
+- **What ships**: `py_modules/native/libgavel-x86_64-linux.so` (romm-gavel `v1.0.1`, a freestanding build with zero
   library dependencies — it loads on any x86_64 Linux), vendored verbatim from the upstream release with a pinned
-  SHA-256 checksum. `v1.0.0` is the first release whose C ABI is part of upstream's promise: struct layouts, signatures
-  and enumerator values now cost a major bump to change, which is what makes pinning a compiled artifact meaningful.
+  SHA-256 checksum. The C ABI has been part of upstream's promise since `v1.0.0`: struct layouts, signatures and
+  enumerator values now cost a major bump to change, which is what makes pinning a compiled artifact meaningful.
   Provenance and the update procedure live in
   [`native/README.md`](https://github.com/danielcopper/decky-romm-sync/blob/main/py_modules/native/README.md). The
   checksum is re-verified by CI and the release smoke test asserts the `.so` is present in the plugin zip, so both a
