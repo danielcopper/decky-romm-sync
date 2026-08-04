@@ -26,6 +26,10 @@ import {
   applyAllMetadata,
 } from "./patches/metadataPatches";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
+import { showCoreChangeModal } from "./components/CoreChangeModal";
+import { handleConflicts } from "./components/SyncConflictModal";
+import { showOfflineDriftModal } from "./components/OfflineDriftModal";
+import { showFallbackLaunchModal } from "./components/FallbackLaunchModal";
 import { hasAnySaveConflict } from "./utils/saveStatus";
 import {
   getAppIdRomIdMap,
@@ -302,7 +306,12 @@ export default definePlugin(() => {
   mountPruneLeasePlugin();
   const pluginAdmission = capturePruneLeaseAdmission();
   registerGameDetailPatch();
-  registerLaunchInterceptor();
+  registerLaunchInterceptor({
+    confirmCoreChange: showCoreChangeModal,
+    resolveConflicts: handleConflicts,
+    askOfflineDrift: showOfflineDriftModal,
+    confirmFallbackLaunch: showFallbackLaunchModal,
+  });
 
   // Load metadata cache, register store patches, and populate RomM app ID set.
   // Retries with backoff if the backend isn't ready yet (e.g. boot without network).

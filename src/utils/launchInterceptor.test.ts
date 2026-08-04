@@ -5,12 +5,8 @@ import * as gameDetailPatch from "../patches/gameDetailPatch";
 import * as launchGate from "./launchGate";
 import * as sessionManager from "./sessionManager";
 import * as runningApps from "./runningApps";
-import * as syncConflictModal from "../components/SyncConflictModal";
-import * as offlineDriftModal from "../components/OfflineDriftModal";
-import * as fallbackLaunchModal from "../components/FallbackLaunchModal";
-import * as coreChangeModal from "../components/CoreChangeModal";
 import * as steamShortcuts from "./steamShortcuts";
-import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./launchInterceptor";
+import { registerLaunchInterceptor, unregisterLaunchInterceptor, type LaunchPrompts } from "./launchInterceptor";
 import { mountPruneLeasePlugin, releaseAllPruneLeases } from "./pruneLease";
 import type { GateVerdict, LaunchGateOps } from "./launchGate";
 import type { SyncConflict } from "../types";
@@ -76,21 +72,20 @@ vi.mock("./saveSortMigrationStore", () => ({
   setSaveSortMigrationStatus: vi.fn(),
 }));
 
-vi.mock("../components/SyncConflictModal", () => ({
-  handleConflicts: vi.fn(),
-}));
+/**
+ * The prompts the interceptor asks its caller for. Stubbing them here is the
+ * whole point of the injection: a gate branch is reachable without standing up
+ * a modal, and the interceptor stays free of any import into `components/`.
+ */
+const prompts = {
+  confirmCoreChange: vi.fn<LaunchPrompts["confirmCoreChange"]>(),
+  resolveConflicts: vi.fn<LaunchPrompts["resolveConflicts"]>(),
+  askOfflineDrift: vi.fn<LaunchPrompts["askOfflineDrift"]>(),
+  confirmFallbackLaunch: vi.fn<LaunchPrompts["confirmFallbackLaunch"]>(),
+};
 
-vi.mock("../components/OfflineDriftModal", () => ({
-  showOfflineDriftModal: vi.fn(),
-}));
-
-vi.mock("../components/FallbackLaunchModal", () => ({
-  showFallbackLaunchModal: vi.fn(),
-}));
-
-vi.mock("../components/CoreChangeModal", () => ({
-  showCoreChangeModal: vi.fn(),
-}));
+/** Register with the stub prompts — every test drives the interceptor through this. */
+const register = (): void => registerLaunchInterceptor(prompts);
 
 type GameActionHandler = (gameActionId: number, appIdStr: string, action: string, launchSource: number) => void;
 
@@ -183,7 +178,7 @@ describe("launchInterceptor — full funnel watcher", () => {
 
   describe("entry guards", () => {
     it("ignores non-LaunchApp actions — no cancel, no gate", async () => {
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(1, "1234", "QuitApp", 0);
       await flush();
@@ -194,7 +189,7 @@ describe("launchInterceptor — full funnel watcher", () => {
 
     it("ignores non-RomM app IDs — no cancel, no gate", async () => {
       vi.mocked(gameDetailPatch.isRomMAppId).mockReturnValue(false);
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(1, "9999", "LaunchApp", 0);
       await flush();
@@ -206,7 +201,7 @@ describe("launchInterceptor — full funnel watcher", () => {
     it("skips a marked appId WITHOUT cancelling or gating", async () => {
       // Pre-mark appId 1234 via the real skip-set.
       launchGate.markLaunchSkipped(1234);
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(99, "1234", "LaunchApp", 0);
       await flush();
@@ -227,7 +222,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       // Our own session state says rom 42 (appId 1234) is live.
       vi.mocked(sessionManager.isSessionActive).mockReturnValue(true);
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -249,7 +244,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       vi.mocked(sessionManager.isSessionActive).mockReturnValue(false);
       vi.mocked(runningApps.isAppRunning).mockReturnValue(true);
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -270,7 +265,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       vi.mocked(sessionManager.isSessionActive).mockReturnValue(false);
       vi.mocked(runningApps.isAppRunning).mockReturnValue(false);
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -284,7 +279,7 @@ describe("launchInterceptor — full funnel watcher", () => {
 
     it("does NOT skip when nothing is running — normal funnel runs", async () => {
       // Defaults: no live session, isAppRunning false → guard inert, funnel runs.
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -306,7 +301,7 @@ describe("launchInterceptor — full funnel watcher", () => {
         }),
       );
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
 
@@ -319,7 +314,7 @@ describe("launchInterceptor — full funnel watcher", () => {
   describe("installed check", () => {
     it("toasts and does NOT relaunch when the ROM is not installed", async () => {
       vi.mocked(backend.getInstalledRom).mockResolvedValue(null);
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -335,7 +330,7 @@ describe("launchInterceptor — full funnel watcher", () => {
 
     it("relaunches without gating when the appId is unknown to the session map", async () => {
       vi.mocked(sessionManager.getAppIdRomIdMapSnapshot).mockReturnValue({});
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -349,7 +344,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       vi.mocked(backend.getCachedGameDetail).mockResolvedValue({ found: true, installed: true });
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -364,7 +359,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       vi.mocked(backend.getInstalledRom).mockRejectedValue(new Error("net"));
       vi.mocked(backend.getCachedGameDetail).mockResolvedValue({ found: true, installed: false });
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -381,7 +376,7 @@ describe("launchInterceptor — full funnel watcher", () => {
   describe("verdict handling", () => {
     it("allow → relaunches via RunGame and marks the appId skipped", async () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -394,16 +389,16 @@ describe("launchInterceptor — full funnel watcher", () => {
     it("conflict → SyncConflictModal shown; resolved → relaunch + romm_data_changed", async () => {
       const conflicts = [conflict()];
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "conflict", conflicts });
-      vi.mocked(syncConflictModal.handleConflicts).mockResolvedValue("resolved");
+      prompts.resolveConflicts.mockResolvedValue("resolved");
       const dataChanged = vi.fn();
       globalThis.addEventListener("romm_data_changed", dataChanged);
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
 
-      expect(syncConflictModal.handleConflicts).toHaveBeenCalledWith(conflicts);
+      expect(prompts.resolveConflicts).toHaveBeenCalledWith(conflicts);
       expect(dataChanged).toHaveBeenCalled();
       expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
       globalThis.removeEventListener("romm_data_changed", dataChanged);
@@ -411,40 +406,40 @@ describe("launchInterceptor — full funnel watcher", () => {
 
     it("conflict → cancelled → no relaunch", async () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "conflict", conflicts: [conflict()] });
-      vi.mocked(syncConflictModal.handleConflicts).mockResolvedValue("cancel");
+      prompts.resolveConflicts.mockResolvedValue("cancel");
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
 
-      expect(syncConflictModal.handleConflicts).toHaveBeenCalled();
+      expect(prompts.resolveConflicts).toHaveBeenCalled();
       expect(runGameMock()).not.toHaveBeenCalled();
     });
 
     it("offline_drift → OfflineDriftModal shown; start_anyway → relaunch", async () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "offline_drift" });
-      vi.mocked(offlineDriftModal.showOfflineDriftModal).mockResolvedValue("start_anyway");
+      prompts.askOfflineDrift.mockResolvedValue("start_anyway");
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
 
-      expect(offlineDriftModal.showOfflineDriftModal).toHaveBeenCalled();
+      expect(prompts.askOfflineDrift).toHaveBeenCalled();
       expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
     });
 
     it("offline_drift → cancel → no relaunch", async () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "offline_drift" });
-      vi.mocked(offlineDriftModal.showOfflineDriftModal).mockResolvedValue("cancel");
+      prompts.askOfflineDrift.mockResolvedValue("cancel");
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
 
-      expect(offlineDriftModal.showOfflineDriftModal).toHaveBeenCalled();
+      expect(prompts.askOfflineDrift).toHaveBeenCalled();
       expect(runGameMock()).not.toHaveBeenCalled();
     });
 
@@ -453,9 +448,9 @@ describe("launchInterceptor — full funnel watcher", () => {
       vi.mocked(launchGate.runLaunchGate)
         .mockResolvedValueOnce({ decision: "offline_drift" })
         .mockResolvedValue({ decision: "allow" });
-      vi.mocked(offlineDriftModal.showOfflineDriftModal).mockResolvedValueOnce("retry");
+      prompts.askOfflineDrift.mockResolvedValueOnce("retry");
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -463,43 +458,43 @@ describe("launchInterceptor — full funnel watcher", () => {
       // Non-vacuous: the gate RE-RAN (called twice) on retry, and the now-allow
       // verdict relaunched.
       expect(vi.mocked(launchGate.runLaunchGate).mock.calls.length).toBeGreaterThanOrEqual(2);
-      expect(offlineDriftModal.showOfflineDriftModal).toHaveBeenCalledTimes(1);
+      expect(prompts.askOfflineDrift).toHaveBeenCalledTimes(1);
       expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
     });
 
     it("offline_drift → retry → still offline_drift → re-shows modal; cancel → no relaunch", async () => {
       // Both gate passes → offline_drift. User retries once, then cancels.
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "offline_drift" });
-      vi.mocked(offlineDriftModal.showOfflineDriftModal).mockResolvedValueOnce("retry").mockResolvedValueOnce("cancel");
+      prompts.askOfflineDrift.mockResolvedValueOnce("retry").mockResolvedValueOnce("cancel");
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
 
       expect(vi.mocked(launchGate.runLaunchGate).mock.calls.length).toBeGreaterThanOrEqual(2);
-      expect(offlineDriftModal.showOfflineDriftModal).toHaveBeenCalledTimes(2);
+      expect(prompts.askOfflineDrift).toHaveBeenCalledTimes(2);
       expect(runGameMock()).not.toHaveBeenCalled();
     });
 
     it("sync_failed → fallback confirm; OK → relaunch", async () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "sync_failed", message: "no device" });
-      vi.mocked(fallbackLaunchModal.showFallbackLaunchModal).mockResolvedValue(true);
+      prompts.confirmFallbackLaunch.mockResolvedValue(true);
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
 
-      expect(fallbackLaunchModal.showFallbackLaunchModal).toHaveBeenCalledWith("no device");
+      expect(prompts.confirmFallbackLaunch).toHaveBeenCalledWith("no device");
       expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
     });
 
     it("sync_failed → cancel → no relaunch", async () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "sync_failed", message: "no device" });
-      vi.mocked(fallbackLaunchModal.showFallbackLaunchModal).mockResolvedValue(false);
+      prompts.confirmFallbackLaunch.mockResolvedValue(false);
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -510,7 +505,7 @@ describe("launchInterceptor — full funnel watcher", () => {
     it("migration_pending block → migration toast, no relaunch", async () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "block", reason: "migration_pending" });
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -525,7 +520,7 @@ describe("launchInterceptor — full funnel watcher", () => {
     it("abort → no toast, no relaunch", async () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "abort" });
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -553,7 +548,7 @@ describe("launchInterceptor — full funnel watcher", () => {
         prune_lease_token: "launch-lease",
       });
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -578,7 +573,7 @@ describe("launchInterceptor — full funnel watcher", () => {
         prune_lease_token: "launch-lease",
       });
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -593,7 +588,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
       vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue(null);
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -607,7 +602,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
       vi.mocked(backend.getRomRelaunchOptions).mockRejectedValue(new Error("offline"));
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -625,7 +620,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       vi.useFakeTimers();
       try {
         vi.mocked(backend.getRomRelaunchOptions).mockReturnValue(new Promise<never>(() => {}));
-        registerLaunchInterceptor();
+        register();
         captureHandler()(77, "1234", "LaunchApp", 0);
 
         await vi.advanceTimersByTimeAsync(0);
@@ -648,7 +643,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       let remounted = false;
       vi.mocked(backend.getRomRelaunchOptions).mockReturnValue(new Promise<never>(() => {}));
       try {
-        registerLaunchInterceptor();
+        register();
         captureHandler()(77, "1234", "LaunchApp", 0);
         await flush();
         expect(backend.getRomRelaunchOptions).toHaveBeenCalledWith(42);
@@ -678,7 +673,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       );
 
       try {
-        registerLaunchInterceptor();
+        register();
         captureHandler()(77, "1234", "LaunchApp", 0);
         await flush();
         expect(backend.getRomRelaunchOptions).toHaveBeenCalledWith(42);
@@ -704,7 +699,7 @@ describe("launchInterceptor — full funnel watcher", () => {
 
     it("conflict resolved → re-confirms then relaunches (shared path covers every relaunch branch)", async () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "conflict", conflicts: [conflict()] });
-      vi.mocked(syncConflictModal.handleConflicts).mockResolvedValue("resolved");
+      prompts.resolveConflicts.mockResolvedValue("resolved");
       vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({
         success: true,
         app_id: 1234,
@@ -712,7 +707,7 @@ describe("launchInterceptor — full funnel watcher", () => {
         prune_lease_token: "launch-lease",
       });
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -724,7 +719,7 @@ describe("launchInterceptor — full funnel watcher", () => {
     it("unknown appId relaunches WITHOUT a re-confirm (no romId to resolve)", async () => {
       vi.mocked(sessionManager.getAppIdRomIdMapSnapshot).mockReturnValue({});
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -739,7 +734,7 @@ describe("launchInterceptor — full funnel watcher", () => {
     it("relaunches (never traps) when the gate throws", async () => {
       vi.mocked(launchGate.runLaunchGate).mockRejectedValue(new Error("boom"));
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -775,7 +770,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       const tabSwitch = vi.fn();
       globalThis.addEventListener("romm_tab_switch", tabSwitch);
 
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -804,7 +799,7 @@ describe("launchInterceptor — full funnel watcher", () => {
           return { decision: "allow" };
         },
       );
-      registerLaunchInterceptor();
+      register();
       const handler = captureHandler();
       handler(77, "1234", "LaunchApp", 0);
       await flush();
@@ -854,9 +849,9 @@ describe("launchInterceptor — full funnel watcher", () => {
         old_label: "Old",
         new_label: "New",
       });
-      vi.mocked(coreChangeModal.showCoreChangeModal).mockResolvedValueOnce(true);
+      prompts.confirmCoreChange.mockResolvedValueOnce(true);
       expect(await ops.checkCoreChange()).toBe(true);
-      expect(coreChangeModal.showCoreChangeModal).toHaveBeenCalledWith("Old", "New");
+      expect(prompts.confirmCoreChange).toHaveBeenCalledWith("Old", "New");
     });
 
     it("preLaunchSync: savefiles_in_content_dir → success; conflicts pass through; a throw → sync_failed outcome", async () => {

@@ -41,12 +41,29 @@ import type { GateVerdict, LaunchGateOps, PreLaunchSyncOutcome } from "./launchG
 import { reconfirmLaunchOptions } from "./launchOptionsReconcile";
 import { capturePruneLeaseAdmission, isPruneLeaseAdmissionCurrent, type PruneLeaseAdmission } from "./pruneLease";
 import { applyLaunchGateSetupOutcome, resolveSaveSetupOutcome } from "./saveSetup";
-import { showCoreChangeModal } from "../components/CoreChangeModal";
-import { handleConflicts } from "../components/SyncConflictModal";
-import { showOfflineDriftModal } from "../components/OfflineDriftModal";
-import { showFallbackLaunchModal } from "../components/FallbackLaunchModal";
-import { SAVEFILES_IN_CONTENT_DIR_REASON } from "../types";
+import { SAVEFILES_IN_CONTENT_DIR_REASON, type SyncConflict } from "../types";
 import { detach } from "./detach";
+
+/**
+ * The four decisions the funnel has to put to the user, as questions rather than
+ * widgets. The interceptor runs outside the component tree and owns no UI, so it
+ * declares what it needs to ask and the caller supplies the answering surface —
+ * `index.tsx` wires the real modals in.
+ *
+ * Asking directly would mean reaching from here into the modal modules, which
+ * puts the launch funnel's control flow and its presentation in one knot: every
+ * test of a gate branch then has to stand up four modal modules to get at it.
+ */
+export interface LaunchPrompts {
+  /** Core changed since the last session — proceed with the new core? */
+  confirmCoreChange(oldLabel: string, newLabel: string): Promise<boolean>;
+  /** Walk the save conflicts; "resolved" once all are settled, "cancel" on the first dismissal. */
+  resolveConflicts(conflicts: SyncConflict[]): Promise<"cancel" | "resolved">;
+  /** Server unreachable and the local save has drifted — start anyway, re-probe, or give up? */
+  askOfflineDrift(): Promise<"start_anyway" | "retry" | "cancel">;
+  /** Pre-launch sync failed — launch on the local save regardless? */
+  confirmFallbackLaunch(message?: string): Promise<boolean>;
+}
 
 let gameActionHook: { unregister: () => void } | null = null;
 
@@ -92,11 +109,11 @@ async function ensureTrackingConfiguredWatcher(romId: number): Promise<void> {
 }
 
 /**
- * Core-change gate — reuses the same check + imperative modal the Play button
- * uses. `showModal` works from this non-component context. Returns `true` to
+ * Core-change gate — reuses the same check the Play button uses, and puts the
+ * same question to the user through the injected prompt. Returns `true` to
  * proceed, `false` when the user cancelled.
  */
-async function checkCoreChangeWatcher(romId: number): Promise<boolean> {
+async function checkCoreChangeWatcher(romId: number, prompts: LaunchPrompts): Promise<boolean> {
   const coreCheck = await checkCoreChange(romId).catch(
     (e): { changed: boolean; old_core?: string; new_core?: string; old_label?: string; new_label?: string } => {
       logError(`Watcher core-change check failed (assuming unchanged): ${e}`);
@@ -104,7 +121,7 @@ async function checkCoreChangeWatcher(romId: number): Promise<boolean> {
     },
   );
   if (!coreCheck.changed) return true;
-  return showCoreChangeModal(
+  return prompts.confirmCoreChange(
     coreCheck.old_label ?? coreCheck.old_core ?? "Unknown",
     coreCheck.new_label ?? coreCheck.new_core ?? "Unknown",
   );
@@ -146,14 +163,14 @@ async function preLaunchSyncWatcher(romId: number): Promise<PreLaunchSyncOutcome
 }
 
 /** Build the funnel callbacks for a given romId. */
-function makeWatcherOps(romId: number): LaunchGateOps {
+function makeWatcherOps(romId: number, prompts: LaunchPrompts): LaunchGateOps {
   return {
     migrationPending: () => getMigrationState().pending,
     ensureTrackingConfigured: async (): Promise<"proceed"> => {
       await ensureTrackingConfiguredWatcher(romId);
       return "proceed";
     },
-    checkCoreChange: () => checkCoreChangeWatcher(romId),
+    checkCoreChange: () => checkCoreChangeWatcher(romId, prompts),
     checkReachability: async () => {
       // A resolved probe feeds the shared store (#1345); a throw is a bridge
       // error, not a server verdict, so it leaves the store untouched but the
@@ -221,6 +238,7 @@ async function handleWatcherVerdict(
   appId: number,
   romId: number,
   admission: PruneLeaseAdmission,
+  prompts: LaunchPrompts,
 ): Promise<"done" | "retry"> {
   switch (verdict.decision) {
     case "allow":
@@ -235,7 +253,7 @@ async function handleWatcherVerdict(
       }
       return "done";
     case "conflict": {
-      const resolution = await handleConflicts(verdict.conflicts);
+      const resolution = await prompts.resolveConflicts(verdict.conflicts);
       if (resolution === "cancel") return "done";
       // Conflicts resolved — notify sibling components to refresh, then relaunch.
       globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
@@ -243,13 +261,13 @@ async function handleWatcherVerdict(
       return "done";
     }
     case "offline_drift": {
-      const choice = await showOfflineDriftModal();
+      const choice = await prompts.askOfflineDrift();
       if (choice === "start_anyway") await relaunch(appId, romId, admission);
       if (choice === "retry") return "retry";
       return "done";
     }
     case "sync_failed": {
-      const proceed = await showFallbackLaunchModal(verdict.message);
+      const proceed = await prompts.confirmFallbackLaunch(verdict.message);
       if (proceed) await relaunch(appId, romId, admission);
       return "done";
     }
@@ -264,13 +282,18 @@ async function handleWatcherVerdict(
  * path; still offline + drift re-shows the offline modal. A gate throw fails
  * open to `allow` so a gate bug never traps the user's already-cancelled launch.
  */
-async function runWatcherGate(appId: number, romId: number, admission: PruneLeaseAdmission): Promise<void> {
-  let verdict = await runLaunchGate(appId, romId, makeWatcherOps(romId)).catch((e): GateVerdict => {
+async function runWatcherGate(
+  appId: number,
+  romId: number,
+  admission: PruneLeaseAdmission,
+  prompts: LaunchPrompts,
+): Promise<void> {
+  let verdict = await runLaunchGate(appId, romId, makeWatcherOps(romId, prompts)).catch((e): GateVerdict => {
     logError(`Watcher gate threw (failing open to allow): ${e}`);
     return { decision: "allow" };
   });
-  while ((await handleWatcherVerdict(verdict, appId, romId, admission)) === "retry") {
-    verdict = await runLaunchGate(appId, romId, makeWatcherOps(romId)).catch((e): GateVerdict => {
+  while ((await handleWatcherVerdict(verdict, appId, romId, admission, prompts)) === "retry") {
+    verdict = await runLaunchGate(appId, romId, makeWatcherOps(romId, prompts)).catch((e): GateVerdict => {
       logError(`Watcher gate threw (failing open to allow): ${e}`);
       return { decision: "allow" };
     });
@@ -298,7 +321,7 @@ async function isRomInstalled(appId: number, romId: number): Promise<boolean> {
   }
 }
 
-export function registerLaunchInterceptor(): void {
+export function registerLaunchInterceptor(prompts: LaunchPrompts): void {
   gameActionHook = SteamClient.Apps.RegisterForGameActionStart(
     (gameActionId: number, appIdStr: string, action: string, _launchSource: number) => {
       if (action !== "LaunchApp") return;
@@ -361,7 +384,7 @@ export function registerLaunchInterceptor(): void {
               return;
             }
 
-            await runWatcherGate(appId, romId, admission);
+            await runWatcherGate(appId, romId, admission, prompts);
           } catch (e) {
             // An unexpected error must not trap a current launch. A stale launch
             // belongs to a torn-down generation and must remain cancelled.
