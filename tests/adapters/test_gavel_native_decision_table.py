@@ -194,6 +194,49 @@ def test_is_current_true_grown_local_uploads_put():
     assert result == Upload(target_save_id=42)
 
 
+# ---------------------------------------------------------------------------
+# The exact edge of the row 9b shrink guard. Where it sits is a promise of the
+# vendored core, not of this repo, so the cases above — a size far below the
+# baseline and one just under it — only bracket it loosely: a future .so could
+# move it several fold and every one of them would stay green. Moving it DOWN
+# is the direction that loses data, because a save truncated to a fraction of
+# its size would then be PUT over the only good server copy instead of asking.
+# Both sides are stated as the sizes that were measured against the shipped
+# binary; deriving them from the ratio would re-state the core's rule in the
+# test that is supposed to hold the core to it.
+# ---------------------------------------------------------------------------
+
+
+def test_is_current_true_largest_refused_shrink_returns_conflict():
+    """Row 9b / #1062 — against a recorded 8192-byte baseline, 4095 bytes is the
+    largest diverged local the guard still reads as truncated → ``Conflict``.
+    """
+    server = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
+    result = _ADAPTER.compute_sync_action(
+        local_file=_local(size=4095),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "abc", "last_sync_local_size": 8192},
+        device_id=DEVICE_ID,
+        local_hash="TRUNCATED",
+    )
+    assert result == Conflict(server_save=server)
+
+
+def test_is_current_true_smallest_accepted_shrink_uploads_put():
+    """Row 9 / #1062 — against the same 8192-byte baseline, 4096 bytes is the
+    smallest diverged local the guard lets through → in-place PUT.
+    """
+    server = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
+    result = _ADAPTER.compute_sync_action(
+        local_file=_local(size=4096),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "abc", "last_sync_local_size": 8192},
+        device_id=DEVICE_ID,
+        local_hash="DIFFERENT",
+    )
+    assert result == Upload(target_save_id=42)
+
+
 def test_recovery_no_local_is_current_true_returns_download():
     """Row 4 — local file gone, server still tracks our last upload as current."""
     server = _server_save(device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
@@ -536,6 +579,51 @@ def test_last_sync_hash_none_skips_divergence_check():
         local_hash="abc",
     )
     assert result_moved == Conflict(server_save=server_moved)
+
+
+def test_empty_last_sync_hash_reads_as_no_baseline():
+    """An empty-string ``last_sync_hash`` is not a baseline the local can diverge
+    from — it decides exactly as an absent one.
+
+    ``""`` is how a hash column persisted blank comes back, and the adapter
+    forwards it as a distinct empty value rather than collapsing it to ``NULL``,
+    so the full decision is where the two spellings have to be shown to meet. A
+    reading that took ``""`` for a real baseline would call the local diverged on
+    every pass and POST a new version of a file nobody edited. The truthy
+    baseline is asserted alongside so the equality is not vacuous — that one DOES
+    diverge from the local hash and uploads.
+    """
+    files_state_size_only = {"last_sync_local_size": 8192}
+
+    server_absent = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
+    result_absent = _ADAPTER.compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server_absent],
+        files_state=files_state_size_only,
+        device_id=DEVICE_ID,
+        local_hash="local-content",
+    )
+    assert result_absent == Skip(reason="synced", adopt_baseline=True)
+
+    server_empty = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
+    result_empty = _ADAPTER.compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server_empty],
+        files_state={**files_state_size_only, "last_sync_hash": ""},
+        device_id=DEVICE_ID,
+        local_hash="local-content",
+    )
+    assert result_empty == Skip(reason="synced", adopt_baseline=True)
+
+    server_held = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
+    result_held = _ADAPTER.compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server_held],
+        files_state={**files_state_size_only, "last_sync_hash": "baseline"},
+        device_id=DEVICE_ID,
+        local_hash="local-content",
+    )
+    assert result_held == Upload(target_save_id=42)
 
 
 def test_zulu_timestamp_is_parsed_for_local_newer_comparison():
@@ -959,6 +1047,58 @@ def test_no_device_entry_non_numeric_local_mtime_returns_download():
         local_hash=None,
     )
     assert result == Download(server_save=server)
+
+
+# ---------------------------------------------------------------------------
+# The corrupt-local guard stays inside branch 4. Everywhere else a 0-byte local
+# against a recorded baseline size is an ordinary input, and these two say so on
+# the branches where it is byte-identical to the head: there the head holds the
+# very same content, so no unbacked local edit exists for the guard to protect
+# and adopting it is the safe answer. Widening the guard to fire on every branch
+# would turn both of these into a Conflict the user has nothing to decide.
+# ---------------------------------------------------------------------------
+
+
+def test_not_current_zero_byte_local_identical_to_head_downloads():
+    """Row 12a (#1480) with an empty local — is_current=false, baseline held and
+    diverged from, the head's ``content_hash`` equal to ``local_hash``, and the
+    local 0 bytes against a recorded 8192-byte baseline. The head carries the
+    same (empty) content, so the download writes back what is already there →
+    ``Download``, not the branch-4 corrupt-local ``Conflict``.
+    """
+    server = _server_save(
+        content_hash="moved-content",
+        device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
+    )
+    result = _ADAPTER.compute_sync_action(
+        local_file=_local(size=0),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "old-baseline", "last_sync_local_size": 8192},
+        device_id=DEVICE_ID,
+        local_hash="moved-content",  # != baseline, but == server.content_hash
+    )
+    assert result == Download(server_save=server)
+
+
+def test_no_device_entry_zero_byte_local_identical_to_head_adopts_baseline():
+    """Branch 6 / #1013 with an empty local — no entry for our device, the head's
+    ``content_hash`` equal to ``local_hash``, and the local 0 bytes against a
+    recorded 8192-byte baseline. The local bytes already exist on the server, so
+    the head is adopted (``Skip(adopt_baseline=True)``) — no POST of a duplicate,
+    and no branch-4 corrupt-local ``Conflict``.
+    """
+    server = _server_save(
+        content_hash="same-hash",
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    result = _ADAPTER.compute_sync_action(
+        local_file=_local(size=0),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "old-baseline", "last_sync_local_size": 8192},
+        device_id=DEVICE_ID,
+        local_hash="same-hash",
+    )
+    assert result == Skip(reason="synced", adopt_baseline=True)
 
 
 # ---------------------------------------------------------------------------

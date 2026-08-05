@@ -74,9 +74,18 @@ _epochs = st.floats(min_value=_MIN_EPOCH, max_value=_MAX_EPOCH, allow_nan=False,
 
 # Hashes are opaque MD5-shaped tokens; the kernel only compares them for
 # equality, so a small alphabet keeps generation cheap while still exercising
-# both the equal and diverged branches.
-_hashes = st.sampled_from(["hash-a", "hash-b", "hash-c"])
+# both the equal and diverged branches. The empty string sits alongside them: it
+# is how a hash column persisted blank comes back, and the adapter forwards it as
+# a distinct empty value rather than collapsing it to NULL, so the space a
+# property quantifies over has to contain it.
+_hashes = st.sampled_from(["", "hash-a", "hash-b", "hash-c"])
 _opt_hashes = st.none() | _hashes
+
+# The subset a property draws from when its own premise names a real hash — a
+# baseline that is *held*, content that is *provably* identical. An empty hash
+# proves neither, so drawing one there would generate inputs outside what the
+# property claims rather than widen what it covers.
+_truthy_hashes = st.sampled_from(["hash-a", "hash-b", "hash-c"])
 
 
 def _epoch_to_iso(epoch: float, *, zulu: bool, micros: bool) -> str:
@@ -284,7 +293,7 @@ def test_replay_determinism(
     assert first == second
 
 
-@given(local_file=_local_files(), server_epoch=_epochs, local_hash=_hashes)
+@given(local_file=_local_files(), server_epoch=_epochs, local_hash=_truthy_hashes)
 def test_idempotent_after_branch6_upload_and_baseline_adoption(
     local_file: dict[str, Any],
     server_epoch: float,
@@ -353,7 +362,7 @@ def _identical_content_scenario(draw: st.DrawFn) -> dict[str, Any]:
     what lets the property say "never a Conflict" outright; restating the guard's
     shrink threshold here would put a second copy of a rule this tier does not own.
     """
-    local_hash = draw(_hashes)
+    local_hash = draw(_truthy_hashes)
     files_state: dict[str, Any] = draw(_files_states)
     baseline_size: int = files_state.get("last_sync_local_size", 0)
     local_file = {
