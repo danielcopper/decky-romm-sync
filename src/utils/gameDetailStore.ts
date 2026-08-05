@@ -309,7 +309,7 @@ export function refreshSaveStatus(appId: number): Promise<SaveStatus | null> {
   const romId = entry.state.romId;
   if (!romId) return Promise.resolve(null);
   const inFlight = entry.saveStatusInFlight;
-  if (inFlight && inFlight.romId === romId) return inFlight.promise;
+  if (inFlight?.romId === romId) return inFlight.promise;
 
   const request = readSaveStatus(entry, romId, entry.generation);
   entry.saveStatusInFlight = { romId, promise: request };
