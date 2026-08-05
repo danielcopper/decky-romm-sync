@@ -111,9 +111,12 @@ class SystemSupportedExtensionsFn(Protocol):
 
     Backed by the same per-system ``<extension>`` list in ``es_systems.xml`` as
     :class:`SystemM3uSupportFn`, so a service can intersect the live accept-list
-    with the disc-image set and never offer a disc the emulator cannot launch.
+    with the disc-image set and never offer a disc the emulator cannot launch,
+    and a completed download can be checked for whether the system can launch it
+    at all before a launch command is baked.
     Default-safe: an empty frozenset for an unknown system or when
-    ``es_systems.xml`` cannot be found (the caller falls back to the full disc set).
+    ``es_systems.xml`` cannot be found (every caller treats the empty answer as
+    "cannot tell" and falls back to its permissive branch, never to a refusal).
     """
 
     def __call__(self, system_name: str) -> frozenset[str]: ...

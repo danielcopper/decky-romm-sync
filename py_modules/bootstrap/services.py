@@ -286,6 +286,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             active_core=active_core_resolver,
             disc_resolver=disc_launch_resolver,
             m3u_support=cfg.callbacks.m3u_support,
+            system_extensions=cfg.callbacks.system_extensions,
             uow_factory=cfg.callbacks.uow_factory,
             rom_remover=rom_remover_binding.get,
         ),

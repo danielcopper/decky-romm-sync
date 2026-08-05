@@ -22,6 +22,7 @@ from domain.rom_files import (
     detect_launch_file,
     es_de_collapse_rename,
     folder_boot_layout_root,
+    is_launchable_target,
     is_multi_file_download,
     needs_m3u,
     resolve_extract_dir_name,
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
         Sleeper,
         SystemM3uSupportFn,
         SystemResolver,
+        SystemSupportedExtensionsFn,
         UnitOfWorkFactory,
     )
 
@@ -116,6 +118,10 @@ class DownloadServiceConfig:
     active_core: ActiveCoreReader
     disc_resolver: DiscResolver
     m3u_support: SystemM3uSupportFn
+    # The live per-system accept-list. The one place the launch-target check
+    # reads its knowledge from, so swapping the source (emu-atlas, #1652) is a
+    # change to this wiring line and nothing else.
+    system_extensions: SystemSupportedExtensionsFn
     uow_factory: UnitOfWorkFactory
     # Deferred access to RomRemovalService.remove_rom — the two services form a
     # construction cycle, so the composition root binds it after both exist
@@ -139,6 +145,7 @@ class DownloadService:
         self._active_core = config.active_core
         self._disc_resolver = config.disc_resolver
         self._m3u_support = config.m3u_support
+        self._system_extensions = config.system_extensions
         self._uow_factory = config.uow_factory
         self._rom_remover = config.rom_remover
 
@@ -504,6 +511,13 @@ class DownloadService:
         Returns ``(file_path, None)`` on success or ``(None, error)`` when the
         invariant rejects the data.
         """
+        # Recorded, never acted on: an unlaunchable download keeps its files and
+        # its row, and only the shortcut's launch command is withheld. Refusing
+        # the install instead would delete a package the user's remaining option
+        # is to install by hand in the emulator (#1582, #1652).
+        launchable = is_launchable_target(file_path, rom_dir, self._system_extensions(system))
+        if not launchable:
+            self._logger.warning(f"No launch target for rom_id={rom_id}: {system} cannot launch '{file_path}'")
         try:
             install = RomInstall.mark_installed(
                 rom_id=int(rom_id),
@@ -512,6 +526,7 @@ class DownloadService:
                 platform_slug=rom_detail.get("platform_slug", ""),
                 system=system,
                 installed_at=self._clock.now().isoformat(),
+                launchable=launchable,
             )
         except ValueError as e:
             cleanup()
@@ -1477,6 +1492,7 @@ class DownloadService:
             "system": install.system,
             "platform_slug": install.platform_slug,
             "installed_at": install.installed_at,
+            "launchable": install.launchable,
         }
         return entry
 

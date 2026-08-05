@@ -29,9 +29,10 @@ class FakeDiscResolver:
     ``resolve_for_install`` mirror the real resolver's
     :func:`domain.disc_selection.resolve_launch_path` decision over the seeded
     discs, so a non-multi-disc ROM resolves to ``install.file_path`` unchanged and
-    a pin resolves to the matching disc's path. ``calls`` records each
-    ``(rom_dir, selected_disc)`` resolve so consumer tests can assert the seam
-    was queried with the right pin.
+    a pin resolves to the matching disc's path. An install the system cannot
+    launch (``launchable is False``) resolves to ``""`` before any disc work, as
+    the real resolver does. ``calls`` records each ``(rom_dir, selected_disc)``
+    resolve so consumer tests can assert the seam was queried with the right pin.
     """
 
     def __init__(self) -> None:
@@ -49,6 +50,8 @@ class FakeDiscResolver:
 
     def resolve_bake_path(self, install: RomInstall, discs: list[Disc], selected_disc: str | None) -> str:
         self.calls.append((install.rom_dir, selected_disc))
+        if not install.launchable:
+            return ""
         path, _stale = resolve_launch_path(install.file_path, discs, selected_disc)
         return path
 

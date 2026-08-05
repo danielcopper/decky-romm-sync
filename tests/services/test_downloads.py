@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import sqlite3
 from datetime import UTC, datetime
@@ -119,6 +120,10 @@ def plugin():
     # Default platform m3u-support for the DownloadService ``m3u_support`` seam.
     # Tests that simulate a non-m3u platform (Switch/Xbox 360) flip this to False.
     p._m3u_supported = True
+    # Per-system ES-DE accept-lists for the DownloadService ``system_extensions``
+    # seam. Empty by default — an unseeded system reads as "cannot tell", which
+    # the launch-target check treats as launchable.
+    p._system_extensions: dict[str, frozenset[str]] = {}
 
     import decky
 
@@ -185,6 +190,10 @@ def plugin():
             # Default-True so the existing M3U/launch-file tests are unaffected;
             # a test that exercises a non-m3u platform repoints this seam.
             m3u_support=lambda system_name: p._m3u_supported,
+            # Default-empty ("ES-DE could not answer") so the launch-target check
+            # accepts every existing test's install; a test that exercises the
+            # check seeds ``p._system_extensions`` with a real accept-list.
+            system_extensions=lambda system_name: p._system_extensions.get(system_name, frozenset()),
             uow_factory=FakeUnitOfWorkFactory(p._uow),
             # Late-bound remover for the #1298 sibling supersede — resolved at call
             # time, by which point ``p._rom_removal_service`` is constructed below.
@@ -561,6 +570,126 @@ class TestRomInstallForeignKey:
                 )
             )
         assert uow.committed is False
+
+
+class TestRecordInstallLaunchTarget:
+    """The launch-target verdict recorded at install time (#1652).
+
+    The accept-lists seeded here are ES-DE's real per-system ``<extension>``
+    sets, so a passing case is not a tautology over a made-up list.
+    """
+
+    _PS3 = frozenset({".desktop", ".iso", ".ps3", ".ps3dir"})
+    _DREAMCAST = frozenset({".cdi", ".chd", ".cue", ".dat", ".elf", ".gdi", ".iso", ".lst", ".m3u", ".7z", ".zip"})
+
+    def _record(self, plugin, *, file_path, rom_dir, system, cleanup=lambda: None):
+        _seed_rom(plugin._uow, 42)
+        return plugin._download_service._record_install_io(
+            rom_id=42,
+            rom_detail={"platform_slug": system},
+            file_path=file_path,
+            rom_dir=rom_dir,
+            system=system,
+            cleanup=cleanup,
+        )
+
+    def test_ps3_pkg_records_an_unlaunchable_install_and_keeps_the_files(self, plugin):
+        # The reported case (#1582). The row is written, the install is NOT
+        # refused, and cleanup is NEVER called — the package stays on disk so the
+        # user can install it by hand in RPCS3.
+        plugin._system_extensions = {"ps3": self._PS3}
+        cleanup_calls = []
+
+        file_path, error = self._record(
+            plugin,
+            file_path="/roms/ps3/Puppeteer/Puppeteer.pkg",
+            rom_dir="/roms/ps3/Puppeteer",
+            system="ps3",
+            cleanup=lambda: cleanup_calls.append(1),
+        )
+
+        assert error is None
+        assert file_path == "/roms/ps3/Puppeteer/Puppeteer.pkg"
+        assert cleanup_calls == []
+        install = plugin._uow.rom_installs.get(42)
+        assert install is not None
+        assert install.launchable is False
+        assert install.file_path == "/roms/ps3/Puppeteer/Puppeteer.pkg"
+        assert install.rom_dir == "/roms/ps3/Puppeteer"
+
+    def test_dreamcast_track_bin_records_an_unlaunchable_install(self, plugin):
+        # A multi-file GDI rip with no .cue: the fallback picks the largest track
+        # file, and dreamcast's accept-list carries no .bin.
+        plugin._system_extensions = {"dreamcast": self._DREAMCAST}
+
+        _, error = self._record(
+            plugin, file_path="/roms/dc/Game/track03.bin", rom_dir="/roms/dc/Game", system="dreamcast"
+        )
+
+        assert error is None
+        install = plugin._uow.rom_installs.get(42)
+        assert install is not None
+        assert install.launchable is False
+
+    def test_ps3_folder_boot_dump_stays_launchable(self, plugin):
+        # The carve-out that protects every working PS3 dump: file_path records
+        # the nested EBOOT (a .bin, absent from ps3's list) but the bake target
+        # is the game directory, which ES-DE spells .ps3dir (ADR-0019).
+        plugin._system_extensions = {"ps3": self._PS3}
+
+        _, error = self._record(
+            plugin,
+            file_path="/roms/ps3/MyGame/PS3_GAME/USRDIR/EBOOT.BIN",
+            rom_dir="/roms/ps3/MyGame",
+            system="ps3",
+        )
+
+        assert error is None
+        install = plugin._uow.rom_installs.get(42)
+        assert install is not None
+        assert install.launchable is True
+
+    def test_desktop_entry_stays_launchable(self, plugin):
+        plugin._system_extensions = {"ps3": self._PS3}
+
+        _, error = self._record(plugin, file_path="/roms/ps3/Game.desktop", rom_dir=None, system="ps3")
+
+        assert error is None
+        install = plugin._uow.rom_installs.get(42)
+        assert install is not None
+        assert install.launchable is True
+
+    def test_unknown_system_stays_launchable(self, plugin):
+        # ES-DE could not answer (empty accept-list). A missing answer must never
+        # turn a working install into an unlaunchable one.
+        plugin._system_extensions = {}
+
+        _, error = self._record(
+            plugin, file_path="/roms/ps3/Puppeteer/Puppeteer.pkg", rom_dir="/roms/ps3/Puppeteer", system="ps3"
+        )
+
+        assert error is None
+        install = plugin._uow.rom_installs.get(42)
+        assert install is not None
+        assert install.launchable is True
+
+    def test_unlaunchable_install_is_logged(self, plugin, caplog):
+        plugin._system_extensions = {"ps3": self._PS3}
+
+        with caplog.at_level(logging.WARNING):
+            self._record(
+                plugin, file_path="/roms/ps3/Puppeteer/Puppeteer.pkg", rom_dir="/roms/ps3/Puppeteer", system="ps3"
+            )
+
+        assert any("No launch target for rom_id=42" in r.message for r in caplog.records)
+
+    def test_launchable_install_logs_nothing(self, plugin, caplog):
+        plugin._system_extensions = {"ps3": self._PS3}
+
+        with caplog.at_level(logging.WARNING):
+            self._record(plugin, file_path="/roms/ps3/Game.iso", rom_dir=None, system="ps3")
+
+        assert not any("No launch target" in r.message for r in caplog.records)
 
 
 class TestRecordInstallFsSizeWriteBack:

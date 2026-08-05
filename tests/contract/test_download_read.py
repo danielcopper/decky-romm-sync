@@ -54,10 +54,12 @@ async def test_get_installed_rom_installed_shape(harness):
         "system",
         "platform_slug",
         "installed_at",
+        "launchable",
     }
     assert result["rom_id"] == 42
     assert result["file_name"] == "pokemon.gba"
     assert result["platform_slug"] == "gba"
+    assert result["launchable"] is True
     assert isinstance(result["file_path"], str)
 
 

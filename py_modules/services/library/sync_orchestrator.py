@@ -1913,10 +1913,10 @@ class SyncOrchestrator:
         library — a single ``iter_all()`` is the cheapest way to cover them all.
         Each path is the disc-resolved launch path: a multi-disc ROM resolves its
         persisted ``selected_disc`` pin against its install directory (a
-        single-disc ROM resolves to its own ``file_path``, unchanged). Only ROMs
-        with a current install record appear in the map; ROMs not downloaded are
-        absent, so :func:`build_shortcuts_data` emits an empty placeholder launch
-        command for them.
+        single-disc ROM resolves to its own ``file_path``, unchanged), or ``""``
+        when the install has no launch target. Only ROMs with a current install
+        record appear in the map; a ROM not downloaded is absent, and both cases
+        reach :func:`build_shortcuts_data` as the same empty launch command.
         """
         with self._uow_factory() as uow:
             paths: dict[int, str] = {}
@@ -1934,9 +1934,9 @@ class SyncOrchestrator:
         only the unit's ROMs via ``get(rom_id)``. Each path is the disc-resolved
         launch path — a multi-disc ROM resolves its persisted ``selected_disc``
         pin against its install directory (a single-disc ROM resolves to its own
-        ``file_path``, unchanged). ROMs with no install record are absent, so
-        :func:`build_shortcuts_data` emits an empty placeholder launch command for
-        them.
+        ``file_path``, unchanged), or ``""`` when the install has no launch
+        target. A ROM with no install record is absent; both cases reach
+        :func:`build_shortcuts_data` as the same empty launch command.
         """
         with self._uow_factory() as uow:
             paths: dict[int, str] = {}

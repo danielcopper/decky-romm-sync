@@ -36,7 +36,9 @@ class InstalledRomEntry(TypedDict):
 
     Identified by ``rom_id``. ``rom_dir`` is set only for ROMs
     extracted from a multi-file archive (otherwise the parent directory
-    is inferred from ``file_path``).
+    is inferred from ``file_path``). ``launchable`` is ``False`` for a ROM that
+    is downloaded and on disk but whose content the system cannot boot — its
+    shortcut carries no launch command.
     """
 
     rom_id: int
@@ -45,6 +47,7 @@ class InstalledRomEntry(TypedDict):
     system: str
     platform_slug: str
     installed_at: str
+    launchable: bool
     rom_dir: NotRequired[str]
 
 

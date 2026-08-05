@@ -79,7 +79,16 @@ class DiscLaunchResolver:
         return enumerate_discs(files, supported or None)
 
     def resolve_bake_path(self, install: RomInstall, discs: list[Disc], selected_disc: str | None) -> str:
-        """Return the path to bake into launch_options for *install*.
+        """Return the path to bake into launch_options for *install*, or ``""`` when it has none.
+
+        An install the system cannot launch (``launchable is False`` — a PS3
+        ``.pkg`` installer, a bare track ``.bin``; #1652) resolves to the empty
+        string before any disc work. That is the seam the whole guard rests on:
+        every launch-bake site already draws its path from here, and
+        :func:`build_launch_options` renders an empty path as the empty launch
+        command, so no site can compose a command for content nothing can boot.
+        The files stay on disk and the install row stays intact — only the
+        command is withheld.
 
         *discs* is the result of :meth:`enumerate_discs` (passed in so a caller
         that already enumerated for the picker does not re-scan). Resolves the
@@ -95,6 +104,8 @@ class DiscLaunchResolver:
         folder-boot marker, so a resolved disc path is never rewritten;
         ``file_path`` itself is left untouched.
         """
+        if not install.launchable:
+            return ""
         path, stale = resolve_launch_path(install.file_path, discs, selected_disc)
         if stale:
             self._logger.warning(

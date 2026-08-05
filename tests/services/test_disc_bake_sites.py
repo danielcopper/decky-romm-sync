@@ -48,7 +48,14 @@ def _discs() -> list[Disc]:
     ]
 
 
-def _seed_multi_disc(uow: FakeUnitOfWork, *, rom_id: int, selected_disc: str | None, app_id: int | None = 99) -> None:
+def _seed_multi_disc(
+    uow: FakeUnitOfWork,
+    *,
+    rom_id: int,
+    selected_disc: str | None,
+    app_id: int | None = 99,
+    launchable: bool = True,
+) -> None:
     with uow:
         uow.roms.save(
             Rom(
@@ -68,6 +75,7 @@ def _seed_multi_disc(uow: FakeUnitOfWork, *, rom_id: int, selected_disc: str | N
                 platform_slug="psx",
                 system="psx",
                 installed_at="2026-01-01T00:00:00+00:00",
+                launchable=launchable,
             )
         )
         if selected_disc is not None:
@@ -136,6 +144,21 @@ class TestSyncOrchestratorBakeSite:
         # file_path is disc 1 (not an m3u) → default resolves to disc 1.
         assert orch._scan_installed_paths() == {1: _DISC1_PATH}
 
+    def test_scan_installed_paths_maps_an_unlaunchable_install_to_the_empty_path(self, disc_resolver):
+        # The ROM stays IN the map — it IS downloaded, and collapse_sibling_groups
+        # reads the key set to pick a group's representative — but carries no
+        # launch path, so build_shortcuts_data emits the empty launch command (#1652).
+        uow = FakeUnitOfWork()
+        _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, launchable=False)
+        orch = self._orchestrator(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        assert orch._scan_installed_paths() == {1: ""}
+
+    def test_read_installed_paths_maps_an_unlaunchable_install_to_the_empty_path(self, disc_resolver):
+        uow = FakeUnitOfWork()
+        _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, launchable=False)
+        orch = self._orchestrator(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        assert orch._read_installed_paths({1}) == {1: ""}
+
 
 # ── downloads bake site ──────────────────────────────────────────────────
 
@@ -158,6 +181,7 @@ class TestDownloadsBakeSite:
                 active_core=FakeActiveCoreResolver(default=(None, None)),
                 disc_resolver=disc_resolver,
                 m3u_support=lambda system_name: False,
+                system_extensions=lambda system_name: frozenset(),
                 uow_factory=uow_factory,
                 rom_remover=lambda: AsyncMock(),
             )
@@ -178,3 +202,13 @@ class TestDownloadsBakeSite:
         svc = self._service(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
         _app_id, _core_so, bake_path = svc._resolve_bound_app_id(1, _DISC1_PATH)
         assert bake_path == _DISC1_PATH
+
+    def test_resolve_bound_app_id_returns_the_empty_path_for_an_unlaunchable_install(self, disc_resolver):
+        # download_complete's re-bake reads through the same seam, so the freshly
+        # downloaded ROM's shortcut gets no launch command either (#1652).
+        uow = FakeUnitOfWork()
+        _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, app_id=1234, launchable=False)
+        svc = self._service(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        app_id, _core_so, bake_path = svc._resolve_bound_app_id(1, _DISC1_PATH)
+        assert app_id == 1234
+        assert bake_path == ""

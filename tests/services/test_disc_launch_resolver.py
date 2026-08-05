@@ -38,7 +38,9 @@ class FakeSystemExtensions:
         return self.by_system.get(system_name, frozenset())
 
 
-def _install(*, rom_id: int = 1, file_path: str, rom_dir: str | None, system: str = "psx") -> RomInstall:
+def _install(
+    *, rom_id: int = 1, file_path: str, rom_dir: str | None, system: str = "psx", launchable: bool = True
+) -> RomInstall:
     return RomInstall(
         rom_id=rom_id,
         file_path=file_path,
@@ -46,6 +48,7 @@ def _install(*, rom_id: int = 1, file_path: str, rom_dir: str | None, system: st
         platform_slug=system,
         system=system,
         installed_at="2026-01-01T00:00:00+00:00",
+        launchable=launchable,
     )
 
 
@@ -230,4 +233,45 @@ class TestFolderBootTarget:
         # guard that the folder rule cannot perturb a bare single-file ROM.
         resolver = _build(FakeFileLister(), FakeSystemExtensions(), logger)
         install = _install(file_path="/roms/snes/game.sfc", rom_dir=None)
+        assert resolver.resolve_for_install(install, None) == "/roms/snes/game.sfc"
+
+
+class TestNoLaunchTarget:
+    """An install the system cannot launch resolves to the empty path (#1652).
+
+    This is the single seam the whole guard rests on: every launch-bake site
+    draws its path from here, and ``build_launch_options`` renders an empty path
+    as the empty launch command — so no bake site can compose a command for
+    content nothing can boot.
+    """
+
+    def test_unlaunchable_install_resolves_to_empty_path(self, logger):
+        rom_dir = "/roms/ps3/Puppeteer"
+        pkg = f"{rom_dir}/Puppeteer.pkg"
+        resolver = _build(FakeFileLister({rom_dir: [pkg]}), FakeSystemExtensions(), logger)
+        install = _install(file_path=pkg, rom_dir=rom_dir, system="ps3", launchable=False)
+        assert resolver.resolve_for_install(install, None) == ""
+
+    def test_unlaunchable_single_file_resolves_to_empty_path(self, logger):
+        resolver = _build(FakeFileLister(), FakeSystemExtensions(), logger)
+        install = _install(file_path="/roms/ps3/Game.pkg", rom_dir=None, system="ps3", launchable=False)
+        assert resolver.resolve_for_install(install, None) == ""
+
+    def test_unlaunchable_install_ignores_a_disc_pin(self, logger):
+        # The refusal precedes disc resolution — a pin cannot resurrect a launch
+        # target for content the system cannot boot.
+        files = {
+            "/roms/psx/game": [
+                "/roms/psx/game/Game (Disc 1).cue",
+                "/roms/psx/game/Game (Disc 2).cue",
+            ]
+        }
+        resolver = _build(FakeFileLister(files), FakeSystemExtensions(), logger)
+        install = _install(file_path="/roms/psx/game/Game (Disc 1).cue", rom_dir="/roms/psx/game", launchable=False)
+        assert resolver.resolve_for_install(install, "Game (Disc 2).cue") == ""
+
+    def test_launchable_install_is_unaffected(self, logger):
+        # Regression guard: the default verdict changes nothing.
+        resolver = _build(FakeFileLister(), FakeSystemExtensions(), logger)
+        install = _install(file_path="/roms/snes/game.sfc", rom_dir=None, launchable=True)
         assert resolver.resolve_for_install(install, None) == "/roms/snes/game.sfc"

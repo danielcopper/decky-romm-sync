@@ -81,7 +81,9 @@ class DiscResolver(Protocol):
     single-file ROM); :meth:`resolve_bake_path` resolves the pin over that list;
     :meth:`resolve_for_install` is the bake-site convenience that does both. A
     non-multi-disc ROM resolves to its own ``file_path`` unchanged; a stale pin
-    degrades to the default with a WARNING rather than raising.
+    degrades to the default with a WARNING rather than raising; an install the
+    system cannot launch (``launchable is False``) resolves to ``""``, which
+    every bake site renders as the empty launch command.
     """
 
     def enumerate_discs(self, install: RomInstall) -> list[Disc]: ...
