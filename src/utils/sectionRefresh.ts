@@ -8,37 +8,12 @@
  */
 
 import type { Dispatch, SetStateAction } from "react";
-import {
-  getSaveStatus,
-  getBiosStatus,
-  getPlatformCoreInfo,
-  getAchievementProgress,
-  debugLog,
-  isCallableFailure,
-} from "../api/backend";
+import { getBiosStatus, getPlatformCoreInfo, getAchievementProgress, debugLog } from "../api/backend";
 import { extractBiosInfo, extractCoreInfo, type BiosInfoFields, type CoreInfoFields } from "./playSection";
-
-interface ActiveSlotFields {
-  activeSlot: string | null;
-}
 
 interface AchievementFields {
   achievementEarned: number;
   achievementTotal: number;
-}
-
-export function refreshActiveSlotInBackground<S extends ActiveSlotFields>(
-  romId: number,
-  cancelled: () => boolean,
-  setter: Dispatch<SetStateAction<S>>,
-): void {
-  getSaveStatus(romId)
-    .then((saveStatus) => {
-      if (!cancelled() && !isCallableFailure(saveStatus) && "active_slot" in saveStatus) {
-        setter((prev) => ({ ...prev, activeSlot: saveStatus.active_slot ?? null }));
-      }
-    })
-    .catch(() => {});
 }
 
 export function refreshBiosInBackground<S extends BiosInfoFields>(

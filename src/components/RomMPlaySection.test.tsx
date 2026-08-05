@@ -106,7 +106,6 @@ vi.mock("../utils/playSection", () => ({
 }));
 vi.mock("../utils/sectionRefresh", () => ({
   refreshAchievementsInBackground: vi.fn(),
-  refreshActiveSlotInBackground: vi.fn(),
   refreshBiosInBackground: vi.fn(),
   refreshCoreInfoInBackground: vi.fn(),
 }));
