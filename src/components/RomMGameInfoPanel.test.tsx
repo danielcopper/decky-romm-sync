@@ -573,6 +573,7 @@ describe("RomMGameInfoPanel", () => {
         system: "snes",
         platform_slug: "snes",
         installed_at: "2024-01-01",
+        launchable: true,
       });
       const { container, queryByText } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
@@ -606,6 +607,7 @@ describe("RomMGameInfoPanel", () => {
         system: "snes",
         platform_slug: "snes",
         installed_at: "2024-01-01",
+        launchable: true,
       });
       const { queryByText } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
@@ -649,6 +651,7 @@ describe("RomMGameInfoPanel", () => {
         system: "snes",
         platform_slug: "snes",
         installed_at: "2024-01-01",
+        launchable: true,
       });
       const { queryByText } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
@@ -675,6 +678,61 @@ describe("RomMGameInfoPanel", () => {
       expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(testAppId);
     });
 
+    it("an unlaunchable install states why the game will not start and that the files were kept (#1652)", async () => {
+      // A PS3 title downloaded as a .pkg installer. The install is real — the
+      // section still renders its filename — but the game page is the one place
+      // that explains why no launch command was written.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 100,
+        installed: true,
+        platform_name: "PlayStation 3",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.getInstalledRom).mockResolvedValue({
+        rom_id: 100,
+        file_name: "Puppeteer.pkg",
+        file_path: "/roms/ps3/Puppeteer/Puppeteer.pkg",
+        system: "ps3",
+        platform_slug: "ps3",
+        installed_at: "2024-01-01",
+        launchable: false,
+      });
+      const { container, queryByText } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+
+      expect(queryByText("ROM File")).not.toBeNull();
+      expect(queryByText("Puppeteer.pkg")).not.toBeNull();
+      expect(container.textContent).toContain("nothing here is a format ps3 can launch");
+      expect(container.textContent).toContain("The files are on disk");
+    });
+
+    it("a launchable install shows the filename with no no-launch-target notice", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 100,
+        installed: true,
+        platform_name: "Super Nintendo",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.getInstalledRom).mockResolvedValue({
+        rom_id: 100,
+        file_name: "test.sfc",
+        file_path: "/roms/test.sfc",
+        system: "snes",
+        platform_slug: "snes",
+        installed_at: "2024-01-01",
+        launchable: true,
+      });
+      const { container, queryByText } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+
+      expect(queryByText("test.sfc")).not.toBeNull();
+      expect(container.textContent).not.toContain("The files are on disk");
+    });
+
     it("download_complete: mismatching rom_id → section stays hidden, no fetch", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
@@ -691,6 +749,7 @@ describe("RomMGameInfoPanel", () => {
         system: "snes",
         platform_slug: "snes",
         installed_at: "2024-01-01",
+        launchable: true,
       });
       const { queryByText } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();

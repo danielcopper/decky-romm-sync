@@ -26,6 +26,7 @@ function makeOps(overrides: Partial<LaunchGateOps> = {}): LaunchGateOps {
   const okSync: PreLaunchSyncOutcome = { success: true, message: "" };
   return {
     migrationPending: vi.fn(() => false),
+    hasLaunchTarget: vi.fn(async () => true),
     ensureTrackingConfigured: vi.fn(async (): Promise<"proceed" | "abort"> => "proceed"),
     checkCoreChange: vi.fn(async () => true),
     checkReachability: vi.fn(async () => true),
@@ -43,8 +44,30 @@ describe("runLaunchGate — verdict branches", () => {
       reason: "migration_pending",
     });
     // Later steps must not run once migration blocks.
+    expect(ops.hasLaunchTarget).not.toHaveBeenCalled();
     expect(ops.ensureTrackingConfigured).not.toHaveBeenCalled();
     expect(ops.checkReachability).not.toHaveBeenCalled();
+  });
+
+  it("blocks with no_launch_target when the ROM has no launch target", async () => {
+    const ops = makeOps({ hasLaunchTarget: vi.fn(async () => false) });
+    await expect(runLaunchGate(100, 42, ops)).resolves.toEqual({
+      decision: "block",
+      reason: "no_launch_target",
+    });
+    // The save-sync work must not run: there is no session for a synced save to
+    // belong to, and a pre-launch upload before a launch that never happens is
+    // pure risk.
+    expect(ops.ensureTrackingConfigured).not.toHaveBeenCalled();
+    expect(ops.preLaunchSync).not.toHaveBeenCalled();
+    expect(ops.checkReachability).not.toHaveBeenCalled();
+  });
+
+  it("proceeds past the launch-target step when the ROM has one", async () => {
+    const ops = makeOps({ hasLaunchTarget: vi.fn(async () => true) });
+    await expect(runLaunchGate(100, 42, ops)).resolves.toEqual({ decision: "allow" });
+    expect(ops.hasLaunchTarget).toHaveBeenCalled();
+    expect(ops.ensureTrackingConfigured).toHaveBeenCalled();
   });
 
   it("aborts when tracking setup returns abort", async () => {

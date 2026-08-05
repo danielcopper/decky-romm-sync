@@ -1012,9 +1012,24 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     : section("game-info", null, ...gameInfoContent);
 
   // --- ROM File section (only when installed) ---
+  // A downloaded ROM the system cannot launch keeps its files and its row; only
+  // the shortcut's launch command is withheld. This is the one place that says
+  // so — without it the game simply never starts and nothing explains why.
   const romFileSection =
     state.installed && state.installedRom
-      ? section("rom-file", "ROM File", infoRow("filename", "Filename", state.installedRom.file_name))
+      ? section(
+          "rom-file",
+          "ROM File",
+          infoRow("filename", "Filename", state.installedRom.file_name),
+          state.installedRom.launchable
+            ? null
+            : createElement(
+                "div",
+                { key: "no-launch-target", className: "romm-panel-muted", style: { marginTop: "4px" } },
+                `Downloaded, but nothing here is a format ${state.installedRom.system} can launch — no launch ` +
+                  `command was set. The files are on disk; install them in the emulator to play.`,
+              ),
+        )
       : null;
 
   // --- BIOS & Core section (two-column layout when platform needs BIOS) ---

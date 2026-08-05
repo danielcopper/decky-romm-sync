@@ -150,6 +150,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       system: "snes",
       platform_slug: "snes",
       installed_at: "2026-01-01T00:00:00Z",
+      launchable: true,
     });
     // Skip-set empty by default — a marked appId is set per-test.
     vi.mocked(sessionManager.getAppIdRomIdMapSnapshot).mockReturnValue({ "1234": 42 });
@@ -513,6 +514,21 @@ describe("launchInterceptor — full funnel watcher", () => {
       expect(toaster.toast).toHaveBeenCalledWith({
         title: "RomM Sync",
         body: "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+      });
+      expect(runGameMock()).not.toHaveBeenCalled();
+    });
+
+    it("no_launch_target block → explains the download was kept, no relaunch", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "block", reason: "no_launch_target" });
+
+      register();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(toaster.toast).toHaveBeenCalledWith({
+        title: "RomM Sync",
+        body: "This download has no file the emulator can launch. The files are on disk — see the game page.",
       });
       expect(runGameMock()).not.toHaveBeenCalled();
     });

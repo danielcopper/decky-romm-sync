@@ -37,6 +37,7 @@ import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 import { getAppIdRomIdMapSnapshot, isSessionActive } from "./sessionManager";
 import { isAppRunning } from "./runningApps";
 import { runLaunchGate, markLaunchSkipped, consumeLaunchSkip } from "./launchGate";
+import { NO_LAUNCH_TARGET_TOAST_BODY, romHasLaunchTarget } from "./launchTarget";
 import type { GateVerdict, LaunchGateOps, PreLaunchSyncOutcome } from "./launchGate";
 import { reconfirmLaunchOptions } from "./launchOptionsReconcile";
 import { capturePruneLeaseAdmission, isPruneLeaseAdmissionCurrent, type PruneLeaseAdmission } from "./pruneLease";
@@ -166,6 +167,7 @@ async function preLaunchSyncWatcher(romId: number): Promise<PreLaunchSyncOutcome
 function makeWatcherOps(romId: number, prompts: LaunchPrompts): LaunchGateOps {
   return {
     migrationPending: () => getMigrationState().pending,
+    hasLaunchTarget: () => romHasLaunchTarget(romId, "Watcher"),
     ensureTrackingConfigured: async (): Promise<"proceed"> => {
       await ensureTrackingConfiguredWatcher(romId);
       return "proceed";
@@ -250,6 +252,8 @@ async function handleWatcherVerdict(
     case "block":
       if (verdict.reason === "migration_pending") {
         toaster.toast({ title: "RomM Sync", body: MIGRATION_TOAST_BODY });
+      } else if (verdict.reason === "no_launch_target") {
+        toaster.toast({ title: "RomM Sync", body: NO_LAUNCH_TARGET_TOAST_BODY });
       }
       return "done";
     case "conflict": {

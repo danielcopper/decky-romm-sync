@@ -1635,6 +1635,49 @@ describe("CustomPlayButton — shared launch gate (ADR-0015)", () => {
     expect(consumeLaunchSkip(100)).toBe(true);
   });
 
+  it("no launch target → toast explaining the files were kept, no launch (#1652)", async () => {
+    // A PS3 title downloaded as a .pkg installer: on disk, recorded, but nothing
+    // RPCS3 can boot. The gate blocks before any save work and the press must
+    // say so — a silent bail would read as a dead button.
+    vi.mocked(backend.getInstalledRom).mockResolvedValue({
+      rom_id: 42,
+      file_name: "Puppeteer.pkg",
+      file_path: "/roms/ps3/Puppeteer/Puppeteer.pkg",
+      system: "ps3",
+      platform_slug: "ps3",
+      installed_at: "2026-01-01T00:00:00Z",
+      launchable: false,
+    });
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+
+    await clickPlay();
+
+    expect(toaster.toast).toHaveBeenCalledWith({
+      title: "RomM Sync",
+      body: "This download has no file the emulator can launch. The files are on disk — see the game page.",
+    });
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+    // Blocked before the save-sync work — no upload for a session that never starts.
+    expect(vi.mocked(backend.preLaunchSync)).not.toHaveBeenCalled();
+  });
+
+  it("a launchable install passes the launch-target step and launches", async () => {
+    vi.mocked(backend.getInstalledRom).mockResolvedValue({
+      rom_id: 42,
+      file_name: "game.chd",
+      file_path: "/roms/psx/game.chd",
+      system: "psx",
+      platform_slug: "psx",
+      installed_at: "2026-01-01T00:00:00Z",
+      launchable: true,
+    });
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+
+    await clickPlay();
+
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+  });
+
   it("offline + local drift → OfflineDriftModal; start_anyway launches", async () => {
     vi.mocked(backend.probeReachability).mockResolvedValue({ online: false });
     vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: true, rom_id: 42 });

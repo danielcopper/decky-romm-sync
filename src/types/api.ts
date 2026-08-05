@@ -47,6 +47,13 @@ export interface InstalledRom {
   system: string;
   platform_slug: string;
   installed_at: string;
+  /**
+   * False when the ROM is downloaded and on disk but the system cannot launch
+   * what it contains — a PS3 `.pkg` installer, a bare disc track. Its shortcut
+   * carries no launch command; the files are kept so the user can install them
+   * by hand in the emulator.
+   */
+  launchable: boolean;
 }
 
 export interface RetroArchInputCheck {
