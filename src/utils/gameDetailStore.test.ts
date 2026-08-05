@@ -116,7 +116,12 @@ describe("gameDetailStore", () => {
     vi.mocked(backend.getSaveStatus).mockResolvedValue(saveStatus());
     vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(coreInfo);
     vi.mocked(backend.getBiosStatus).mockResolvedValue({ bios_status: null, bios_level: null, bios_label: null });
-    vi.mocked(backend.getAchievementProgress).mockResolvedValue({ success: true, earned: 0, total: 0 });
+    vi.mocked(backend.getAchievementProgress).mockResolvedValue({
+      success: true,
+      earned: 0,
+      total: 0,
+      earned_achievements: [],
+    });
     vi.mocked(backend.getRomMetadata).mockResolvedValue({} as never);
     vi.mocked(backend.debugLog).mockResolvedValue(undefined);
   });
@@ -141,7 +146,12 @@ describe("gameDetailStore", () => {
 
     it("loads the cached detail on first subscribe and notifies with the folded state", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
-        found({ installed: true, fs_size_bytes: 4096, ra_id: 7, achievement_summary: { earned: 3, total: 50 } }),
+        found({
+          installed: true,
+          fs_size_bytes: 4096,
+          ra_id: 7,
+          achievement_summary: { earned: 3, total: 50, earned_hardcore: 0 },
+        }),
       );
       const notified = vi.fn();
       subscribe(nextAppId, notified);
@@ -288,6 +298,42 @@ describe("gameDetailStore", () => {
       expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledTimes(2);
     });
 
+    // A version switch re-keys the entry to a new rom_id without closing it, so
+    // the generation is unchanged and the open read is the only thing that could
+    // still speak for the previous ROM.
+    it("does not serve a read left open across a version switch to the new rom", async () => {
+      const previousRom = deferred<SaveStatus>();
+      vi.mocked(backend.getSaveStatus).mockReturnValueOnce(previousRom.promise);
+      subscribe(nextAppId);
+      await flush();
+      expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledWith(42);
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ rom_id: 43, save_sync_enabled: true }));
+      vi.mocked(backend.getSaveStatus).mockResolvedValue(saveStatus({ rom_id: 43, active_slot: "new-version" }));
+
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "version_switched", app_id: nextAppId, rom_id: 43 },
+          }),
+        );
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledWith(43);
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, activeSlot: "new-version" });
+
+      previousRom.resolve(saveStatus({ rom_id: 42, active_slot: "old-version", savefiles_in_content_dir: true }));
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        romId: 43,
+        activeSlot: "new-version",
+        savefilesInContentDir: false,
+      });
+    });
+
     it("leaves the shown display untouched when the backend refuses the read", async () => {
       subscribe(nextAppId);
       await flush();
@@ -394,6 +440,31 @@ describe("gameDetailStore", () => {
       vi.mocked(backend.getSaveStatus).mockResolvedValue(saveStatus({ active_slot: "ours" }));
       await flush();
       expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, activeSlot: "ours" });
+    });
+
+    // `rom_id` and `save_status` are independently optional on the event, so a
+    // dispatch carrying a status but no rom_id would pass the handler's identity
+    // check on the event itself — the shape #975 took.
+    it("drops an inline status for another rom when the notification carries no rom_id", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found());
+      subscribe(nextAppId);
+      await flush();
+      vi.mocked(backend.getSaveStatus).mockClear();
+
+      await act(async () => {
+        dispatchSaveSync({
+          save_status: saveStatus({ rom_id: 999, active_slot: "foreign", savefiles_in_content_dir: true }),
+        });
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.getSaveStatus)).not.toHaveBeenCalled();
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        romId: 42,
+        activeSlot: "default",
+        savefilesInContentDir: false,
+        saveStatus: null,
+      });
     });
 
     it("uses a status carried on the notification instead of re-reading it", async () => {

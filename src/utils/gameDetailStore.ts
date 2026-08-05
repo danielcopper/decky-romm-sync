@@ -117,13 +117,23 @@ type BiosStatusResult = Awaited<ReturnType<typeof getBiosStatus>>;
  *  genuinely have removed the requirement. */
 const NO_BIOS_STATUS: BiosStatusResult = { bios_status: null, bios_level: null, bios_label: null };
 
+/** A save-status read still in flight, together with the rom identity it was
+ *  issued for. A version switch re-keys the entry to a new rom_id without
+ *  closing it, so the generation is unchanged and the identity is the only thing
+ *  that distinguishes an answer about this page's ROM from one about its
+ *  predecessor. */
+interface InFlightSaveStatus {
+  romId: number;
+  promise: Promise<SaveStatus | null>;
+}
+
 interface Entry {
   state: GameDetailState;
   listeners: Set<(state: GameDetailState) => void>;
   /** Bumped when the entry is torn down, so a read that resolves afterwards
    *  cannot write into a state nobody is showing any more. */
   generation: number;
-  saveStatusInFlight: Promise<SaveStatus | null> | null;
+  saveStatusInFlight: InFlightSaveStatus | null;
   detachListeners: () => void;
 }
 
@@ -281,28 +291,34 @@ async function loadDetail(appId: number, entry: Entry): Promise<void> {
  * Read this ROM's save status and fold it into the entry.
  *
  * Callers that overlap share one request: the second caller gets the first
- * caller's promise instead of a second `get_save_status` round-trip. Resolves to
- * `null` — leaving the shown display untouched — when the identity is not
- * resolved yet, or when the backend refuses the read (a prune-active refusal is
- * not a save-status answer). Rejects when the call itself fails, so each caller
- * reports the failure in its own terms. Whether a ROM with save sync switched
- * off is worth reading at all is the caller's call, not this one's.
+ * caller's promise instead of a second `get_save_status` round-trip — but only
+ * while it is a read of the rom_id bound to this appId now. A read left open
+ * across a version switch is about the previous ROM, so a caller arriving after
+ * the switch gets a fresh read rather than the answer to a question about
+ * another game.
+ *
+ * Resolves to `null` — leaving the shown display untouched — when the identity
+ * is not resolved yet, or when the backend refuses the read (a prune-active
+ * refusal is not a save-status answer). Rejects when the call itself fails, so
+ * each caller reports the failure in its own terms. Whether a ROM with save sync
+ * switched off is worth reading at all is the caller's call, not this one's.
  */
 export function refreshSaveStatus(appId: number): Promise<SaveStatus | null> {
   const entry = _entries.get(appId);
   if (!entry) return Promise.resolve(null);
-  if (entry.saveStatusInFlight) return entry.saveStatusInFlight;
   const romId = entry.state.romId;
   if (!romId) return Promise.resolve(null);
+  const inFlight = entry.saveStatusInFlight;
+  if (inFlight && inFlight.romId === romId) return inFlight.promise;
 
   const request = readSaveStatus(entry, romId, entry.generation);
-  entry.saveStatusInFlight = request;
+  entry.saveStatusInFlight = { romId, promise: request };
   // Free the slot once this request settles, whichever way it settles. Both
   // arms of `then` are the same bookkeeping, and giving it a rejection arm is
   // what keeps this branch from surfacing as an unhandled rejection — the
   // rejection callers see is the one on `request` itself.
   const release = () => {
-    if (entry.saveStatusInFlight === request) entry.saveStatusInFlight = null;
+    if (entry.saveStatusInFlight?.promise === request) entry.saveStatusInFlight = null;
   };
   request.then(release, release);
   return request;
@@ -323,8 +339,12 @@ async function readSaveStatus(entry: Entry, romId: number, generation: number): 
 
 /** Fold a save status — freshly read or carried on a notification — into the
  *  entry. The single place a save status becomes shown state, so no two
- *  surfaces can derive it differently. */
+ *  surfaces can derive it differently, and the last gate on whose status it is:
+ *  a status whose `rom_id` is not the one bound to this appId is another game's
+ *  (#975), whether it arrived on a notification carrying no `rom_id` of its own
+ *  or from a read issued before a version switch re-keyed the entry. */
 function applySaveStatus(entry: Entry, generation: number, status: SaveStatus): void {
+  if (status.rom_id !== entry.state.romId) return;
   const { status: saveSyncStatus, label: saveSyncLabel } = applySaveSyncDisplay(status.save_sync_display, status);
   writerFor(
     entry,
