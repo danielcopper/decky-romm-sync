@@ -669,7 +669,7 @@ class TestRecordInstallLaunchTarget:
         assert install.launchable is True
         resolver = DiscLaunchResolver(
             config=DiscLaunchResolverConfig(
-                list_files=lambda _directory: [eboot],
+                list_files=lambda directory: [eboot] if directory == rom_dir else [],
                 system_extensions=lambda system_name: plugin._system_extensions.get(system_name, frozenset()),
                 logger=logging.getLogger("test_downloads"),
             ),
