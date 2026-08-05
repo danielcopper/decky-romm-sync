@@ -142,13 +142,25 @@ def _direct_launch_args(command: str) -> str:
 def build_launch_options(invocation: str, path: str) -> str:
     """Compose the Steam shortcut launch command from *invocation* and ROM *path*.
 
-    An empty *path* means the ROM has **no launch target** — it is not
-    downloaded, or it is downloaded but nothing in it is something the system
-    can boot (``RomInstall.launchable is False``, resolved to ``""`` by the
-    disc-resolver seam every bake site draws its path from). It yields the empty
-    launch command, the same placeholder an un-downloaded ROM's shortcut
-    carries. Composing one anyway would hand the emulator a bare ``""``
-    argument, which is the silent-failure this rule exists to prevent.
+    An empty *path* means the ROM has **no launch target**, and yields the empty
+    launch command. Composing one anyway would hand the emulator a bare ``""``
+    argument — the silent failure this rule exists to prevent.
+
+    **An empty launch command means two different things, and nothing may infer
+    which.** A ROM that is *not downloaded* and one that is *downloaded but not
+    launchable* (``RomInstall.launchable is False``, resolved to ``""`` by the
+    disc-resolver seam every bake site draws its path from) produce the same
+    empty string, and at the Steam-shortcut layer the two are indistinguishable:
+    the shortcut holds ``""`` either way. Only the data layer separates them —
+    no ``rom_installs`` row versus a row with ``launchable = 0``. Never read
+    emptiness as "not downloaded"; ask the install record.
+
+    Empty is the established uninstalled state, not a new one invented here:
+    ``addShortcut`` leaves a new shortcut's options untouched when the command
+    is ``""`` (``src/utils/steamShortcuts.ts``), the sync update/adoption path
+    writes ``""`` explicitly (``rewriteShortcutIdentity`` in
+    ``src/utils/syncManager.ts``), and an uninstall records ``""`` as the ROM's
+    ``applied_launch_options`` (``services/rom_removal.py``).
 
     The path is double-quoted so paths with spaces survive the launcher's
     ``exec "$@"``. Embedded ``\\`` and ``"`` in the path are backslash-escaped

@@ -148,8 +148,13 @@ class TestBuildLaunchOptions:
         result = build_launch_options(RETRODECK_INVOCATION, "/roms/dc/My Game.chd")
         assert result == 'flatpak run net.retrodeck.retrodeck "/roms/dc/My Game.chd"'
 
-    def test_empty_path_still_quoted(self):
-        assert build_launch_options(RETRODECK_INVOCATION, "") == 'flatpak run net.retrodeck.retrodeck ""'
+    def test_empty_path_yields_no_launch_command(self):
+        # An empty path is the "no launch target" signal — not downloaded, or
+        # downloaded with nothing the system can boot. Quoting it would hand the
+        # emulator a bare "" argument, which is the failure #1652 exists to
+        # prevent; the shortcut gets the same empty command an uninstalled ROM's
+        # carries instead.
+        assert build_launch_options(RETRODECK_INVOCATION, "") == ""
 
     def test_folder_boot_direct_composes_full_mgs4_command(self):
         # End-to-end: the direct invocation + the quoted game folder reproduce the

@@ -649,6 +649,33 @@ class TestRecordInstallLaunchTarget:
         assert install is not None
         assert install.launchable is True
 
+    def test_ps3_folder_boot_dump_still_bakes_the_game_directory_end_to_end(self, plugin):
+        # The one shape that can silently break a working install, walked end to
+        # end: record the install through the real check, then resolve the
+        # persisted row through the REAL DiscLaunchResolver the bake sites use.
+        # A False verdict anywhere in that chain collapses the bake path to ""
+        # and the PS3 dump loses the launch command it has today. No installed
+        # ROM in a typical library has this shape, so only this fixture pins it.
+        from services.disc_launch_resolver import DiscLaunchResolver, DiscLaunchResolverConfig
+
+        plugin._system_extensions = {"ps3": self._PS3}
+        rom_dir = "/roms/ps3/MyGame"
+        eboot = f"{rom_dir}/PS3_GAME/USRDIR/EBOOT.BIN"
+
+        self._record(plugin, file_path=eboot, rom_dir=rom_dir, system="ps3")
+
+        install = plugin._uow.rom_installs.get(42)
+        assert install is not None
+        assert install.launchable is True
+        resolver = DiscLaunchResolver(
+            config=DiscLaunchResolverConfig(
+                list_files=lambda _directory: [eboot],
+                system_extensions=lambda system_name: plugin._system_extensions.get(system_name, frozenset()),
+                logger=logging.getLogger("test_downloads"),
+            ),
+        )
+        assert resolver.resolve_for_install(install, None) == rom_dir
+
     def test_desktop_entry_stays_launchable(self, plugin):
         plugin._system_extensions = {"ps3": self._PS3}
 

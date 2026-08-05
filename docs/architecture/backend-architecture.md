@@ -1092,10 +1092,18 @@ worse off than the silent failure this replaces. What is withheld is only the la
 `launchable is False`, before any disc work, and `build_launch_options` renders an empty path as the empty launch
 command. Every launch-bake site already draws its path from that resolver — library sync's `installed_paths` map,
 download-complete's re-bake, the core-change re-bake, the startup relaunch-options heal, the disc picker — so none of
-them can compose a command for content nothing can boot, and none needed a guard of its own. The resulting shortcut
-carries the same empty `launch_options` an un-downloaded ROM's does. An unlaunchable install stays **in** the
-`installed_paths` map (it _is_ downloaded, and `collapse_sibling_groups` reads the key set to choose a sibling group's
-representative) and maps to the empty path.
+them can compose a command for content nothing can boot, and none needed a guard of its own. An unlaunchable install
+stays **in** the `installed_paths` map (it _is_ downloaded, and `collapse_sibling_groups` reads the key set to choose a
+sibling group's representative) and maps to the empty path.
+
+Empty is the **established** uninstalled state, not one invented here: `addShortcut` leaves a new shortcut's options
+untouched when the command is `""` (`src/utils/steamShortcuts.ts`), the sync update/adoption path writes `""` explicitly
+(`rewriteShortcutIdentity`, `src/utils/syncManager.ts`), and an uninstall records `""` as the ROM's
+`applied_launch_options` (`services/rom_removal.py`). **An empty launch command therefore means two things, and nothing
+may infer which**: "not downloaded" and "downloaded but not launchable" are indistinguishable at the Steam-shortcut
+layer — the shortcut holds `""` either way. Only the data layer separates them (no `rom_installs` row versus a row with
+`launchable = 0`), so a consumer that needs to tell them apart must ask the install record, never read emptiness as "not
+downloaded". The rule is restated on `build_launch_options` itself, where a later reader will hit it.
 
 The frontend closes the loop in two places: the shared launch gate blocks with `no_launch_target` before any save-sync
 work — for both the Play button and the global launch watcher — and the game-detail page's **ROM File** section states
