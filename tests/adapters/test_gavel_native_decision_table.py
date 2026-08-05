@@ -1,8 +1,16 @@
-"""Unit tests for ``domain.sync_action.compute_sync_action``.
+"""Hand-enumerated decision cases for the compiled save-sync core.
 
-Each test pins a specific (local_file, server_saves_in_slot, files_state,
-device_id, local_hash) input shape to the ``SyncAction`` outcome the service
-must dispatch. Pure-domain only — no I/O, no service fixtures.
+Each case pins a specific (local_file, server_saves_in_slot, files_state,
+device_id, local_hash) input shape to the ``SyncAction`` the service must
+dispatch, plus the 409 upload-conflict resolution the same core owns. They map
+onto the decision-matrix rows in
+``docs/architecture/save-file-sync-architecture.md`` and name, in this project's
+vocabulary, which row an input lands on — where the vendored gavel vectors state
+the same contract in upstream's terms.
+
+Both decisions are reached through
+:class:`~adapters.gavel_native.GavelNativeAdapter`, the seam production uses, so
+every case is read against the shipped binary rather than a stand-in.
 """
 
 from __future__ import annotations
@@ -10,14 +18,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from domain.sync_action import (
-    Conflict,
-    Download,
-    Skip,
-    Upload,
-    compute_sync_action,
-    resolve_upload_conflict,
-)
+from adapters.gavel_native import GavelNativeAdapter
+from domain.sync_action import Conflict, Download, Skip, Upload
+
+_ADAPTER = GavelNativeAdapter()
 
 DEVICE_ID = "device-abc"
 OTHER_DEVICE_ID = "device-xyz"
@@ -67,7 +71,7 @@ def _server_save(
 
 
 def test_empty_server_no_local_returns_skip_nothing_to_sync():
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=None,
         server_saves_in_slot=[],
         files_state={},
@@ -78,7 +82,7 @@ def test_empty_server_no_local_returns_skip_nothing_to_sync():
 
 
 def test_empty_server_with_local_returns_upload_post():
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[],
         files_state={},
@@ -90,7 +94,7 @@ def test_empty_server_with_local_returns_upload_post():
 
 def test_synced_state_returns_skip_synced():
     server = _server_save(device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc"},
@@ -104,7 +108,7 @@ def test_is_current_true_local_diverged_returns_upload_put():
     """is_current=true + local diverged from baseline → Upload (PUT) the local
     content against the existing server save id."""
     server = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc"},
@@ -120,7 +124,7 @@ def test_is_current_true_zero_byte_local_returns_conflict():
     would overwrite the only good server copy with no recoverable version.
     """
     server = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(size=0),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc", "last_sync_local_size": 8192},
@@ -135,7 +139,7 @@ def test_is_current_true_zero_byte_local_no_baseline_size_returns_conflict():
     ``last_sync_local_size`` baseline, a diverged 0-byte local is a Conflict, not a PUT.
     """
     server = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(size=0),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc"},  # no last_sync_local_size
@@ -150,7 +154,7 @@ def test_is_current_true_shrunken_local_returns_conflict():
     the recorded baseline size (truncated / partial write) → Conflict, not PUT.
     """
     server = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(size=100),  # < 50% of 8192
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc", "last_sync_local_size": 8192},
@@ -165,7 +169,7 @@ def test_is_current_true_plausible_size_diverged_still_uploads_put():
     size (no shrink) still PUTs in place. The guard must NOT fire on a normal edit.
     """
     server = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(size=8000),  # ~same size as baseline
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc", "last_sync_local_size": 8192},
@@ -180,7 +184,7 @@ def test_is_current_true_grown_local_uploads_put():
     plausible edit → PUT, never Conflict.
     """
     server = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(size=16384),  # larger than baseline
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc", "last_sync_local_size": 8192},
@@ -193,7 +197,7 @@ def test_is_current_true_grown_local_uploads_put():
 def test_recovery_no_local_is_current_true_returns_download():
     """Row 4 — local file gone, server still tracks our last upload as current."""
     server = _server_save(device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=None,
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc"},
@@ -209,7 +213,7 @@ def test_no_baseline_is_current_true_returns_skip_with_adopt_baseline():
     new baseline.
     """
     server = _server_save(device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={},
@@ -230,7 +234,7 @@ def test_no_baseline_is_current_false_content_identical_returns_download():
         content_hash="same-hash",
         device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={},
@@ -251,7 +255,7 @@ def test_no_baseline_is_current_false_content_differs_returns_conflict():
         content_hash="server-hash",
         device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={},
@@ -263,7 +267,7 @@ def test_no_baseline_is_current_false_content_differs_returns_conflict():
 
 def test_server_changed_local_unchanged_returns_download():
     server = _server_save(device_syncs=[_device_sync(DEVICE_ID, is_current=False)])
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc"},
@@ -275,7 +279,7 @@ def test_server_changed_local_unchanged_returns_download():
 
 def test_both_changed_returns_conflict():
     server = _server_save(device_syncs=[_device_sync(DEVICE_ID, is_current=False)])
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc"},
@@ -305,7 +309,7 @@ def test_not_current_diverged_but_identical_to_head_downloads():
         content_hash="moved-content",
         device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "old-baseline"},
@@ -325,7 +329,7 @@ def test_not_current_diverged_and_differs_from_head_returns_conflict():
         content_hash="server-content",
         device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "old-baseline"},
@@ -344,7 +348,7 @@ def test_not_current_diverged_empty_server_hash_stays_conflict():
         content_hash="",
         device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "old-baseline"},
@@ -362,7 +366,7 @@ def test_not_current_diverged_missing_server_hash_stays_conflict():
     server = _server_save(  # no content_hash key
         device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "old-baseline"},
@@ -384,7 +388,7 @@ def test_not_current_diverged_stale_stored_server_hash_stays_conflict():
         content_hash="server-content",
         device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "old-baseline", "last_sync_server_hash": "server-content"},
@@ -396,7 +400,7 @@ def test_not_current_diverged_stale_stored_server_hash_stays_conflict():
 
 def test_no_device_entry_no_local_returns_download():
     server = _server_save(device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)])
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=None,
         server_saves_in_slot=[server],
         files_state={},
@@ -419,7 +423,7 @@ def test_no_device_entry_no_baseline_local_newer_returns_conflict():
         updated_at=server_updated_at,
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch + 3600),  # 1 hour newer
         server_saves_in_slot=[server],
         files_state={},
@@ -441,7 +445,7 @@ def test_no_device_entry_no_baseline_local_older_returns_conflict():
         updated_at=server_updated_at,
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch - 3600),  # 1 hour older
         server_saves_in_slot=[server],
         files_state={},
@@ -462,7 +466,7 @@ def test_multiple_server_saves_picks_newest():
         updated_at="2024-06-01T00:00:00+00:00",
         device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[older, newer],
         files_state={"last_sync_hash": "abc"},
@@ -475,7 +479,7 @@ def test_multiple_server_saves_picks_newest():
 
 def test_first_sync_no_state_no_local_one_server_returns_download():
     server = _server_save(device_syncs=[])  # no device_syncs at all
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=None,
         server_saves_in_slot=[server],
         files_state={},
@@ -490,7 +494,7 @@ def test_local_hash_none_skips_divergence_check_in_synced_branch():
     is_current=true falls through to Skip("synced") instead of Conflict.
     """
     server = _server_save(device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc"},
@@ -512,7 +516,7 @@ def test_last_sync_hash_none_skips_divergence_check():
     """
     # is_current=true branch
     server_current = _server_save(device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
-    result_current = compute_sync_action(
+    result_current = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server_current],
         files_state={},
@@ -524,7 +528,7 @@ def test_last_sync_hash_none_skips_divergence_check():
     # is_current=false branch (server moved), no content_hash to prove identity:
     # cannot silently overwrite an unbacked local → Conflict.
     server_moved = _server_save(device_syncs=[_device_sync(DEVICE_ID, is_current=False)])
-    result_moved = compute_sync_action(
+    result_moved = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server_moved],
         files_state={},
@@ -546,7 +550,7 @@ def test_zulu_timestamp_is_parsed_for_local_newer_comparison():
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
     server_epoch = datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC).timestamp()
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch + 1),
         server_saves_in_slot=[server],
         files_state={},
@@ -571,7 +575,7 @@ def test_no_device_entry_local_mtime_equals_server_epoch_returns_upload_post():
         updated_at=server_updated_at,
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch),  # exactly equal
         server_saves_in_slot=[server],
         files_state={},
@@ -594,7 +598,7 @@ def test_no_device_entry_baseline_diverged_server_newer_returns_conflict():
         updated_at=server_updated_at,
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch - 3600),  # local older → today Downloads
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc"},
@@ -615,7 +619,7 @@ def test_no_device_entry_baseline_diverged_local_newer_returns_conflict():
         updated_at=server_updated_at,
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch + 3600),  # local newer → today Uploads
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc"},
@@ -638,7 +642,7 @@ def test_no_device_entry_baseline_matches_preserves_mtime_behavior():
         updated_at=server_updated_at,
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result_older = compute_sync_action(
+    result_older = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch - 3600),
         server_saves_in_slot=[server_a],
         files_state={"last_sync_hash": "abc"},
@@ -652,7 +656,7 @@ def test_no_device_entry_baseline_matches_preserves_mtime_behavior():
         updated_at=server_updated_at,
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result_newer = compute_sync_action(
+    result_newer = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch + 3600),
         server_saves_in_slot=[server_b],
         files_state={"last_sync_hash": "abc"},
@@ -677,7 +681,7 @@ def test_no_device_entry_no_baseline_differing_local_returns_conflict_both_direc
         updated_at=server_updated_at,
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result_older = compute_sync_action(
+    result_older = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch - 3600),
         server_saves_in_slot=[server_a],
         files_state={},  # no baseline
@@ -691,7 +695,7 @@ def test_no_device_entry_no_baseline_differing_local_returns_conflict_both_direc
         updated_at=server_updated_at,
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result_newer = compute_sync_action(
+    result_newer = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch + 3600),
         server_saves_in_slot=[server_b],
         files_state={},  # no baseline
@@ -716,7 +720,7 @@ def test_no_device_entry_identical_content_returns_skip_adopt_baseline():
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
     server["content_hash"] = "abc"
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch + 3600),  # local newer → today Uploads
         server_saves_in_slot=[server],
         files_state={},
@@ -740,7 +744,7 @@ def test_no_device_entry_no_baseline_different_content_returns_conflict():
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
     server["content_hash"] = "server-hash"
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch + 3600),
         server_saves_in_slot=[server],
         files_state={},
@@ -766,7 +770,7 @@ def test_no_device_entry_no_baseline_missing_content_hash_returns_conflict():
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
     # No "content_hash" key at all.
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch + 3600),
         server_saves_in_slot=[server],
         files_state={},
@@ -789,7 +793,7 @@ def test_no_device_entry_diverged_baseline_with_different_content_hash_returns_c
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
     server["content_hash"] = "server-hash"  # != local, so dedup must not fire
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=server_epoch + 3600),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc"},
@@ -817,7 +821,7 @@ def test_no_device_entry_provenance_adopts_despite_scheme_drift():
         content_hash="server-scheme-hash",
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "local-scheme-hash", "last_sync_server_hash": "server-scheme-hash"},
@@ -837,7 +841,7 @@ def test_not_current_provenance_does_not_apply_without_baseline():
         content_hash="server-scheme-hash",
         device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={},  # no baseline → no stored server hash
@@ -857,7 +861,7 @@ def test_no_device_entry_parity_adopts_fresh_install_no_stored_hash():
         content_hash="same-hash",
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={},  # no baseline, no last_sync_server_hash
@@ -878,7 +882,7 @@ def test_no_device_entry_provenance_not_taken_when_local_changed():
         content_hash="server-content",
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "baseline", "last_sync_server_hash": "server-content"},
@@ -898,7 +902,7 @@ def test_no_device_entry_empty_stored_server_hash_falls_back_to_parity():
         content_hash="server-content",
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "baseline", "last_sync_server_hash": ""},
@@ -920,7 +924,7 @@ def test_no_device_entry_garbled_server_updated_at_returns_download():
         updated_at="not a date",
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
     )
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=_local(mtime=1_700_000_000.0),
         server_saves_in_slot=[server],
         files_state={},
@@ -947,7 +951,7 @@ def test_no_device_entry_non_numeric_local_mtime_returns_download():
         "size": 8192,
         "mtime": "garbage",
     }
-    result = compute_sync_action(
+    result = _ADAPTER.compute_sync_action(
         local_file=local_file,
         server_saves_in_slot=[server],
         files_state={},
@@ -958,7 +962,8 @@ def test_no_device_entry_non_numeric_local_mtime_returns_download():
 
 
 # ---------------------------------------------------------------------------
-# resolve_upload_conflict — the 409 write-time backstop (ADR-0017 / #1276)
+# The 409 write-time backstop — the ``ResolveUploadConflictFn`` seam, which the
+# adapter itself implements as its ``__call__`` (ADR-0017 / #1276)
 # ---------------------------------------------------------------------------
 
 
@@ -967,7 +972,7 @@ def test_resolve_upload_conflict_local_matches_baseline_downloads():
     last_sync_hash``) → nothing of ours to protect, adopt the server via
     ``"download"``.
     """
-    assert resolve_upload_conflict("abc", "abc", None) == "download"
+    assert _ADAPTER("abc", "abc", None, None) == "download"
 
 
 def test_resolve_upload_conflict_local_matches_server_content_downloads():
@@ -975,14 +980,14 @@ def test_resolve_upload_conflict_local_matches_server_content_downloads():
     the server now holds (``local_hash == server_content_hash``, ``!=
     last_sync_hash``) → still nothing of ours to protect → ``"download"``.
     """
-    assert resolve_upload_conflict("abc", "old-baseline", "abc") == "download"
+    assert _ADAPTER("abc", "old-baseline", "abc", None) == "download"
 
 
 def test_resolve_upload_conflict_diverged_from_both_conflicts():
     """Local matches neither our baseline nor the server's current content →
     two-sided divergence (which the 409 proves) → ``"conflict"``.
     """
-    assert resolve_upload_conflict("local", "baseline", "server") == "conflict"
+    assert _ADAPTER("local", "baseline", "server", None) == "conflict"
 
 
 def test_resolve_upload_conflict_local_hash_none_conflicts():
@@ -990,14 +995,14 @@ def test_resolve_upload_conflict_local_hash_none_conflicts():
     safe default under uncertainty is ``"conflict"`` — never ``"download"`` even
     when the baseline and server content agree.
     """
-    assert resolve_upload_conflict(None, "abc", "abc") == "conflict"
+    assert _ADAPTER(None, "abc", "abc", None) == "conflict"
 
 
 def test_resolve_upload_conflict_no_baseline_no_server_content_conflicts():
     """``last_sync_hash`` and ``server_content_hash`` both ``None`` → no evidence
     the local is unchanged → ``"conflict"``.
     """
-    assert resolve_upload_conflict("abc", None, None) == "conflict"
+    assert _ADAPTER("abc", None, None, None) == "conflict"
 
 
 def test_resolve_upload_conflict_empty_local_hash_does_not_match_none():
@@ -1009,8 +1014,8 @@ def test_resolve_upload_conflict_empty_local_hash_does_not_match_none():
     and downloaded. The truthiness guards forbid any empty-string match, so every
     combination involving an empty hash stays ``"conflict"``.
     """
-    assert resolve_upload_conflict("", None, None) == "conflict"
-    assert resolve_upload_conflict("", "abc", "def") == "conflict"
+    assert _ADAPTER("", None, None, None) == "conflict"
+    assert _ADAPTER("", "abc", "def", None) == "conflict"
 
 
 def test_resolve_upload_conflict_empty_local_and_baseline_conflicts():
@@ -1018,14 +1023,14 @@ def test_resolve_upload_conflict_empty_local_and_baseline_conflicts():
     match as "unchanged" — the truthiness guard keeps it ``"conflict"`` (the
     old ``is not None`` guards would have equated ``"" == ""`` → ``"download"``).
     """
-    assert resolve_upload_conflict("", "", None) == "conflict"
+    assert _ADAPTER("", "", None, None) == "conflict"
 
 
 def test_resolve_upload_conflict_empty_local_and_server_content_conflicts():
     """Empty ``local_hash`` AND empty ``server_content_hash`` must not
     coincidentally match — the truthiness guard keeps it ``"conflict"``.
     """
-    assert resolve_upload_conflict("", None, "") == "conflict"
+    assert _ADAPTER("", None, "", None) == "conflict"
 
 
 def test_resolve_upload_conflict_downloads_despite_scheme_drift():
@@ -1035,7 +1040,7 @@ def test_resolve_upload_conflict_downloads_despite_scheme_drift():
     drift). We still ``"download"``: our own baseline proves the local carries no
     un-synced work, so parity is not required to decide it is safe to adopt.
     """
-    assert resolve_upload_conflict("local-scheme", "local-scheme", "server-scheme", "server-scheme") == "download"
+    assert _ADAPTER("local-scheme", "local-scheme", "server-scheme", "server-scheme") == "download"
 
 
 def test_resolve_upload_conflict_parity_downloads_without_stored_hash():
@@ -1043,7 +1048,7 @@ def test_resolve_upload_conflict_parity_downloads_without_stored_hash():
     byte-identical to the fresh server head still downloads via the parity
     fallback, even with no ``last_sync_server_hash`` stored (fresh-install shape).
     """
-    assert resolve_upload_conflict("abc", "old-baseline", "abc", None) == "download"
+    assert _ADAPTER("abc", "old-baseline", "abc", None) == "download"
 
 
 def test_resolve_upload_conflict_stored_hash_alone_does_not_download():
@@ -1052,4 +1057,4 @@ def test_resolve_upload_conflict_stored_hash_alone_does_not_download():
     and not byte-identical to the head (``local_hash != server_content_hash``),
     the stored hash never fabricates a provenance match → ``"conflict"``.
     """
-    assert resolve_upload_conflict("CHANGED", "baseline", "server-content", "server-content") == "conflict"
+    assert _ADAPTER("CHANGED", "baseline", "server-content", "server-content") == "conflict"

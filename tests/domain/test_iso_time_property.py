@@ -8,7 +8,7 @@ that denote the *same instant* — ``…Z`` vs ``…+00:00`` vs
 on the epoch is stable under format variation. The #1014 bug is the opposite:
 sites that compared the raw strings mis-ordered mixed-shape timestamps.
 
-See ``tests.domain.test_sync_action_property`` for the convention note on the
+See ``tests.adapters.test_gavel_native_property`` for the convention note on the
 ``xfail(strict=True)`` pinning of properties that encode an open bug.
 """
 

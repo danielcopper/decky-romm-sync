@@ -12,7 +12,7 @@ its canonical source. The safety invariants stated directly:
   (non-``romm``) key only if every member carrying the canonical id agrees on its
   value; a component whose canonical source holds conflicting values never merges.
 
-See ``tests.domain.test_sync_action_property`` for the convention note on
+See ``tests.adapters.test_gavel_native_property`` for the convention note on
 ``xfail(strict=True)`` pinning of properties that encode an open bug. These
 properties hold today, so they run live.
 """

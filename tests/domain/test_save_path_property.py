@@ -12,7 +12,7 @@ key never mixes two distinct canonical targets, and saves that differ only in
 #1006 fix makes the matrix's local-file loop filter to this same group; the
 key itself is already correct, so this is a live regression guard.
 
-See ``tests.domain.test_sync_action_property`` for the convention note on the
+See ``tests.adapters.test_gavel_native_property`` for the convention note on the
 ``xfail(strict=True)`` pinning of properties that encode an open bug.
 """
 

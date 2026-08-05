@@ -10,7 +10,7 @@ reshuffle would flip which sibling a group's shortcut binds to on every sync
 shares the same pure order (ignoring the installed/binding/default filters) and
 carries the same determinism guarantee.
 
-See ``tests.domain.test_sync_action_property`` for the convention note on the
+See ``tests.adapters.test_gavel_native_property`` for the convention note on the
 ``xfail(strict=True)`` pinning of properties that encode an open bug. These
 properties encode a TRUE invariant that holds today, so they run live.
 """
