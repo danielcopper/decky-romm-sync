@@ -1,0 +1,32 @@
+-- =============================================================================
+-- 023_add_rom_install_launchable.sql — record whether an install can be launched
+-- #1652 (an unlaunchable download is baked into a shortcut anyway)
+-- =============================================================================
+--
+-- ``detect_launch_file`` ends in "largest file by size", so a download none of
+-- its format rules recognise still yields a ``file_path`` — and that path became
+-- the shortcut's launch command with nothing checking whether the system can
+-- boot it. A PS3 title distributed as ``.pkg`` + ``.rap`` is the reported case:
+-- the PKG is an installer, the game is sealed inside it, and the shortcut hands
+-- RPCS3 an argument it cannot act on. The download reports success; the failure
+-- only appears when the user presses play.
+--
+--   * rom_installs.launchable — whether the system's accept-list covers
+--     ``file_path`` (or the install is a recognised folder-boot layout).
+--
+-- The files stay on disk either way: a refusal that discarded the download would
+-- be worse than the silent failure it replaces, because installing the package
+-- by hand in RPCS3 is the documented RetroDECK procedure. An install with
+-- ``launchable = 0`` keeps its row, its files, and its uninstall path; only the
+-- baked launch command is withheld, and the game page states why.
+--
+-- NOT NULL DEFAULT 1 — existing rows are launchable by assumption, not by
+-- re-assessment. They were downloaded under the old behaviour and their
+-- shortcuts work (or do not) exactly as before; flipping any of them to 0 here
+-- would need an accept-list this DDL cannot consult. A ROM re-downloaded after
+-- this migration gets a real verdict.
+--
+-- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 23.
+-- -----------------------------------------------------------------------------
+ALTER TABLE rom_installs ADD COLUMN launchable INTEGER NOT NULL DEFAULT 1;  -- 0 = downloaded, no launch target

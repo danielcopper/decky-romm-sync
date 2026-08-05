@@ -11,6 +11,7 @@ from domain.rom_files import (
     es_de_collapse_rename,
     folder_boot_layout_root,
     folder_boot_root,
+    is_launchable_target,
     is_multi_file_download,
     needs_m3u,
     resolve_extract_dir_name,
@@ -387,6 +388,80 @@ class TestFolderBootRoot:
         rom_dir = "/roms/ps3/MyGame"
         launch = "/roms/ps3/MyGame/ps3_game/USRDIR/EBOOT.BIN"
         assert folder_boot_root(launch, rom_dir) is None
+
+
+class TestIsLaunchableTarget:
+    """Tests for is_launchable_target — can the system launch the recorded launch file?
+
+    The accept-lists below are ES-DE's real per-system ``<extension>`` sets for
+    the systems each case names, so a passing test is not a tautology over a
+    made-up list.
+    """
+
+    # ES-DE's ps3 accept-list. ``.ps3dir`` is how it spells the directory case;
+    # ``.desktop`` is a shortcut to an already-installed game, not ROM content.
+    PS3 = frozenset({".desktop", ".iso", ".ps3", ".ps3dir"})
+    # ES-DE's dreamcast accept-list. Note the absence of ``.bin`` — a GDI rip's
+    # raw track is not a launch target for any of these emulators.
+    DREAMCAST = frozenset({".cdi", ".chd", ".cue", ".dat", ".elf", ".gdi", ".iso", ".lst", ".m3u", ".7z", ".zip"})
+
+    def test_ps3_pkg_is_not_launchable(self):
+        # The reported case (#1582): a PS3 title shipped as .pkg + .rap. No rule
+        # in detect_launch_file matches, the fallback picks the multi-gigabyte
+        # package, and a PKG is an installer — the game is still sealed inside.
+        assert is_launchable_target("/roms/ps3/Puppeteer/Puppeteer.pkg", "/roms/ps3/Puppeteer", self.PS3) is False
+
+    def test_dreamcast_track_bin_is_not_launchable(self):
+        # A multi-file GDI rip without a .cue: the fallback bakes the largest
+        # track file, and dreamcast's accept-list carries no .bin.
+        assert is_launchable_target("/roms/dc/Game/track03.bin", "/roms/dc/Game", self.DREAMCAST) is False
+
+    def test_folder_boot_eboot_is_launchable(self):
+        # A working PS3 disc dump. file_path records the nested EBOOT.BIN, whose
+        # .bin extension is absent from ps3's list — but the bake target is the
+        # game DIRECTORY (ADR-0019), which ES-DE spells .ps3dir. Rejecting this
+        # would break every PS3 dump that launches today.
+        launch = "/roms/ps3/MyGame/PS3_GAME/USRDIR/EBOOT.BIN"
+        assert is_launchable_target(launch, "/roms/ps3/MyGame", self.PS3) is True
+
+    def test_folder_boot_nested_one_level_deeper_is_launchable(self):
+        # The same dump extracted one level deeper still resolves to a game root
+        # inside rom_dir, so the folder-boot carve-out still applies.
+        launch = "/roms/ps3/MyGame/InnerGame/PS3_GAME/USRDIR/EBOOT.BIN"
+        assert is_launchable_target(launch, "/roms/ps3/MyGame", self.PS3) is True
+
+    def test_desktop_entry_is_launchable(self):
+        # ES-DE lists .desktop for ps3 — a shortcut to an already-installed game.
+        assert is_launchable_target("/roms/ps3/Game.desktop", None, self.PS3) is True
+
+    def test_bare_eboot_without_marker_is_not_launchable(self):
+        # An EBOOT.BIN outside the PS3_GAME/USRDIR run gets no carve-out, and
+        # RPCS3 rejects a nested EBOOT path anyway ("Invalid file or folder",
+        # ADR-0019). Falls through to the extension check, which has no .bin.
+        assert is_launchable_target("/roms/ps3/MyGame/EBOOT.BIN", "/roms/ps3/MyGame", self.PS3) is False
+
+    def test_empty_accept_list_accepts(self):
+        # ES-DE could not answer (unknown system, no ES-DE installation). A
+        # missing answer must never turn a working install unlaunchable.
+        assert is_launchable_target("/roms/ps3/Puppeteer/Puppeteer.pkg", "/roms/ps3/Puppeteer", frozenset()) is True
+
+    def test_single_file_iso_is_launchable(self):
+        assert is_launchable_target("/roms/ps3/Game.iso", None, self.PS3) is True
+
+    def test_uppercase_extension_is_launchable(self):
+        # The accept-list is lowercased; a server-supplied .ISO must still match.
+        assert is_launchable_target("/roms/ps3/Game.ISO", None, self.PS3) is True
+
+    def test_extensionless_file_is_not_launchable(self):
+        assert is_launchable_target("/roms/dc/Game/readme", "/roms/dc/Game", self.DREAMCAST) is False
+
+    def test_empty_extract_dir_as_launch_path_is_not_launchable(self):
+        # detect_launch_file fell back to the extract dir itself (nothing inside).
+        # There is no launch target, and the directory name carries no extension.
+        assert is_launchable_target("/roms/dc/Game", "/roms/dc/Game", self.DREAMCAST) is False
+
+    def test_m3u_playlist_is_launchable(self):
+        assert is_launchable_target("/roms/dc/Game/Game.m3u", "/roms/dc/Game", self.DREAMCAST) is True
 
 
 class TestFolderBootLayoutRoot:

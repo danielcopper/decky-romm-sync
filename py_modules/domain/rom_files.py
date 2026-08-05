@@ -192,6 +192,42 @@ def folder_boot_root(launch_path: str, rom_dir: str | None) -> str | None:
     return None
 
 
+def is_launchable_target(file_path: str, rom_dir: str | None, supported_extensions: frozenset[str]) -> bool:
+    """Whether the system can actually launch *file_path* — the download's recorded launch file.
+
+    :func:`detect_launch_file` ends in "largest file by size", so when no
+    format-specific rule matches, whatever happens to be biggest becomes the
+    launch target. A PS3 title distributed as ``.pkg`` + ``.rap`` has no
+    ``EBOOT.BIN`` at all: the PKG is an installer, the game is still sealed
+    inside it, and baking it produces a shortcut the emulator cannot act on.
+    This is the check that catches that before the launch command is written.
+
+    *supported_extensions* is the target system's live accept-list (ES-DE's
+    per-system ``<extension>`` set, lowercased and dot-prefixed). Two cases pass
+    without consulting it:
+
+    - **An empty accept-list** — the source could not answer (unknown system, no
+      ES-DE installation). Default-safe: a missing answer must never turn a
+      working install into an unlaunchable one, so it accepts.
+    - **A folder-boot layout** (:data:`FOLDER_BOOT_MARKERS`) — the baked target
+      is the game *directory*, not the nested ``EBOOT.BIN`` that
+      ``file_path`` records (ES-DE spells the directory case ``.ps3dir``). The
+      marker match is positive evidence that the plugin recognised the layout,
+      so no extension is examined.
+
+    Everything else is decided by the recorded launch file's extension. A
+    ``.pkg`` is absent from ps3's accept-list; a bare track ``.bin`` is absent
+    from dreamcast's — both are caught here.
+
+    Pure path algebra plus a set membership, stdlib only.
+    """
+    if not supported_extensions:
+        return True
+    if folder_boot_root(file_path, rom_dir) is not None:
+        return True
+    return os.path.splitext(file_path)[1].lower() in supported_extensions
+
+
 def folder_boot_layout_root(files: list[str]) -> str | None:
     """Return the game root of a folder-boot layout among *files*, or ``None``.
 

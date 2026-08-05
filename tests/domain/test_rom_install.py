@@ -23,6 +23,34 @@ class TestMarkInstalled:
         assert install.platform_slug == "psx"
         assert install.system == "psx"
         assert install.installed_at == "2026-05-28T10:00:00"
+        assert install.launchable is True
+
+    def test_launchable_defaults_to_true(self):
+        """Unlaunchable is a proven verdict, never the absence of one (#1652)."""
+        install = RomInstall.mark_installed(
+            rom_id=1,
+            file_path="/roms/psx/game.cue",
+            rom_dir=None,
+            platform_slug="psx",
+            system="psx",
+            installed_at="2026-05-28T10:00:00",
+        )
+        assert install.launchable is True
+
+    def test_records_an_unlaunchable_install(self):
+        """A download the system cannot boot is still a real install — files and row kept."""
+        install = RomInstall.mark_installed(
+            rom_id=42,
+            file_path="/roms/ps3/Puppeteer/Puppeteer.pkg",
+            rom_dir="/roms/ps3/Puppeteer",
+            platform_slug="ps3",
+            system="ps3",
+            installed_at="2026-05-28T10:00:00",
+            launchable=False,
+        )
+        assert install.launchable is False
+        assert install.file_path == "/roms/ps3/Puppeteer/Puppeteer.pkg"
+        assert install.rom_dir == "/roms/ps3/Puppeteer"
 
     def test_single_file_has_no_rom_dir(self):
         """A single-file ROM owns no folder — ``rom_dir`` is ``None``."""
@@ -77,3 +105,17 @@ class TestRelocate:
         install.relocate(None, "/new/roms/n64/zelda.z64")
         assert install.rom_dir is None
         assert install.file_path == "/new/roms/n64/zelda.z64"
+
+    def test_relocate_preserves_the_launchable_verdict(self):
+        """A home migration moves the same content — it cannot make it launchable."""
+        install = RomInstall.mark_installed(
+            rom_id=3,
+            file_path="/old/roms/ps3/Game/Game.pkg",
+            rom_dir="/old/roms/ps3/Game",
+            platform_slug="ps3",
+            system="ps3",
+            installed_at="2026-05-28T10:00:00",
+            launchable=False,
+        )
+        install.relocate("/new/roms/ps3/Game", "/new/roms/ps3/Game/Game.pkg")
+        assert install.launchable is False

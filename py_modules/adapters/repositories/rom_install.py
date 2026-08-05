@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     import sqlite3
     from collections.abc import Iterator
 
-_COLUMNS = "rom_id, file_path, rom_dir, platform_slug, system, installed_at"
+_COLUMNS = "rom_id, file_path, rom_dir, platform_slug, system, installed_at, launchable"
 
 
 def _row_to_install(row: sqlite3.Row) -> RomInstall:
@@ -22,11 +22,16 @@ def _row_to_install(row: sqlite3.Row) -> RomInstall:
         platform_slug=row["platform_slug"],
         system=row["system"],
         installed_at=row["installed_at"],
+        launchable=bool(row["launchable"]),
     )
 
 
 class SqliteRomInstallRepository(BaseRepository):
-    """Install records — present only while a ROM is downloaded; ``rom_dir`` is NULL for single-file ROMs."""
+    """Install records — present only while a ROM is downloaded; ``rom_dir`` is NULL for single-file ROMs.
+
+    ``launchable`` is a SQLite INTEGER (STRICT tables have no BOOLEAN affinity)
+    round-tripped as a Python bool.
+    """
 
     def get(self, rom_id: int) -> RomInstall | None:
         row = self._conn.execute(
@@ -37,7 +42,7 @@ class SqliteRomInstallRepository(BaseRepository):
 
     def save(self, install: RomInstall) -> None:
         self._conn.execute(
-            f"INSERT OR REPLACE INTO rom_installs ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)",
+            f"INSERT OR REPLACE INTO rom_installs ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 install.rom_id,
                 install.file_path,
@@ -45,6 +50,7 @@ class SqliteRomInstallRepository(BaseRepository):
                 install.platform_slug,
                 install.system,
                 install.installed_at,
+                int(install.launchable),
             ),
         )
 

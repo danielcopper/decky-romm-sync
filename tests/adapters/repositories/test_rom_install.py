@@ -24,7 +24,13 @@ def _seed_rom(uow: SqliteUnitOfWork, rom_id: int) -> None:
     )
 
 
-def _install(rom_id: int, *, path: str = "/roms/snes/game.sfc", rom_dir: str | None = None) -> RomInstall:
+def _install(
+    rom_id: int,
+    *,
+    path: str = "/roms/snes/game.sfc",
+    rom_dir: str | None = None,
+    launchable: bool = True,
+) -> RomInstall:
     return RomInstall(
         rom_id=rom_id,
         file_path=path,
@@ -32,6 +38,7 @@ def _install(rom_id: int, *, path: str = "/roms/snes/game.sfc", rom_dir: str | N
         platform_slug="snes",
         system="snes",
         installed_at="2026-02-02T00:00:00Z",
+        launchable=launchable,
     )
 
 
@@ -53,6 +60,25 @@ class TestRoundTrip:
         assert loaded is not None
         assert loaded.rom_dir is None
         assert loaded == install
+
+    def test_unlaunchable_round_trips_as_bool(self, uow: SqliteUnitOfWork):
+        """``launchable`` crosses the STRICT-table INTEGER column and reads back a bool (#1652)."""
+        _seed_rom(uow, 7)
+        install = _install(7, path="/roms/ps3/Game/Game.pkg", rom_dir="/roms/ps3/Game", launchable=False)
+        uow.rom_installs.save(install)
+
+        loaded = uow.rom_installs.get(7)
+        assert loaded is not None
+        assert loaded.launchable is False
+        assert loaded == install
+
+    def test_launchable_round_trips_as_bool(self, uow: SqliteUnitOfWork):
+        _seed_rom(uow, 8)
+        uow.rom_installs.save(_install(8, launchable=True))
+
+        loaded = uow.rom_installs.get(8)
+        assert loaded is not None
+        assert loaded.launchable is True
 
 
 class TestMiss:
