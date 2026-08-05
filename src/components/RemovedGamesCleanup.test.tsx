@@ -74,6 +74,37 @@ function contentToggleFor(modal: RenderResult, gameName: string): HTMLInputEleme
   return input;
 }
 
+/**
+ * The dialog's run options, by the label text each one renders.
+ *
+ * All but `confirmWithoutRecovery` are always on screen; that one is rendered
+ * only while the recovery bundle is switched off.
+ */
+const OPTION_LABELS = {
+  repoint: "Repoint vanished shortcuts to the live default version",
+  removeRows: "Remove confirmed rows and installed content from groups with a live version",
+  removeDeadGames: "Remove fully vanished games, including any Steam shortcut",
+  recovery: "Create recovery bundle",
+  confirmWithoutRecovery: "I understand local database state and playtime will have no recovery bundle",
+} as const;
+
+/**
+ * The option checkbox carrying `label`.
+ *
+ * Sibling of `contentToggleFor` for the toggles above the item list. Throws on
+ * anything but a single match: a missing option is the failure, and a label
+ * that has become ambiguous would otherwise flip whichever toggle came first.
+ */
+function optionToggleFor(modal: RenderResult, label: string): HTMLInputElement {
+  const matches = [...modal.container.querySelectorAll<HTMLElement>('[data-testid="toggle"]')].filter((toggle) =>
+    toggle.textContent.includes(label),
+  );
+  if (matches.length !== 1) throw new Error(`Expected one option toggle labelled "${label}", found ${matches.length}`);
+  const input = matches[0]!.querySelector<HTMLInputElement>('[data-testid="toggle-input"]');
+  if (!input) throw new Error(`No checkbox in the option toggle labelled "${label}"`);
+  return input;
+}
+
 describe("RemovedGamesCleanup", () => {
   // logInfo/logWarn/logError are plain wrappers over the frontend_log callable,
   // so they are spied rather than module-mocked. Fresh per test: the confirm
@@ -137,18 +168,23 @@ describe("RemovedGamesCleanup", () => {
   it("uses the shipped option defaults and blocks confirmation when selected content exceeds free space", async () => {
     await openRemovedGamesCleanupModal();
     const modal = render(shownModal());
-    const toggles = modal.getAllByTestId("toggle-input") as HTMLInputElement[];
 
-    // repoint, remove rows, remove fully vanished, recovery bundle, per-ROM
-    // content. Whole-game removal is on: it is what the dialog exists for, and
-    // the default-on recovery bundle is what makes it recoverable. Per-ROM
-    // content stays off — it is the only one that can exhaust the disk.
-    expect(toggles.map((toggle) => toggle.checked)).toEqual([true, true, true, true, false]);
+    // Whole-game removal is on: it is what the dialog exists for, and the
+    // default-on recovery bundle is what makes it recoverable. Per-ROM content
+    // stays off — it is the only one that can exhaust the disk.
+    expect(optionToggleFor(modal, OPTION_LABELS.repoint).checked).toBe(true);
+    expect(optionToggleFor(modal, OPTION_LABELS.removeRows).checked).toBe(true);
+    expect(optionToggleFor(modal, OPTION_LABELS.removeDeadGames).checked).toBe(true);
+    expect(optionToggleFor(modal, OPTION_LABELS.recovery).checked).toBe(true);
+    expect(contentToggleFor(modal, "Removed Game").checked).toBe(false);
+    // The acknowledgement exists only to gate a run that keeps no bundle, so it
+    // must not be on screen while the bundle is on.
+    expect(modal.queryByText(OPTION_LABELS.confirmWithoutRecovery)).toBeNull();
     const confirm = modal.getByRole("button", { name: "Confirm Cleanup" }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(false);
     expect(modal.container.textContent).toContain("Without a backup, the downloaded ROM file is deleted");
 
-    fireEvent.click(toggles[4]!);
+    fireEvent.click(contentToggleFor(modal, "Removed Game"));
 
     expect(modal.container.textContent).toContain("Not enough free space.");
     fireEvent.click(confirm);
@@ -318,15 +354,12 @@ describe("RemovedGamesCleanup", () => {
   it("clears and disables installed-content selections when recovery is off", async () => {
     await openRemovedGamesCleanupModal();
     const modal = render(shownModal());
-    let toggles = modal.getAllByTestId("toggle-input") as HTMLInputElement[];
-    fireEvent.click(toggles[4]!);
-    expect(toggles[4]!.checked).toBe(true);
+    fireEvent.click(contentToggleFor(modal, "Removed Game"));
+    expect(contentToggleFor(modal, "Removed Game").checked).toBe(true);
 
-    fireEvent.click(toggles[3]!);
+    fireEvent.click(optionToggleFor(modal, OPTION_LABELS.recovery));
     await waitFor(() => {
-      toggles = modal.getAllByTestId("toggle-input") as HTMLInputElement[];
-      const content = toggles[toggles.length - 1]!;
-      expect(content.checked).toBe(false);
+      expect(contentToggleFor(modal, "Removed Game").checked).toBe(false);
       expect(modal.container.textContent).toContain("Selected ROM-content recovery estimate: 0 B");
     });
     expect(modal.container.textContent).toContain("Without a backup, the downloaded ROM file is deleted");
@@ -344,8 +377,7 @@ describe("RemovedGamesCleanup", () => {
     });
     await openRemovedGamesCleanupModal(7);
     const modal = render(shownModal());
-    const toggles = modal.getAllByTestId("toggle-input") as HTMLInputElement[];
-    fireEvent.click(toggles[1]!);
+    fireEvent.click(optionToggleFor(modal, OPTION_LABELS.removeRows));
     const confirm = modal.getByRole("button", { name: "Confirm Cleanup" }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(false);
 
@@ -629,8 +661,7 @@ describe("RemovedGamesCleanup", () => {
     expect(confirm.disabled).toBe(false);
     expect(modal.container.textContent).not.toContain("no safe measurable size");
 
-    const toggles = modal.getAllByTestId("toggle-input") as HTMLInputElement[];
-    fireEvent.click(toggles[4]!);
+    fireEvent.click(contentToggleFor(modal, "Removed Game"));
 
     // Selected for recovery, its required space cannot be proven, so the run is
     // refused rather than started on an unbacked estimate.
@@ -681,7 +712,7 @@ describe("RemovedGamesCleanup", () => {
     const modal = render(shownModal());
     expect(modal.container.textContent).toContain("Live sibling");
 
-    fireEvent.click((modal.getAllByTestId("toggle-input") as HTMLInputElement[])[2]!);
+    fireEvent.click(optionToggleFor(modal, OPTION_LABELS.removeDeadGames));
 
     // With whole-game removal off, `selected_prune_ids` can never return a
     // non-candidate, so disclosing one describes a thing that cannot happen.
@@ -706,11 +737,10 @@ describe("RemovedGamesCleanup", () => {
     await openRemovedGamesCleanupModal();
     const modal = render(shownModal());
 
-    const contentToggle = (modal.getAllByTestId("toggle-input") as HTMLInputElement[])[4]!;
-    fireEvent.click(contentToggle);
+    fireEvent.click(contentToggleFor(modal, "Live sibling"));
     expect(modal.container.textContent).toContain("recovery estimate: 512 B");
 
-    fireEvent.click((modal.getAllByTestId("toggle-input") as HTMLInputElement[])[2]!);
+    fireEvent.click(optionToggleFor(modal, OPTION_LABELS.removeDeadGames));
     await waitFor(() => expect(modal.container.textContent).toContain("recovery estimate: 0 B"));
 
     // A selection the user can no longer see must not be staged behind their back.
@@ -802,7 +832,7 @@ describe("RemovedGamesCleanup", () => {
       const scrollTo = vi.fn();
       body.scrollTo = scrollTo as unknown as typeof body.scrollTo;
 
-      fireEvent.focusIn((modal.getAllByTestId("toggle-input") as HTMLInputElement[])[0]!);
+      fireEvent.focusIn(optionToggleFor(modal, OPTION_LABELS.repoint));
       expect(scrollTo).not.toHaveBeenCalled();
       act(() => {
         vi.runAllTimers();
