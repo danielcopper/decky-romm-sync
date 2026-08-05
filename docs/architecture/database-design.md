@@ -594,6 +594,22 @@ migration (the app only ever wrote `'user'` / `'smart'`), so the rewrite can nev
 `enabled_collections` bucket rename (`user → standard`) is the separate schema migration **v12 → v13** in
 `domain/state_migrations.py`.
 
+`023_add_rom_install_launchable.sql` (`user_version = 23`) adds `rom_installs.launchable INTEGER NOT NULL DEFAULT 1` —
+whether the system can act on the install's `file_path` at all
+([#1652](https://github.com/danielcopper/decky-romm-sync/issues/1652)). `detect_launch_file` ends in "largest file by
+size", so a download none of its format rules recognise still produces a `file_path`, and that path became the
+shortcut's launch command with nothing checking it; the reported case is a PS3 title shipped as `.pkg` + `.rap`, where
+the PKG is an installer and the game is still sealed inside it
+([#1582](https://github.com/danielcopper/decky-romm-sync/issues/1582)). The verdict is decided once at download-complete
+and recorded here; the behavior it drives is in
+[Launch-target validation](backend-architecture.md#launch-target-validation).
+
+`NOT NULL DEFAULT 1` — existing rows are launchable **by assumption, not by re-assessment**. They were downloaded under
+the old behaviour and their shortcuts work (or do not) exactly as before; flipping any of them to `0` would need an
+accept-list this DDL cannot consult. A ROM re-downloaded after the migration gets a real verdict. Unlaunchable is always
+a proven verdict, never the absence of one — the same reason the aggregate field and the check's unknown-system branch
+both default to launchable.
+
 ## The runtime Unit of Work
 
 The schema is read and written at runtime through a **Unit of Work** (UoW) — the atomic transaction boundary one

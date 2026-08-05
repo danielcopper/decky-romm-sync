@@ -33,6 +33,26 @@ for details.
 **Fix**: Open the game's detail page and tap **Download** in the RomM Sync panel. The game will be playable once the
 download completes.
 
+### The download has no launchable file
+
+**Symptom**: The download finished, but pressing Play shows a toast saying the download has no file the emulator can
+launch. The game's detail page repeats it under **ROM File**.
+
+**What happened**: Some titles are distributed as an _installer_ rather than as playable content. The clearest case is a
+PS3 game shipped as a `.pkg` (plus a `.rap` licence file): the game is sealed inside the package until an emulator
+installs it, so there is nothing for a shortcut to launch. The same applies to a disc rip that arrived as raw `.bin`
+tracks with no `.cue` or `.gdi` alongside them.
+
+Rather than write a launch command that cannot work, the plugin leaves the shortcut without one and says so. **Your
+download is not deleted** — the files are on disk exactly where the ROM would normally live.
+
+**Fix**: Install the content in the emulator yourself. For a PS3 `.pkg`, that is RetroDECK's documented procedure — open
+**RetroDECK → Configurator → Open Emulator → RPCS3**, use **File → Install Packages (PKG)**, point it at the downloaded
+`.pkg`, and install the `.rap` licence the same way. Launching from Steam once a package is installed is not supported
+yet; start it from RPCS3 in the meantime.
+
+To find the files, open the game's detail page — the **ROM File** section shows the filename the download produced.
+
 ### Controller doesn't work in RetroArch menus
 
 **Symptom**: The game plays fine, but the RetroArch Quick Menu (L3+R3) can't be navigated with the controller — only

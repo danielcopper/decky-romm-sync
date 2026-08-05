@@ -271,6 +271,20 @@ no playlist either way.
     loose files — or, on cartridge systems, as a stray `.m3u`. The fix only affects new downloads; re-download the game
     to get the single clean ES-DE entry.
 
+### When a download has nothing launchable
+
+A few titles are distributed as an **installer** rather than as playable content — most commonly a PS3 game shipped as a
+`.pkg` (plus a `.rap` licence file), where the game stays sealed inside the package until an emulator installs it. A
+disc rip that arrived as raw `.bin` tracks with no `.cue` or `.gdi` alongside them has the same problem.
+
+The plugin checks what the download actually produced against the list of formats the system can open. When nothing in
+it qualifies, the shortcut is left **without a launch command** and the game's **ROM File** section says so, instead of
+writing a command that would fail the first time you press Play. Pressing Play shows the same explanation.
+
+**Your download is kept.** The files stay on disk where the ROM would normally live, and **Uninstall** works as usual —
+because installing the package by hand in the emulator is exactly what you would do next. See
+[the troubleshooting entry](troubleshooting.md#the-download-has-no-launchable-file) for how.
+
 ## Picking a Disc for Multi-Disc Games
 
 When an installed game has more than one disc, a small **disc dropdown** appears on the game detail page, right next to

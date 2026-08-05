@@ -156,6 +156,24 @@ stored as a separate boolean ([ADR-0008](docs/adr/0008-rom-install-launch-file-a
 [#129](https://github.com/danielcopper/decky-romm-sync/issues/129); it is an additive 1:N child of `rom_installs`
 (deferred until those land), and `file_path` + `rom_dir` are its forward-compatible projection.
 
+### Launchable install / no launch target
+
+A downloaded ROM whose recorded **launch file** is something the system cannot act on — a PS3 `.pkg` installer (the game
+is still sealed inside the package), a bare disc track `.bin`. `detect_launch_file` ends in "largest file by size", so a
+download none of its format rules recognise still yields a `file_path`; `RomInstall.launchable` records whether that
+path is a real launch target, decided once at download-complete against the system's live ES-DE accept-list
+([#1652](https://github.com/danielcopper/decky-romm-sync/issues/1652)).
+
+"No launch target" is a statement about the **launch command**, never about the download. The files stay on disk, the
+install row is written, and uninstall works normally — installing the package by hand in the emulator is the documented
+RetroDECK procedure and a refusal that discarded the download would leave the user worse off. What is withheld is the
+baked `launch_options`: an unlaunchable install resolves to the empty path in the `DiscLaunchResolver` seam, so every
+bake site emits the same empty launch command an **un-downloaded** ROM's shortcut carries.
+
+Unlaunchable is always a **proven** verdict, never the absence of one: an unreadable accept-list, an unknown system, and
+a pre-migration row all read as launchable. The foil is a **folder-boot** install, whose `file_path` extension is
+irrelevant because the baked target is the game directory.
+
 ### platform_slug (denormalized)
 
 The RomM platform identifier (e.g. `gba`, `psx`) carried as a plain string on the rows that need it (`roms`,

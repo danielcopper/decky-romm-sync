@@ -1056,6 +1056,59 @@ domain functions (`needs_m3u`, `detect_launch_file`) take `m3u_supported`, never
 bundled `.m3u` is left inert on disk, never deleted. When `es_systems.xml` cannot be found the answer defaults to
 `False` (safe: a missing playlist only degrades disc-switching, a wrong one breaks the launch).
 
+#### Launch-target validation
+
+`detect_launch_file` ends in "largest file by size". When none of its format-specific rules match, whatever happens to
+be biggest becomes the launch target, is written into `RomInstall.file_path`, and becomes the shortcut's launch command
+— with nothing checking whether the system can act on it. A PS3 title distributed as `.pkg` + `.rap` is the reported
+case ([#1582](https://github.com/danielcopper/decky-romm-sync/issues/1582)): a PKG is an installer, the game is still
+sealed inside it, no `EBOOT.BIN` exists anywhere in the download, so every rule misses and the multi-gigabyte package is
+baked. The download reports success and the failure only surfaces when the user presses play.
+
+**The verdict is decided once, at record time.** `_record_install_io` — the single seam both the single-file and
+multi-file download paths pass through — calls `is_launchable_target` (`domain/rom_files.py`) and records the answer on
+`RomInstall.launchable`. The check reads the target system's live ES-DE accept-list through the
+`SystemSupportedExtensionsFn` Protocol, the same seam `DiscLaunchResolver` intersects the disc set with. Two cases pass
+without consulting it:
+
+- **An empty accept-list** — the source could not answer (unknown system, no ES-DE installation). A missing answer must
+  never turn a working install into an unlaunchable one, so it accepts.
+- **A folder-boot layout** (`FOLDER_BOOT_MARKERS`) — the baked target is the game _directory_, not the nested
+  `EBOOT.BIN` that `file_path` records, and ES-DE spells the directory case `.ps3dir`. The marker match is positive
+  evidence that the plugin recognised the layout, so no extension is examined. Without this carve-out every working PS3
+  dump would be rejected: `file_path` ends in `.bin`, which ps3's accept-list (`.desktop .iso .ps3 .ps3dir`) does not
+  carry.
+
+Everything else is decided by the recorded launch file's extension. `.pkg` is absent from ps3's list; a bare track
+`.bin` is absent from dreamcast's (`.cdi .chd .cue .dat .elf .gdi .iso .lst .m3u .7z .zip`), which is why a multi-file
+GDI rip without a `.cue` is caught by the same rule.
+
+**The files are always kept.** An unlaunchable download is a real install: the row is written, the ROM is uninstallable
+through the normal path, and nothing is deleted. Refusing the install would discard a package whose remaining use is
+exactly to be installed by hand in the emulator — the documented RetroDECK procedure for PSN titles — leaving the user
+worse off than the silent failure this replaces. What is withheld is only the launch command.
+
+**One seam withholds it everywhere.** `DiscLaunchResolver.resolve_bake_path` returns `""` for an install with
+`launchable is False`, before any disc work, and `build_launch_options` renders an empty path as the empty launch
+command. Every launch-bake site already draws its path from that resolver — library sync's `installed_paths` map,
+download-complete's re-bake, the core-change re-bake, the startup relaunch-options heal, the disc picker — so none of
+them can compose a command for content nothing can boot, and none needed a guard of its own. The resulting shortcut
+carries the same empty `launch_options` an un-downloaded ROM's does. An unlaunchable install stays **in** the
+`installed_paths` map (it _is_ downloaded, and `collapse_sibling_groups` reads the key set to choose a sibling group's
+representative) and maps to the empty path.
+
+The frontend closes the loop in two places: the shared launch gate blocks with `no_launch_target` before any save-sync
+work — for both the Play button and the global launch watcher — and the game-detail page's **ROM File** section states
+that the download has no launchable format and that the files are on disk. Re-checking a recorded verdict once the user
+has installed the package in the emulator is separate work
+([#1654](https://github.com/danielcopper/decky-romm-sync/issues/1654)).
+
+**Where the knowledge comes from.** The accept-list is read from the plugin's own `es_systems.xml` parser
+(`CoreResolver.get_supported_extensions`), wired in as `DownloadServiceConfig.system_extensions`. That parser duplicates
+one emu-atlas already has, and the resolver adoption is meant to remove it — so the consuming call site is deliberately
+a single `self._system_extensions(system)` behind one Protocol-typed config field. Swapping the source is a change to
+that wiring line.
+
 Filesystem writes go through `DownloadFileAdapter`. ZIP extraction is ZIP-slip protected and streamed: `extract_zip`
 copies each member in chunks and reports byte progress through an optional callback, so a multi-file ROM emits
 `download_progress` frames with `status: "extracting"` (`bytes_downloaded`/`total_bytes` over the **uncompressed**
