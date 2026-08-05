@@ -123,7 +123,7 @@ def plugin():
     # Per-system ES-DE accept-lists for the DownloadService ``system_extensions``
     # seam. Empty by default — an unseeded system reads as "cannot tell", which
     # the launch-target check treats as launchable.
-    p._system_extensions: dict[str, frozenset[str]] = {}
+    p._system_extensions = {}
 
     import decky
 

@@ -73,6 +73,7 @@ def _make_testable_plugin():
         _platform_core_reader: Any
         _active_core: Any
         _m3u_supported: Any
+        _system_extensions: Any
         _renderer_rss: Any
         _renderer_gc: Any
 
