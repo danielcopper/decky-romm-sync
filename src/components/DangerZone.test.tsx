@@ -199,7 +199,7 @@ describe("DangerZone", () => {
       expect(container.textContent).toContain("No synced platforms");
     });
 
-    it("shows the loading Spinner before refreshPlatforms resolves", () => {
+    it("shows the loading Spinner before refreshPlatforms resolves", async () => {
       vi.mocked(backend.getRegistryPlatforms).mockImplementation(
         () =>
           new Promise(() => {
@@ -210,6 +210,9 @@ describe("DangerZone", () => {
       // initial render runs before any effect — but useEffect fires before
       // the assert below; loading state is still true while the promise stalls.
       expect(queryAllByTestId("spinner").length).toBeGreaterThan(0);
+      // getRegistryPlatforms stalls by design, but the sibling mount effects do
+      // resolve — their state updates have to land inside act.
+      await flushAsync();
     });
 
     it("logs the failure when getWhitelistSettings rejects on mount", async () => {
@@ -421,7 +424,9 @@ describe("DangerZone", () => {
       const view = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(view.getByText("Super Nintendo (1)"));
-      lastShownModalProps<{ onRemoveShortcuts?: () => void }>()?.onRemoveShortcuts?.();
+      act(() => {
+        lastShownModalProps<{ onRemoveShortcuts?: () => void }>()?.onRemoveShortcuts?.();
+      });
       await waitFor(() => expect(clearPlatformCollection).toHaveBeenCalled());
 
       view.unmount();
@@ -453,7 +458,9 @@ describe("DangerZone", () => {
       const view = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(view.getByText("Super Nintendo (2)"));
-      lastShownModalProps<{ onRemoveShortcuts?: () => void }>()?.onRemoveShortcuts?.();
+      act(() => {
+        lastShownModalProps<{ onRemoveShortcuts?: () => void }>()?.onRemoveShortcuts?.();
+      });
       await waitFor(() => expect(backend.removePlatformShortcuts).toHaveBeenCalledWith("snes"));
 
       view.unmount();
@@ -1879,8 +1886,12 @@ describe("DangerZone", () => {
 
     // The syncProgress store is real module state (not a vi mock) — it
     // survives vi.resetAllMocks(), so restore the idle default after each test.
+    // act-wrapped: this runs before RTL's cleanup(), so every mounted subscriber
+    // re-renders on the reset.
     afterEach(() => {
-      setSyncProgress({ running: false, stage: "", current: 0, total: 0, message: "", runId: "" });
+      act(() => {
+        setSyncProgress({ running: false, stage: "", current: 0, total: 0, message: "", runId: "" });
+      });
     });
 
     it("disables the bulk removal buttons and shows the hint while a sync runs", async () => {

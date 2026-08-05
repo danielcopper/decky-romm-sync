@@ -125,6 +125,16 @@ function newSlotModalSubmit(idx = 0): ((name: string) => Promise<void>) | undefi
   return el?.props.onSubmit as ((name: string) => Promise<void>) | undefined;
 }
 
+// Settles the mount-time stranded-version probe (getVersionList → checkLocalDrift).
+// A test that returns before it resolves leaves its setStrandedVersion to land
+// unattributed, outside act.
+const flushAsync = () =>
+  act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
 describe("SavesTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -169,8 +179,9 @@ describe("SavesTab", () => {
       expect(container.textContent).toContain("RomM is offline");
     });
 
-    it("appears live when the store flips to offline (no remount)", () => {
+    it("appears live when the store flips to offline (no remount)", async () => {
       const { container } = render(<SavesTab {...defaultProps()} />);
+      await flushAsync();
       expect(container.textContent).not.toContain("RomM is offline");
       act(() => {
         setRommConnectionState("offline");
@@ -178,9 +189,10 @@ describe("SavesTab", () => {
       expect(container.textContent).toContain("RomM is offline");
     });
 
-    it("clears live when the store flips back to connected (no remount)", () => {
+    it("clears live when the store flips back to connected (no remount)", async () => {
       setRommConnectionState("offline");
       const { container } = render(<SavesTab {...defaultProps()} />);
+      await flushAsync();
       expect(container.textContent).toContain("RomM is offline");
       act(() => {
         setRommConnectionState("connected");
@@ -570,8 +582,9 @@ describe("SavesTab", () => {
   });
 
   describe("event dispatch — version restored + slot deleted", () => {
-    it("dispatches romm_data_changed when a child SlotPanel calls onVersionRestored", () => {
+    it("dispatches romm_data_changed when a child SlotPanel calls onVersionRestored", async () => {
       render(<SavesTab {...defaultProps({ availableSlots: [makeSlot()] })} />);
+      await flushAsync();
       const listener = vi.fn();
       globalThis.addEventListener("romm_data_changed", listener);
       try {
@@ -587,7 +600,7 @@ describe("SavesTab", () => {
       }
     });
 
-    it("re-renders SlotPanel children after onVersionRestored", () => {
+    it("re-renders SlotPanel children after onVersionRestored", async () => {
       // Render with two distinct slots so each SavesTab render produces 2
       // captured-prop entries. The state bump in onVersionRestored triggers a
       // re-render of all panels — the captured-props array grows by 2, not 1.
@@ -596,6 +609,9 @@ describe("SavesTab", () => {
       // verified manually in integration testing, not asserted here.
       const slots = [makeSlot({ slot: "a" }), makeSlot({ slot: "b" })];
       render(<SavesTab {...defaultProps({ activeSlot: "a", availableSlots: slots })} />);
+      // Baseline is taken after the mount probe settles, so the act() below is
+      // the only thing that can add captured props.
+      await flushAsync();
       const initialCount = capturedSlotPanelProps.length;
       expect(initialCount).toBe(2);
       act(() => {
@@ -604,8 +620,9 @@ describe("SavesTab", () => {
       expect(capturedSlotPanelProps.length).toBe(initialCount + 2);
     });
 
-    it("dispatches romm_data_changed when a child SlotPanel calls onSlotDeleted", () => {
+    it("dispatches romm_data_changed when a child SlotPanel calls onSlotDeleted", async () => {
       render(<SavesTab {...defaultProps({ availableSlots: [makeSlot()] })} />);
+      await flushAsync();
       const listener = vi.fn();
       globalThis.addEventListener("romm_data_changed", listener);
       try {

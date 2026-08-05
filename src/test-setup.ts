@@ -1,13 +1,69 @@
 import "@testing-library/jest-dom/vitest";
-import { afterEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { resetDeckyEventBus } from "./test-utils/decky-api-mock";
+
+// A React `act(...)` warning is a defect, but Vitest's default reporter prints no
+// console output for a *passing* test — so a suite that emits stays green, and any
+// grep over that stream proves only that the reporter said nothing. Buffer every
+// console.error and fail the test that emitted it: the attribution is the test's
+// own failure, which no reporter choice can suppress.
+//
+// A test that installs its own vi.spyOn(console, "error") replaces this handler
+// for its duration — that is the sanctioned way to assert on an expected error,
+// and restoring the spy lands back here rather than on the bare console.
+let emittedConsoleErrors: string[] = [];
+let forwardConsoleError: ((...args: unknown[]) => void) | null = null;
+
+// Applies console's own %s-style substitution so the recorded first line reads
+// as printed — React passes the component name as a trailing argument, and a
+// plain join would strand it after the warning's multi-line body. node:util's
+// format() would do this, but it needs @types/node in the typecheck config.
+const formatConsoleArgs = (args: unknown[]): string => {
+  const [template, ...rest] = args;
+  if (typeof template !== "string" || rest.length === 0) return args.map(String).join(" ");
+  let next = 0;
+  const filled = template.replace(/%[sdifoOj]/g, (token) => (next < rest.length ? String(rest[next++]) : token));
+  return [filled, ...rest.slice(next).map(String)].join(" ");
+};
+
+const consoleErrorGuard = (...args: unknown[]) => {
+  emittedConsoleErrors.push(formatConsoleArgs(args));
+  // Forwarded, not swallowed: silencing it here would make a `--reporter=dot`
+  // stderr sweep vacuously clean, which is the blindness this guard exists to remove.
+  forwardConsoleError?.(...args);
+};
+
+beforeEach(() => {
+  emittedConsoleErrors = [];
+  // Captured on first use rather than at module scope: Vitest installs its own
+  // per-test-framing console after this file evaluates, and binding the raw one
+  // would strip every forwarded warning of its `stderr | <test>` header.
+  forwardConsoleError ??= console.error.bind(console);
+  // Re-armed per test, and by assignment rather than vi.spyOn: many test files
+  // call vi.restoreAllMocks() / vi.resetAllMocks() in their own beforeEach, which
+  // runs after this one and would otherwise leave the guard disarmed for the file.
+  console.error = consoleErrorGuard;
+});
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   resetDeckyEventBus();
+
+  // Drained before the throw so one emitting test cannot fail its successors.
+  // Checked after cleanup(), so an unmount-time warning counts too.
+  const emitted = emittedConsoleErrors;
+  emittedConsoleErrors = [];
+  if (emitted.length > 0) {
+    const summary = emitted.map((msg, i) => `  ${i + 1}. ${msg.split("\n")[0]}`).join("\n");
+    throw new Error(
+      `This test emitted ${emitted.length} console.error call(s):\n${summary}\n\n` +
+        "Fix the cause (wrap the state update in act(...), or await the pending work). " +
+        'To assert on an expected error, install vi.spyOn(console, "error").mockImplementation(() => {}) in the test.',
+    );
+  }
 });
 
 // Steam Deck ambient globals — minimal stubs; individual tests refine via vi.mocked.

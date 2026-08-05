@@ -96,7 +96,10 @@ function defaultProps(overrides: Partial<React.ComponentProps<typeof SlotPanel>>
   };
 }
 
-const flushAsync = () => new Promise((r) => setTimeout(r, 0));
+const flushAsync = () =>
+  act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
 
 describe("SlotPanel", () => {
   beforeEach(() => {
@@ -426,7 +429,9 @@ describe("SlotPanel", () => {
 
         const { container, getByText } = render(<SlotPanel {...defaultProps()} />);
         fireEvent.click(container.querySelector("button")!);
-        await vi.advanceTimersByTimeAsync(0);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
         fireEvent.click(getByText("Activate Slot"));
         // Flush the awaited switchSlot promise + the setSwitchError state
         await act(async () => {

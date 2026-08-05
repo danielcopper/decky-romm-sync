@@ -45,8 +45,12 @@ describe("useVersionError hook", () => {
   // The hook subscribes to the real in-memory connectionState store. Drive it
   // via setVersionError(...) and reset to null in afterEach so tests don't
   // leak state into siblings (the store is module-singleton).
+  // act-wrapped: this teardown runs before RTL's cleanup(), so the hook is still
+  // mounted and the reset notifies its subscriber — a real state update.
   afterEach(() => {
-    setVersionError(null);
+    act(() => {
+      setVersionError(null);
+    });
   });
 
   it("returns the current error from getVersionError() on mount", () => {

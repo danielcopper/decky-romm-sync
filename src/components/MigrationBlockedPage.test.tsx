@@ -385,8 +385,12 @@ describe("MigrationBlockedPage component", () => {
 });
 
 describe("useMigrationStatus hook", () => {
+  // act-wrapped: this teardown runs before RTL's cleanup(), so the hook is still
+  // mounted and the reset notifies its subscriber — a real state update.
   afterEach(() => {
-    clearMigration();
+    act(() => {
+      clearMigration();
+    });
   });
 
   it("returns the current state from getMigrationState() on mount", () => {

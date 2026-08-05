@@ -318,12 +318,15 @@ describe("RomMGameInfoPanel", () => {
       expect(capturedMigrationBlockedCard.length).toBeGreaterThanOrEqual(1);
     });
 
-    it("renders 'Loading...' before loadData resolves", () => {
+    it("renders 'Loading...' before loadData resolves", async () => {
       // getCachedGameDetail returns a never-resolving promise so the initial
       // loading state stays visible.
       vi.mocked(cachedStore.getCachedGameDetail).mockReturnValue(new Promise(() => {}));
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       expect(container.textContent).toContain("Loading...");
+      // loadData stays pending by design, but the sibling refreshMigrationState
+      // effect does resolve — its store writes have to land inside act.
+      await flushAsync();
     });
 
     it("returns null when cached.found=false → state.error=true and romId=null", async () => {

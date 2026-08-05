@@ -49,7 +49,10 @@ function defaultProps(overrides: Partial<React.ComponentProps<typeof VersionHist
   };
 }
 
-const flushAsync = () => new Promise((r) => setTimeout(r, 0));
+const flushAsync = () =>
+  act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
 
 describe("VersionHistoryPanel", () => {
   beforeEach(() => {

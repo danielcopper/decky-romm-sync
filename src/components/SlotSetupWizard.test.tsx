@@ -159,10 +159,13 @@ describe("SlotSetupWizard", () => {
   });
 
   describe("initial fetch + loading state", () => {
-    it("renders the connecting spinner immediately", () => {
+    it("renders the connecting spinner immediately", async () => {
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       expect(container.textContent).toContain("Connecting to RomM…");
       expect(container.querySelector(".romm-throbber")).not.toBeNull();
+      // The spinner is asserted pre-resolution, but the mount fetch still has to
+      // land inside act — otherwise its setState escapes the test that started it.
+      await flushAsync();
     });
 
     it("calls getSaveSetupInfo with the romId on mount", async () => {

@@ -2330,6 +2330,13 @@ describe("RomMPlaySection", () => {
   // ------------------------------------------------------------------
 
   describe("handleUninstall", () => {
+    // The menu item detaches handleUninstall, so onClick resolves long before the
+    // handler's finally-block setActionPending and before the romm_rom_uninstalled
+    // listener's loadCached re-run. Await this INSIDE the caller's act(...): a
+    // second, separate act would leave a microtask gap between the two for those
+    // updates to escape through.
+    const settleDetachedUninstall = () => new Promise((r) => setTimeout(r, 0));
+
     async function setupUninstallAction(romName = "Some ROM") {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
@@ -2363,6 +2370,7 @@ describe("RomMPlaySection", () => {
           // uninstall is the last one (index 5).
           const uninstall = items[items.length - 1]!;
           await uninstall.props.onClick?.();
+          await settleDetachedUninstall();
         });
         expect(vi.mocked(backend.removeRom)).toHaveBeenCalledWith(42);
         expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(testAppId, "");
@@ -2387,6 +2395,7 @@ describe("RomMPlaySection", () => {
       vi.mocked(toaster.toast).mockClear();
       await act(async () => {
         await items[items.length - 1]!.props.onClick?.();
+        await settleDetachedUninstall();
       });
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "ROM uninstalled" }));
     });
@@ -2444,7 +2453,12 @@ describe("RomMPlaySection", () => {
             rejectRemove = reject;
           }),
       );
-      const uninstall = items[items.length - 1]!.props.onClick?.();
+      // The click's synchronous state update belongs inside act; the returned
+      // promise stays pending until rejectRemove below.
+      let uninstall: unknown;
+      await act(async () => {
+        uninstall = items[items.length - 1]!.props.onClick?.();
+      });
       await flushAsync();
 
       // The user leaves the game page while the uninstall is still in flight.
