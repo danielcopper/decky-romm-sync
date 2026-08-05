@@ -328,6 +328,16 @@ class TestDecisionTable:
         action = adapter.compute_sync_action(_local(size=8192, mtime=_MTIME_NEWER), [head], {}, _DEVICE, _SERVER_HASH)
         assert action == Skip(reason="synced", adopt_baseline=True)
 
+    def test_head_without_a_device_syncs_key_decides_on_its_content_hash(self, adapter: GavelNativeAdapter) -> None:
+        # A RomM payload can omit ``device_syncs`` entirely, so the head arrives
+        # with no sync entries and its ``content_hash`` is the only evidence that
+        # the local bytes are already on the server. Lost across the marshalling
+        # boundary, the decision is made on unproven identity: a conflict prompt
+        # for a file that is in sync.
+        head = _save(101, updated_at=_HEAD_UPDATED_AT)
+        action = adapter.compute_sync_action(_local(size=8192, mtime=_MTIME_NEWER), [head], {}, _DEVICE, _SERVER_HASH)
+        assert action == Skip(reason="synced", adopt_baseline=True)
+
     def test_upload_echoes_the_superseded_save_id(self, adapter: GavelNativeAdapter) -> None:
         head = _save(101, updated_at=_HEAD_UPDATED_AT, device_syncs=_ours(is_current=True))
         action = adapter.compute_sync_action(
