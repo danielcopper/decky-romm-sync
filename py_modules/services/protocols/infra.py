@@ -33,9 +33,8 @@ class ResolveUploadConflictFn(Protocol):
     otherwise. ``None`` and ``""`` both read as "unknown" and never yield
     ``"download"``.
 
-    Backed at runtime by the compiled gavel core (``adapters.gavel_native``);
-    the in-tree ``domain.sync_action.resolve_upload_conflict`` kernel shares
-    the exact contract and stands in as a trivial fake in service tests.
+    Backed by the compiled gavel core (``adapters.gavel_native``) — the only
+    implementation there is, in production and in tests alike.
     """
 
     def __call__(
@@ -57,10 +56,9 @@ class ComputeSyncActionFn(Protocol):
     ``Conflict``, with ``Download`` and ``Conflict`` naming the chosen save from
     the very list that was passed in.
 
-    Backed at runtime by the compiled gavel core
-    (``adapters.gavel_native.GavelNativeAdapter.compute_sync_action``); the
-    in-tree ``domain.sync_action.compute_sync_action`` kernel shares the exact
-    contract and stands in as a trivial fake in service tests.
+    Backed by the compiled gavel core
+    (``adapters.gavel_native.GavelNativeAdapter.compute_sync_action``) — the only
+    implementation there is, in production and in tests alike.
     """
 
     def __call__(

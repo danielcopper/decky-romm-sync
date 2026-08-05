@@ -7,18 +7,11 @@ artifact: each one pins the five positional inputs (``local_file``, ``server_sav
 ``files_state``, ``device_id``, ``local_hash``) to the tagged decision the spec mandates, so any
 drift between kernel and contract surfaces here as a failing vector.
 
-Every vector runs against **both** kernels:
-
-* ``native`` — :class:`adapters.gavel_native.GavelNativeAdapter`, the compiled core services
-  actually decide through. This is the run that guards production.
-* ``in-tree`` — :func:`domain.sync_action.compute_sync_action`, kept as the differential oracle
-  (``tests/adapters/test_gavel_native.py`` crosses the two over input shapes no vector covers).
-  It has no runtime call site; a failure here means the oracle has drifted from the contract and
-  can no longer be trusted to arbitrate the differential.
-
-Both return the same ``Skip`` / ``Upload`` / ``Download`` / ``Conflict`` dataclasses, which this
-test serializes into the vector dialect for comparison. Vectors change only by a deliberate
-re-copy from upstream (see ``gavel_vectors/README.md``) — never by editing them to match a kernel.
+Every vector runs against :class:`adapters.gavel_native.GavelNativeAdapter`, the compiled core
+services actually decide through. It answers in the ``Skip`` / ``Upload`` / ``Download`` /
+``Conflict`` dataclasses, which this test serializes into the vector dialect for comparison.
+Vectors change only by a deliberate re-copy from upstream (see ``gavel_vectors/README.md``) —
+never by editing them to match the kernel.
 """
 
 from __future__ import annotations
@@ -30,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from adapters.gavel_native import GavelNativeAdapter
-from domain.sync_action import Download, Skip, SyncAction, Upload, compute_sync_action
+from domain.sync_action import Download, Skip, SyncAction, Upload
 
 if TYPE_CHECKING:
     from services.protocols import ComputeSyncActionFn
@@ -39,9 +32,9 @@ _VECTORS_DIR = Path(__file__).parent / "gavel_vectors" / "decision-table"
 
 
 @pytest.fixture(scope="module")
-def kernels() -> dict[str, ComputeSyncActionFn]:
-    """Both implementations of the decision, keyed by the id the parametrization uses."""
-    return {"native": GavelNativeAdapter().compute_sync_action, "in-tree": compute_sync_action}
+def kernel() -> ComputeSyncActionFn:
+    """The compiled core, bound the way production binds it."""
+    return GavelNativeAdapter().compute_sync_action
 
 
 def _serialize(result: SyncAction) -> dict[str, Any]:
@@ -86,16 +79,14 @@ _ARGVALUES, _IDS = _load_vectors()
 assert _ARGVALUES, f"no gavel decision-table vectors loaded from {_VECTORS_DIR}"
 
 
-@pytest.mark.parametrize("kernel_name", ["native", "in-tree"])
 @pytest.mark.parametrize(("vector_input", "expected", "rationale"), _ARGVALUES, ids=_IDS)
 def test_compute_sync_action_conforms(
-    kernels: dict[str, ComputeSyncActionFn],
-    kernel_name: str,
+    kernel: ComputeSyncActionFn,
     vector_input: dict[str, Any],
     expected: dict[str, Any],
     rationale: str | None,
 ) -> None:
-    result = kernels[kernel_name](
+    result = kernel(
         vector_input["local_file"],
         vector_input["server_saves_in_slot"],
         vector_input["files_state"],
@@ -105,6 +96,5 @@ def test_compute_sync_action_conforms(
     actual = _serialize(result)
     context = f" — {rationale}" if rationale else ""
     assert actual == expected, (
-        f"gavel vector expected {expected!r}, {kernel_name} kernel returned {actual!r} "
-        f"for input {vector_input!r}{context}"
+        f"gavel vector expected {expected!r}, the native core returned {actual!r} for input {vector_input!r}{context}"
     )

@@ -28,9 +28,9 @@ measured is a real case the decision must keep apart from a missing one.
 
 There is no fallback: if the library cannot load, :class:`GavelNativeLoadError`
 propagates so bootstrap aborts and the plugin stays inert — the same
-"fatal until the environment is fixed" posture as the SQLite migration
-gate. The in-tree :mod:`domain.sync_action` kernels are not a runtime fallback;
-they survive only as the differential oracle in tests.
+"fatal until the environment is fixed" posture as the SQLite migration gate.
+Nothing in-tree stands in for the core; :mod:`domain.sync_action` holds only the
+vocabulary the answer comes back in.
 """
 
 from __future__ import annotations
