@@ -5,10 +5,10 @@
 // catches (no state change, no log call) are exempt — and even then, prefer
 // dropping the test over keeping one with zero expects.
 //
-// The module-scope `artworkApplied: Set<number>` in RomMPlaySection.tsx
-// persists across tests within this file. To avoid Set state bleeding
-// between tests we use a unique `testAppId` per test (incremented in
-// `beforeEach`) — Option A in the playbook.
+// The module-scope `artworkApplied` map in RomMPlaySection.tsx and the
+// per-appId entries in utils/gameDetailStore.ts both persist across tests
+// within this file. To avoid that state bleeding between tests we use a unique
+// `testAppId` per test (incremented in `beforeEach`) — Option A in the playbook.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, act, waitFor } from "@testing-library/react";
@@ -428,19 +428,19 @@ describe("RomMPlaySection", () => {
   // C. loadCached flow
   // ------------------------------------------------------------------
 
-  describe("loadCached mount flow", () => {
+  describe("cache-first mount flow", () => {
     it("does nothing when cached.found is false", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: false,
       });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(sectionRefresh.refreshActiveSlotInBackground).not.toHaveBeenCalled();
+      expect(backend.getSaveStatus).not.toHaveBeenCalled();
       expect(sectionRefresh.refreshAchievementsInBackground).not.toHaveBeenCalled();
       expect(sectionRefresh.refreshBiosInBackground).not.toHaveBeenCalled();
     });
 
-    it("applies cached fields and dispatches active-slot/achievements/BIOS/core background refreshes", async () => {
+    it("applies cached fields and dispatches save-status/achievements/BIOS/core background refreshes", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 99,
@@ -466,11 +466,10 @@ describe("RomMPlaySection", () => {
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
 
-      expect(sectionRefresh.refreshActiveSlotInBackground).toHaveBeenCalledWith(
-        99,
-        expect.any(Function),
-        expect.any(Function),
-      );
+      // The live save status is what carries the active slot, the content-dir
+      // flag and the conflicts — the store reads it once for the whole page
+      // rather than each surface reading its own copy (#993).
+      expect(backend.getSaveStatus).toHaveBeenCalledWith(99);
       expect(backend.getRomMetadata).toHaveBeenCalledWith(99);
       expect(sectionRefresh.refreshAchievementsInBackground).toHaveBeenCalledWith(
         99,
@@ -545,7 +544,7 @@ describe("RomMPlaySection", () => {
         render(<RomMPlaySection appId={testAppId} />);
         await flushAsync();
         // A failed cache load leaves the play section stale — warn-level, not debug.
-        expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("loadCached error"));
+        expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("load error"));
       } finally {
         logErrorSpy.mockRestore();
       }
@@ -757,7 +756,7 @@ describe("RomMPlaySection", () => {
         });
         await flushAsync();
 
-        expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("loadCached error"));
+        expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("load error"));
       } finally {
         logErrorSpy.mockRestore();
       }
@@ -1362,8 +1361,9 @@ describe("RomMPlaySection", () => {
       const before = domListenerCount("romm_data_changed");
       const { unmount } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      // Two listeners: RomMPlaySection's own + the child VersionPicker's (it also
-      // refreshes on version_switched, #1297). Both are removed on unmount.
+      // Two listeners: the game-detail store's, opened by this section's
+      // subscription, + the child VersionPicker's (it also refreshes on
+      // version_switched, #1297). Both are removed on unmount.
       expect(domListenerCount("romm_data_changed")).toBe(before + 2);
       unmount();
       expect(domListenerCount("romm_data_changed")).toBe(before);
@@ -1701,6 +1701,50 @@ describe("RomMPlaySection", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(backend.getSaveStatus)).not.toHaveBeenCalled();
+    });
+
+    // #975 — the cross-game bleed. While the cached detail is still in flight
+    // this section has no rom_id of its own; a save_sync for ANOTHER game used
+    // to be adopted anyway and its status shown here.
+    it("save_sync: a foreign rom_id arriving before the detail resolves leaves the display untouched", async () => {
+      // Hold the cached-detail read open so the identity stays unresolved.
+      vi.mocked(cachedStore.getCachedGameDetail).mockReturnValue(new Promise(() => {}));
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      const foreignSaveStatus = {
+        rom_id: 999,
+        files: [],
+        playtime: {
+          total_seconds: 0,
+          session_count: 0,
+          last_session_start: null,
+          last_session_duration_sec: null,
+          last_played: null,
+        },
+        device_id: "d",
+        last_sync_check_at: null,
+        // The other game writes its saves next to the ROM — showing THIS game's
+        // page a "Save sync off" banner is exactly the bleed.
+        savefiles_in_content_dir: true,
+        save_sync_display: { status: "none" as const, label: "foreign-label", last_sync_check_at: null },
+      };
+      vi.mocked(backend.getSaveStatus).mockResolvedValue(foreignSaveStatus);
+
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: 999 } }));
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "save_sync", rom_id: 999, save_status: foreignSaveStatus },
+          }),
+        );
+        await Promise.resolve();
+      });
+      await flushAsync();
+
+      expect(vi.mocked(backend.getSaveStatus)).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Save sync off");
+      expect(container.textContent).not.toContain("Write Saves to Content Directory");
     });
 
     it("save_sync: uses detail.save_status when present (no fetch)", async () => {
@@ -3361,19 +3405,28 @@ describe("RomMPlaySection", () => {
     });
 
     it("legacy slot warning shows when activeSlot null and saveSyncEnabled true", async () => {
-      // The component's initial activeSlot is "default" (not null); we'd need
-      // refreshActiveSlotInBackground to set it to null. Easier: re-mock the
-      // refresh helper to apply the null directly via the setter callback.
+      // The shared state starts on activeSlot "default" (not null), so the
+      // warning only appears once a real save status reports the legacy
+      // slot:null — which is what the store's save-status read folds in.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 42,
         save_sync_enabled: true,
         save_sync_display: { status: "none", label: "No saves", last_sync_check_at: null },
       });
-      vi.mocked(sectionRefresh.refreshActiveSlotInBackground).mockImplementation((_romId, _cancelled, setter) => {
-        act(() => {
-          setter((prev) => ({ ...prev, activeSlot: null }));
-        });
+      vi.mocked(backend.getSaveStatus).mockResolvedValue({
+        rom_id: 42,
+        files: [],
+        playtime: {
+          total_seconds: 0,
+          session_count: 0,
+          last_session_start: null,
+          last_session_duration_sec: null,
+          last_played: null,
+        },
+        device_id: "d",
+        last_sync_check_at: null,
+        active_slot: null,
       });
       const { container } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
@@ -3563,18 +3616,18 @@ describe("RomMPlaySection", () => {
       expect(container.textContent).not.toContain("Write Saves to Content Directory");
     });
 
-    it("logs via debugLog when the content-dir probe rejects (non-vacuous catch)", async () => {
+    it("logs via debugLog when the save-status read rejects (non-vacuous catch)", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 42,
         save_sync_enabled: true,
       });
-      // Reject from getSaveStatus — the probe's catch must log, and the banner
-      // must stay hidden (flag defaults to false).
+      // Reject from getSaveStatus — the connection check's catch must log, and
+      // the banner must stay hidden (flag defaults to false).
       vi.mocked(backend.getSaveStatus).mockRejectedValue(new Error("cfgfail"));
       const { container } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("content-dir probe error"));
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("background save check error"));
       expect(container.textContent).not.toContain("Write Saves to Content Directory");
     });
   });

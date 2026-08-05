@@ -10,8 +10,8 @@
  * Save Sync and BIOS items only appear when relevant.
  */
 
-import { useState, useEffect, useRef, FC, createElement } from "react";
-import { addEventListener, removeEventListener, toaster } from "@decky/api";
+import { useState, useEffect, FC, createElement } from "react";
+import { toaster } from "@decky/api";
 import {
   ConfirmModal,
   DialogButton,
@@ -35,14 +35,8 @@ import { saveSyncToastBody } from "../utils/saveSyncToast";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getEventTarget } from "../utils/events";
 import {
-  getCachedGameDetail,
-  invalidateCachedGameDetail,
   testConnection,
   probeReachability,
-  getSaveStatus,
-  isCallableFailure,
-  getBiosStatus,
-  getPlatformCoreInfo,
   getSgdbResolution,
   getRomMetadata,
   refreshCoverArtwork,
@@ -54,7 +48,6 @@ import {
   clearGameCore,
   reconcilePlaytime,
   debugLog,
-  logError,
 } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import {
@@ -68,26 +61,22 @@ import {
 } from "../utils/pruneLease";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
-import type { BiosStatus, DownloadCompleteEvent, EmulatorOption, SaveStatus } from "../types";
-import type { RommDataChangedDetail } from "../types/events";
 import { formatBytes, formatLastPlayed, formatPlaytime } from "../utils/formatters";
 import { biosColorForLevel } from "../utils/biosColor";
+import { timeoutMs } from "../utils/playSection";
 import {
-  applySaveSyncDisplay,
-  extractBiosInfo,
-  extractCoreInfo,
-  resolveSaveSyncLabel,
-  timeoutMs,
-} from "../utils/playSection";
-import {
-  refreshAchievementsInBackground,
-  refreshActiveSlotInBackground,
-  refreshBiosInBackground,
-  refreshCoreInfoInBackground,
-} from "../utils/sectionRefresh";
+  getGameDetail,
+  noteSaveSyncDisplay,
+  refreshBiosStatus,
+  refreshCoreAndBios,
+  refreshSaveStatus,
+  useGameDetail,
+} from "../utils/gameDetailStore";
 
-/** Track which appIds have had auto-artwork applied this session */
-const artworkApplied = new Set<number>();
+/** Which rom_id each appId has had auto-artwork applied for this session. Keyed
+ *  on the pair, not the appId alone: a version switch re-binds the appId to a
+ *  new rom_id whose artwork has to be applied afresh (#1298 item 3). */
+const artworkApplied = new Map<number, number>();
 
 /** Resolve the LAST PLAYED display, preferring our restored cross-device
  *  `last_played` (ISO-8601, from `reconcile_playtime` / native play sessions,
@@ -108,44 +97,18 @@ interface RomMPlaySectionProps {
   appId: number;
 }
 
-interface InfoState {
-  romId: number | null;
-  romName: string;
-  platformSlug: string;
-  /** Local install state (#1395). Drives the SPACE REQUIRED cell, which shows
-   *  only while the ROM is NOT installed (mirroring Steam hiding the size once
-   *  a game is on disk). */
-  installed: boolean;
-  /** Server-reported ROM size in bytes (#1395), or `null` when unknown. Rendered
-   *  as the SPACE REQUIRED cell for an uninstalled ROM; a null value hides it. */
-  fsSizeBytes: number | null;
+/** The play section's own display state. Everything the game page's surfaces
+ *  share — rom identity, install state, save sync, BIOS, core — lives in the
+ *  per-appId game-detail store instead; what stays here is the PLAYTIME /
+ *  LAST PLAYED pair, which is read from Steam's overview and belongs to this
+ *  row alone. */
+interface PlaytimeState {
   lastPlayed: string;
   /** Restored cross-device `last_played` (ISO-8601) from `reconcile_playtime`,
    *  or `null` until the server yields one. Preferred over Steam's device-local
    *  `rt_last_time_played` when rendering LAST PLAYED (#1294). */
   restoredLastPlayed: string | null;
   playtime: string;
-  saveSyncEnabled: boolean;
-  saveSyncStatus: "synced" | "pending" | "conflict" | "none" | null;
-  saveSyncLabel: string;
-  /** RetroArch `savefiles_in_content_dir=true` — saves go next to the ROM and
-   *  can't be synced (#239). Derived from a LOCAL retroarch.cfg read, so it is
-   *  populated even offline (independent of connectivity). Drives the prominent
-   *  "Save sync off" WarningCard. */
-  savefilesInContentDir: boolean;
-  biosNeeded: boolean;
-  biosStatus: "ok" | "partial" | "missing" | "unmanaged" | null; // NOSONAR(typescript:S4323) — inline union inside InfoState; extracting an alias adds indirection for no reuse benefit.
-  biosLabel: string;
-  activeCoreLabel: string | null;
-  activeCoreIsDefault: boolean;
-  emulators: EmulatorOption[];
-  emulatorDataAvailable: boolean;
-  platformCoreLabel: string | null;
-  hasGameOverride: boolean;
-  activeSlot: string | null;
-  raId: number | null;
-  achievementEarned: number;
-  achievementTotal: number;
 }
 
 import { setRommConnectionState, setVersionError, useRommConnectionState } from "../utils/connectionState";
@@ -153,106 +116,6 @@ import { registerConnectionHeartbeat } from "../utils/connectionHeartbeat";
 import { useVersionError } from "./VersionErrorCard";
 import { useMigrationStatus } from "./MigrationBlockedPage";
 import { detach } from "../utils/detach";
-
-/** Cache-first initial render. Resolves the cached game detail for this appId,
- *  pushes it into InfoState, and fires the background refresh tasks (active
- *  slot, artwork, metadata, achievements, BIOS) whose results are merged in
- *  later. Module-scope so the FC body stays focused on rendering. */
-async function loadCached(
-  appId: number,
-  cancelled: () => boolean,
-  romIdRef: React.RefObject<number | null>,
-  setter: React.Dispatch<React.SetStateAction<InfoState>>,
-) {
-  try {
-    const cached = await getCachedGameDetail(appId);
-    if (cancelled() || !cached.found) return;
-
-    const romId = cached.rom_id!;
-    romIdRef.current = romId;
-
-    // Process save sync from backend-computed display fields
-    let saveSyncStatus: "synced" | "pending" | "conflict" | "none" | null = null;
-    let saveSyncLabel = "";
-    if (cached.save_sync_enabled && cached.save_sync_display) {
-      saveSyncStatus = cached.save_sync_display.status;
-      saveSyncLabel = resolveSaveSyncLabel(cached.save_sync_display);
-    }
-
-    if (cancelled()) return;
-    setter((prev) => ({
-      ...prev,
-      romId,
-      romName: cached.rom_name || "",
-      platformSlug: cached.platform_slug || "",
-      installed: cached.installed ?? false,
-      fsSizeBytes: cached.fs_size_bytes ?? null,
-      saveSyncEnabled: cached.save_sync_enabled ?? false,
-      saveSyncStatus,
-      saveSyncLabel,
-      raId: cached.ra_id ?? null,
-      // Keep the last-known count when the re-derived cache has no achievement
-      // summary (e.g. a version switch during an offline window, where the
-      // backend progress cache is cold) — don't degrade a shown "7/70" to 0
-      // (#1345). A genuine earned:0 is a real object, so it still shows through.
-      achievementEarned: cached.achievement_summary?.earned ?? prev.achievementEarned,
-      achievementTotal: cached.achievement_summary?.total ?? prev.achievementTotal,
-    }));
-
-    // Background: fetch active_slot from save status (not in cached data)
-    if (cached.save_sync_enabled) {
-      refreshActiveSlotInBackground(romId, cancelled, setter);
-    }
-
-    // Auto-apply SGDB artwork on first visit (fire-and-forget)
-    // Only mark as applied after success so transient failures allow retry on next visit
-    if (!artworkApplied.has(appId)) {
-      applyArtwork(romId, appId)
-        .then(() => {
-          artworkApplied.add(appId);
-        })
-        .catch((e) => debugLog(`Auto-artwork error: ${e}`));
-    }
-
-    const staleFields = cached.stale_fields ?? [];
-
-    // Background: fetch metadata if stale
-    if (romId && staleFields.includes("metadata")) {
-      getRomMetadata(romId).catch((e) => debugLog(`Background metadata fetch error: ${e}`));
-    }
-
-    // Achievements: render from cache, background refresh if stale
-    if (cached.ra_id && staleFields.includes("achievements")) {
-      refreshAchievementsInBackground(romId, cancelled, setter);
-    }
-
-    // BIOS: render from cache first, background refresh if stale
-    const cachedBios = cached.bios_status;
-    if (cachedBios) {
-      setter((prev) => ({
-        ...prev,
-        ...extractBiosInfo(cached.bios_level ?? null, cached.bios_label ?? null),
-      }));
-    }
-
-    if (staleFields.includes("bios")) {
-      refreshBiosInBackground(romId, cancelled, setter);
-    }
-
-    // Core info: sourced from its OWN path (#923), independent of BIOS status.
-    // Fetched non-blocking so the core button / badge can render once cores are
-    // known, regardless of whether the platform needs BIOS. Keyed on rom_id so
-    // the active core reflects a per-game DB override (epic #945).
-    if (romId) {
-      refreshCoreInfoInBackground(romId, cancelled, setter);
-    }
-  } catch (e) {
-    // Shared by the mount load and the version-switch re-derive — a failed cache
-    // load leaves the play section stale either way, so surface at warn level
-    // (debugLog is dropped at the default log level).
-    logError(`RomMPlaySection: loadCached error: ${e}`);
-  }
-}
 
 // S3776 is raised on the declaration line, so its NOSONAR must stay there. prettier-ignore stops
 // Prettier from relocating the trailing comment into the body (which would break the suppression).
@@ -268,200 +131,45 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   const initialLastPlayed = formatLastPlayed(overview?.rt_last_time_played ?? 0);
   const initialPlaytime = formatPlaytime(overview?.minutes_playtime_forever ?? 0);
 
-  const [info, setInfo] = useState<InfoState>({
-    romId: null,
-    romName: "",
-    platformSlug: "",
-    installed: false,
-    fsSizeBytes: null,
+  // Every field the game page's surfaces share — rom identity, install state,
+  // save sync, BIOS, core selection — comes from the per-appId store, which owns
+  // the reads and the romm_data_changed fold for all of them (#993).
+  const detail = useGameDetail(appId);
+  const [playtimeInfo, setPlaytimeInfo] = useState<PlaytimeState>({
     lastPlayed: initialLastPlayed,
     restoredLastPlayed: null,
     playtime: initialPlaytime,
-    saveSyncEnabled: false,
-    saveSyncStatus: null,
-    saveSyncLabel: "",
-    savefilesInContentDir: false,
-    biosNeeded: false,
-    biosStatus: null,
-    biosLabel: "",
-    activeCoreLabel: null,
-    activeCoreIsDefault: true,
-    emulators: [],
-    emulatorDataAvailable: true,
-    platformCoreLabel: null,
-    hasGameOverride: false,
-    activeSlot: "default",
-    raId: null,
-    achievementEarned: 0,
-    achievementTotal: 0,
   });
   // Badge derives from the shared store so it appears/disappears live on any
   // reachability signal (mount check, a failed/succeeded call, or the offline
   // recovery probe), not just at this mount's check (#1345).
   const connectionState = useRommConnectionState();
   const [actionPending, setActionPending] = useState<string | null>(null);
-  const romIdRef = useRef<number | null>(null);
 
   // Drive the offline recovery probe while this game page is mounted (#1345).
   // A module-level guard keeps the ~30s re-probe single-instance and offline-only.
   useEffect(() => registerConnectionHeartbeat(), []);
 
-  // Cache-first load: render instantly from cached data, then check connection in background
   useEffect(() => {
     mountPruneLeaseOwner(`game-detail:${appId}`);
-    let cancelled = false;
-
-    detach(loadCached(appId, () => cancelled, romIdRef, setInfo));
-
-    // Per-event-type handlers — each owns one branch of the data-changed dispatch.
-    // Defined inside useEffect to share the cancelled/romIdRef/setInfo closure.
-    const handleSaveSyncSettingsChange = async (
-      detail: Extract<RommDataChangedDetail, { type: "save_sync_settings" }>,
-    ) => {
-      const enabled = detail.save_sync_enabled;
-      if (enabled) {
-        const rid = romIdRef.current;
-        if (rid) {
-          const result = await getSaveStatus(rid).catch(() => null);
-          if (result && isCallableFailure(result)) return;
-          const saveStatus: SaveStatus | null = result;
-          const { status: ss, label: sl } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
-          setInfo((prev) => ({
-            ...prev,
-            saveSyncEnabled: true,
-            saveSyncStatus: ss,
-            saveSyncLabel: sl,
-            savefilesInContentDir: !!saveStatus?.savefiles_in_content_dir,
-          }));
-        } else {
-          setInfo((prev) => ({ ...prev, saveSyncEnabled: true }));
-        }
-      } else {
-        // Save sync turned off entirely — the content-dir banner is meaningless.
-        setInfo((prev) => ({
-          ...prev,
-          saveSyncEnabled: false,
-          saveSyncStatus: null,
-          saveSyncLabel: "",
-          savefilesInContentDir: false,
-        }));
-      }
-    };
-
-    const handleCoreChange = async (_detail: Extract<RommDataChangedDetail, { type: "core_changed" }>) => {
-      const rid = romIdRef.current;
-      if (!rid) return;
-      // Core data comes from the dedicated core-info path (#923), keyed on the
-      // rom_id from a ref to avoid a stale-closure read of InfoState. The active
-      // core reflects the per-game DB override (epic #945). BIOS level/label
-      // still come from the (now core-free) BIOS status — the active core just
-      // switched, so the BIOS requirements may have changed.
-      const [coreInfo, biosResult] = await Promise.all([getPlatformCoreInfo(rid), getBiosStatus(rid)]);
-      if (cancelled) return;
-      setInfo((prev) => ({
-        ...prev,
-        ...extractCoreInfo(coreInfo),
-        // The new core may need different (or no) BIOS — re-derive biosNeeded
-        // from the refreshed status so the missing-BIOS badge keys off the
-        // active core, not the core that was active at mount (#923).
-        biosNeeded: !!biosResult.bios_status,
-        biosStatus: biosResult.bios_level,
-        biosLabel: biosResult.bios_label ?? "",
-      }));
-    };
-
-    const handleSaveSyncChange = async (detail: Extract<RommDataChangedDetail, { type: "save_sync" }>) => {
-      const romId = romIdRef.current ?? detail.rom_id;
-      if (!romId) return;
-      // If event specifies a rom_id, skip if it's not for this game
-      if (detail.rom_id && romIdRef.current && detail.rom_id !== romIdRef.current) return;
-      const fetched = detail.save_status ?? (await getSaveStatus(romId).catch(() => null));
-      if (fetched && isCallableFailure(fetched)) return;
-      const saveStatus: SaveStatus | null = fetched;
-      const { status: saveSyncStatus, label: saveSyncLabel } = applySaveSyncDisplay(
-        saveStatus?.save_sync_display,
-        saveStatus,
-      );
-      setInfo((prev) => ({
-        ...prev,
-        saveSyncStatus,
-        saveSyncLabel,
-        activeSlot: saveStatus && "active_slot" in saveStatus ? (saveStatus.active_slot ?? null) : prev.activeSlot,
-      }));
-    };
-
-    const handleVersionSwitched = async (detail: Extract<RommDataChangedDetail, { type: "version_switched" }>) => {
-      if (detail.app_id !== appId) return;
-      // A version switch re-bound this appId to a new rom_id. The picker already
-      // invalidated the cached detail, so re-run the cache-first load to re-derive
-      // the info badges (save-sync / BIOS / core rows) and romId for the new
-      // version. Reset the artwork-applied gate first so the Steam tile's SGDB art
-      // re-applies for the new rom_id (#1298 item 3) — loadCached only applies it
-      // when the appId is absent from the set.
-      artworkApplied.delete(appId);
-      await loadCached(appId, () => cancelled, romIdRef, setInfo);
-    };
-
-    const onDataChanged = (e: Event) => {
-      detach(
-        (async () => {
-          try {
-            const detail = (e as CustomEvent).detail;
-            switch (detail?.type) {
-              case "save_sync_settings":
-                await handleSaveSyncSettingsChange(detail);
-                break;
-              case "core_changed":
-                await handleCoreChange(detail);
-                break;
-              case "save_sync":
-                await handleSaveSyncChange(detail);
-                break;
-              case "version_switched":
-                await handleVersionSwitched(detail);
-                break;
-            }
-          } catch (err) {
-            detach(debugLog(`RomMPlaySection: onDataChanged error: ${err}`));
-          }
-        })(),
-      );
-    };
-    globalThis.addEventListener("romm_data_changed", onDataChanged);
-
-    // Install-state reactivity (#1395) — the SPACE REQUIRED cell is shown only
-    // while the ROM is uninstalled, so a download or an uninstall must re-derive
-    // the cached detail (installed + fs_size_bytes). Mirrors DiscSelector's
-    // download_complete (@decky/api backend event) + romm_rom_uninstalled (DOM
-    // CustomEvent) wiring. Each invalidates the cached detail first so the re-run
-    // reads the fresh install state rather than a stale entry inside the 3s TTL,
-    // then re-runs loadCached so the whole info block stays consistent.
-    const onDownloadComplete = addEventListener<[DownloadCompleteEvent]>(
-      "download_complete",
-      (evt: DownloadCompleteEvent) => {
-        if (evt.rom_id !== romIdRef.current) return;
-        invalidateCachedGameDetail(appId);
-        detach(loadCached(appId, () => cancelled, romIdRef, setInfo));
-      },
-    );
-
-    const onUninstalled = (e: Event) => {
-      const rid = (e as CustomEvent).detail?.rom_id;
-      if (rid !== romIdRef.current) return;
-      invalidateCachedGameDetail(appId);
-      detach(loadCached(appId, () => cancelled, romIdRef, setInfo));
-    };
-    globalThis.addEventListener("romm_rom_uninstalled", onUninstalled);
-
     return () => {
-      cancelled = true;
       detach(cancelArtworkApply(appId));
       detach(releasePruneLeasesByOwner(`game-detail:${appId}`));
-      globalThis.removeEventListener("romm_data_changed", onDataChanged);
-      removeEventListener("download_complete", onDownloadComplete);
-      globalThis.removeEventListener("romm_rom_uninstalled", onUninstalled);
     };
   }, [appId]);
+
+  // Auto-apply SGDB artwork on first visit, once per (appId, rom_id) — so a
+  // version switch re-applies for the newly bound rom_id (#1298 item 3). Only
+  // marked applied after success, so a transient failure retries next visit.
+  useEffect(() => {
+    const romId = detail.romId;
+    if (!romId || artworkApplied.get(appId) === romId) return;
+    applyArtwork(romId, appId)
+      .then(() => {
+        artworkApplied.set(appId, romId);
+      })
+      .catch((e) => debugLog(`Auto-artwork error: ${e}`));
+  }, [appId, detail.romId]);
 
   // Background connection check — runs after initial cached render
   // If connected + installed + save sync enabled, also runs background save status check
@@ -469,32 +177,21 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     let cancelled = false;
 
     // Background save-status check — detects new conflicts once the connection
-    // check confirms the server is reachable (save-sync only). Playtime
+    // check confirms the server is reachable (save-sync only). The read itself
+    // and the state it produces belong to the store; what stays here is the
+    // conflict notification for the other save-sync surfaces. Playtime
     // reconcile-on-view is a separate, connectivity-independent effect (#1345).
     async function doSaveCheck(isCancelled: boolean) {
-      const romId = romIdRef.current;
-      if (!romId || !info.saveSyncEnabled) return;
+      const { romId, saveSyncEnabled } = getGameDetail(appId);
+      if (!romId || !saveSyncEnabled) return;
       try {
-        const saveStatus = await getSaveStatus(romId);
-        if (isCancelled) return;
-        if (isCallableFailure(saveStatus)) {
-          detach(debugLog(`RomMPlaySection: background save check deferred: ${saveStatus.message}`));
-          return;
-        }
-        const hasConflict = hasAnySaveConflict(saveStatus);
+        const saveStatus = await refreshSaveStatus(appId);
+        if (isCancelled || !saveStatus) return;
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {
-            detail: { type: "save_sync", rom_id: romId, has_conflict: hasConflict },
+            detail: { type: "save_sync", rom_id: romId, has_conflict: hasAnySaveConflict(saveStatus) },
           }),
         );
-        const { status: ss, label: sl } = applySaveSyncDisplay(saveStatus.save_sync_display, saveStatus);
-        setInfo((prev) => ({
-          ...prev,
-          saveSyncStatus: ss,
-          saveSyncLabel: sl,
-          savefilesInContentDir: !!saveStatus.savefiles_in_content_dir,
-          activeSlot: "active_slot" in saveStatus ? (saveStatus.active_slot ?? null) : prev.activeSlot,
-        }));
       } catch (e) {
         detach(debugLog(`RomMPlaySection: background save check error: ${e}`));
       }
@@ -565,7 +262,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     return () => {
       cancelled = true;
     };
-  }, [info.saveSyncEnabled, appId]);
+  }, [detail.saveSyncEnabled, appId]);
 
   // Reconcile-on-view (#868) — pull-only: folds RomM's play-session history into
   // the local total so a session played on another device shows up the moment the
@@ -573,12 +270,12 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // returns the LOCAL total even when the server is unreachable, so it re-injects
   // real playtime into a rebuilt/rebound Steam overview instead of leaving it at
   // "PLAYTIME None". Runs once romId is known (its own effect, so it fires after
-  // loadCached populates romId rather than racing the connection check). Pushes
+  // the store resolves romId rather than racing the connection check). Pushes
   // the total through updatePlaytimeDisplay (the write-chokepoint), which emits
   // romm_playtime_changed; the reactive PLAYTIME effect (#869) refreshes the
   // display on the same mount. A 0 total no-ops in updatePlaytimeDisplay.
   useEffect(() => {
-    const romId = info.romId;
+    const romId = detail.romId;
     if (!romId) return;
     let cancelled = false;
 
@@ -597,7 +294,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           // covers the sub-minute total case where updatePlaytimeDisplay emits no
           // signal. Skipped on a failed read — no cross-device push offline.
           const steamSecs = appStore.GetAppOverviewByAppID(appId)?.rt_last_time_played ?? 0;
-          setInfo((prev) => ({
+          setPlaytimeInfo((prev) => ({
             ...prev,
             restoredLastPlayed: result.last_played,
             lastPlayed: resolveLastPlayed(result.last_played, steamSecs),
@@ -614,42 +311,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     return () => {
       cancelled = true;
     };
-  }, [info.romId, appId]);
-
-  // Content-dir warning probe (#239) — populates `savefilesInContentDir` from a
-  // dedicated getSaveStatus call that is INTENTIONALLY NOT gated on connectivity.
-  // The backend derives `savefiles_in_content_dir` from a LOCAL retroarch.cfg
-  // read (independent of `server_query_failed`), so the banner must surface even
-  // when RomM is offline. The connected-only `doSaveCheck` above can't be relied
-  // on for this. We read getSaveStatus live (not getCachedGameDetail, which does
-  // not carry the flag and may be stale) and consume ONLY the content-dir flag —
-  // the server-dependent save-sync display is owned by doSaveCheck / the event
-  // handlers. Runs once romId + saveSyncEnabled are known.
-  useEffect(() => {
-    let cancelled = false;
-    const romId = info.romId;
-    if (!romId || !info.saveSyncEnabled) return;
-
-    async function probeContentDir(rid: number, isCancelled: () => boolean) {
-      try {
-        const saveStatus = await getSaveStatus(rid);
-        if (isCancelled()) return;
-        if (isCallableFailure(saveStatus)) {
-          detach(debugLog(`RomMPlaySection: content-dir probe deferred: ${saveStatus.message}`));
-          return;
-        }
-        const inContentDir = saveStatus.savefiles_in_content_dir === true;
-        setInfo((prev) => ({ ...prev, savefilesInContentDir: inContentDir }));
-      } catch (e) {
-        detach(debugLog(`RomMPlaySection: content-dir probe error: ${e}`));
-      }
-    }
-
-    detach(probeContentDir(romId, () => cancelled));
-    return () => {
-      cancelled = true;
-    };
-  }, [info.romId, info.saveSyncEnabled]);
+  }, [detail.romId, appId]);
 
   // Reactive PLAYTIME display (#869) — re-read Steam's overview whenever the
   // playtime write-chokepoint (updatePlaytimeDisplay) fires romm_playtime_changed
@@ -659,11 +321,11 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // the SAME mount — no navigate-away/back remount required.
   useEffect(() => {
     const onPlaytimeChanged = (e: Event) => {
-      const detail = (e as CustomEvent<{ appId?: number } | null>).detail;
-      if (detail?.appId !== appId) return;
+      const payload = (e as CustomEvent<{ appId?: number } | null>).detail;
+      if (payload?.appId !== appId) return;
       const ov = appStore.GetAppOverviewByAppID(appId);
       if (!ov) return;
-      setInfo((prev) => ({
+      setPlaytimeInfo((prev) => ({
         ...prev,
         playtime: formatPlaytime(ov.minutes_playtime_forever ?? 0),
         lastPlayed: resolveLastPlayed(prev.restoredLastPlayed, ov.rt_last_time_played ?? 0),
@@ -691,11 +353,11 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
   const handleRefreshArtwork = async () => {
     if (actionPending) return;
-    if (!info.romId) {
+    if (!detail.romId) {
       toaster.toast({ title: "RomM Sync", body: "ROM info not loaded yet" });
       return;
     }
-    const romId = info.romId;
+    const romId = detail.romId;
     setActionPending("artwork");
     const admission = capturePruneLeaseAdmission(`game-detail:${appId}`);
     try {
@@ -750,7 +412,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
             createElement(SgdbGamePickerModalContent, {
               romId,
               appId,
-              romName: info.romName,
+              romName: detail.romName,
               candidates: resolution.candidates,
               onApplied: () => {},
             }),
@@ -771,13 +433,13 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   };
 
   const handleRefreshMetadata = async () => {
-    if (actionPending || !info.romId) return;
+    if (actionPending || !detail.romId) return;
     setActionPending("metadata");
     try {
-      await getRomMetadata(info.romId);
+      await getRomMetadata(detail.romId);
       toaster.toast({ title: "RomM Sync", body: "Metadata refreshed" });
       globalThis.dispatchEvent(
-        new CustomEvent("romm_data_changed", { detail: { type: "metadata", rom_id: info.romId } }),
+        new CustomEvent("romm_data_changed", { detail: { type: "metadata", rom_id: detail.romId } }),
       );
     } catch {
       toaster.toast({ title: "RomM Sync", body: "Failed to refresh metadata" });
@@ -787,10 +449,10 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   };
 
   const handleSyncSaves = async () => {
-    if (actionPending || !info.romId) return;
+    if (actionPending || !detail.romId) return;
     setActionPending("savesync");
     try {
-      const result = await syncRomSaves(info.romId);
+      const result = await syncRomSaves(detail.romId);
       if (result.success) {
         // Directional completion toast via the shared helper — the single source
         // of that copy across every save-sync surface (#1481).
@@ -813,10 +475,10 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           toaster.toast({ title: "RomM Save Sync", body: `${c} conflict(s) need resolution` });
         }
         globalThis.dispatchEvent(
-          new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: info.romId } }),
+          new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: detail.romId } }),
         );
         // Refresh save sync status — last_sync_check_at was just set by the backend
-        setInfo((prev) => ({ ...prev, saveSyncStatus: "synced" as const, saveSyncLabel: "Just now" }));
+        noteSaveSyncDisplay(appId, { status: "synced", label: "Just now", last_sync_check_at: null });
       } else {
         toaster.toast({ title: "RomM Sync", body: result.message || "Save sync failed" });
       }
@@ -828,30 +490,17 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   };
 
   const handleDownloadBios = async () => {
-    if (actionPending || !info.platformSlug) return;
+    if (actionPending || !detail.platformSlug) return;
     setActionPending("bios");
     try {
-      const result = await downloadAllFirmware(info.platformSlug);
+      const result = await downloadAllFirmware(detail.platformSlug);
       if (result.success) {
         toaster.toast({ title: "RomM Sync", body: `BIOS downloaded (${result.downloaded ?? 0} files)` });
         globalThis.dispatchEvent(
-          new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: info.platformSlug } }),
+          new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: detail.platformSlug } }),
         );
         // Refresh BIOS status — getBiosStatus ships pre-computed level/label so we don't re-derive.
-        if (info.romId) {
-          const refreshed = await getBiosStatus(info.romId).catch(() => ({
-            bios_status: null as BiosStatus | null,
-            bios_level: null as "ok" | "partial" | "missing" | "unmanaged" | null,
-            bios_label: null as string | null,
-          }));
-          if (refreshed.bios_status) {
-            setInfo((prev) => ({
-              ...prev,
-              biosStatus: refreshed.bios_level,
-              biosLabel: refreshed.bios_label ?? "",
-            }));
-          }
-        }
+        await refreshBiosStatus(appId);
       } else {
         toaster.toast({ title: "RomM Sync", body: result.message || "BIOS download failed" });
       }
@@ -863,11 +512,11 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   };
 
   const handleUninstall = async () => {
-    if (actionPending || !info.romId) return;
+    if (actionPending || !detail.romId) return;
     setActionPending("uninstall");
     const admission = capturePruneLeaseAdmission(`game-detail:${appId}`);
     try {
-      const result = await removeRom(info.romId);
+      const result = await removeRom(detail.romId);
       if (result.success) {
         await withPruneLease(
           result.prune_lease_token,
@@ -876,12 +525,12 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
             if (isPruneLeaseCancelled(signal)) return;
             await setLaunchOptionsConfirmed(appId, "").catch(() => false);
             if (isPruneLeaseCancelled(signal)) return;
-            globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: info.romId } }));
+            globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: detail.romId } }));
           },
           `game-detail:${appId}`,
           admission,
         );
-        toaster.toast({ title: "RomM Sync", body: `${info.romName || "ROM"} uninstalled` });
+        toaster.toast({ title: "RomM Sync", body: `${detail.romName || "ROM"} uninstalled` });
       } else {
         toaster.toast({ title: "RomM Sync", body: result.message || "Uninstall failed" });
       }
@@ -899,8 +548,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   };
 
   const handleDeleteSaves = () => {
-    if (actionPending || !info.romId) return;
-    const romId = info.romId;
+    if (actionPending || !detail.romId) return;
+    const romId = detail.romId;
     showModal(
       createElement(ConfirmModal, {
         strTitle: "Delete Local Saves",
@@ -916,8 +565,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
                 const result = await deleteLocalSaves(romId);
                 if (result.success) {
                   toaster.toast({ title: "RomM Sync", body: result.message });
-                  // Directly update PlaySection status — no local saves remain
-                  setInfo((prev) => ({ ...prev, saveSyncStatus: "none" as const, saveSyncLabel: "No saves" }));
+                  // Directly update the shown status — no local saves remain
+                  noteSaveSyncDisplay(appId, { status: "none", label: "No saves", last_sync_check_at: null });
                   globalThis.dispatchEvent(
                     new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }),
                   );
@@ -938,30 +587,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
   /** Refresh the core badge + BIOS state from their dedicated paths and notify
    *  sibling components after a successful override pin/clear. */
-  const refreshCoreDisplay = async (romId: number, platformSlug: string) => {
-    // Core data comes from the dedicated core-info path (#923), keyed on rom_id
-    // so the per-game DB override (epic #945) reads back as the active core.
-    // BIOS level/label still come from getBiosStatus — the active core just
-    // switched, so the BIOS requirements may have changed.
-    const [coreInfo, refreshed] = await Promise.all([
-      getPlatformCoreInfo(romId),
-      getBiosStatus(romId).catch(() => ({
-        bios_status: null as BiosStatus | null,
-        bios_level: null as "ok" | "partial" | "missing" | "unmanaged" | null,
-        bios_label: null as string | null,
-      })),
-    ]);
-    setInfo((prev) => ({
-      ...prev,
-      ...extractCoreInfo(coreInfo),
-      // Re-derive biosNeeded from the refreshed status so the missing-BIOS
-      // badge keys off the now-active core (#923).
-      biosNeeded: !!refreshed.bios_status,
-      biosStatus: refreshed.bios_level,
-      biosLabel: refreshed.bios_label ?? "",
-    }));
-    // Invalidate the frontend cache and notify other components (e.g. GameInfoPanel)
-    invalidateCachedGameDetail(appId);
+  const refreshCoreDisplay = async (platformSlug: string) => {
+    await refreshCoreAndBios(appId);
     globalThis.dispatchEvent(
       new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: platformSlug } }),
     );
@@ -975,7 +602,6 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
    *  carry no launch_options/app_id: persist-only, no SetAppLaunchOptions. */
   const applyCoreResult = async (
     result: Awaited<ReturnType<typeof setGameCore>>,
-    romId: number,
     platformSlug: string,
     successBody: string,
     admission: PruneLeaseAdmission,
@@ -1000,20 +626,20 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       }
       // Confirmed (or uninstalled/unbound: nothing to confirm) → success.
       toaster.toast({ title: "RomM Sync", body: successBody });
-      await refreshCoreDisplay(romId, platformSlug);
+      await refreshCoreDisplay(platformSlug);
     }, `game-detail:${appId}`, admission);
   };
 
   const handleChangeGameCore = async (coreLabel: string) => {
-    const romId = info.romId;
-    if (!romId || !info.platformSlug) return;
-    const platformSlug = info.platformSlug;
+    const romId = detail.romId;
+    if (!romId || !detail.platformSlug) return;
+    const platformSlug = detail.platformSlug;
     detach(debugLog(`handleChangeGameCore: romId=${romId} coreLabel=${coreLabel}`));
     const admission = capturePruneLeaseAdmission(`game-detail:${appId}`);
     try {
       const result = await setGameCore(romId, coreLabel);
       detach(debugLog(`handleChangeGameCore: result success=${result.success}`));
-      await applyCoreResult(result, romId, platformSlug, `Core set to ${coreLabel}`, admission);
+      await applyCoreResult(result, platformSlug, `Core set to ${coreLabel}`, admission);
     } catch (e) {
       // The core pin is persisted before the Steam continuation runs, so a
       // teardown cancellation is not a "failed to set core" the user must see.
@@ -1026,15 +652,15 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   };
 
   const handleResetGameCore = async () => {
-    const romId = info.romId;
-    if (!romId || !info.platformSlug) return;
-    const platformSlug = info.platformSlug;
+    const romId = detail.romId;
+    if (!romId || !detail.platformSlug) return;
+    const platformSlug = detail.platformSlug;
     detach(debugLog(`handleResetGameCore: romId=${romId}`));
     const admission = capturePruneLeaseAdmission(`game-detail:${appId}`);
     try {
       const result = await clearGameCore(romId);
       detach(debugLog(`handleResetGameCore: result success=${result.success}`));
-      await applyCoreResult(result, romId, platformSlug, "Now following the system core", admission);
+      await applyCoreResult(result, platformSlug, "Now following the system core", admission);
     } catch (e) {
       if (isPruneLeaseCancellation(e, admission)) {
         detach(debugLog(`handleResetGameCore: continuation was cancelled: ${e}`));
@@ -1050,12 +676,12 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     // every bakeable emulator entry PINS the per-game override.
     showContextMenu(
       buildEmulatorMenu({
-        emulators: info.emulators,
-        emulatorDataAvailable: info.emulatorDataAvailable,
-        activeLabel: info.activeCoreLabel,
-        platformCoreLabel: info.platformCoreLabel,
+        emulators: detail.emulators,
+        emulatorDataAvailable: detail.emulatorDataAvailable,
+        activeLabel: detail.activeCoreLabel,
+        platformCoreLabel: detail.platformCoreLabel,
         followSystem: {
-          hasGameOverride: info.hasGameOverride,
+          hasGameOverride: detail.hasGameOverride,
           onFollowSystem: () => {
             detach(handleResetGameCore());
           },
@@ -1201,25 +827,25 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // Played / Playtime, and the cell disappears once the ROM is on disk. Being
   // first also keeps it clear of the romm-info-items nowrap + overflow:hidden
   // clip, which drops cells from the right edge.
-  if (!info.installed && info.fsSizeBytes != null) {
-    infoItems.push(infoItem("space-required", "SPACE REQUIRED", formatBytes(info.fsSizeBytes)));
+  if (!detail.installed && detail.fsSizeBytes != null) {
+    infoItems.push(infoItem("space-required", "SPACE REQUIRED", formatBytes(detail.fsSizeBytes)));
   }
 
   // Last Played
-  if (info.lastPlayed) {
-    infoItems.push(infoItem("last-played", "LAST PLAYED", info.lastPlayed));
+  if (playtimeInfo.lastPlayed) {
+    infoItems.push(infoItem("last-played", "LAST PLAYED", playtimeInfo.lastPlayed));
   }
 
   // Playtime
-  if (info.playtime) {
-    infoItems.push(infoItem("playtime", "PLAYTIME", info.playtime));
+  if (playtimeInfo.playtime) {
+    infoItems.push(infoItem("playtime", "PLAYTIME", playtimeInfo.playtime));
   }
 
   // Achievements badge (only when RA data available)
-  if (info.raId) {
-    const hasEarned = info.achievementEarned > 0;
+  if (detail.raId) {
+    const hasEarned = detail.achievementEarned > 0;
     const countLabel =
-      info.achievementTotal > 0 ? `${info.achievementEarned}/${info.achievementTotal}` : `${info.achievementEarned}`;
+      detail.achievementTotal > 0 ? `${detail.achievementEarned}/${detail.achievementTotal}` : `${detail.achievementEarned}`;
 
     // Generate sparkle dots at random fixed positions (only when earned > 0)
     // Positions are deterministic per-index so they don't shift on re-render
@@ -1283,7 +909,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   }
 
   // Save Sync moved to dedicated tab — show legacy slot warning only
-  if (info.activeSlot == null && info.saveSyncEnabled) {
+  if (detail.activeSlot == null && detail.saveSyncEnabled) {
     infoItems.push(
       createElement(
         "div",
@@ -1305,8 +931,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
   // BIOS warning (only when files are actually missing — "ok" and "unmanaged"
   // are non-actionable here and live in the BIOS tab, not on the play section)
-  if (info.biosNeeded && info.biosStatus && info.biosStatus !== "ok" && info.biosStatus !== "unmanaged") {
-    const biosColor = biosColorForLevel(info.biosStatus);
+  if (detail.biosNeeded && detail.biosStatus && detail.biosStatus !== "ok" && detail.biosStatus !== "unmanaged") {
+    const biosColor = biosColorForLevel(detail.biosStatus);
     infoItems.push(
       createElement(
         "div",
@@ -1329,7 +955,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
             className: "romm-status-dot",
             style: { backgroundColor: biosColor },
           }),
-          info.biosLabel,
+          detail.biosLabel,
         ),
       ),
     );
@@ -1395,7 +1021,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         createElement(FaGamepad, { size: 18, color: "#553e98" }),
       ),
       // Core selection button (only when multiple emulators to choose between)
-      ...(info.emulators.length > 1
+      ...(detail.emulators.length > 1
         ? [
             createElement(
               DialogButton,
@@ -1406,7 +1032,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
                 onFocus: scrollToTop,
                 title: "Emulator Core",
               },
-              createElement(FaMicrochip, { size: 18, color: info.activeCoreIsDefault ? "#8f98a0" : "#d4a72c" }),
+              createElement(FaMicrochip, { size: 18, color: detail.activeCoreIsDefault ? "#8f98a0" : "#d4a72c" }),
             ),
           ]
         : []),
@@ -1427,7 +1053,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // Content-dir warning (#239) — prominent banner above the play row when
   // RetroArch writes saves to the content directory. The play row still renders
   // below it: the game remains fully playable, only save sync is unavailable.
-  if (info.savefilesInContentDir) {
+  if (detail.savefilesInContentDir) {
     return createElement(
       "div",
       { style: { display: "flex", flexDirection: "column" } },

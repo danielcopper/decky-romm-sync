@@ -317,6 +317,17 @@ A one-run, one-action lease for a frontend-owned Steam operation during Prune. T
 before touching Steam and complete that same token afterward. Duplicate, stale, unknown, and late unclaimed tokens are
 non-authoritative and cannot mutate Steam.
 
+### Game-detail store
+
+The single holder of the state one Steam game page shares across its surfaces (`src/utils/gameDetailStore.ts`): the
+bound `rom_id`, install state, save-sync status, BIOS level and core selection, plus the reads that produce them. One
+entry per appId — the first surface to subscribe opens it, the last to unsubscribe closes it, so a page that is off
+screen holds nothing and listens to nothing. The `romm_data_changed` DOM bus keeps carrying the notifications and
+carries no state: one handler per appId folds an event into the entry, and every subscriber renders from that one fold
+rather than from its own copy. Overlapping reads for one appId share a single request, so a payload-less notification
+costs one `get_save_status` round-trip however many surfaces are mounted. The foil to a surface's **own** state — the
+play row's PLAYTIME / LAST PLAYED pair, which nothing else reads and which stays in the component.
+
 ### Collection kind (Standard / Smart / Virtual)
 
 The axis on which a RomM collection is classified for syncing — the internal literal `standard` / `smart` / `virtual`
