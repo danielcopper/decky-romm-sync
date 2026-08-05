@@ -436,7 +436,10 @@ async function handleSaveSyncSettingsChange(
   detail: Extract<RommDataChangedDetail, { type: "save_sync_settings" }>,
 ): Promise<void> {
   if (!detail.save_sync_enabled) {
-    // Save sync turned off entirely — the content-dir banner is meaningless.
+    // Only the sync-derived display is cleared. `savefilesInContentDir` stays as
+    // read: it describes the local RetroArch config, which the setting does not
+    // change, and each surface decides for itself whether the fact is worth
+    // showing while sync is off.
     writerFor(
       entry,
       entry.generation,
@@ -445,7 +448,6 @@ async function handleSaveSyncSettingsChange(
       saveSyncEnabled: false,
       saveSyncStatus: null,
       saveSyncLabel: "",
-      savefilesInContentDir: false,
     }));
     return;
   }

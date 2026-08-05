@@ -507,7 +507,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId).saveSyncEnabled).toBe(true);
     });
 
-    it("disabling clears the display and the content-dir banner without a read", async () => {
+    it("disabling clears the sync-derived display without a read, keeping the content-dir fact", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ save_sync_enabled: true }));
       vi.mocked(backend.getSaveStatus).mockResolvedValue(saveStatus({ savefiles_in_content_dir: true }));
       subscribe(nextAppId);
@@ -525,7 +525,9 @@ describe("gameDetailStore", () => {
         saveSyncEnabled: false,
         saveSyncStatus: null,
         saveSyncLabel: "",
-        savefilesInContentDir: false,
+        // The local RetroArch config did not change with the setting, so the
+        // fact stands; whether it is worth showing is each surface's call.
+        savefilesInContentDir: true,
       });
     });
   });

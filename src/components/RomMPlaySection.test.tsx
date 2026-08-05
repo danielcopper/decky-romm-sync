@@ -30,6 +30,7 @@ import * as connectionState from "../utils/connectionState";
 import * as sectionRefresh from "../utils/sectionRefresh";
 import * as playSectionUtils from "../utils/playSection";
 import * as formatters from "../utils/formatters";
+import { getGameDetail } from "../utils/gameDetailStore";
 import { useVersionError } from "./VersionErrorCard";
 import { useMigrationStatus } from "./MigrationBlockedPage";
 
@@ -3531,10 +3532,10 @@ describe("RomMPlaySection", () => {
   // ------------------------------------------------------------------
 
   describe("savefiles_in_content_dir warning banner (#239)", () => {
-    // The content-dir probe reads getSaveStatus live (NOT getCachedGameDetail),
-    // gated only on romId + saveSyncEnabled — intentionally NOT on connectivity,
-    // so the banner surfaces offline. These tests force the connection check
-    // offline to prove the banner does not depend on a connected server.
+    // The flag reaches the section with the store's save-status fold, and the
+    // backend derives it from a LOCAL retroarch.cfg read — so the banner must
+    // surface even while RomM is unreachable. One test below forces the
+    // connection check offline to pin that.
     function stubSaveStatus(romId: number, savefilesInContentDir: boolean) {
       vi.mocked(backend.getSaveStatus).mockResolvedValue({
         rom_id: romId,
@@ -3599,6 +3600,35 @@ describe("RomMPlaySection", () => {
       await flushAsync();
       expect(container.textContent).not.toContain("Write Saves to Content Directory");
       // The play row still renders (game remains playable).
+      expect(container.querySelector('[data-testid="play-button"]')).not.toBeNull();
+    });
+
+    // The store keeps the content-dir fact whether or not save sync is on, so a
+    // save_sync notification can fold it in for a game whose sync is off — e.g.
+    // after "Delete Local Saves" from this page's own RomM Actions menu, which is
+    // not gated on the setting. The banner asks the user to change a RetroArch
+    // setting in order to re-enable save sync, so it has nothing to say to
+    // someone who has save sync switched off.
+    it("does NOT render the banner while save sync is disabled, even once the flag is known", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 42,
+        save_sync_enabled: false,
+      });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      stubSaveStatus(42, true);
+
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: 42 } }));
+        await Promise.resolve();
+      });
+      await flushAsync();
+
+      // Assert the fact actually reached the store — otherwise the banner's
+      // absence below would prove nothing.
+      expect(getGameDetail(testAppId).savefilesInContentDir).toBe(true);
+      expect(container.textContent).not.toContain("Write Saves to Content Directory");
       expect(container.querySelector('[data-testid="play-button"]')).not.toBeNull();
     });
 

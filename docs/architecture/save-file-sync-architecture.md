@@ -868,8 +868,9 @@ layout keys and models them as a `SaveLayout` value object (`domain/save_layout.
 the four save-sync entry points (`pre_launch_sync`, `post_exit_sync`, `sync_rom_saves`, `sync_all_saves`) return a
 benign skip (`{success: false, reason: "savefiles_in_content_dir", …}` — the game still launches, no error), and
 `get_save_status` carries an additive `savefiles_in_content_dir: true` flag so the game-detail play section shows a
-banner asking the user to turn the setting back off. Actually _syncing_ ROM-adjacent saves stays unsupported (the
-deferred multi-emulator work).
+banner asking the user to turn the setting back off — only while save sync is enabled, since the banner asks for a
+RetroArch change whose sole purpose is to make save sync work. Actually _syncing_ ROM-adjacent saves stays unsupported
+(the deferred multi-emulator work).
 
 This blind spot is **persistent**: RetroDECK only restores the `false` default on a full config reset or first-run
 install — never on a normal launch (verified 2026-06-09) — so the plugin reads the layout live on every sync rather than

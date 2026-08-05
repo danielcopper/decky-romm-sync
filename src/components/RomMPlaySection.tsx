@@ -1053,7 +1053,11 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // Content-dir warning (#239) — prominent banner above the play row when
   // RetroArch writes saves to the content directory. The play row still renders
   // below it: the game remains fully playable, only save sync is unavailable.
-  if (detail.savefilesInContentDir) {
+  // The store holds the flag whether or not save sync is on (it is a fact about
+  // the local RetroArch config, not about our setting); the banner asks the user
+  // to change that config to re-enable save sync, so it is only worth showing to
+  // someone who has save sync on.
+  if (detail.savefilesInContentDir && detail.saveSyncEnabled) {
     return createElement(
       "div",
       { style: { display: "flex", flexDirection: "column" } },
