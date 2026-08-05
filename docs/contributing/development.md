@@ -72,13 +72,14 @@ the `@decky/api` event harness.
 
 ### Property-based tests
 
-The pure save-sync decision kernels (`domain/sync_action.py`, `domain/save_path.py`, `domain/iso_time.py`) carry an
-extra tier of [Hypothesis](https://hypothesis.readthedocs.io/) property tests (`tests/domain/test_*_property.py`)
+The pure decision kernels carry an extra tier of [Hypothesis](https://hypothesis.readthedocs.io/) property tests
 alongside the hand-enumerated cases. They state the safety invariants directly and exercise them across a generated
-input space. Run them like any other test:
+input space. The in-tree kernels (`domain/save_path.py`, `domain/iso_time.py`) have theirs in
+`tests/domain/test_*_property.py`; the save-sync decision runs in the compiled gavel core, so its properties drive
+`GavelNativeAdapter` from `tests/adapters/test_gavel_native_property.py`. Run them like any other test:
 
 ```bash
-python -m pytest tests/domain/test_sync_action_property.py tests/domain/test_save_path_property.py -q
+python -m pytest tests/adapters/test_gavel_native_property.py tests/domain/test_save_path_property.py -q
 ```
 
 Hypothesis is a dev-only dependency (pinned in `requirements-dev.txt`, compiled into `requirements-dev.lock` via
@@ -106,29 +107,27 @@ separate change. See `.claude/rules/testing-backend.md` for the full contract-ti
 
 ### Gavel conformance vectors
 
-The save-sync decision kernels are also published as a standalone client contract,
-[romm-gavel](https://github.com/danielcopper/romm-gavel) — and since both decisions now run in gavel's compiled core
-(vendored as `py_modules/native/libgavel-x86_64-linux.so`), the two vector families are what keep the shipped binary,
-the in-tree oracle, and the published spec from silently drifting apart:
+The save-sync decisions are also published as a standalone client contract,
+[romm-gavel](https://github.com/danielcopper/romm-gavel) — and since both of them run in gavel's compiled core (vendored
+as `py_modules/native/libgavel-x86_64-linux.so`), the two vector families are what keep the shipped binary and the
+published spec from silently drifting apart:
 
-- **ladder** (the 409 resolution ladder) — `tests/domain/test_sync_action_gavel_vectors.py` against the in-tree
-  `domain/sync_action.resolve_upload_conflict`, `tests/adapters/test_gavel_native.py` against the compiled core.
+- **ladder** (the 409 resolution ladder) — `tests/adapters/test_gavel_native.py`.
 - **decision-table** (the full per-`(rom, filename, slot)` decision) —
-  `tests/domain/test_sync_action_gavel_table_vectors.py` against both kernels.
+  `tests/domain/test_sync_action_gavel_table_vectors.py`.
 
-`tests/adapters/test_gavel_native.py` additionally crosses the two implementations directly over input shapes no vector
-covers. The vectors are vendored verbatim under `tests/domain/gavel_vectors/`, one subdirectory per family mirroring
-upstream `vectors/` (`ladder/` — a curated named-case set plus the exhaustive equivalence classes; `decision-table/` —
-curated named cases) — there is no submodule and no network in CI, so every contract change lands as a reviewable diff.
-Run them like any other test:
+Both families read the core through `GavelNativeAdapter`, the seam production decides on. The vectors are vendored
+verbatim under `tests/domain/gavel_vectors/`, one subdirectory per family mirroring upstream `vectors/` (`ladder/` — a
+curated named-case set plus the exhaustive equivalence classes; `decision-table/` — curated named cases) — there is no
+submodule and no network in CI, so every contract change lands as a reviewable diff. Run them like any other test:
 
 ```bash
-python -m pytest tests/domain/test_sync_action_gavel_vectors.py tests/domain/test_sync_action_gavel_table_vectors.py tests/adapters/test_gavel_native.py -q
+python -m pytest tests/domain/test_sync_action_gavel_table_vectors.py tests/adapters/test_gavel_native.py -q
 ```
 
 Updating the vectors means deliberately re-copying the JSON from the matching upstream `vectors/<family>/` directory and
 bumping the release tag in `tests/domain/gavel_vectors/README.md` — in lockstep with the `.so`, which is pinned to the
-same release; never edit a vector to match a kernel.
+same release; never edit a vector to match the core.
 
 ### emu-atlas conformance vectors
 

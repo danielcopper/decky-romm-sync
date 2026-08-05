@@ -12,10 +12,17 @@ module. Shared mocks live in `tests/conftest.py`.
 
 ## Property-based tests — pure decision kernels (hypothesis)
 
-The pure save-sync decision kernels (`domain/sync_action.py`, `domain/save_path.py`, `domain/iso_time.py`) carry a
-property tier on top of hand-enumerated cases, in `tests/domain/test_*_property.py`. Properties state the safety
-invariant directly (no destructive action without a recovery source; decisions stable under timestamp-format variation;
-replay determinism). `hypothesis` is dev-only and never ships.
+The pure decision kernels carry a property tier on top of hand-enumerated cases. The in-tree ones
+(`domain/save_path.py`, `domain/iso_time.py`) have theirs in `tests/domain/test_*_property.py`; the save-sync decision
+is made by the compiled gavel core, so its properties drive `GavelNativeAdapter` — the production seam — from
+`tests/adapters/test_gavel_native_property.py`. Properties state the safety invariant directly (no destructive action
+without a recovery source; decisions stable under timestamp-format variation; replay determinism). `hypothesis` is
+dev-only and never ships.
+
+**A property earns its place only where a vector cannot reach.** It either quantifies over a space the vendored vectors
+do not exhaust, or it relates several runs to each other — the same decision under two ISO renderings, a replay, a state
+sequence — which one input bound to one output can never say. A point statement about a single row of the decision table
+belongs in a vector; stating it as a property too is two places to maintain for one rule.
 
 **A property states the TRUE invariant, never a watered-down one.** If the invariant's fix is still open, the property
 FAILS today — pin it `@pytest.mark.xfail(strict=True, reason="#<issue>: <one-line>")`. When the fix lands the property
@@ -50,12 +57,12 @@ and its boundaries.
 ## Gavel conformance vectors — vendored contract tier
 
 Two [romm-gavel](https://github.com/danielcopper/romm-gavel) vector families guard the save-sync decisions: **ladder**
-(the 409 resolution) and **decision-table** (the full per-file decision). Both decisions run in the compiled core
-(`adapters/gavel_native.py`), so each family runs against the **compiled core** — the production path — and against the
-in-tree `domain/sync_action` kernel, which is retained solely as the differential oracle
-`tests/adapters/test_gavel_native.py` crosses the core against. The vectors are vendored verbatim under
-`tests/domain/gavel_vectors/` at a pinned upstream **release tag** (no submodule, no network in CI), so a contract
-change lands as a reviewable diff. **Never edit a vector to make a kernel pass** — updating means deliberately
+(the 409 resolution, `tests/adapters/test_gavel_native.py`) and **decision-table** (the full per-file decision,
+`tests/domain/test_sync_action_gavel_table_vectors.py`). Both decisions run in the compiled core
+(`adapters/gavel_native.py`) and nowhere else, so each family runs against that core through `GavelNativeAdapter` — the
+production path — and there is no second implementation to hold to the same contract. The vectors are vendored verbatim
+under `tests/domain/gavel_vectors/` at a pinned upstream **release tag** (no submodule, no network in CI), so a contract
+change lands as a reviewable diff. **Never edit a vector to make the core pass** — updating means deliberately
 re-copying the JSON and bumping the tag in that folder's `README.md`, in lockstep with the vendored `.so`.
 
 ## emu-atlas conformance vectors — vendored contract tier

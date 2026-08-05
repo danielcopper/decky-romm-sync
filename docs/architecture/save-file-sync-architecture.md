@@ -78,8 +78,8 @@ baseline working. This hash reproduction is what the sync decision needs
 — including legacy `slot:null` saves, which RomM cannot address through the negotiate inventory param.
 
 **Server-hash baseline; parity as the no-history fallback (#1468).** The identity question — "is my local file
-byte-identical to that server save?" — is answered by `domain.sync_action._local_matches_server`, a two-route
-disjunction used at matrix rows 6d / 11a and the `resolve_upload_conflict` 409 backstop:
+byte-identical to that server save?" — is answered by a two-route disjunction, used at matrix rows 6d / 11a and in the
+409 backstop:
 
 - **Provenance (primary).** At each sync boundary the plugin stores the server's own `content_hash` alongside the local
   baseline, in `FileSyncState.last_sync_server_hash` (the `rom_save_files.last_sync_server_hash` column, added by
@@ -474,9 +474,9 @@ For future standalone emulator support (Phase 9): just the emulator name, e.g. `
 
 ## Sync Decision Algorithm
 
-Each sync run picks one action per save file: `Skip`, `Upload`, `Download`, or `Conflict`. The decision is computed by a
-pure function — no I/O, no service or adapter imports — so behaviour is fully driven by inputs and is exhaustively
-unit-tested.
+Each sync run picks one action per save file: `Skip`, `Upload`, `Download`, or `Conflict`. The decision is a pure
+function of what it is handed — no I/O, no state of its own — so behaviour is fully driven by inputs and is exhaustively
+covered by cases and vectors.
 
 ### Inputs
 
@@ -499,7 +499,10 @@ unit-tested.
 ### Pick rule and discriminators
 
 Within `server_saves_in_slot`, the algorithm picks the **newest by `updated_at`** as the canonical save and decides
-against that one. Other saves in the slot are ignored — no foreign-save surfacing, no per-save dismiss state.
+against that one. The pick is deterministic — `max(updated_at)` over the same list always names the same save — so two
+devices reasoning about the same slot converge on the same target instead of each choosing a different head. A save
+whose `updated_at` cannot be parsed sorts to the bottom, so a garbled timestamp can never beat a readable one into the
+head position. Other saves in the slot are ignored — no foreign-save surfacing, no per-save dismiss state.
 
 Three discriminators drive the branch:
 
@@ -509,13 +512,16 @@ Three discriminators drive the branch:
 2. **Hash divergence vs. baseline**: `local_hash != files_state["last_sync_hash"]` means the local file has been edited
    since the last successful sync. Without a baseline (`last_sync_hash` is missing) we cannot claim divergence.
 3. **Size plausibility (upload guard only)**: in the branch that uploads a diverged edit (our device `is_current=true` +
-   local diverged, row 9), `local_file.size` is checked against the recorded `last_sync_local_size` baseline via
-   `domain/save_size.is_implausibly_shrunken`. A 0-byte or implausibly-shrunk local is a crash artifact, not an edit,
-   and diverts that branch to `Conflict` (row 9b) so a corrupt-looking local is never pushed as the new newest save
-   (#1062).
+   local diverged, row 9), `local_file.size` is checked against the recorded `last_sync_local_size` baseline. A 0-byte
+   or implausibly-shrunk local is a crash artifact, not an edit, and diverts that branch to `Conflict` (row 9b) so a
+   corrupt-looking local is never pushed as the new newest save (#1062).
 
 `is_current` is **computed server-side**, not stored — see [RomM Save Sync API Behaviour](#romm-save-sync-api-behaviour)
-below.
+below. It is also a **snapshot**, not a promise: the whole decision is made against one `list_saves` response, and
+another device can move the slot on between that read and the write we derive from it. "Our device is still current, so
+nobody else has moved the server forward" is therefore a heuristic re-checked at write time, not something the decision
+may rely on — which is why the row-9 upload it licenses POSTs with `overwrite=false` and treats RomM's 409 as the
+authority (see [Upload-time conflicts (the 409 backstop)](#upload-time-conflicts-the-409-backstop)).
 
 ### Outcomes
 
@@ -537,9 +543,8 @@ The algorithm runs in the compiled [romm-gavel](https://github.com/danielcopper/
 `ComputeSyncActionFn` seam that `GavelNativeAdapter` provides (see
 [GavelNativeAdapter notes](backend-architecture.md#gavelnativeadapter-notes-the-compiled-save-sync-core) for the
 marshalling and the no-fallback posture). It answers in the `SyncAction` dataclasses defined in
-`py_modules/domain/sync_action.py`, alongside the in-tree `compute_sync_action` that is now the core's differential
-oracle in tests rather than runtime code. The `SaveService` aggregate (`py_modules/services/saves/`) calls the seam from
-two sub-services:
+`py_modules/domain/sync_action.py` — which is all that module holds, the decision itself living nowhere in Python. The
+`SaveService` aggregate (`py_modules/services/saves/`) calls the seam from two sub-services:
 
 - `SyncEngine.do_sync_rom_saves` (`services/saves/sync_engine/`) iterates local files and server-only-in-slot groups,
   dispatching each action via the matrix executor's `_dispatch_sync_action` (POST/GET + state update; the in-place PUT
@@ -557,8 +562,9 @@ cross-contaminates extensions — `Game.srm` is never resolved against a newer `
 ## Decision Matrix
 
 The matrix below enumerates every input combination the decision handles. Rows are derived from the algorithm and
-exhaustively cover the cross-product of dimensions. Tests in `tests/domain/test_sync_action.py` map 1:1 to these rows;
-they exercise the in-tree oracle, and `tests/adapters/test_gavel_native.py` proves the shipped core decides identically.
+exhaustively cover the cross-product of dimensions. The cases in `tests/adapters/test_gavel_native_decision_table.py`
+map 1:1 to these rows and read each one off the shipped core; the vendored gavel `decision-table` vectors state the same
+contract in upstream's terms.
 
 Dimensions:
 
@@ -570,9 +576,10 @@ Dimensions:
 - **Local mtime vs server `updated_at`** — only consulted in the `never touched` branch where the algorithm has no other
   ordering signal.
 - **Content identity** — in the `never touched` branch, byte-identity between the local file and the server head is
-  checked first (`_local_matches_server`: the stored `last_sync_server_hash` vs `server.content_hash` while local is
-  unchanged, else parity `local_hash == server.content_hash`); a match short-circuits to row 6d before mtime/baseline
-  are consulted (#1468).
+  checked first (the stored `last_sync_server_hash` vs `server.content_hash` while local is unchanged, else parity
+  `local_hash == server.content_hash`); a match short-circuits to row 6d before mtime/baseline are consulted (#1468).
+  Every hash the comparison touches must be present and non-empty on both sides: a missing or empty hash is uncertainty,
+  and uncertainty never reads as a match.
 
 | #   | local file | server in slot | our entry     | local vs baseline | mtime vs server      | decision                            | reason                                                                                                                                                                  |
 | --- | ---------- | -------------- | ------------- | ----------------- | -------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -648,13 +655,13 @@ upload mirror of the [#965](https://github.com/danielcopper/decky-romm-sync/issu
 download-overwrite path already quarantines the local file into `.romm-backup` first, but a blind upload of a
 corrupt-looking local had no equivalent guard.
 
-The plausibility check is pure (`domain/save_size.is_implausibly_shrunken`, fed `local_file.size` and the recorded
-`last_sync_local_size` baseline): a new size of **0** fires unconditionally, and a non-empty new size below **50%** of
-the recorded baseline fires as a shrink. The threshold is a hard-coded conservative default — not a setting. When the
-guard fires, the kernel returns `Conflict(picked)` instead of `Upload`, routing through the existing `SyncConflictModal`
-so the user decides: **Use Server** downloads the good server copy (quarantining the bad local first), **Keep Local**
-re-uploads the corrupt file only after an explicit choice. A plausible-size divergent edit (or a save that grew) is
-unaffected and still uploads (row 9).
+The plausibility check is part of the decision (fed `local_file.size` and the recorded `last_sync_local_size` baseline):
+a new size of **0** fires unconditionally, and a non-empty new size below **50%** of the recorded baseline fires as a
+shrink. The threshold is a hard-coded conservative default — not a setting. When the guard fires, the decision is
+`Conflict(picked)` instead of `Upload`, routing through the existing `SyncConflictModal` so the user decides: **Use
+Server** downloads the good server copy (quarantining the bad local first), **Keep Local** re-uploads the corrupt file
+only after an explicit choice. A plausible-size divergent edit (or a save that grew) is unaffected and still uploads
+(row 9).
 
 ### Why row 11 splits into download (11a) vs conflict (11b)
 
@@ -694,13 +701,10 @@ The content hash breaks the tie, mirroring row 11's split:
 - **12b — the content differs.** Both sides genuinely hold unreconciled bytes → **`Conflict`**, the user decides via
   Keep Local / Use Server. Unchanged from before.
 
-The identity check reuses the shared `_local_matches_server` helper (the same one rows 6d / 11a use). One subtlety: in
-this slice the local has **diverged** from the baseline, so the helper's provenance route — which requires local
-_unchanged_ since baseline (`local_hash == last_sync_hash`) — can never fire; only the parity route
-(`local_hash ==
-server.content_hash`) can prove identity here. The helper is called anyway for a uniform call shape; the
-provenance leg is simply inert. When the head carries no `content_hash` (older / migrated saves) or either hash is
-empty, parity fails closed to 12b — the safe default.
+The identity check is the same two-route one rows 6d / 11a use. One subtlety: in this slice the local has **diverged**
+from the baseline, and the provenance route requires it to be _unchanged_ since baseline — so that route is inert here
+and only parity (`local_hash == server.content_hash`) can prove identity. When the head carries no `content_hash` (older
+/ migrated saves) or either hash is empty, parity fails closed to 12b — the safe default.
 
 ### Why is there no foreign-save modal anymore
 
@@ -717,7 +721,9 @@ The client kernel is not the only conflict detector — RomM's `POST /api/saves`
 sync path dispatches is a POST with `overwrite=false`, and RomM rejects it with **HTTP 409** when the device is not
 current on the slot's newest save (see [The `add_save` POST 409-gate](#the-add_save-post-409-gate) below for the exact
 predicate). The adapter maps that 409 to `RommConflictError`, which is non-retryable and propagates on the first
-attempt.
+attempt. The backstop is needed because the matrix decided against a `list_saves` snapshot that can already be stale by
+the time the POST lands. The server's rejection, not our snapshot, is the authority on what the slot holds; the
+resolution below does nothing but map that rejection to an action.
 
 **Dedup-to-non-head (detected client-side).** A second signal routes to the same backstop. RomM's `add_save` content
 dedup can early-return an **existing** save whose content matches the upload instead of creating a new version — and
@@ -734,14 +740,20 @@ the empty-slot race) keeps today's behavior: the dedup response holds our conten
 any concurrent newer head is caught on the next sync's fresh list.
 
 On a 409 (or a client-detected dedup-to-non-head) the executor re-fetches the slot, picks the newest save in the
-canonical group, and resolves through the pure
-`resolve_upload_conflict(local_hash, last_sync_hash, server_content_hash)`:
+canonical group, and resolves through the `ResolveUploadConflictFn` seam — the core's second entry point, reading the
+current local hash, the recorded baseline, and both server hashes:
 
 | Condition                           | Result       | Why                                                                                 |
 | ----------------------------------- | ------------ | ----------------------------------------------------------------------------------- |
 | `local_hash == last_sync_hash`      | `"download"` | local is unchanged since our last sync — the server moved on, adopt it              |
 | `local_hash == server_content_hash` | `"download"` | already byte-identical to the server head — adopt it, nothing to upload             |
 | otherwise (incl. any `None` input)  | `"conflict"` | genuinely divergent — surface the same `SyncConflictModal` a matrix `Conflict` uses |
+
+**The download leg needs proof, not merely the absence of a reason to worry.** `"download"` is reachable only where the
+local file is _provably_ unchanged — unchanged since our own recorded baseline, or byte-identical to what the server now
+holds. A missing or empty `local_hash` proves neither, so it resolves to a conflict rather than a download: with no
+evidence about the local bytes we cannot claim there is no un-synced work to protect, and a download overwrites them.
+That asymmetry is why every unknown-input row of the vendored ladder vectors lands on `"conflict"`.
 
 A `"download"` result downgrades the upload to a `do_download_save` (the server save was newer and our local had no
 un-synced edits); a `"conflict"` result appends a `SyncConflict` and returns without writing, so the user resolves it
@@ -1338,7 +1350,7 @@ This has a concrete consequence for the sync algorithm: the "no entry for our de
 `compute_sync_action` (matrix rows 6a/6b) is unreachable in real plugin operation, because
 `SyncEngine.do_sync_rom_saves` always calls `list_saves` (which triggers the upsert) before passing the data to the
 algorithm. By the time the algorithm runs, our device entry exists on every server save. The branch is retained as
-defensive code and is exercised by unit tests in `tests/domain/test_sync_action.py`.
+defensive code and is exercised by the cases in `tests/adapters/test_gavel_native_decision_table.py`.
 
 ### The `add_save` POST 409-gate
 

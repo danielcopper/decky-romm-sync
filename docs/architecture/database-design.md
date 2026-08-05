@@ -527,13 +527,12 @@ before. Unlike the pin columns it rides the sync UPSERT, but the commit always w
 `rom_save_files` — the first schema change to a `FileSyncState` child
 ([#1468](https://github.com/danielcopper/decky-romm-sync/issues/1468)) — a single
 `ALTER TABLE rom_save_files ADD COLUMN last_sync_server_hash TEXT;` with no backfill. It records the server's own
-`content_hash` for the save synced at the last baseline, so the save-sync identity check
-(`domain.sync_action._local_matches_server`) can compare two server-produced hashes (the stored one against the live
-`server.content_hash`) instead of relying on the client's local reimplementation of RomM's hashing — the **provenance**
-route, now primary. `NULL` means "no stored server hash": a pre-migration baseline (or a hash-only skip-adopt) uses the
-**parity** fallback (`local_hash == server.content_hash`, #1457) until the next full sync stamps a value. Written only
-alongside `last_sync_hash` at the recorded-baseline writer sites (`adopt_baseline`), so a stored server hash always
-truthfully pairs with its `last_sync_hash`.
+`content_hash` for the save synced at the last baseline, so the save-sync identity check can compare two server-produced
+hashes (the stored one against the live `server.content_hash`) instead of relying on the client's local reimplementation
+of RomM's hashing — the **provenance** route, now primary. `NULL` means "no stored server hash": a pre-migration
+baseline (or a hash-only skip-adopt) uses the **parity** fallback (`local_hash == server.content_hash`, #1457) until the
+next full sync stamps a value. Written only alongside `last_sync_hash` at the recorded-baseline writer sites
+(`adopt_baseline`), so a stored server hash always truthfully pairs with its `last_sync_hash`.
 
 `018_rename_rom_save_states.sql` (`user_version = 18`) renames the save-sync scalar table `rom_save_states` ->
 `rom_save_sync_states` ([#1478](https://github.com/danielcopper/decky-romm-sync/issues/1478)) so the table name matches

@@ -3,19 +3,18 @@
 These JSON files are vendored verbatim from [danielcopper/romm-gavel](https://github.com/danielcopper/romm-gavel)
 `vectors/`, at release tag `v1.0.1`. The layout mirrors upstream — one subdirectory per vector family:
 
-- `ladder/` — the 409 resolution ladder (`resolve_upload_conflict`), run against the in-tree kernel by
-  `tests/domain/test_sync_action_gavel_vectors.py` and against the compiled core by
+- `ladder/` — the 409 resolution ladder (`gavel_resolve_upload_conflict`), run against the compiled core by
   `tests/adapters/test_gavel_native.py`.
   - `named-cases.json` — curated, named cases (each carries a `rationale`).
   - `equivalence-classes.json` — the exhaustive equivalence-class set.
-- `decision-table/` — the full per-`(rom, filename, slot)` sync decision (`compute_sync_action`), run against both
-  kernels by `tests/domain/test_sync_action_gavel_table_vectors.py`.
+- `decision-table/` — the full per-`(rom, filename, slot)` sync decision (`gavel_compute_sync_action`), run against the
+  compiled core by `tests/domain/test_sync_action_gavel_table_vectors.py`.
   - `named-cases.json` — curated cases across every branch of the decision table (each carries a `rationale`).
 
-They are the normative conformance vectors for the save-sync decision kernels — gavel is the client companion contract
-for RomM Device Sync, itself extracted from this repo's `py_modules/domain/sync_action.py`. Every vector runs against
-the compiled core services actually decide through **and** against the in-tree kernel that arbitrates the differential,
-so this tier proves both still conform to the published contract.
+They are the normative conformance vectors for the save-sync decisions — gavel is the client companion contract for RomM
+Device Sync, itself extracted from this plugin. Both decisions are made by the vendored core and nowhere else, so every
+vector runs against the binary the plugin actually ships, and this tier is what proves it still conforms to the
+published contract.
 
 ## Updating
 

@@ -224,14 +224,15 @@ Format: **invariant** — tier — enforced by.
   client-side, and a legacy delete is refused up-front
 - **Every save-sync decision comes from `compute_sync_action` (via `list_saves`), never the `negotiate` op list; every
   automatic upload POSTs `overwrite=false` (409-backstopped); `overwrite=true` only from an explicit `keep_local`** —
-  test + prompt-only — domain property tests (`resolve_upload_conflict`, row-11 split, Inv7/Inv8) + contract 409 tests
-  (`tests/contract/`); new upload/dispatch call sites are prompt-only
+  test + prompt-only — the hand-enumerated core cases (`tests/adapters/test_gavel_native_decision_table.py`) and the
+  core property tier (`tests/adapters/test_gavel_native_property.py`) + contract 409 tests (`tests/contract/`); new
+  upload/dispatch call sites are prompt-only
 - **Both save-sync decisions run in the compiled gavel core, reached only through the `ComputeSyncActionFn` /
-  `ResolveUploadConflictFn` seams; the in-tree `domain/sync_action` kernels have no runtime call site and exist as the
-  differential oracle, so a change to either must be a contract change carried by re-copied gavel vectors** — test —
-  vendored vector families run against both kernels plus the crossed-input differential
-  (`tests/adapters/test_gavel_native.py`, `tests/domain/test_sync_action_gavel_table_vectors.py`); the `.so` and the
-  vectors are pinned to the same upstream release tag and are bumped together
+  `ResolveUploadConflictFn` seams; `domain/sync_action.py` holds only the `SyncAction` vocabulary the core answers in,
+  so a change to either decision is a contract change carried by re-copied gavel vectors** — test — both vendored vector
+  families run against the core (ladder in `tests/adapters/test_gavel_native.py`, decision table in
+  `tests/domain/test_sync_action_gavel_table_vectors.py`); the `.so` and the vectors are pinned to the same upstream
+  release tag and are bumped together
 - **`applied_launch_options` is written only by the five recorded-state writer sites (sync ack-commit,
   download-complete, uninstall, home-migration, version-switch), each recording the exact command the frontend wrote;
   excluded from the sync UPSERT; the only sanctioned reset is Force Full Sync's clear-to-NULL (a wrong recorded value is
