@@ -35,12 +35,12 @@ from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
+from adapters.gavel_native import GavelNativeAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.romm.romm_api import RommApiAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.save_layout import InSaveDir
-from domain.sync_action import compute_sync_action, resolve_upload_conflict
 from services.achievements import AchievementsService
 from services.cores import CoreService
 from services.disc import DiscService
@@ -54,6 +54,8 @@ from services.prune import PruneService
 from services.saves import SaveService
 from services.steamgrid import SteamGridService
 from services.version_switch import VersionSwitchService
+
+_GAVEL = GavelNativeAdapter()
 
 
 def _bootstrap_for(tmp_path) -> BootstrapResult:
@@ -250,8 +252,8 @@ class TestWireServices:
             "renderer_rss": FakeRendererRss(),
             "renderer_gc": FakeRendererGc(),
             "game_process": FakeGameProcessControlAdapter(),
-            "resolve_upload_conflict": resolve_upload_conflict,
-            "compute_sync_action": compute_sync_action,
+            "resolve_upload_conflict": _GAVEL,
+            "compute_sync_action": _GAVEL.compute_sync_action,
             "recovery_store": MagicMock(),
             "prune_artifacts": MagicMock(),
             "steam_recovery": MagicMock(),

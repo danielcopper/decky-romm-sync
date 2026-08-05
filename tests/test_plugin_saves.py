@@ -21,6 +21,7 @@ from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
+from adapters.gavel_native import GavelNativeAdapter
 from adapters.migration_file import MigrationFileAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.save_file import SaveFileAdapter
@@ -30,11 +31,12 @@ from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_layout import InSaveDir
-from domain.sync_action import compute_sync_action, resolve_upload_conflict
 from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
 from services.playtime import PlaytimeService, PlaytimeServiceConfig
 from services.saves import SaveService, SaveServiceConfig
+
+_GAVEL = GavelNativeAdapter()
 
 
 @pytest.fixture
@@ -96,8 +98,8 @@ def plugin(tmp_path):
         config=SaveServiceConfig(
             romm_api=fake_api,
             retry=_make_retry(),
-            resolve_upload_conflict=resolve_upload_conflict,
-            compute_sync_action=compute_sync_action,
+            resolve_upload_conflict=_GAVEL,
+            compute_sync_action=_GAVEL.compute_sync_action,
             settings=p._save_settings,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),

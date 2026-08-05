@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from domain.rom_save_sync_state import RomSaveSyncState
-from domain.sync_action import Conflict, Skip, compute_sync_action
+from domain.sync_action import Conflict, Skip
 from lib.errors import DeviceNotRegisteredError, RommApiError, RommConflictError
 from services.saves.sync_engine.matrix import (
     DispatchSink,
@@ -23,6 +23,7 @@ from services.saves.sync_engine.matrix import (
     _dedup_returned_non_head,
 )
 from tests.services.saves._helpers import (
+    _GAVEL,
     _create_save,
     _do_sync,
     _do_upload,
@@ -1383,7 +1384,7 @@ class TestZipSaveContentHashParity:
         local_file = {"filename": "pokemon.srm", "path": zip_path, "size": os.path.getsize(zip_path), "mtime": 1.0}
 
         def _decide(local_hash: str):
-            return compute_sync_action(
+            return _GAVEL.compute_sync_action(
                 local_file=local_file,
                 server_saves_in_slot=[server],
                 files_state={},

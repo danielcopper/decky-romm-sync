@@ -17,13 +17,17 @@ from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock
 
+from adapters.gavel_native import GavelNativeAdapter
 from adapters.save_file import SaveFileAdapter
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_layout import InSaveDir
-from domain.sync_action import compute_sync_action, resolve_upload_conflict
 from services.saves import SaveService, SaveServiceConfig
+
+# One ctypes load for the whole SaveService suite — the adapter is stateless,
+# so every service built here can share the same instance.
+_GAVEL = GavelNativeAdapter()
 
 
 async def _noop_emit(_event: str, /, *_args: object) -> None:
@@ -42,12 +46,8 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
     config_kwargs: dict[str, Any] = {
         "romm_api": fake,
         "retry": _make_retry(),
-        # Service tests exercise the injected seams with the in-tree kernels —
-        # the native adapter's own conformance/differential tests prove the
-        # shipped binary matches these exact contracts
-        # (tests/adapters/test_gavel_native.py).
-        "resolve_upload_conflict": resolve_upload_conflict,
-        "compute_sync_action": compute_sync_action,
+        "resolve_upload_conflict": _GAVEL,
+        "compute_sync_action": _GAVEL.compute_sync_action,
         "settings": {"log_level": "debug"},
         "settings_persister": FakeSettingsPersister(),
         "save_file_store": save_file_store,
