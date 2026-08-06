@@ -114,7 +114,7 @@ published spec from silently drifting apart:
 
 - **ladder** (the 409 resolution ladder) — `tests/adapters/test_gavel_native.py`.
 - **decision-table** (the full per-`(rom, filename, slot)` decision) —
-  `tests/domain/test_sync_action_gavel_table_vectors.py`.
+  `tests/adapters/test_gavel_native_table_vectors.py`.
 
 Both families read the core through `GavelNativeAdapter`, the seam production decides on. The vectors are vendored
 verbatim under `tests/domain/gavel_vectors/`, one subdirectory per family mirroring upstream `vectors/` (`ladder/` — a
@@ -122,7 +122,7 @@ curated named-case set plus the exhaustive equivalence classes; `decision-table/
 submodule and no network in CI, so every contract change lands as a reviewable diff. Run them like any other test:
 
 ```bash
-python -m pytest tests/domain/test_sync_action_gavel_table_vectors.py tests/adapters/test_gavel_native.py -q
+python -m pytest tests/adapters/test_gavel_native_table_vectors.py tests/adapters/test_gavel_native.py -q
 ```
 
 Updating the vectors means deliberately re-copying the JSON from the matching upstream `vectors/<family>/` directory and

@@ -58,7 +58,7 @@ and its boundaries.
 
 Two [romm-gavel](https://github.com/danielcopper/romm-gavel) vector families guard the save-sync decisions: **ladder**
 (the 409 resolution, `tests/adapters/test_gavel_native.py`) and **decision-table** (the full per-file decision,
-`tests/domain/test_sync_action_gavel_table_vectors.py`). Both decisions run in the compiled core
+`tests/adapters/test_gavel_native_table_vectors.py`). Both decisions run in the compiled core
 (`adapters/gavel_native.py`) and nowhere else, so each family runs against that core through `GavelNativeAdapter` — the
 production path — and there is no second implementation to hold to the same contract. The vectors are vendored verbatim
 under `tests/domain/gavel_vectors/` at a pinned upstream **release tag** (no submodule, no network in CI), so a contract

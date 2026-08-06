@@ -2,16 +2,16 @@
 
 This tier proves the full per-``(rom, filename, slot)`` decision still conforms to the gavel
 decision-table contract — the decision the spec models, extracted from this very codebase. The
-vendored JSON vectors under ``gavel_vectors/decision-table/`` are the contract's normative
-artifact: each one pins the five positional inputs (``local_file``, ``server_saves_in_slot``,
-``files_state``, ``device_id``, ``local_hash``) to the tagged decision the spec mandates, so any
-drift between kernel and contract surfaces here as a failing vector.
+vendored JSON vectors under ``tests/domain/gavel_vectors/decision-table/`` are the contract's
+normative artifact: each one pins the five positional inputs (``local_file``,
+``server_saves_in_slot``, ``files_state``, ``device_id``, ``local_hash``) to the tagged decision
+the spec mandates, so any drift between core and contract surfaces here as a failing vector.
 
 Every vector runs against :class:`adapters.gavel_native.GavelNativeAdapter`, the compiled core
 services actually decide through. It answers in the ``Skip`` / ``Upload`` / ``Download`` /
 ``Conflict`` dataclasses, which this test serializes into the vector dialect for comparison.
-Vectors change only by a deliberate re-copy from upstream (see ``gavel_vectors/README.md``) —
-never by editing them to match the kernel.
+Vectors change only by a deliberate re-copy from upstream (see
+``tests/domain/gavel_vectors/README.md``) — never by editing them to match the core.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from domain.sync_action import Download, Skip, SyncAction, Upload
 if TYPE_CHECKING:
     from services.protocols import ComputeSyncActionFn
 
-_VECTORS_DIR = Path(__file__).parent / "gavel_vectors" / "decision-table"
+_VECTORS_DIR = Path(__file__).parent.parent / "domain" / "gavel_vectors" / "decision-table"
 
 
 @pytest.fixture(scope="module")
@@ -56,7 +56,7 @@ def _serialize(result: SyncAction) -> dict[str, Any]:
 
 
 def _load_vectors() -> tuple[list[tuple[dict[str, Any], dict[str, Any], str | None]], list[str]]:
-    """Flatten every ``gavel_vectors/decision-table/*.json`` file into parametrize argvalues + ids.
+    """Flatten every ``decision-table/*.json`` vector file into parametrize argvalues + ids.
 
     Returns a ``(argvalues, ids)`` pair. Each argvalue is ``(input, expected, rationale)`` — every
     decision-table vector carries a ``rationale``. Each id is ``<filestem>:<vector name>`` so a

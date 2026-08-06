@@ -231,7 +231,7 @@ Format: **invariant** — tier — enforced by.
   `ResolveUploadConflictFn` seams; `domain/sync_action.py` holds only the `SyncAction` vocabulary the core answers in,
   so a change to either decision is a contract change carried by re-copied gavel vectors** — test — both vendored vector
   families run against the core (ladder in `tests/adapters/test_gavel_native.py`, decision table in
-  `tests/domain/test_sync_action_gavel_table_vectors.py`); the `.so` and the vectors are pinned to the same upstream
+  `tests/adapters/test_gavel_native_table_vectors.py`); the `.so` and the vectors are pinned to the same upstream
   release tag and are bumped together
 - **`applied_launch_options` is written only by the five recorded-state writer sites (sync ack-commit,
   download-complete, uninstall, home-migration, version-switch), each recording the exact command the frontend wrote;

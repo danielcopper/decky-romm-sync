@@ -8,7 +8,7 @@ These JSON files are vendored verbatim from [danielcopper/romm-gavel](https://gi
   - `named-cases.json` — curated, named cases (each carries a `rationale`).
   - `equivalence-classes.json` — the exhaustive equivalence-class set.
 - `decision-table/` — the full per-`(rom, filename, slot)` sync decision (`gavel_compute_sync_action`), run against the
-  compiled core by `tests/domain/test_sync_action_gavel_table_vectors.py`.
+  compiled core by `tests/adapters/test_gavel_native_table_vectors.py`.
   - `named-cases.json` — curated cases across every branch of the decision table (each carries a `rationale`).
 
 They are the normative conformance vectors for the save-sync decisions — gavel is the client companion contract for RomM

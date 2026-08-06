@@ -1396,7 +1396,7 @@ backstop in `_handle_upload_409` (`services/saves/sync_engine/matrix.py`).
   stays inert — the same "fatal until the environment is fixed" posture as the SQLite migration gate. There is no Python
   implementation of either decision to fall back to: `domain/sync_action.py` holds only the `SyncAction` vocabulary the
   core answers in. What holds the shipped binary to the contract is the vendored gavel vectors — the ladder family in
-  `tests/adapters/test_gavel_native.py`, the decision table in `tests/domain/test_sync_action_gavel_table_vectors.py` —
+  `tests/adapters/test_gavel_native.py`, the decision table in `tests/adapters/test_gavel_native_table_vectors.py` —
   alongside the hand-enumerated cases in `tests/adapters/test_gavel_native_decision_table.py`, the property tier in
   `tests/adapters/test_gavel_native_property.py`, and the boundary cases that pin the two marshalling conversions above.
 

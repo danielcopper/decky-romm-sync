@@ -1,7 +1,7 @@
 """Tests for the GavelNativeAdapter — the compiled save-sync decision kernels.
 
-Two tiers guard the shipped shared object, for both of the decisions it owns
-(the upload-409 ladder and the full per-file sync action):
+Two of the tiers guarding the shipped shared object live here, for both of the
+decisions it owns (the upload-409 ladder and the full per-file sync action):
 
 * **Unit** — the real vendored ``.so`` loads, decides the canonical cases
   (including the ``None`` vs ``""`` distinction and the marshalling boundaries
@@ -10,7 +10,7 @@ Two tiers guard the shipped shared object, for both of the decisions it owns
 * **Vendored-vector conformance** — every ``ladder`` gavel vector is replayed
   against the adapter, so the shipped binary must satisfy the normative contract
   the decision is held to. The decision-table family runs in
-  ``tests/domain/test_sync_action_gavel_table_vectors.py``.
+  ``tests/adapters/test_gavel_native_table_vectors.py``.
 """
 
 from __future__ import annotations
