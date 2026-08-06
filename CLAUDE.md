@@ -250,14 +250,19 @@ Format: **invariant** — tier — enforced by.
 - **A prune frontend action mutates Steam only after atomically claiming its exact run/token/discriminant/binding;
   repeats are idempotent and an outcome lost in transit is ambiguous, never success** — test + prompt-only — prune
   service claim tests + `src/utils/pruneActions.test.ts`; new action kinds are prompt-only
-- **Every prune mutation is authorized by a descriptor-relative no-follow claim (root identity, descendant identities,
-  regular-file hashes) revalidated immediately before it, never by a path re-lookup; refusal and ambiguity are reported,
-  never rewritten into success. The hashes are what bind a deletion to bytes held somewhere else, so they are mandatory
-  wherever a claim outlives its sealing — every cleanup removal, bundle-sealed or not. A user-initiated uninstall is not
-  a prune mutation: it seals and consumes its own claim with no second copy to bind to, so it claims identity-only
-  (`claim_source(..., digest=False)`) and every other element — staging rename, writer-exclusion leases, mount checks,
-  no-follow traversal, exact-identity revalidation immediately before each unlink — holds unchanged** — test +
-  prompt-only — descriptor-path, recovery-adapter, real RomRemovalService, and prune contract tests; new mutation
+- **Every installed-content mutation is authorized by a descriptor-relative no-follow claim (root identity, descendant
+  identities, and — where a bundle exists — regular-file hashes) revalidated immediately before it, never by a path
+  re-lookup; refusal, partial mutation and ambiguity are reported, never rewritten into success. The hashes bind a
+  deletion to bytes held somewhere else, so they follow the **bundle**, not the caller: a source a sealed bundle holds
+  consumes the bundle's digest-bound claim, a source it did not capture seals a fresh content-bound one, and a removal
+  with no bundle anywhere — recovery off, or a user-initiated uninstall — seals identity-only
+  (`claim_source(..., digest=False)`). An identity-only claim is also the only one that may adopt interrupted
+  `.{basename}.romm-prune-*` staging, and only where a surviving install row proves the path. Everything else holds for
+  both: staging rename, mount checks, no-follow traversal, and exact-identity revalidation under writer exclusion held
+  across each unlink. The one guarantee that differs is all-or-nothing: a content-bound removal leases the whole tree up
+  front, an identity-only directory leases per unlink (a whole-tree hold hits `EMFILE` and makes large dumps
+  un-uninstallable), so a writer arriving mid-loop yields a reported partial removal instead of a clean refusal** —
+  test + prompt-only — descriptor-path, recovery-adapter, real RomRemovalService, and prune contract tests; new mutation
   adapters are prompt-only
 - **Every prune frame carries its originating preview ID; only a matching pending preview may adopt a run, and an
   accepted contiguous terminal result seals it against every later frame** — test + prompt-only — prune service frame

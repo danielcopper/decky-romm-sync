@@ -197,29 +197,69 @@ never authorizes a delete or a quarantine.
 ### What the hashes are for, and where they stop
 
 A claim's regular-file hashes exist to bind a deletion to bytes held **somewhere else**: the sealed bundle's
-`checksums.sha256` and its per-artifact digests are the same values, so consuming the claim proves the copy in the
-bundle is the copy being deleted. That is why they are mandatory across every cleanup removal — including the
-recovery-off and unselected sources, whose final presence-or-absence claim still outlives its sealing and is still
-consumed by a run the user did not watch each step of.
+`checksums.sha256` and its per-artifact digests are the same values, and `_require_records_match_claims` refuses any
+artifact record whose digest differs from the claim's, so consuming the claim proves the copy in the bundle is the copy
+being deleted.
 
-They stop at the boundary of this feature. A user-initiated **uninstall** seals its claim and consumes it within the
-same call, against the same filesystem state, with no second copy anywhere for a hash to bind to — re-reading the bytes
-only compares them against themselves. Exact identity (device, inode, mode, size, mtime, ctime) plus the kernel writer
-exclusion, which cannot be established at all while another process holds the file open for writing, already carry
-everything the comparison could. So an uninstall claims **identity-only** (`claim_source(..., digest=False)`, recorded
-on the claim as `content_bound: false`) and pays no I/O for it, while every other element of the discipline holds
-unchanged. The cost of not drawing that line was measured: hashing turned a 31 GB uninstall into roughly 23 minutes of
-reading, four times over ([#1664](https://github.com/danielcopper/decky-romm-sync/issues/1664)).
+Where there is no second copy, that binding has nothing to attach to. Re-reading the bytes then only compares them
+against themselves, and exact identity (device, inode, mode, size, mtime, ctime) plus the kernel writer exclusion —
+which cannot be established at all while another process holds the file open for writing — already carry everything the
+comparison could. So the discipline follows the bundle, not the caller:
 
-An uninstall's identity-only claim is also the only one allowed to adopt **interrupted staging**. When the source is
-absent, the parent still holds a `.{basename}.romm-prune-*` entry, and the install record survives to prove the path was
-this ROM's, the next attempt finishes the removal under a fresh self-claim. A run's claim cannot do this: its authority
-came from a sealed bundle, and a partially consumed source no longer matches it.
+| Source                                            | Claim                                                            |
+| ------------------------------------------------- | ---------------------------------------------------------------- |
+| Selected for a sealed bundle                      | Decoded from that held bundle, digest-bound                      |
+| Not captured, but a bundle was sealed             | Sealed fresh at mutation time, content-bound — the bundle exists |
+| Removed with recovery off (no bundle anywhere)    | Sealed fresh at mutation time, **identity-only**                 |
+| Removed by a user-initiated uninstall (no bundle) | Sealed fresh at mutation time, **identity-only**                 |
+
+An identity-only claim is `claim_source(..., digest=False)` and records itself as `content_bound: false`. Everything
+else holds unchanged: staging rename, writer exclusion, mount checks, no-follow traversal, and exact-identity
+revalidation immediately before each unlink. The cost of not drawing this line was measured — hashing turned a 31 GB
+uninstall into roughly 23 minutes of reading, four times over
+([#1664](https://github.com/danielcopper/decky-romm-sync/issues/1664)).
+
+Earlier revisions of this page described the last two rows as taking a "presence-or-absence claim". That was never what
+the code did — those sources took a fully content-bound claim, and the phrase described only the **provenance** of the
+claim (sealed here rather than decoded from a bundle), not its strength. An identity-only claim is weaker than what
+shipped and far stronger than that phrase suggests, so the table above states the strength outright. The saves side is
+unaffected: exclusive-save claims stay content-bound, and `validate_prune_absences` reads only their `exists` flag when
+it rechecks the quarantined set before the cascade.
+
+An identity-only claim is also the only one allowed to adopt **interrupted staging**. Where the source is absent, the
+parent still holds a `.{basename}.romm-prune-*` entry, and the install record survives to prove the path was this ROM's,
+the next attempt finishes the removal under a fresh self-claim — a claim it can simply re-seal. A bundle-backed removal
+cannot: its authority came from a seal that a partially consumed source no longer matches.
+
+### Writer exclusion: whole-tree versus per-unlink
+
+A content-bound removal leases every regular file in the tree before it deletes anything and holds all of those leases
+until the last unlink. That makes it **all-or-nothing**: a writer anywhere in the tree refuses the removal with nothing
+deleted and the tree renamed back.
+
+An identity-only removal of a directory cannot do that. One open descriptor per file, against a soft `RLIMIT_NOFILE` of
+1024, made a tree of a few thousand files fail with `EMFILE` — and because the rollback then restored it intact, those
+ROMs were **permanently un-uninstallable** through the UI. Multi-thousand-file dumps are ordinary on some platforms. So
+it leases each file only for its own unlink, and the guarantees split:
+
+- **Unchanged** — every unlink is authorized by exact identity revalidated immediately before it, under writer exclusion
+  held across that unlink. A single file that another process has open for writing is never deleted.
+- **Unchanged** — a whole-subtree pass runs before any unlink and takes each file's lease in turn, so a writer already
+  holding any file in the tree, or any identity drift, still refuses with nothing deleted.
+- **Changed** — a writer that arrives _during_ the unlink loop yields a **partial** removal instead of a clean refusal.
+  It is reported as partial and ambiguous, never as success, and the message names how far the removal got ("3 of 331
+  files were removed", or that no file was removed). The remainder stays under the staging name, which the next attempt
+  reclaims.
+
+A single-file source keeps the whole-hold form under either discipline — there is only one descriptor to hold.
 
 - Regular-file and controller-claim deletion holds kernel writer exclusion from final validation through the unlink; if
   exclusion cannot be established the source is retained. A writer-exclusion teardown fault is ambiguity, not success.
-- Selected sources consume claims decoded from the same held, digest-bound sealed bundle. Unselected and recovery-off
-  sources take a final presence-or-absence claim instead — content-bound like every other cleanup claim.
+  Whether that hold spans the whole tree or one file at a time depends on the claim — see
+  [Writer exclusion](#writer-exclusion-whole-tree-versus-per-unlink).
+- Selected sources consume claims decoded from the same held, digest-bound sealed bundle. Every other source seals its
+  own claim at mutation time, content-bound while a bundle exists to bind it to and identity-only when none does — see
+  [What the hashes are for](#what-the-hashes-are-for-and-where-they-stop).
 - Every exclusive save is expected absent after quarantine, and the whole set is rechecked collectively immediately
   before the aggregate cascade — a save an emulator recreated in between stops the deletion.
 - Quarantine publication is atomic no-replace, so a concurrently created `.romm-backup` destination is never
