@@ -53,7 +53,12 @@ import { runLaunchGate, markLaunchSkipped } from "../utils/launchGate";
 import type { GateVerdict, LaunchGateOps, PreLaunchSyncOutcome } from "../utils/launchGate";
 import { isSessionActive } from "../utils/sessionManager";
 import { isAppRunning } from "../utils/runningApps";
-import type { DownloadProgressEvent, DownloadCompleteEvent, DownloadFailedEvent } from "../types";
+import type {
+  DownloadProgressEvent,
+  DownloadCompleteEvent,
+  DownloadFailedEvent,
+  UninstallProgressEvent,
+} from "../types";
 import { SAVEFILES_IN_CONTENT_DIR_REASON } from "../types";
 import { detach } from "../utils/detach";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
@@ -69,7 +74,16 @@ import { reconfirmLaunchOptions } from "../utils/launchOptionsReconcile";
 import { saveSyncToastBody } from "../utils/saveSyncToast";
 
 type PlayButtonState =
-  "loading" | "not_romm" | "download" | "conflict" | "syncing" | "play" | "launching" | "dl_complete" | "uninstalling";
+  | "loading"
+  | "not_romm"
+  | "download"
+  | "conflict"
+  | "syncing"
+  | "play"
+  | "launching"
+  | "dl_complete"
+  | "uninstall_pending"
+  | "uninstalling";
 
 interface DownloadProgress {
   bytesDownloaded: number;
@@ -139,6 +153,11 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // reads "Stopping..." and is disabled while the ladder runs, which can be
   // several seconds of no visible change.
   const [stopPending, setStopPending] = useState(false);
+  // Per-file progress of an in-flight uninstall (multi-file ROMs only).
+  const [uninstallProgress, setUninstallProgress] = useState<{ removed: number; total: number } | null>(null);
+  // Set synchronously before the uninstall's first await, so a second press
+  // cannot start a duplicate removal while React has not re-rendered yet.
+  const uninstallPendingRef = useRef(false);
   const romIdRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -315,6 +334,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         }),
     );
 
+    const uninstallProgressListener = addEventListener<[UninstallProgressEvent]>(
+      "uninstall_progress",
+      (evt: UninstallProgressEvent) => {
+        if (evt.rom_id !== romIdRef.current) return;
+        setUninstallProgress({ removed: evt.files_removed, total: evt.files_total });
+      },
+    );
+
     const onUninstall = (e: Event) => {
       const romId = (e as CustomEvent).detail?.rom_id;
       if (romId !== romIdRef.current) return;
@@ -405,6 +432,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       removeEventListener("download_progress", progressListener);
       removeEventListener("download_complete", completeListener);
       removeEventListener("download_failed", failedListener);
+      removeEventListener("uninstall_progress", uninstallProgressListener);
       globalThis.removeEventListener("romm_rom_uninstalled", onUninstall);
       globalThis.removeEventListener("romm_data_changed", onDataChanged);
       unsubscribeConnection();
@@ -984,7 +1012,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   };
 
   const handleUninstall = async () => {
-    if (!romId) return;
+    if (!romId || uninstallPendingRef.current) return;
+    // Removing a large multi-file ROM takes long enough that a button which only
+    // changes on completion reads as dead and gets pressed again (#1664). Claim
+    // the press before the first await and show it immediately.
+    uninstallPendingRef.current = true;
+    const stateBeforeUninstall = state;
+    setUninstallProgress(null);
+    setState("uninstall_pending");
     detach(debugLog(`CustomPlayButton: uninstalling romId=${romId}`));
     try {
       const admission = capturePruneLeaseAdmission(leaseOwner);
@@ -1012,9 +1047,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         return;
       } else {
         toaster.toast({ title: "RomM Sync", body: result.message || "Uninstall failed" });
+        setState(stateBeforeUninstall);
       }
     } catch {
       toaster.toast({ title: "RomM Sync", body: "Uninstall failed" });
+      setState(stateBeforeUninstall);
+    } finally {
+      uninstallPendingRef.current = false;
+      setUninstallProgress(null);
     }
   };
 
@@ -1386,6 +1426,28 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       >
         {downloadBtn}
         <div style={{ display: "flex", flexDirection: "row", height: "100%" }}>{rightAction}</div>
+      </Focusable>
+    );
+  }
+
+  if (state === "uninstall_pending") {
+    return (
+      <Focusable className={appActionButtonClasses?.PlayButtonContainer} style={btnContainerStyle}>
+        <DialogButton
+          className={[appActionButtonClasses?.PlayButton, "romm-btn-download"].filter(Boolean).join(" ")}
+          style={{
+            ...mainBtnStyle,
+            borderRadius: "2px",
+            background: "linear-gradient(to right, #47b3ff, #1a9fff)",
+          }}
+          disabled
+        >
+          <span className="romm-dl-label">
+            {uninstallProgress
+              ? `Uninstalling ${uninstallProgress.removed}/${uninstallProgress.total}`
+              : "Uninstalling..."}
+          </span>
+        </DialogButton>
       </Focusable>
     );
   }

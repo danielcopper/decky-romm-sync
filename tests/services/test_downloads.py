@@ -195,6 +195,8 @@ def plugin():
         config=RomRemovalServiceConfig(
             logger=decky.logger,
             loop=asyncio.get_event_loop(),
+            clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
+            emit=decky.emit,
             rom_file_store=RomFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(
                 roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),

@@ -371,12 +371,37 @@ class RomFileStore(Protocol):
         """Recursively delete *path* and all contents."""
         ...
 
-    def claim_source(self, path: str, safe_root: str) -> SourceClaim:
-        """Capture the current no-follow source and complete subtree identity."""
+    def claim_source(self, path: str, safe_root: str, *, digest: bool = True) -> SourceClaim:
+        """Capture the current no-follow source and complete subtree identity.
+
+        With *digest* false the claim carries no content hashes and is
+        authorized by exact identity and writer exclusion alone — the form a
+        caller takes when it seals and consumes the claim itself, with no
+        separately held copy of the bytes for a hash to bind the deletion to.
+        """
         ...
 
-    def remove_claimed(self, path: str, safe_root: str, claim: SourceClaim) -> MutationOutcome:
-        """Remove only the complete claimed source tree and report durable progress."""
+    def remove_claimed(
+        self,
+        path: str,
+        safe_root: str,
+        claim: SourceClaim,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> MutationOutcome:
+        """Remove only the complete claimed source tree and report durable progress.
+
+        *on_progress* receives (files removed, files claimed) after each
+        unlink, on the calling thread.
+        """
+        ...
+
+    def reclaim_staged_source(self, path: str, safe_root: str) -> MutationOutcome:
+        """Finish removing the staging entries an interrupted removal of *path* left behind.
+
+        Reports ``changed`` false when the parent holds no such entry. The
+        caller must hold its own proof that *path* is the ROM's, because a
+        partially consumed claim can no longer be revalidated.
+        """
         ...
 
 

@@ -911,4 +911,5 @@ class RecoveryBundleAdapter:
             "source_identity": cls._decode_identity(raw_identity),
             "sha256": raw_sha256,
             "entries": entries,
+            "content_bound": True,
         }

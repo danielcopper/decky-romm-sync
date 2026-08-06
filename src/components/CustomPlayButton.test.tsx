@@ -936,6 +936,161 @@ describe("CustomPlayButton — uninstall resets launch_options (#1051)", () => {
   });
 });
 
+describe("CustomPlayButton — uninstall is visible and single-shot (#1664)", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(toaster.toast).mockReset();
+    vi.mocked(showContextMenu).mockReset();
+    vi.mocked(setLaunchOptionsConfirmed).mockReset();
+    vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(true);
+    vi.mocked(backend.removeRom).mockReset();
+  });
+
+  /** Open the play-state menu once and return a click-the-Uninstall-item function. */
+  async function openUninstallMenu(container: HTMLElement): Promise<() => Promise<void>> {
+    const chevron = container.querySelector(".romm-btn-dropdown") as HTMLElement | null;
+    if (!chevron) throw new Error("dropdown chevron not rendered");
+    act(() => {
+      chevron.click();
+    });
+    const calls = vi.mocked(showContextMenu).mock.calls;
+    const menu = calls[calls.length - 1]![0] as ReactElement;
+    const { findByText } = render(menu);
+    const uninstallItem = await findByText("Uninstall");
+    return async () => {
+      await act(async () => {
+        uninstallItem.click();
+        await Promise.resolve();
+      });
+    };
+  }
+
+  /** A removeRom that stays in flight until the test releases it. */
+  function pendingRemoveRom(): (result?: backend.BackendResult) => Promise<void> {
+    let release: (value: backend.BackendResult) => void = () => {};
+    vi.mocked(backend.removeRom).mockReturnValue(
+      new Promise<backend.BackendResult>((resolve) => {
+        release = resolve;
+      }),
+    );
+    return async (result = { success: true, message: "" }) => {
+      await act(async () => {
+        release(result);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    };
+  }
+
+  it("shows the removal is running before the backend answers", async () => {
+    const finish = pendingRemoveRom();
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { container, findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+
+    const pressUninstall = await openUninstallMenu(container);
+    await pressUninstall();
+
+    // The pending state is set before the await, so a removal that takes minutes
+    // is not indistinguishable from a dead button.
+    await findByText("Uninstalling...");
+    await finish();
+  });
+
+  it("counts files removed as the backend reports them", async () => {
+    const finish = pendingRemoveRom();
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { container, findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    const pressUninstall = await openUninstallMenu(container);
+    await pressUninstall();
+
+    act(() => {
+      emitDeckyEvent("uninstall_progress", { rom_id: 42, files_removed: 128, files_total: 331 });
+    });
+
+    await findByText("Uninstalling 128/331");
+    await finish();
+  });
+
+  it("ignores a progress frame for another ROM", async () => {
+    const finish = pendingRemoveRom();
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { container, findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    const pressUninstall = await openUninstallMenu(container);
+    await pressUninstall();
+
+    act(() => {
+      emitDeckyEvent("uninstall_progress", { rom_id: 7, files_removed: 128, files_total: 331 });
+    });
+
+    await findByText("Uninstalling...");
+    await finish();
+  });
+
+  it("no-ops a second press while the first removal is still running", async () => {
+    const finish = pendingRemoveRom();
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { container, findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    const pressUninstall = await openUninstallMenu(container);
+
+    await pressUninstall();
+    await pressUninstall();
+    await pressUninstall();
+
+    expect(vi.mocked(backend.removeRom)).toHaveBeenCalledTimes(1);
+    await finish();
+  });
+
+  it("accepts a fresh press once the first removal has finished", async () => {
+    vi.mocked(backend.removeRom).mockResolvedValue({ success: false, message: "boom" });
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { container, findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    const pressUninstall = await openUninstallMenu(container);
+
+    await pressUninstall();
+    await findByText("Play");
+    await pressUninstall();
+
+    expect(vi.mocked(backend.removeRom)).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns to the pre-uninstall button when the backend refuses", async () => {
+    vi.mocked(backend.removeRom).mockResolvedValue({
+      success: false,
+      reason: "in_progress",
+      message: "This ROM is already being uninstalled",
+    });
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { container, findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    const pressUninstall = await openUninstallMenu(container);
+
+    await pressUninstall();
+
+    await findByText("Play");
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
+      title: "RomM Sync",
+      body: "This ROM is already being uninstalled",
+    });
+  });
+
+  it("drops its progress listener on unmount", async () => {
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { findByText, unmount } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    expect(deckyEventListenerCount("uninstall_progress")).toBe(1);
+
+    unmount();
+
+    expect(deckyEventListenerCount("uninstall_progress")).toBe(0);
+  });
+});
+
 describe("CustomPlayButton — pre-launch failure shapes without an errors array (#1050)", () => {
   beforeEach(() => {
     vi.mocked(getCachedGameDetail).mockReset();

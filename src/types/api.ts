@@ -22,7 +22,8 @@ export type RommErrorCode =
   | "version_error"
   | "stale_conflict"
   | "stale_preview"
-  | "config_error";
+  | "config_error"
+  | "in_progress";
 
 /**
  * Payload of the `server_retry_progress` event (#1345). Emitted once per retry

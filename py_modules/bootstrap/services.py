@@ -295,6 +295,8 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         config=RomRemovalServiceConfig(
             logger=cfg.runtime.logger,
             loop=cfg.runtime.loop,
+            clock=cfg.runtime.clock,
+            emit=cfg.runtime.emit,
             rom_file_store=cfg.adapters.rom_file_store,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             download_queue_cleanup=download_service,

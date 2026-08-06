@@ -131,6 +131,7 @@ class FakeSaveFileStore:
             },
             "sha256": hashlib.sha256(self.files[path]).hexdigest() if exists else None,
             "entries": {},
+            "content_bound": True,
         }
 
     def ensure_directory(self, path: str, safe_root: str) -> None:

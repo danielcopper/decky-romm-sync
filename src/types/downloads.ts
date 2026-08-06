@@ -59,3 +59,14 @@ export interface DownloadFailedEvent {
   platform_name: string;
   error_message: string;
 }
+
+/**
+ * Per-file progress of an in-flight uninstall. Emitted only while removing a
+ * multi-file ROM — a single-file removal has nothing to report between "started"
+ * and "done".
+ */
+export interface UninstallProgressEvent {
+  rom_id: number;
+  files_removed: number;
+  files_total: number;
+}

@@ -17,16 +17,23 @@ from lib.path_safety import is_safe_rom_path
 if TYPE_CHECKING:
     import asyncio
     import logging
+    from collections.abc import Callable
 
     from models.prune import MutationOutcome, SourceClaim
 
     from domain.rom_install import RomInstall
     from services.protocols import (
+        Clock,
         DownloadQueueCleanup,
+        EventEmitter,
         RetroDeckPaths,
         RomFileStore,
         UnitOfWorkFactory,
     )
+
+# Seconds between ``uninstall_progress`` frames while a multi-file removal runs.
+# The terminal frame is never throttled.
+_PROGRESS_INTERVAL_S = 0.5
 
 
 @dataclass(frozen=True)
@@ -43,6 +50,8 @@ class RomRemovalServiceConfig:
 
     logger: logging.Logger
     loop: asyncio.AbstractEventLoop
+    clock: Clock
+    emit: EventEmitter
     rom_file_store: RomFileStore
     retrodeck_paths: RetroDeckPaths
     download_queue_cleanup: DownloadQueueCleanup | None
@@ -59,12 +68,22 @@ class RomRemovalService:
     ):
         self._logger = config.logger
         self._loop = config.loop
+        self._clock = config.clock
+        self._emit = config.emit
         self._rom_file_store = config.rom_file_store
         self._retrodeck_paths = config.retrodeck_paths
         self._download_queue_cleanup = config.download_queue_cleanup
         self._uow_factory = config.uow_factory
+        self._removals_in_flight: set[int] = set()
 
-    def _delete_rom_files(self, install: RomInstall, claims: dict[str, SourceClaim] | None = None) -> MutationOutcome:
+    def _delete_rom_files(
+        self,
+        install: RomInstall,
+        claims: dict[str, SourceClaim] | None = None,
+        *,
+        content_bound: bool = True,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> MutationOutcome:
         """Delete ROM files for an install record. Handles both single-file and multi-file ROMs.
 
         A multi-file ROM owns a dedicated per-ROM directory (``rom_dir`` is set)
@@ -73,6 +92,11 @@ class RomRemovalService:
         which must **never** be removed — so only the launch file itself is
         deleted. ``is_safe_rom_path`` stays the path-containment guard before
         any removal.
+
+        *content_bound* selects the claim discipline for a source this call has
+        to claim itself: a cleanup run's removal is content-bound, an uninstall's
+        is identity-only. It also decides whether interrupted staging may be
+        adopted — see :meth:`_remove_under_claim`.
         """
         rom_dir = install.rom_dir
         file_path = install.file_path
@@ -83,26 +107,77 @@ class RomRemovalService:
                 raise ValueError(f"Refusing to delete path outside roms directory: {rom_dir}")
             if self._rom_file_store.exists(rom_dir) and not self._rom_file_store.is_dir(rom_dir):
                 raise ValueError(f"Expected installed ROM directory, found another file type: {rom_dir}")
-            return self._remove_under_claim(rom_dir, roms_base, claims)
+            return self._remove_under_claim(rom_dir, roms_base, claims, content_bound, on_progress)
         if file_path:
             if not is_safe_rom_path(file_path, roms_base):
                 raise ValueError(f"Refusing to delete path outside roms directory: {file_path}")
             if self._rom_file_store.is_dir(file_path):
                 raise ValueError(f"Expected installed ROM file, found a directory: {file_path}")
-            return self._remove_under_claim(file_path, roms_base, claims)
+            return self._remove_under_claim(file_path, roms_base, claims, content_bound, on_progress)
         return {"success": True, "changed": False, "ambiguous": False, "message": "No installed path recorded"}
 
-    def _remove_under_claim(self, path: str, roms_base: str, claims: dict[str, SourceClaim] | None) -> MutationOutcome:
+    def _remove_under_claim(
+        self,
+        path: str,
+        roms_base: str,
+        claims: dict[str, SourceClaim] | None,
+        content_bound: bool,
+        on_progress: Callable[[int, int], None] | None,
+    ) -> MutationOutcome:
         """Remove one already-guarded path under the claim that authorizes it.
 
         A run that sealed the claim earlier hands it in, so the removal is
         authorized by what the preview proved; anything else claims the source
         here and is authorized by that.
+
+        A source that is already absent may be the debris of an earlier attempt
+        that was interrupted between the staging rename and the last unlink.
+        Only the identity-only caller may adopt it: it holds the install record
+        that proves the path is this ROM's and its claim discipline is one it
+        can re-seal, where a content-bound removal's authority came from a
+        sealed bundle that a partially consumed source no longer matches.
         """
         claim = claims.get(path) if claims is not None else None
         if claim is None:
-            claim = self._rom_file_store.claim_source(path, roms_base)
-        return self._rom_file_store.remove_claimed(path, roms_base, claim)
+            claim = self._rom_file_store.claim_source(path, roms_base, digest=content_bound)
+            if not content_bound and not claim["source_identity"]["exists"]:
+                reclaimed = self._rom_file_store.reclaim_staged_source(path, roms_base)
+                if reclaimed["changed"] or not reclaimed["success"]:
+                    return reclaimed
+        return self._rom_file_store.remove_claimed(path, roms_base, claim, on_progress)
+
+    def _make_progress_callback(self, rom_id: int) -> Callable[[int, int], None]:
+        """Build a throttled per-file removal callback for one uninstall.
+
+        Single-file ROMs report nothing: a one-entry progress bar is noise. The
+        callback runs on the ``run_in_executor`` worker, so the emit is marshaled
+        to the loop thread.
+        """
+        last_emit = [0.0]
+
+        def on_progress(removed: int, total: int) -> None:
+            if total <= 1:
+                return
+            now = self._clock.monotonic()
+            if now - last_emit[0] < _PROGRESS_INTERVAL_S and removed < total:
+                return
+            last_emit[0] = now
+            self._loop.call_soon_threadsafe(self._publish_removal_progress, rom_id, removed, total)
+
+        return on_progress
+
+    def _publish_removal_progress(self, rom_id: int, removed: int, total: int) -> None:
+        """Schedule one ``uninstall_progress`` emit. Runs on the loop thread."""
+        self._loop.create_task(
+            self._emit(
+                "uninstall_progress",
+                {"rom_id": rom_id, "files_removed": removed, "files_total": total},
+            )
+        )
+
+    def _elapsed(self, started: float) -> str:
+        """Render the time since *started* for a log line."""
+        return f"{self._clock.monotonic() - started:.1f}s"
 
     def delete_rom_files(self, rom_id: int, claims: dict[str, SourceClaim] | None = None) -> dict[str, Any]:
         """Delete only installed content, leaving every database row untouched."""
@@ -139,7 +214,11 @@ class RomRemovalService:
         ``""`` keeps the next sync from re-touching an already-correct shortcut
         (delta apply, #1383). Third of the five recorded-state writer sites.
         """
-        outcome = self._delete_rom_files(install)
+        outcome = self._delete_rom_files(
+            install,
+            content_bound=False,
+            on_progress=self._make_progress_callback(rom_id),
+        )
         if not outcome["success"]:
             raise RuntimeError(outcome["message"])
         with self._uow_factory() as uow:
@@ -150,18 +229,36 @@ class RomRemovalService:
                 uow.roms.set_applied_launch_options(rom_id, rom.applied_launch_options)
 
     async def remove_rom(self, rom_id: int | str) -> dict[str, Any]:
-        """Remove a single installed ROM: delete files and drop the install record."""
+        """Remove a single installed ROM: delete files and drop the install record.
+
+        A removal already running for the same ROM refuses the request instead
+        of starting a second one against the same tree: the first has renamed
+        the source to its staging name, so a concurrent attempt would report the
+        source as vanished while the removal it duplicates is still working.
+        """
         rom_id_int = int(rom_id)
         with self._uow_factory() as uow:
             install = uow.rom_installs.get(rom_id_int)
         if install is None:
             return {"success": False, "reason": "not_installed", "message": "ROM not installed"}
+        if rom_id_int in self._removals_in_flight:
+            return {
+                "success": False,
+                "reason": "in_progress",
+                "message": "This ROM is already being uninstalled",
+            }
 
+        self._removals_in_flight.add(rom_id_int)
+        started = self._clock.monotonic()
+        self._logger.info(f"Uninstall started: rom_id={rom_id_int}")
         try:
             await self._loop.run_in_executor(None, self._remove_rom_io, rom_id_int, install)
         except Exception as e:
-            self._logger.error(f"Failed to delete ROM files: {e}")
+            self._logger.error(f"Failed to delete ROM files after {self._elapsed(started)}: {e}")
             return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "Failed to delete ROM files"}
+        finally:
+            self._removals_in_flight.discard(rom_id_int)
+        self._logger.info(f"Uninstall completed: rom_id={rom_id_int} in {self._elapsed(started)}")
 
         if self._download_queue_cleanup is not None:
             self._download_queue_cleanup.evict(rom_id_int)
@@ -189,7 +286,7 @@ class RomRemovalService:
         successfully_deleted: list[int] = []
         for install in installs:
             try:
-                outcome = self._delete_rom_files(install)
+                outcome = self._delete_rom_files(install, content_bound=False)
                 if not outcome["success"]:
                     raise RuntimeError(outcome["message"])
                 count += 1
@@ -224,7 +321,12 @@ class RomRemovalService:
         placeholder (#1146). Install records for partially-failed bulk runs
         are left intact for the failing entries so the user can retry.
         """
+        started = self._clock.monotonic()
+        self._logger.info("Bulk uninstall started")
         count, errors, app_ids = await self._loop.run_in_executor(None, self._uninstall_all_roms_io)
+        self._logger.info(
+            f"Bulk uninstall completed: {count} removed, {len(errors)} failed in {self._elapsed(started)}"
+        )
         if self._download_queue_cleanup is not None:
             self._download_queue_cleanup.clear()
         return {

@@ -35,13 +35,20 @@ class SourceEntry(TypedDict):
 
 
 class SourceClaim(TypedDict):
-    """A source root and its complete descriptor-inventoried subtree."""
+    """A source root and its complete descriptor-inventoried subtree.
+
+    ``content_bound`` records which discipline sealed it: a content-bound claim
+    carries every regular file's hash and is what binds a deletion to bytes held
+    elsewhere; an identity-only claim carries no hashes and is authorized by
+    exact identity plus writer exclusion alone.
+    """
 
     source_path: str
     safe_root: str
     source_identity: SourceIdentity
     sha256: str | None
     entries: dict[str, SourceEntry]
+    content_bound: bool
 
 
 class SealedSourceClaims(TypedDict):

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from adapters.descriptor_paths import (
     claim_source,
@@ -354,3 +358,156 @@ class TestCooperativeAbort:
         claim = claim_source(str(source), str(tmp_path), lambda: False)
 
         assert claim == claim_source(str(source), str(tmp_path))
+
+
+class TestIdentityOnlyClaims:
+    """The hash-free claim discipline a caller uses when it seals and consumes its own claim."""
+
+    @staticmethod
+    def _tree(root) -> None:
+        (root / "sub").mkdir(parents=True)
+        (root / "disc.bin").write_bytes(b"\x00" * 4096)
+        (root / "sub" / "data.bin").write_bytes(b"\x01" * 4096)
+
+    @staticmethod
+    def _count_hashes(monkeypatch) -> list[int]:
+        module = __import__("adapters.descriptor_paths", fromlist=["_sha256_fd"])
+        original = module._sha256_fd
+        calls = [0]
+
+        def counted(fd, should_abort=None):
+            calls[0] += 1
+            return original(fd, should_abort)
+
+        monkeypatch.setattr(module, "_sha256_fd", counted)
+        return calls
+
+    def test_self_claimed_removal_reads_no_content_at_all(self, tmp_path, monkeypatch):
+        safe = tmp_path / "safe"
+        source = safe / "game"
+        self._tree(source)
+        calls = self._count_hashes(monkeypatch)
+
+        claim = claim_source(str(source), str(safe), digest=False)
+        outcome = remove_claimed(str(source), str(safe), claim)
+
+        assert calls == [0]
+        assert outcome["success"] is True
+        assert outcome["changed"] is True
+        assert not source.exists()
+
+    def test_content_bound_removal_of_the_same_tree_still_hashes(self, tmp_path, monkeypatch):
+        """Non-vacuous counterpart: the counter does see the content-bound path."""
+        safe = tmp_path / "safe"
+        source = safe / "game"
+        self._tree(source)
+        calls = self._count_hashes(monkeypatch)
+
+        claim = claim_source(str(source), str(safe))
+        remove_claimed(str(source), str(safe), claim)
+
+        assert calls[0] > 0
+        assert not source.exists()
+
+    def test_identity_only_claim_carries_no_hashes(self, tmp_path):
+        safe = tmp_path / "safe"
+        source = safe / "game"
+        self._tree(source)
+
+        claim = claim_source(str(source), str(safe), digest=False)
+
+        assert claim["content_bound"] is False
+        assert claim["sha256"] is None
+        assert all("sha256" not in entry for entry in claim["entries"].values())
+
+    def test_identity_only_claim_still_refuses_a_rewritten_child(self, tmp_path):
+        safe = tmp_path / "safe"
+        source = safe / "game"
+        self._tree(source)
+        claim = claim_source(str(source), str(safe), digest=False)
+        (source / "disc.bin").write_bytes(b"\x02" * 4096)
+
+        with pytest.raises(RuntimeError, match="subtree changed"):
+            remove_claimed(str(source), str(safe), claim)
+
+        assert (source / "disc.bin").read_bytes() == b"\x02" * 4096
+        assert (source / "sub" / "data.bin").exists()
+
+    def test_identity_only_claim_still_refuses_a_replaced_root(self, tmp_path):
+        safe = tmp_path / "safe"
+        safe.mkdir()
+        source = safe / "game.z64"
+        source.write_bytes(b"sealed")
+        claim = claim_source(str(source), str(safe), digest=False)
+        source.unlink()
+        source.write_bytes(b"replacement")
+
+        with pytest.raises(RuntimeError, match="identity changed"):
+            remove_claimed(str(source), str(safe), claim)
+
+        assert source.read_bytes() == b"replacement"
+
+    def test_identity_only_claim_still_refuses_an_active_writer(self, tmp_path):
+        safe = tmp_path / "safe"
+        source = safe / "game"
+        self._tree(source)
+        claim = claim_source(str(source), str(safe), digest=False)
+        writer = os.open(source / "disc.bin", os.O_WRONLY)
+        try:
+            with pytest.raises(RuntimeError, match=r"active writer.*retained"):
+                remove_claimed(str(source), str(safe), claim)
+        finally:
+            os.close(writer)
+
+        assert (source / "disc.bin").exists()
+        assert (source / "sub" / "data.bin").exists()
+
+
+class TestRemovalProgress:
+    @staticmethod
+    def _recorder() -> tuple[list[tuple[int, int]], Callable[[int, int], None]]:
+        reported: list[tuple[int, int]] = []
+
+        def record(removed: int, total: int) -> None:
+            reported.append((removed, total))
+
+        return reported, record
+
+    def test_every_unlinked_file_is_reported_against_the_claim_total(self, tmp_path):
+        safe = tmp_path / "safe"
+        source = safe / "game"
+        (source / "sub").mkdir(parents=True)
+        (source / "a.bin").write_bytes(b"a")
+        (source / "b.bin").write_bytes(b"b")
+        (source / "sub" / "c.bin").write_bytes(b"c")
+        reported, record = self._recorder()
+
+        claim = claim_source(str(source), str(safe), digest=False)
+        remove_claimed(str(source), str(safe), claim, record)
+
+        assert reported == [(1, 3), (2, 3), (3, 3)]
+        assert not source.exists()
+
+    def test_a_single_file_removal_reports_one_of_one(self, tmp_path):
+        safe = tmp_path / "safe"
+        safe.mkdir()
+        source = safe / "game.z64"
+        source.write_bytes(b"rom")
+        reported, record = self._recorder()
+
+        claim = claim_source(str(source), str(safe), digest=False)
+        remove_claimed(str(source), str(safe), claim, record)
+
+        assert reported == [(1, 1)]
+
+    def test_an_absent_source_reports_nothing(self, tmp_path):
+        safe = tmp_path / "safe"
+        safe.mkdir()
+        source = safe / "gone.z64"
+        reported, record = self._recorder()
+
+        claim = claim_source(str(source), str(safe), digest=False)
+        outcome = remove_claimed(str(source), str(safe), claim, record)
+
+        assert reported == []
+        assert outcome["changed"] is False
