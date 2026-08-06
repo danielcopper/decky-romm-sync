@@ -74,7 +74,11 @@ class RomRemovalService:
         self._retrodeck_paths = config.retrodeck_paths
         self._download_queue_cleanup = config.download_queue_cleanup
         self._uow_factory = config.uow_factory
+        # Both are read and written only on the loop thread — every mutation
+        # brackets a ``run_in_executor`` call rather than happening inside one —
+        # so the two removal entry points exclude each other without a lock.
         self._removals_in_flight: set[int] = set()
+        self._bulk_removal_in_flight = False
 
     def _delete_rom_files(
         self,
@@ -229,16 +233,23 @@ class RomRemovalService:
     async def remove_rom(self, rom_id: int | str) -> dict[str, Any]:
         """Remove a single installed ROM: delete files and drop the install record.
 
-        A removal already running for the same ROM refuses the request instead
-        of starting a second one against the same tree: the first has renamed
-        the source to its staging name, so a concurrent attempt would report the
-        source as vanished while the removal it duplicates is still working.
+        Refused while any removal that could own the same tree is running — this
+        ROM's own, or a bulk uninstall, which owns every tree. The running one
+        has renamed its source to a staging name, so a second attempt against it
+        would report the source as vanished while the removal it duplicates is
+        still working.
         """
         rom_id_int = int(rom_id)
         with self._uow_factory() as uow:
             install = uow.rom_installs.get(rom_id_int)
         if install is None:
             return {"success": False, "reason": "not_installed", "message": "ROM not installed"}
+        if self._bulk_removal_in_flight:
+            return {
+                "success": False,
+                "reason": "in_progress",
+                "message": "A bulk uninstall is already running",
+            }
         if rom_id_int in self._removals_in_flight:
             return {
                 "success": False,
@@ -318,10 +329,26 @@ class RomRemovalService:
         kept shortcuts' now-stale ``launch_options`` to the uninstalled
         placeholder (#1146). Install records for partially-failed bulk runs
         are left intact for the failing entries so the user can retry.
+
+        Refused outright while a single uninstall is running, because this owns
+        every tree and would otherwise race that one. The refusal carries no
+        removal payload, which is how the frontend already tells a refusal from
+        a partial failure.
         """
+        if self._removals_in_flight:
+            return {
+                "success": False,
+                "reason": "in_progress",
+                "message": "A ROM is already being uninstalled",
+            }
+
+        self._bulk_removal_in_flight = True
         started = self._clock.monotonic()
         self._logger.info("Bulk uninstall started")
-        count, errors, app_ids = await self._loop.run_in_executor(None, self._uninstall_all_roms_io)
+        try:
+            count, errors, app_ids = await self._loop.run_in_executor(None, self._uninstall_all_roms_io)
+        finally:
+            self._bulk_removal_in_flight = False
         self._logger.info(
             f"Bulk uninstall completed: {count} removed, {len(errors)} failed in {self._elapsed(started)}"
         )

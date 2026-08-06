@@ -1100,6 +1100,85 @@ class TestInterruptedStagingRecovery:
         assert not staged.exists()
 
 
+class TestBulkAndSingleExclusion:
+    """A bulk uninstall owns every tree, so it and a single removal exclude each other (#1664)."""
+
+    @pytest.mark.asyncio
+    async def test_a_bulk_run_is_refused_while_a_single_removal_is_in_flight(self, service, uow, rom_files):
+        rom_path = f"{_ROMS_BASE}/n64/game.z64"
+        rom_files.files[rom_path] = b"rom"
+        _seed_install(uow, _make_install(42, file_path=rom_path))
+        bulk: dict[str, object] = {}
+        entered: list[bool] = []
+
+        original = service._delete_rom_files
+
+        def run_a_bulk_uninstall_mid_removal(*args, **kwargs):
+            # The sentinel is set *before* the nested call, not after it: were
+            # the guard to regress, the bulk run would re-enter this hook while
+            # `bulk` was still empty and recurse without bound. A lost guard has
+            # to fail the assertion below, not hang the suite.
+            if not entered:
+                entered.append(True)
+                bulk.update(asyncio.run_coroutine_threadsafe(service.uninstall_all_roms(), service._loop).result())
+            return original(*args, **kwargs)
+
+        service._delete_rom_files = run_a_bulk_uninstall_mid_removal
+        result = await service.remove_rom(42)
+
+        assert result["success"] is True
+        assert bulk == {
+            "success": False,
+            "reason": "in_progress",
+            "message": "A ROM is already being uninstalled",
+        }
+        # No removal payload: that absence is the frontend's refusal discriminant.
+        assert "app_ids" not in bulk
+
+    @pytest.mark.asyncio
+    async def test_a_single_removal_is_refused_while_a_bulk_run_is_in_flight(self, service, uow, rom_files):
+        rom_path = f"{_ROMS_BASE}/n64/game.z64"
+        rom_files.files[rom_path] = b"rom"
+        _seed_install(uow, _make_install(42, file_path=rom_path))
+        single: dict[str, object] = {}
+        entered: list[bool] = []
+
+        original = service._delete_rom_files
+
+        def press_uninstall_mid_bulk(*args, **kwargs):
+            # Sentinel set before the nested call — see the sibling test.
+            if not entered:
+                entered.append(True)
+                single.update(asyncio.run_coroutine_threadsafe(service.remove_rom(42), service._loop).result())
+            return original(*args, **kwargs)
+
+        service._delete_rom_files = press_uninstall_mid_bulk
+        result = await service.uninstall_all_roms()
+
+        assert result["success"] is True
+        assert single == {
+            "success": False,
+            "reason": "in_progress",
+            "message": "A bulk uninstall is already running",
+        }
+
+    @pytest.mark.asyncio
+    async def test_both_run_again_once_the_other_has_finished(self, service, uow, rom_files):
+        """Edge: the guards are released, so neither entry point stays locked out."""
+        rom_path = f"{_ROMS_BASE}/n64/game.z64"
+        rom_files.files[rom_path] = b"rom"
+        _seed_install(uow, _make_install(42, file_path=rom_path))
+
+        first = await service.remove_rom(42)
+        rom_files.files[rom_path] = b"rom"
+        _seed_install(uow, _make_install(42, file_path=rom_path))
+        second = await service.uninstall_all_roms()
+
+        assert first["success"] is True
+        assert second["success"] is True
+        assert second["removed_count"] == 1
+
+
 class TestConcurrentUninstall:
     """The per-ROM in-flight guard (#1664)."""
 
