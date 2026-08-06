@@ -252,8 +252,13 @@ Format: **invariant** — tier — enforced by.
   service claim tests + `src/utils/pruneActions.test.ts`; new action kinds are prompt-only
 - **Every prune mutation is authorized by a descriptor-relative no-follow claim (root identity, descendant identities,
   regular-file hashes) revalidated immediately before it, never by a path re-lookup; refusal and ambiguity are reported,
-  never rewritten into success** — test + prompt-only — descriptor-path, recovery-adapter, real RomRemovalService, and
-  prune contract tests; new mutation adapters are prompt-only
+  never rewritten into success. The hashes are what bind a deletion to bytes held somewhere else, so they are mandatory
+  wherever a claim outlives its sealing — every cleanup removal, bundle-sealed or not. A user-initiated uninstall is not
+  a prune mutation: it seals and consumes its own claim with no second copy to bind to, so it claims identity-only
+  (`claim_source(..., digest=False)`) and every other element — staging rename, writer-exclusion leases, mount checks,
+  no-follow traversal, exact-identity revalidation immediately before each unlink — holds unchanged** — test +
+  prompt-only — descriptor-path, recovery-adapter, real RomRemovalService, and prune contract tests; new mutation
+  adapters are prompt-only
 - **Every prune frame carries its originating preview ID; only a matching pending preview may adopt a run, and an
   accepted contiguous terminal result seals it against every later frame** — test + prompt-only — prune service frame
   tests + `src/utils/pruneStore.test.ts`; new prune frame types are prompt-only

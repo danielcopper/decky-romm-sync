@@ -194,10 +194,32 @@ ctime, every descendant's identity, and every regular file's hash. Mutation is d
 throughout, and a nested mount transition — including a same-device bind mount — fails closed. A path re-lookup alone
 never authorizes a delete or a quarantine.
 
+### What the hashes are for, and where they stop
+
+A claim's regular-file hashes exist to bind a deletion to bytes held **somewhere else**: the sealed bundle's
+`checksums.sha256` and its per-artifact digests are the same values, so consuming the claim proves the copy in the
+bundle is the copy being deleted. That is why they are mandatory across every cleanup removal — including the
+recovery-off and unselected sources, whose final presence-or-absence claim still outlives its sealing and is still
+consumed by a run the user did not watch each step of.
+
+They stop at the boundary of this feature. A user-initiated **uninstall** seals its claim and consumes it within the
+same call, against the same filesystem state, with no second copy anywhere for a hash to bind to — re-reading the bytes
+only compares them against themselves. Exact identity (device, inode, mode, size, mtime, ctime) plus the kernel writer
+exclusion, which cannot be established at all while another process holds the file open for writing, already carry
+everything the comparison could. So an uninstall claims **identity-only** (`claim_source(..., digest=False)`, recorded
+on the claim as `content_bound: false`) and pays no I/O for it, while every other element of the discipline holds
+unchanged. The cost of not drawing that line was measured: hashing turned a 31 GB uninstall into roughly 23 minutes of
+reading, four times over ([#1664](https://github.com/danielcopper/decky-romm-sync/issues/1664)).
+
+An uninstall's identity-only claim is also the only one allowed to adopt **interrupted staging**. When the source is
+absent, the parent still holds a `.{basename}.romm-prune-*` entry, and the install record survives to prove the path was
+this ROM's, the next attempt finishes the removal under a fresh self-claim. A run's claim cannot do this: its authority
+came from a sealed bundle, and a partially consumed source no longer matches it.
+
 - Regular-file and controller-claim deletion holds kernel writer exclusion from final validation through the unlink; if
   exclusion cannot be established the source is retained. A writer-exclusion teardown fault is ambiguity, not success.
 - Selected sources consume claims decoded from the same held, digest-bound sealed bundle. Unselected and recovery-off
-  sources take a final presence-or-absence claim instead.
+  sources take a final presence-or-absence claim instead — content-bound like every other cleanup claim.
 - Every exclusive save is expected absent after quarantine, and the whole set is rechecked collectively immediately
   before the aggregate cascade — a save an emulator recreated in between stops the deletion.
 - Quarantine publication is atomic no-replace, so a concurrently created `.romm-backup` destination is never
