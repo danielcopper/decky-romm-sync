@@ -918,7 +918,7 @@ class TestClaimDiscipline:
         rom_files.files[rom_path] = b"rom"
         _seed_install(uow, _make_install(1, file_path=rom_path))
 
-        service._uninstall_all_roms_io()
+        service._uninstall_all_roms_io([_installed(uow, 1)])
 
         assert rom_files.claim_digests == [False]
 
@@ -1136,7 +1136,8 @@ class TestBulkAndSingleExclusion:
         assert "app_ids" not in bulk
 
     @pytest.mark.asyncio
-    async def test_a_single_removal_is_refused_while_a_bulk_run_is_in_flight(self, service, uow, rom_files):
+    async def test_a_single_removal_is_refused_while_a_bulk_run_holds_that_rom(self, service, uow, rom_files):
+        """The bulk run claims each ROM it will remove, so the per-ROM guard is what refuses."""
         rom_path = f"{_ROMS_BASE}/n64/game.z64"
         rom_files.files[rom_path] = b"rom"
         _seed_install(uow, _make_install(42, file_path=rom_path))
@@ -1159,7 +1160,7 @@ class TestBulkAndSingleExclusion:
         assert single == {
             "success": False,
             "reason": "in_progress",
-            "message": "A bulk uninstall is already running",
+            "message": "This ROM is already being uninstalled",
         }
 
     @pytest.mark.asyncio
