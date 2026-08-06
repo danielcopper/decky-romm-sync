@@ -32,7 +32,7 @@ _VECTORS_DIR = Path(__file__).parent.parent / "domain" / "gavel_vectors" / "deci
 
 
 @pytest.fixture(scope="module")
-def kernel() -> ComputeSyncActionFn:
+def core() -> ComputeSyncActionFn:
     """The compiled core, bound the way production binds it."""
     return GavelNativeAdapter().compute_sync_action
 
@@ -81,12 +81,12 @@ assert _ARGVALUES, f"no gavel decision-table vectors loaded from {_VECTORS_DIR}"
 
 @pytest.mark.parametrize(("vector_input", "expected", "rationale"), _ARGVALUES, ids=_IDS)
 def test_compute_sync_action_conforms(
-    kernel: ComputeSyncActionFn,
+    core: ComputeSyncActionFn,
     vector_input: dict[str, Any],
     expected: dict[str, Any],
     rationale: str | None,
 ) -> None:
-    result = kernel(
+    result = core(
         vector_input["local_file"],
         vector_input["server_saves_in_slot"],
         vector_input["files_state"],

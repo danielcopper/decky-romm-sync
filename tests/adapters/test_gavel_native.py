@@ -1,4 +1,4 @@
-"""Tests for the GavelNativeAdapter — the compiled save-sync decision kernels.
+"""Tests for the GavelNativeAdapter — the compiled save-sync decision core.
 
 Two of the tiers guarding the shipped shared object live here, for both of the
 decisions it owns (the upload-409 ladder and the full per-file sync action):
