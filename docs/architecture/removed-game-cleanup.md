@@ -196,6 +196,9 @@ never authorizes a delete or a quarantine.
 
 ### What the hashes are for, and where they stop
 
+Why the disciplines are split this way, and what was rejected on the way there, is
+[ADR-0027](../adr/0027-claim-discipline-follows-the-recovery-bundle.md).
+
 A claim's regular-file hashes exist to bind a deletion to bytes held **somewhere else**: the sealed bundle's
 `checksums.sha256` and its per-artifact digests are the same values, and `_require_records_match_claims` refuses any
 artifact record whose digest differs from the claim's, so consuming the claim proves the copy in the bundle is the copy
