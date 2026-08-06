@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import os
+import resource
 from typing import TYPE_CHECKING
 
 import pytest
@@ -511,3 +513,130 @@ class TestRemovalProgress:
 
         assert reported == []
         assert outcome["changed"] is False
+
+
+class TestPerUnlinkLeasing:
+    """An identity-only directory leases each file for its own unlink, not the whole tree at once."""
+
+    @staticmethod
+    def _tree(root, count: int) -> None:
+        root.mkdir(parents=True)
+        for index in range(count):
+            (root / f"f{index:05d}.bin").write_bytes(b"x")
+
+    def test_a_tree_larger_than_the_descriptor_limit_is_removable(self, tmp_path):
+        """The whole-tree hold made the largest dumps permanently un-uninstallable (#1664)."""
+        safe = tmp_path / "safe"
+        source = safe / "game"
+        self._tree(source, 1200)
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (1024, hard))
+        try:
+            claim = claim_source(str(source), str(safe), digest=False)
+            outcome = remove_claimed(str(source), str(safe), claim)
+        finally:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+
+        assert outcome["success"] is True
+        assert not source.exists()
+
+    def test_the_content_bound_hold_still_refuses_such_a_tree_rather_than_half_removing_it(self, tmp_path):
+        """Non-vacuous counterpart: whole-tree leasing is what the identity-only path opts out of."""
+        safe = tmp_path / "safe"
+        source = safe / "game"
+        self._tree(source, 1200)
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        claim = claim_source(str(source), str(safe))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (1024, hard))
+        try:
+            with pytest.raises(OSError) as excinfo:
+                remove_claimed(str(source), str(safe), claim)
+        finally:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+
+        assert excinfo.value.errno == errno.EMFILE
+        assert source.is_dir()
+        assert len(os.listdir(source)) == 1200
+
+    def test_a_writer_present_before_the_loop_refuses_with_nothing_removed(self, tmp_path):
+        safe = tmp_path / "safe"
+        source = safe / "game"
+        (source / "sub").mkdir(parents=True)
+        (source / "a.bin").write_bytes(b"a")
+        (source / "b.bin").write_bytes(b"b")
+        (source / "sub" / "c.bin").write_bytes(b"c")
+        claim = claim_source(str(source), str(safe), digest=False)
+        # The last file in walk order, so a pre-loop probe is the only thing that
+        # can catch it before the earlier two are already gone.
+        writer = os.open(source / "sub" / "c.bin", os.O_WRONLY)
+        try:
+            with pytest.raises(RuntimeError, match=r"active writer.*retained"):
+                remove_claimed(str(source), str(safe), claim)
+        finally:
+            os.close(writer)
+
+        assert (source / "a.bin").exists()
+        assert (source / "b.bin").exists()
+        assert (source / "sub" / "c.bin").exists()
+
+    def test_a_writer_arriving_mid_loop_reports_the_partial_removal(self, tmp_path, monkeypatch):
+        safe = tmp_path / "safe"
+        source = safe / "game"
+        source.mkdir(parents=True)
+        for name in ("a.bin", "b.bin", "c.bin"):
+            (source / name).write_bytes(b"x")
+        claim = claim_source(str(source), str(safe), digest=False)
+        module = __import__("adapters.descriptor_paths", fromlist=["_leased_regular"])
+        original = module._leased_regular
+        writers: list[int] = []
+        leased: list[str] = []
+
+        def open_a_writer_once_the_delete_loop_is_under_way(directory_fd, name, path):
+            # The first three calls are the pre-unlink probe over a/b/c; the
+            # delete loop then re-leases each, so call five is b.bin's unlink.
+            leased.append(name)
+            if len(leased) == 5 and not writers:
+                writers.append(os.open(name, os.O_WRONLY, dir_fd=directory_fd))
+            return original(directory_fd, name, path)
+
+        monkeypatch.setattr(module, "_leased_regular", open_a_writer_once_the_delete_loop_is_under_way)
+        try:
+            outcome = remove_claimed(str(source), str(safe), claim)
+        finally:
+            for fd in writers:
+                os.close(fd)
+
+        assert outcome["success"] is False
+        assert outcome["changed"] is True
+        assert outcome["ambiguous"] is True
+        assert "1 of 3 files were removed" in outcome["message"]
+        # A stopped removal leaves the remainder under the staging name rather
+        # than back at the source path — the outcome is the record of that.
+        staged = [entry for entry in os.listdir(safe) if entry.startswith(".game.romm-prune-")]
+        assert len(staged) == 1
+        assert sorted(os.listdir(safe / staged[0])) == ["b.bin", "c.bin"]
+        assert not source.exists()
+
+    def test_a_stopped_removal_that_touched_no_file_says_so(self, tmp_path, monkeypatch):
+        safe = tmp_path / "safe"
+        source = safe / "game"
+        source.mkdir(parents=True)
+        (source / "a.bin").write_bytes(b"a")
+        claim = claim_source(str(source), str(safe), digest=False)
+        module = __import__("adapters.descriptor_paths", fromlist=["_require_file_claim"])
+        original = module._require_file_claim
+        calls = [0]
+
+        def fail_once_the_probe_is_done(*args, **kwargs):
+            calls[0] += 1
+            if calls[0] > 0 and kwargs.get("claimed") is False:
+                raise RuntimeError("simulated pre-unlink refusal")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(module, "_require_file_claim", fail_once_the_probe_is_done)
+        outcome = remove_claimed(str(source), str(safe), claim)
+
+        assert outcome["success"] is False
+        assert outcome["ambiguous"] is True
+        assert "no file was removed" in outcome["message"]
+        assert os.listdir(safe) != []
