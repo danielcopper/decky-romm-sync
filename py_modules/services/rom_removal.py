@@ -81,7 +81,6 @@ class RomRemovalService:
         install: RomInstall,
         claims: dict[str, SourceClaim] | None = None,
         *,
-        content_bound: bool = True,
         on_progress: Callable[[int, int], None] | None = None,
     ) -> MutationOutcome:
         """Delete ROM files for an install record. Handles both single-file and multi-file ROMs.
@@ -93,10 +92,9 @@ class RomRemovalService:
         deleted. ``is_safe_rom_path`` stays the path-containment guard before
         any removal.
 
-        *content_bound* selects the claim discipline for a source this call has
-        to claim itself: a cleanup run's removal is content-bound, an uninstall's
-        is identity-only. It also decides whether interrupted staging may be
-        adopted — see :meth:`_remove_under_claim`.
+        *claims* is the claim map a cleanup run that sealed a recovery bundle
+        hands in; its absence marks a caller that has no bundle at all and
+        therefore seals its own claim — see :meth:`_remove_under_claim`.
         """
         rom_dir = install.rom_dir
         file_path = install.file_path
@@ -107,13 +105,13 @@ class RomRemovalService:
                 raise ValueError(f"Refusing to delete path outside roms directory: {rom_dir}")
             if self._rom_file_store.exists(rom_dir) and not self._rom_file_store.is_dir(rom_dir):
                 raise ValueError(f"Expected installed ROM directory, found another file type: {rom_dir}")
-            return self._remove_under_claim(rom_dir, roms_base, claims, content_bound, on_progress)
+            return self._remove_under_claim(rom_dir, roms_base, claims, on_progress)
         if file_path:
             if not is_safe_rom_path(file_path, roms_base):
                 raise ValueError(f"Refusing to delete path outside roms directory: {file_path}")
             if self._rom_file_store.is_dir(file_path):
                 raise ValueError(f"Expected installed ROM file, found a directory: {file_path}")
-            return self._remove_under_claim(file_path, roms_base, claims, content_bound, on_progress)
+            return self._remove_under_claim(file_path, roms_base, claims, on_progress)
         return {"success": True, "changed": False, "ambiguous": False, "message": "No installed path recorded"}
 
     def _remove_under_claim(
@@ -121,26 +119,30 @@ class RomRemovalService:
         path: str,
         roms_base: str,
         claims: dict[str, SourceClaim] | None,
-        content_bound: bool,
         on_progress: Callable[[int, int], None] | None,
     ) -> MutationOutcome:
         """Remove one already-guarded path under the claim that authorizes it.
 
-        A run that sealed the claim earlier hands it in, so the removal is
-        authorized by what the preview proved; anything else claims the source
-        here and is authorized by that.
+        A run that sealed a recovery bundle hands its claim map in, so a source
+        it captured is removed under what the bundle proved, and one it did not
+        capture takes a fresh content-bound claim here — the bundle exists, so
+        the hashes still have a copy to bind to. A caller that hands in no map
+        has no bundle anywhere: the claim it seals here is consumed a moment
+        later by this same call, with nothing else holding the bytes, so it is
+        sealed identity-only.
 
-        A source that is already absent may be the debris of an earlier attempt
-        that was interrupted between the staging rename and the last unlink.
-        Only the identity-only caller may adopt it: it holds the install record
-        that proves the path is this ROM's and its claim discipline is one it
-        can re-seal, where a content-bound removal's authority came from a
-        sealed bundle that a partially consumed source no longer matches.
+        That last case is also the only one allowed to adopt the debris of an
+        attempt interrupted between the staging rename and the last unlink. It
+        holds the install record proving the path is this ROM's, and its claim
+        discipline is one it can simply re-seal, where a bundle-backed removal's
+        authority came from a seal that a partially consumed source no longer
+        matches.
         """
+        self_sealed = claims is None
         claim = claims.get(path) if claims is not None else None
         if claim is None:
-            claim = self._rom_file_store.claim_source(path, roms_base, digest=content_bound)
-            if not content_bound and not claim["source_identity"]["exists"]:
+            claim = self._rom_file_store.claim_source(path, roms_base, digest=not self_sealed)
+            if self_sealed and not claim["source_identity"]["exists"]:
                 reclaimed = self._rom_file_store.reclaim_staged_source(path, roms_base)
                 if reclaimed["changed"] or not reclaimed["success"]:
                     return reclaimed
@@ -214,11 +216,7 @@ class RomRemovalService:
         ``""`` keeps the next sync from re-touching an already-correct shortcut
         (delta apply, #1383). Third of the five recorded-state writer sites.
         """
-        outcome = self._delete_rom_files(
-            install,
-            content_bound=False,
-            on_progress=self._make_progress_callback(rom_id),
-        )
+        outcome = self._delete_rom_files(install, on_progress=self._make_progress_callback(rom_id))
         if not outcome["success"]:
             raise RuntimeError(outcome["message"])
         with self._uow_factory() as uow:
@@ -286,7 +284,7 @@ class RomRemovalService:
         successfully_deleted: list[int] = []
         for install in installs:
             try:
-                outcome = self._delete_rom_files(install, content_bound=False)
+                outcome = self._delete_rom_files(install)
                 if not outcome["success"]:
                     raise RuntimeError(outcome["message"])
                 count += 1

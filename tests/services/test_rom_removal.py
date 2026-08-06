@@ -344,7 +344,9 @@ class TestDeleteRomFiles:
         assert "subtree changed" in result["message"]
         assert child.read_bytes() == b"replacement"
 
-    def test_unselected_directory_replacement_after_final_claim_is_retained(self, tmp_path, logger, monkeypatch):
+    @pytest.mark.parametrize("claims", [None, {}], ids=["no-bundle", "bundle-without-this-source"])
+    def test_directory_replacement_after_a_final_claim_is_retained(self, tmp_path, logger, monkeypatch, claims):
+        """Either discipline refuses a source swapped out between its final claim and the mutation."""
         roms = tmp_path / "roms"
         rom_dir = roms / "psx" / "Game"
         rom_dir.mkdir(parents=True)
@@ -380,7 +382,7 @@ class TestDeleteRomFiles:
             )
         )
 
-        result = real_service.delete_rom_files(1)
+        result = real_service.delete_rom_files(1, claims)
 
         assert result["success"] is False
         assert "identity changed" in result["message"]
@@ -920,15 +922,26 @@ class TestClaimDiscipline:
 
         assert rom_files.claim_digests == [False]
 
-    def test_cleanup_run_without_a_bundle_claim_stays_content_bound(self, service, uow, rom_files):
-        """A prune run hands in no claim for unselected content; that removal keeps its hashes."""
+    def test_a_source_a_sealed_bundle_did_not_capture_stays_content_bound(self, service, uow, rom_files):
+        """The bundle exists, so the hashes still have a copy to bind this deletion to."""
+        rom_path = f"{_ROMS_BASE}/n64/game.z64"
+        rom_files.files[rom_path] = b"rom"
+        _seed_install(uow, _make_install(1, file_path=rom_path))
+
+        # A run that sealed a bundle but captured no installed ROM content.
+        service.delete_rom_files(1, {})
+
+        assert rom_files.claim_digests == [True]
+
+    def test_a_cleanup_run_with_no_bundle_at_all_claims_identity_only(self, service, uow, rom_files):
+        """Recovery off means no copy anywhere, so there is nothing for a hash to bind to."""
         rom_path = f"{_ROMS_BASE}/n64/game.z64"
         rom_files.files[rom_path] = b"rom"
         _seed_install(uow, _make_install(1, file_path=rom_path))
 
         service.delete_rom_files(1)
 
-        assert rom_files.claim_digests == [True]
+        assert rom_files.claim_digests == [False]
 
     def test_a_handed_in_claim_is_not_re_claimed(self, service, uow, rom_files):
         rom_path = f"{_ROMS_BASE}/n64/game.z64"
@@ -1014,7 +1027,7 @@ class TestInterruptedStagingRecovery:
         )
         service = self._service(tmp_path, logger, uow, roms)
 
-        result = service._delete_rom_files(_installed(uow, 1), content_bound=False)
+        result = service._delete_rom_files(_installed(uow, 1))
 
         assert result["success"] is True
         assert result["changed"] is True
@@ -1041,8 +1054,31 @@ class TestInterruptedStagingRecovery:
         assert not staged.exists()
         assert uow.rom_installs.get(1) is None
 
-    def test_a_cleanup_run_never_adopts_staging_debris(self, tmp_path, logger):
-        """A content-bound removal's authority came from a sealed bundle a partial tree cannot match."""
+    def test_a_bundle_backed_run_never_adopts_staging_debris(self, tmp_path, logger):
+        """Its authority came from a seal that a partially consumed source no longer matches."""
+        roms = tmp_path / "roms"
+        rom_dir = roms / "psx" / "Game"
+        rom_dir.mkdir(parents=True)
+        (rom_dir / "disc.bin").write_bytes(b"\x00" * 64)
+        staged = rom_dir.parent / f".Game.romm-prune-{rom_dir.stat().st_ino}"
+        rom_dir.rename(staged)
+        uow = FakeUnitOfWork()
+        _seed_install(
+            uow,
+            _make_install(1, file_path=str(rom_dir / "disc.bin"), rom_dir=str(rom_dir), system="psx"),
+            platform_slug="psx",
+        )
+        service = self._service(tmp_path, logger, uow, roms)
+
+        # A run that sealed a bundle but captured no installed ROM content.
+        result = service.delete_rom_files(1, {})
+
+        assert result["success"] is True
+        assert result["changed"] is False
+        assert staged.is_dir()
+
+    def test_a_cleanup_run_with_no_bundle_adopts_debris_like_an_uninstall(self, tmp_path, logger):
+        """Recovery off self-seals its claim, so the same re-seal authorizes finishing the removal."""
         roms = tmp_path / "roms"
         rom_dir = roms / "psx" / "Game"
         rom_dir.mkdir(parents=True)
@@ -1060,8 +1096,8 @@ class TestInterruptedStagingRecovery:
         result = service.delete_rom_files(1)
 
         assert result["success"] is True
-        assert result["changed"] is False
-        assert staged.is_dir()
+        assert result["changed"] is True
+        assert not staged.exists()
 
 
 class TestConcurrentUninstall:
