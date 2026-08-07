@@ -994,7 +994,7 @@ describe("CustomPlayButton — uninstall is visible and single-shot (#1664)", ()
 
     // The pending state is set before the await, so a removal that takes minutes
     // is not indistinguishable from a dead button.
-    await findByText("Uninstalling...");
+    expect(await findByText("Uninstalling...")).toBeTruthy();
     await finish();
   });
 
@@ -1010,7 +1010,7 @@ describe("CustomPlayButton — uninstall is visible and single-shot (#1664)", ()
       emitDeckyEvent("uninstall_progress", { rom_id: 42, files_removed: 128, files_total: 331 });
     });
 
-    await findByText("Uninstalling 128/331");
+    expect(await findByText("Uninstalling 128/331")).toBeTruthy();
     await finish();
   });
 
@@ -1026,7 +1026,8 @@ describe("CustomPlayButton — uninstall is visible and single-shot (#1664)", ()
       emitDeckyEvent("uninstall_progress", { rom_id: 7, files_removed: 128, files_total: 331 });
     });
 
-    await findByText("Uninstalling...");
+    // Still the plain label — a frame for another ROM must not move this counter.
+    expect(await findByText("Uninstalling...")).toBeTruthy();
     await finish();
   });
 
