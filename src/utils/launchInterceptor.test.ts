@@ -37,6 +37,9 @@ vi.mock("../api/backend", () => ({
   renewPruneConflictLease: vi.fn(),
   logInfo: vi.fn(),
   logError: vi.fn(),
+  // Not called by launchInterceptor itself — the real connectionState store it
+  // reports reachability into logs each transition through it.
+  debugLog: vi.fn(),
 }));
 
 // The reconcile helper confirm-sets the resolved command onto the shortcut.

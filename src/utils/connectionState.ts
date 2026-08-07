@@ -10,6 +10,8 @@
  */
 
 import { useEffect, useState } from "react";
+import { debugLog } from "../api/backend";
+import { detach } from "./detach";
 
 export type RommConnectionState = "checking" | "connected" | "offline";
 
@@ -22,10 +24,17 @@ export function getRommConnectionState(): RommConnectionState {
 
 /** Set the connection state, notifying subscribers only when it actually
  *  changes. Feed real reachability signals through {@link reportServerReachable};
- *  this direct setter is for the play section's own `checking`/verdict flow. */
-export function setRommConnectionState(s: RommConnectionState): void {
+ *  this direct setter is for the play section's own `checking`/verdict flow.
+ *
+ *  `reason` names the signal that produced the transition, and is logged with
+ *  it. A dozen call sites write this state and the user only ever sees the
+ *  result, so without the reason on the transition itself a wrong "RomM offline"
+ *  cannot be attributed to the signal that caused it from a log alone (#1670). */
+export function setRommConnectionState(s: RommConnectionState, reason = "unspecified"): void {
   if (_state === s) return;
+  const previous = _state;
   _state = s;
+  detach(debugLog(`connectionState: ${previous} -> ${s} (${reason})`));
   connectionListeners.forEach((l) => l(s));
 }
 
@@ -34,7 +43,7 @@ export function setRommConnectionState(s: RommConnectionState): void {
  *  `SERVER_UNREACHABLE` / offline probe) → `offline`. Only feed it signals that
  *  genuinely mean the server is reachable or not — never an arbitrary error. */
 export function reportServerReachable(ok: boolean): void {
-  setRommConnectionState(ok ? "connected" : "offline");
+  setRommConnectionState(ok ? "connected" : "offline", "reachability report");
 }
 
 export function onRommConnectionChange(cb: (s: RommConnectionState) => void): () => void {

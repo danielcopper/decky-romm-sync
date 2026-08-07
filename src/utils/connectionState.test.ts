@@ -8,11 +8,13 @@ import {
   setServerRetryProgress,
   onServerRetryProgressChange,
 } from "./connectionState";
+import { debugLog } from "../api/backend";
 
 describe("connectionState store (#1345)", () => {
   beforeEach(() => {
     // Reset the module-level store to the neutral state between tests.
     setRommConnectionState("checking");
+    vi.mocked(debugLog).mockClear();
   });
 
   it("notifies subscribers on a real change", () => {
@@ -56,6 +58,32 @@ describe("connectionState store (#1345)", () => {
     reportServerReachable(false);
     expect(a).toHaveBeenCalledExactlyOnceWith("offline");
     expect(b).toHaveBeenCalledExactlyOnceWith("offline");
+  });
+
+  // A dozen call sites write this state and the user only sees the result, so
+  // the transition has to name the signal behind it (#1670).
+  it("logs each transition with its previous state, next state and reason", () => {
+    setRommConnectionState("offline", "fast probe");
+    expect(vi.mocked(debugLog)).toHaveBeenCalledExactlyOnceWith("connectionState: checking -> offline (fast probe)");
+  });
+
+  it("logs 'unspecified' when a caller names no reason", () => {
+    setRommConnectionState("connected");
+    expect(vi.mocked(debugLog)).toHaveBeenCalledExactlyOnceWith("connectionState: checking -> connected (unspecified)");
+  });
+
+  it("reportServerReachable names itself as the reason", () => {
+    reportServerReachable(true);
+    expect(vi.mocked(debugLog)).toHaveBeenCalledExactlyOnceWith(
+      "connectionState: checking -> connected (reachability report)",
+    );
+  });
+
+  it("logs nothing when the state is unchanged", () => {
+    setRommConnectionState("offline", "fast probe");
+    vi.mocked(debugLog).mockClear();
+    setRommConnectionState("offline", "authoritative verdict");
+    expect(vi.mocked(debugLog)).not.toHaveBeenCalled();
   });
 });
 
