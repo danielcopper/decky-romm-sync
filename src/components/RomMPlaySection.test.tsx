@@ -220,6 +220,26 @@ const flushAsync = () =>
     await Promise.resolve();
   });
 
+type ConnectionResult = Awaited<ReturnType<typeof backend.testConnection>>;
+
+// Hold testConnection open so a test can land its verdict at a chosen moment —
+// the late-answer case #1670 turns on. The returned `resolve` reads the captured
+// one at call time, since the mock body only runs once the component renders.
+function deferredConnection(): { resolve: (r: ConnectionResult) => void } {
+  let settle: (r: ConnectionResult) => void = () => {};
+  vi.mocked(backend.testConnection).mockImplementation(
+    () =>
+      new Promise<ConnectionResult>((res) => {
+        settle = res;
+      }),
+  );
+  return {
+    resolve: (r) => {
+      settle(r);
+    },
+  };
+}
+
 // Inspect the most recent showContextMenu(menuElement, target) call.
 function lastContextMenuElement(): ReactElement | null {
   const calls = vi.mocked(showContextMenu).mock.calls;
@@ -1004,13 +1024,126 @@ describe("RomMPlaySection", () => {
       expect(connectionState.getRommConnectionState()).not.toBe("offline");
     });
 
-    it("on timeout (timeoutMs rejects first) → catch sets 'offline'", async () => {
+    // -----------------------------------------------------------------
+    // #1670 — the check ran twice per mount (the save-sync flag flipping
+    // re-keyed its effect), and the second run's 5s deadline was reported as a
+    // verdict even though the server answered seconds later.
+    // -----------------------------------------------------------------
+
+    it("#1670 — issues exactly ONE testConnection per mount, even though save-sync flips mid-mount", async () => {
+      // save_sync_enabled starts false in the store and flips true when the
+      // cached detail lands — the flip that used to re-run the connection check.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1670,
+        save_sync_enabled: true,
+        save_sync_display: { status: "synced", label: "ok", last_sync_check_at: null },
+      });
+      vi.mocked(backend.getSaveStatus).mockResolvedValue({
+        rom_id: 1670,
+        files: [],
+        playtime: {
+          total_seconds: 0,
+          session_count: 0,
+          last_session_start: null,
+          last_session_duration_sec: null,
+          last_played: null,
+        },
+        device_id: "d",
+        last_sync_check_at: null,
+      });
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      // Non-vacuous: the flip really happened, so a check keyed on it WOULD have
+      // re-run. One call is then proof the check is no longer keyed on it.
+      expect(getGameDetail(testAppId).saveSyncEnabled).toBe(true);
+      expect(vi.mocked(backend.testConnection)).toHaveBeenCalledTimes(1);
+      expect(connectionState.getRommConnectionState()).toBe("connected");
+    });
+
+    it("#1670 — a check that misses the deadline stays 'checking' and shows no offline badge", async () => {
       vi.mocked(playSectionUtils.timeoutMs).mockReturnValue(Promise.reject(new Error("timeout")));
-      // testConnection never resolves — race goes to timeoutMs.
+      // testConnection has not answered yet — the race goes to timeoutMs.
       vi.mocked(backend.testConnection).mockImplementation(() => new Promise(() => {}));
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      // A deadline is not a verdict: unknown, not unreachable.
+      expect(connectionState.getRommConnectionState()).toBe("checking");
+      expect(container.textContent).not.toContain("RomM offline");
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("connection check unanswered"));
+    });
+
+    it("#1670 — the verdict that lands AFTER the deadline still settles the badge", async () => {
+      vi.mocked(playSectionUtils.timeoutMs).mockReturnValue(Promise.reject(new Error("timeout")));
+      const late = deferredConnection();
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(connectionState.getRommConnectionState()).toBe("checking");
+
+      // The server answers 2.5s past the deadline, as it did in the recorded
+      // session — that answer is the verdict, not the deadline.
+      await act(async () => {
+        late.resolve({ success: true, message: "ok" });
+        await flushAsync();
+      });
+      expect(connectionState.getRommConnectionState()).toBe("connected");
+      expect(container.textContent).not.toContain("RomM offline");
+    });
+
+    it("#1670 — a late verdict for an UNMOUNTED page is dropped", async () => {
+      vi.mocked(playSectionUtils.timeoutMs).mockReturnValue(Promise.reject(new Error("timeout")));
+      const late = deferredConnection();
+      const { unmount } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      unmount();
+      // A page nobody is looking at must not write the shared badge.
+      await act(async () => {
+        late.resolve({ success: false, message: "" });
+        await flushAsync();
+      });
+      expect(connectionState.getRommConnectionState()).toBe("checking");
+    });
+
+    it("#1670 — a late verdict does not clobber the state a NEWER check already settled", async () => {
+      vi.mocked(playSectionUtils.timeoutMs).mockReturnValue(Promise.reject(new Error("timeout")));
+      const stale = deferredConnection();
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(connectionState.getRommConnectionState()).toBe("checking");
+
+      // A second game page opens and gets its answer inside the deadline.
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
+      render(<RomMPlaySection appId={testAppId + 1} />);
+      await flushAsync();
+      expect(connectionState.getRommConnectionState()).toBe("connected");
+
+      // The first page's answer arrives afterwards. It is the answer to an older
+      // question and must not replace the newer one's.
+      await act(async () => {
+        stale.resolve({ success: false, message: "" });
+        await flushAsync();
+      });
+      expect(connectionState.getRommConnectionState()).toBe("connected");
+    });
+
+    it("#1670 — a rejected testConnection is still a reachability signal → 'offline'", async () => {
+      // Distinct from the deadline above: the CALL failed, which is a verdict.
+      vi.mocked(playSectionUtils.timeoutMs).mockReturnValue(Promise.reject(new Error("timeout")));
+      vi.mocked(backend.testConnection).mockRejectedValue(new Error("net"));
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       expect(connectionState.getRommConnectionState()).toBe("offline");
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("connection check failed"));
+    });
+
+    it("#1670 — every state transition is logged with its previous state, next state and reason", async () => {
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: false, message: "" });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+        "connectionState: checking -> offline (authoritative verdict)",
+      );
     });
 
     it("dispatches romm_data_changed with has_conflict when connected + save_sync_enabled", async () => {

@@ -105,6 +105,11 @@ the RomM database was reset and this device's registration disappeared with it �
 **RomM offline** badge stays clear and the surface tells you what's missing instead. If you see such a message while the
 badge is clear, the fix is on the RomM side (re-sync the library, or re-check the game), not with your network.
 
+A slow answer isn't a failure either. The check a game page runs when it opens can take a while on a busy server or over
+a remote connection; while it's still outstanding the page simply keeps waiting, and the **RomM offline** badge appears
+only once something actually reports the server as unreachable. A page that takes a few seconds to settle is not the
+same thing as a page that found RomM missing.
+
 When the missing thing is this device's own registration — the RomM database was wiped or restored and the id this
 device was issued no longer exists — you don't have to do anything. Both when the plugin loads (installing an update
 counts, since that reloads it) and before every save-sync (before a game launches, after it exits, or a manual sync),
