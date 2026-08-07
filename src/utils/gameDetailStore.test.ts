@@ -21,6 +21,7 @@ import type { CachedGameDetail } from "../api/backend";
 import type { CoreInfo, DownloadCompleteEvent, SaveStatus } from "../types";
 
 type BiosStatusResult = Awaited<ReturnType<typeof backend.getBiosStatus>>;
+type AchievementProgressResult = Awaited<ReturnType<typeof backend.getAchievementProgress>>;
 
 // getCachedGameDetail / invalidateCachedGameDetail are re-exported through
 // backend.ts but their canonical home is utils — mock the store so both import
@@ -135,6 +136,8 @@ const switchedCoreInfo: CoreInfo = {
     },
   ],
 };
+
+const achievementSummary = (earned: number, total: number) => ({ earned, total, earned_hardcore: 0 });
 
 const biosMissing: BiosStatusResult = {
   bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
@@ -708,6 +711,105 @@ describe("gameDetailStore", () => {
       });
 
       expect(vi.mocked(cachedStore.getCachedGameDetail)).not.toHaveBeenCalled();
+    });
+  });
+
+  // The mount load fires its background reads and returns; a switch landing
+  // before one of them answers re-keys the entry without closing it, so the
+  // generation the read was issued under is still current.
+  describe("mount-load background refreshes across a version switch", () => {
+    it("does not fold a core answer read for the rom the load resolved", async () => {
+      const previousRomCore = deferred<CoreInfo>();
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(switchedCoreInfo);
+      vi.mocked(backend.getPlatformCoreInfo).mockReturnValueOnce(previousRomCore.promise);
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found());
+      subscribe(nextAppId);
+      await flush();
+      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledExactlyOnceWith(42);
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found(switchedDetail));
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, activeCoreLabel: "Genesis Plus GX" });
+
+      previousRomCore.resolve(coreInfo);
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, activeCoreLabel: "Genesis Plus GX" });
+    });
+
+    it("does not fold a BIOS answer read for the rom the load resolved", async () => {
+      const previousRomBios = deferred<BiosStatusResult>();
+      vi.mocked(backend.getBiosStatus).mockReturnValueOnce(previousRomBios.promise);
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ stale_fields: ["bios"] }));
+      subscribe(nextAppId);
+      await flush();
+      expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledExactlyOnceWith(42);
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found(switchedDetail));
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, biosStatus: "ok", biosLabel: "3/3" });
+
+      previousRomBios.resolve(biosMissing);
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, biosStatus: "ok", biosLabel: "3/3" });
+    });
+
+    it("does not fold an achievement count read for the rom the load resolved", async () => {
+      const previousRomProgress = deferred<AchievementProgressResult>();
+      vi.mocked(backend.getAchievementProgress).mockReturnValueOnce(previousRomProgress.promise);
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({ ra_id: 7, stale_fields: ["achievements"], achievement_summary: achievementSummary(7, 70) }),
+      );
+      subscribe(nextAppId);
+      await flush();
+      expect(vi.mocked(backend.getAchievementProgress)).toHaveBeenCalledExactlyOnceWith(42);
+      expect(getGameDetail(nextAppId)).toMatchObject({ achievementEarned: 7, achievementTotal: 70 });
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({ rom_id: 43, ra_id: 9, achievement_summary: achievementSummary(3, 30) }),
+      );
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, achievementEarned: 3, achievementTotal: 30 });
+
+      previousRomProgress.resolve({ success: true, earned: 12, total: 70, earned_achievements: [] });
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, achievementEarned: 3, achievementTotal: 30 });
+    });
+
+    // #1345: a switched-to detail with no achievement summary keeps the shown
+    // count rather than degrading it to 0. That carry-over is the identity
+    // write's doing, and the identity write is deliberately NOT rom-bound — this
+    // pins that the binding above did not turn the carry-over into a reset.
+    it("still keeps the last-known achievement counts when the switched-to detail carries no summary", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({ ra_id: 7, achievement_summary: achievementSummary(7, 70) }),
+      );
+      subscribe(nextAppId);
+      await flush();
+      expect(getGameDetail(nextAppId)).toMatchObject({ achievementEarned: 7, achievementTotal: 70 });
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ rom_id: 43 }));
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, achievementEarned: 7, achievementTotal: 70 });
     });
   });
 

@@ -228,7 +228,8 @@ function writerForRom(entry: Entry, generation: number, romId: number): Dispatch
 /**
  * Cache-first load: resolve the cached game detail for this appId, fold it into
  * the entry, and fire the background refreshes (save status, metadata,
- * achievements, BIOS, core) whose results are merged in as they land.
+ * achievements, BIOS, core) whose results are merged in as they land — unless a
+ * version switch re-keyed the entry to another ROM while one was open.
  */
 async function loadDetail(appId: number, entry: Entry): Promise<void> {
   const generation = entry.generation;
@@ -267,6 +268,12 @@ async function loadDetail(appId: number, entry: Entry): Promise<void> {
       achievementTotal: cached.achievement_summary?.total ?? prev.achievementTotal,
     }));
 
+    // Every background answer below is bound to the rom THIS load resolved, so a
+    // version switch landing while one is open cannot fold it into a page that
+    // has moved on. The identity write above is the one write that cannot take
+    // the binding — it is what establishes the identity.
+    const writeForRom = writerForRom(entry, generation, romId);
+
     // The live save status carries what the cached detail does not: the active
     // slot, the content-dir flag, and the conflicts. Fire-and-forget — a failed
     // read leaves the cached display standing, and a caller that needs to know
@@ -280,7 +287,7 @@ async function loadDetail(appId: number, entry: Entry): Promise<void> {
     }
 
     if (cached.ra_id && staleFields.includes("achievements")) {
-      refreshAchievementsInBackground(romId, cancelled, write);
+      refreshAchievementsInBackground(romId, cancelled, writeForRom);
     }
 
     if (cached.bios_status) {
@@ -291,13 +298,13 @@ async function loadDetail(appId: number, entry: Entry): Promise<void> {
     }
 
     if (staleFields.includes("bios")) {
-      refreshBiosInBackground(romId, cancelled, write);
+      refreshBiosInBackground(romId, cancelled, writeForRom);
     }
 
     // Core info is sourced from its OWN path (#923), independent of BIOS status,
     // and keyed on rom_id so the active core reflects a per-game DB override
     // (epic #945).
-    refreshCoreInfoInBackground(romId, cancelled, write);
+    refreshCoreInfoInBackground(romId, cancelled, writeForRom);
   } catch (e) {
     // Shared by the mount load and the version-switch re-derive — a failed cache
     // load leaves every subscribed surface stale either way, so surface at warn
