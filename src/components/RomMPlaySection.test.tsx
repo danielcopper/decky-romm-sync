@@ -29,6 +29,7 @@ import * as cachedStore from "../utils/cachedGameDetailStore";
 import * as connectionState from "../utils/connectionState";
 import * as sectionRefresh from "../utils/sectionRefresh";
 import * as playSectionUtils from "../utils/playSection";
+import * as saveStatusUtils from "../utils/saveStatus";
 import * as formatters from "../utils/formatters";
 import { getGameDetail } from "../utils/gameDetailStore";
 import { useVersionError } from "./VersionErrorCard";
@@ -1125,6 +1126,81 @@ describe("RomMPlaySection", () => {
         await flushAsync();
       });
       expect(connectionState.getRommConnectionState()).toBe("connected");
+    });
+
+    it("#1670 — a newer check ABANDONED before it answered does not silence the open page's verdict", async () => {
+      vi.mocked(playSectionUtils.timeoutMs).mockReturnValue(Promise.reject(new Error("timeout")));
+      const stillOpen = deferredConnection();
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      // A second page opens over it and closes again before the server answers
+      // it — so it never writes a verdict of its own.
+      deferredConnection();
+      const { unmount } = render(<RomMPlaySection appId={testAppId + 1} />);
+      await flushAsync();
+      unmount();
+
+      // The first page is still on screen, and its answer is now the only one
+      // anybody is going to get. Ordering on the newest ANSWER rather than the
+      // newest question is what keeps it from being discarded here.
+      await act(async () => {
+        stillOpen.resolve({ success: false, message: "" });
+        await flushAsync();
+      });
+      expect(connectionState.getRommConnectionState()).toBe("offline");
+    });
+
+    it("#1670 — a testConnection that throws SYNCHRONOUSLY still settles the badge and logs", async () => {
+      // The callable bridge is injected by the plugin loader; a synchronous
+      // throw out of it must not vanish into the fire-and-forget check.
+      vi.mocked(backend.testConnection).mockImplementation(() => {
+        throw new Error("bridge gone");
+      });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(connectionState.getRommConnectionState()).toBe("offline");
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("connection check failed"));
+    });
+
+    it("#1670 — the save-status check runs on the ROM identity, NOT on the connection verdict", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1671,
+        save_sync_enabled: true,
+      });
+      // The verdict is negative — a check gated on "connected" would skip.
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: false, message: "" });
+      vi.mocked(backend.getSaveStatus).mockResolvedValue({
+        rom_id: 1671,
+        files: [],
+        playtime: {
+          total_seconds: 0,
+          session_count: 0,
+          last_session_start: null,
+          last_session_duration_sec: null,
+          last_played: null,
+        },
+        device_id: "d",
+        last_sync_check_at: null,
+      });
+      vi.mocked(saveStatusUtils.hasAnySaveConflict).mockReturnValue(true);
+      const listener = vi.fn();
+      globalThis.addEventListener("romm_data_changed", listener);
+      try {
+        render(<RomMPlaySection appId={testAppId} />);
+        await flushAsync();
+        // Non-vacuous on two counts: the verdict really was negative, and
+        // has_conflict is carried by THIS component's dispatch alone — the
+        // store's own save-status read emits nothing.
+        expect(connectionState.getRommConnectionState()).toBe("offline");
+        const saveSyncEv = listener.mock.calls
+          .map((c) => c[0] as CustomEvent)
+          .find((e) => e.detail.type === "save_sync");
+        expect(saveSyncEv?.detail).toMatchObject({ type: "save_sync", rom_id: 1671, has_conflict: true });
+      } finally {
+        globalThis.removeEventListener("romm_data_changed", listener);
+      }
     });
 
     it("#1670 — a rejected testConnection is still a reachability signal → 'offline'", async () => {

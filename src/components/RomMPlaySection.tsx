@@ -82,14 +82,17 @@ const artworkApplied = new Map<number, number>();
  *  unreachable — see the check below. */
 const CONNECTION_CHECK_DEADLINE_MS = 5000;
 
-/** Id of the most recently STARTED connection check across every mounted play
- *  section. A check that has been superseded must not write its verdict: the
- *  newer one has already reset the shared state to "checking" and will settle it
- *  itself, so an older answer would replace a fresher question's state. Ids are
- *  handed out here rather than per component because the state they guard is
- *  module-level too — two play sections briefly overlap while Steam swaps game
- *  pages. */
-let latestConnectionCheck = 0;
+/** Source of connection-check ids, in start order. Ids are handed out at module
+ *  level rather than per component because the state they order is module-level
+ *  too — two play sections briefly overlap while Steam swaps game pages. */
+let connectionCheckSeq = 0;
+
+/** Id of the newest check that has WRITTEN a verdict. An older check must not
+ *  write over it — its answer is to a question a newer one has already answered.
+ *  Ordering on the write rather than on the start is what keeps a check that is
+ *  abandoned before it answers (its page closed while the server was still
+ *  thinking) from silencing the verdict of a page that is still open. */
+let lastSettledCheckId = 0;
 
 /** Resolve the LAST PLAYED display, preferring our restored cross-device
  *  `last_played` (ISO-8601, from `reconcile_playtime` / native play sessions,
@@ -124,7 +127,12 @@ interface PlaytimeState {
   playtime: string;
 }
 
-import { setRommConnectionState, setVersionError, useRommConnectionState } from "../utils/connectionState";
+import {
+  setRommConnectionState,
+  setVersionError,
+  useRommConnectionState,
+  type RommConnectionState,
+} from "../utils/connectionState";
 import { registerConnectionHeartbeat } from "../utils/connectionHeartbeat";
 import { useVersionError } from "./VersionErrorCard";
 import { useMigrationStatus } from "./MigrationBlockedPage";
@@ -193,16 +201,26 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // (fast, idle-backend) answer was discarded as cancelled and the second one
   // queued behind the mount's own calls until it missed its deadline (#1670).
   useEffect(() => {
-    const checkId = ++latestConnectionCheck;
+    const checkId = ++connectionCheckSeq;
     let cancelled = false;
     // Once testConnection() lands an authoritative verdict, the fast probe must
     // not override it (avoids a late probe clobbering a "connected" badge).
     let settled = false;
 
-    /** An answer this check obtained is only still worth writing while it is the
-     *  newest question asked: after unmount, and after a later check started,
-     *  writing it would put a stale verdict over a fresh one. */
-    const superseded = () => cancelled || checkId !== latestConnectionCheck;
+    /** An answer this check obtained is only still worth writing while nothing
+     *  newer has answered: after unmount, and after a later check wrote its own
+     *  verdict, writing it would put a stale verdict over a fresh one. A newer
+     *  check that has merely STARTED does not supersede — it may yet be
+     *  abandoned unanswered, and then this check's answer is the only one
+     *  anybody is going to get. */
+    const superseded = () => cancelled || checkId < lastSettledCheckId;
+
+    /** Write a verdict and record this check as the newest one to have answered.
+     *  The single place either happens, so the two cannot drift apart. */
+    const settleWith = (next: RommConnectionState, reason: string) => {
+      lastSettledCheckId = checkId;
+      setRommConnectionState(next, reason);
+    };
 
     // Fast offline-badge probe (ADR-0015): the slow `testConnection()` below
     // goes through the retrying heartbeat (3 attempts + backoff, up to ~90s on a
@@ -227,7 +245,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       // "connected"), or if superseded / not offline. The shared store notifies
       // its subscribers on the change (#1345).
       if (superseded() || settled || !offline) return;
-      setRommConnectionState("offline", "fast probe");
+      settleWith("offline", "fast probe");
     };
 
     const applyVerdict = (result: Awaited<ReturnType<typeof testConnection>>) => {
@@ -235,10 +253,30 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       settled = true; // authoritative verdict in hand — a late fast probe must not override it
       if (result.reason === "version_error") {
         setVersionError(result.message);
-        setRommConnectionState("offline", "version error");
+        settleWith("offline", "version error");
         return;
       }
-      setRommConnectionState(result.success ? "connected" : "offline", "authoritative verdict");
+      settleWith(result.success ? "connected" : "offline", "authoritative verdict");
+    };
+
+    /** Obtain the verdict and apply it. Declared async so a SYNCHRONOUS throw
+     *  out of the callable bridge arrives here as a rejection instead of
+     *  escaping into the fire-and-forget `check()` unlogged — a bridge that
+     *  cannot be called at all is as much a reachability signal as a rejected
+     *  promise. Only the CALL is guarded: a throw out of applyVerdict is a
+     *  subscriber's defect, not a verdict, and must not be reported as one. */
+    const runVerdict = async () => {
+      let result: Awaited<ReturnType<typeof testConnection>>;
+      try {
+        result = await testConnection();
+      } catch (e) {
+        if (superseded()) return;
+        settled = true;
+        detach(debugLog(`RomMPlaySection(${appId}): connection check failed: ${e}`));
+        settleWith("offline", "check failed");
+        return;
+      }
+      applyVerdict(result);
     };
 
     const check = async () => {
@@ -249,16 +287,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       // Snappy offline badge — runs concurrently with the precise check below.
       detach(fastOfflineProbe());
 
-      // The verdict is consumed by its OWN handlers, not by the race below, so
-      // an answer that arrives after the deadline is still applied. A rejection
-      // is a different thing from a slow answer: the call itself failed, which
-      // is a reachability signal, so it settles the badge offline.
-      const verdict = testConnection().then(applyVerdict, (e: unknown) => {
-        if (superseded()) return;
-        settled = true;
-        detach(debugLog(`RomMPlaySection(${appId}): connection check failed: ${e}`));
-        setRommConnectionState("offline", "check failed");
-      });
+      // The verdict is consumed by runVerdict, not by the race below, so an
+      // answer that arrives after the deadline is still applied.
+      const verdict = runVerdict();
 
       // Missing the deadline means UNKNOWN, not unreachable: the badge stays at
       // "checking" and the outstanding call above settles it whenever it lands.
