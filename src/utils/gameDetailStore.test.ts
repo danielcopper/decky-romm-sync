@@ -18,7 +18,9 @@ import {
 } from "../test-utils/dom-event-listener-spy";
 import { deckyEventListenerCount, emitDeckyEvent } from "../test-utils/decky-api-mock";
 import type { CachedGameDetail } from "../api/backend";
-import type { DownloadCompleteEvent, SaveStatus } from "../types";
+import type { CoreInfo, DownloadCompleteEvent, SaveStatus } from "../types";
+
+type BiosStatusResult = Awaited<ReturnType<typeof backend.getBiosStatus>>;
 
 // getCachedGameDetail / invalidateCachedGameDetail are re-exported through
 // backend.ts but their canonical home is utils — mock the store so both import
@@ -79,6 +81,14 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reje
   return { promise, resolve, reject };
 }
 
+/** Re-key an entry to rom 43 the way the version picker does — without closing
+ *  it, so the generation is unchanged and only the rom identity separates an
+ *  answer read for the previous ROM from the entry's new one. */
+const dispatchVersionSwitch = (appId: number) =>
+  globalThis.dispatchEvent(
+    new CustomEvent("romm_data_changed", { detail: { type: "version_switched", app_id: appId, rom_id: 43 } }),
+  );
+
 const downloadComplete = (romId: number): DownloadCompleteEvent => ({
   rom_id: romId,
   rom_name: "Test ROM",
@@ -88,7 +98,7 @@ const downloadComplete = (romId: number): DownloadCompleteEvent => ({
   launch_options: "",
 });
 
-const coreInfo = {
+const coreInfo: CoreInfo = {
   active_core: "snes9x.so",
   active_core_label: "Snes9x",
   platform_core_label: null,
@@ -97,13 +107,48 @@ const coreInfo = {
   emulators: [
     {
       label: "Snes9x",
-      kind: "libretro" as const,
+      kind: "libretro",
       core_so: "snes9x.so",
       is_default: true,
       bakeable: true,
       reason: null,
     },
   ],
+};
+
+/** The core the entry reads for the ROM it switches TO — distinct from
+ *  {@link coreInfo} so a fold of the previous ROM's answer is visible. */
+const switchedCoreInfo: CoreInfo = {
+  active_core: "genesis_plus_gx.so",
+  active_core_label: "Genesis Plus GX",
+  platform_core_label: null,
+  has_game_override: false,
+  emulator_data_available: true,
+  emulators: [
+    {
+      label: "Genesis Plus GX",
+      kind: "libretro",
+      core_so: "genesis_plus_gx.so",
+      is_default: true,
+      bakeable: true,
+      reason: null,
+    },
+  ],
+};
+
+const biosMissing: BiosStatusResult = {
+  bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+  bios_level: "missing",
+  bios_label: "0/3",
+};
+
+/** The cached detail of the ROM a version switch moves the entry to, carrying a
+ *  BIOS level the previous ROM's read would overwrite if it were still folded. */
+const switchedDetail: Partial<CachedGameDetail> = {
+  rom_id: 43,
+  bios_status: { platform_slug: "genesis", server_count: 3, local_count: 3, all_downloaded: true },
+  bios_level: "ok",
+  bios_label: "3/3",
 };
 
 describe("gameDetailStore", () => {
@@ -581,6 +626,43 @@ describe("gameDetailStore", () => {
       expect(vi.mocked(backend.getBiosStatus)).not.toHaveBeenCalled();
     });
 
+    // The entry is re-keyed, not closed, so the generation fence cannot see this:
+    // the core and BIOS answers below were read for the ROM the page has left.
+    it("does not fold a core or BIOS answer read for the rom the entry has since left", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found());
+      subscribe(nextAppId);
+      await flush();
+      vi.mocked(backend.getPlatformCoreInfo).mockClear();
+      const previousRomCore = deferred<CoreInfo>();
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(switchedCoreInfo);
+      vi.mocked(backend.getPlatformCoreInfo).mockReturnValueOnce(previousRomCore.promise);
+      vi.mocked(backend.getBiosStatus).mockResolvedValue(biosMissing);
+
+      await act(async () => {
+        dispatchCoreChanged();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledExactlyOnceWith(42);
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found(switchedDetail));
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, activeCoreLabel: "Genesis Plus GX" });
+
+      previousRomCore.resolve(coreInfo);
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        romId: 43,
+        activeCoreLabel: "Genesis Plus GX",
+        biosStatus: "ok",
+        biosLabel: "3/3",
+      });
+    });
+
     it("surfaces a failed read through debugLog instead of leaving it unhandled", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found());
       subscribe(nextAppId);
@@ -599,11 +681,6 @@ describe("gameDetailStore", () => {
   });
 
   describe("version_switched notifications", () => {
-    const dispatchSwitch = (appId: number) =>
-      globalThis.dispatchEvent(
-        new CustomEvent("romm_data_changed", { detail: { type: "version_switched", app_id: appId, rom_id: 43 } }),
-      );
-
     it("re-derives the entry for this appId", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found());
       subscribe(nextAppId);
@@ -611,7 +688,7 @@ describe("gameDetailStore", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ rom_id: 43, rom_name: "Other version" }));
 
       await act(async () => {
-        dispatchSwitch(nextAppId);
+        dispatchVersionSwitch(nextAppId);
         await Promise.resolve();
       });
       await flush();
@@ -626,7 +703,7 @@ describe("gameDetailStore", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockClear();
 
       await act(async () => {
-        dispatchSwitch(nextAppId + 1);
+        dispatchVersionSwitch(nextAppId + 1);
         await Promise.resolve();
       });
 
@@ -726,6 +803,63 @@ describe("gameDetailStore", () => {
       await refreshBiosStatus(nextAppId);
 
       expect(getGameDetail(nextAppId)).toMatchObject({ biosStatus: "partial", biosLabel: "1/3" });
+    });
+
+    it("refreshBiosStatus does not fold a level read for the rom the entry has since left", async () => {
+      subscribe(nextAppId);
+      await flush();
+      const previousRom = deferred<BiosStatusResult>();
+      vi.mocked(backend.getBiosStatus).mockReturnValueOnce(previousRom.promise);
+      const inFlight = refreshBiosStatus(nextAppId);
+      expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledExactlyOnceWith(42);
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found(switchedDetail));
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, biosStatus: "ok", biosLabel: "3/3" });
+
+      previousRom.resolve(biosMissing);
+      await inFlight;
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, biosStatus: "ok", biosLabel: "3/3" });
+    });
+
+    it("refreshCoreAndBios does not fold core or BIOS answers for the rom the entry has since left", async () => {
+      subscribe(nextAppId);
+      await flush();
+      vi.mocked(backend.getPlatformCoreInfo).mockClear();
+      const previousRomCore = deferred<CoreInfo>();
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(switchedCoreInfo);
+      vi.mocked(backend.getPlatformCoreInfo).mockReturnValueOnce(previousRomCore.promise);
+      vi.mocked(backend.getBiosStatus).mockResolvedValue(biosMissing);
+      const inFlight = refreshCoreAndBios(nextAppId);
+      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledExactlyOnceWith(42);
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found(switchedDetail));
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, activeCoreLabel: "Genesis Plus GX" });
+
+      previousRomCore.resolve(coreInfo);
+      await inFlight;
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        romId: 43,
+        activeCoreLabel: "Genesis Plus GX",
+        biosStatus: "ok",
+        biosLabel: "3/3",
+      });
+      // The cache drop is not part of the fold: it only forces the next read to
+      // go to the backend, so it runs even when the fold was refused.
+      expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(nextAppId);
     });
 
     it("refreshCoreAndBios re-derives both and drops the cached detail", async () => {

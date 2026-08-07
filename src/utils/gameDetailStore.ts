@@ -206,6 +206,25 @@ function writerFor(entry: Entry, generation: number): Dispatch<SetStateAction<Ga
   };
 }
 
+/** A writer additionally bound to the rom identity a read was issued for: it
+ *  refuses a fold once the entry has moved on to another ROM. A version switch
+ *  re-keys the entry without closing it, so the generation is unchanged and the
+ *  identity is the only thing separating this page's answer from its
+ *  predecessor's.
+ *
+ *  The gate is the question, not the answer: it compares the rom the read was
+ *  ISSUED for against the entry's rom now, where {@link applySaveStatus} can
+ *  compare the answer's own `rom_id` and so also catch a payload about the wrong
+ *  ROM. Neither `CoreInfo` nor the `get_bios_status` payload carries a rom id,
+ *  so that stronger form is not available to the core and BIOS reads. */
+function writerForRom(entry: Entry, generation: number, romId: number): Dispatch<SetStateAction<GameDetailState>> {
+  const write = writerFor(entry, generation);
+  return (update) => {
+    if (entry.state.romId !== romId) return;
+    write(update);
+  };
+}
+
 /**
  * Cache-first load: resolve the cached game detail for this appId, fold it into
  * the entry, and fire the background refreshes (save status, metadata,
@@ -376,7 +395,8 @@ export function noteSaveSyncDisplay(appId: number, display: SaveSyncDisplay): vo
 }
 
 /** Re-read the BIOS level after a firmware download. Leaves the shown level
- *  alone when the read fails or reports no BIOS need. */
+ *  alone when the read fails, when it reports no BIOS need, or when a version
+ *  switch re-keyed the entry while the read was open. */
 export async function refreshBiosStatus(appId: number): Promise<void> {
   const entry = _entries.get(appId);
   const romId = entry?.state.romId;
@@ -384,9 +404,10 @@ export async function refreshBiosStatus(appId: number): Promise<void> {
   const generation = entry.generation;
   const refreshed = await getBiosStatus(romId).catch(() => NO_BIOS_STATUS);
   if (!refreshed.bios_status) return;
-  writerFor(
+  writerForRom(
     entry,
     generation,
+    romId,
   )((prev) => ({
     ...prev,
     biosStatus: refreshed.bios_level,
@@ -401,6 +422,12 @@ export async function refreshBiosStatus(appId: number): Promise<void> {
  * `biosNeeded` is re-derived from the refreshed status rather than kept: the
  * active core just changed, so the BIOS requirement may have changed with it
  * (#923).
+ *
+ * A version switch landing while the two reads are open re-keys the entry, and
+ * the answers are then about the ROM it moved off — so the fold is refused. The
+ * cache drop still runs either way: it only forces the next read to go to the
+ * backend, so it cannot show anything wrong, while skipping it would make the
+ * cache's correctness depend on the switch path having dropped it first.
  */
 export async function refreshCoreAndBios(appId: number): Promise<void> {
   const entry = _entries.get(appId);
@@ -411,9 +438,10 @@ export async function refreshCoreAndBios(appId: number): Promise<void> {
     getPlatformCoreInfo(romId),
     getBiosStatus(romId).catch(() => NO_BIOS_STATUS),
   ]);
-  writerFor(
+  writerForRom(
     entry,
     generation,
+    romId,
   )((prev) => ({
     ...prev,
     ...extractCoreInfo(coreInfo),
@@ -483,9 +511,10 @@ async function handleCoreChange(entry: Entry): Promise<void> {
   // level/label still come from the (now core-free) BIOS status — the active
   // core just switched, so the BIOS requirements may have changed.
   const [coreInfo, biosResult] = await Promise.all([getPlatformCoreInfo(romId), getBiosStatus(romId)]);
-  writerFor(
+  writerForRom(
     entry,
     generation,
+    romId,
   )((prev) => ({
     ...prev,
     ...extractCoreInfo(coreInfo),
