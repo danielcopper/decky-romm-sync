@@ -270,8 +270,11 @@ async function loadDetail(appId: number, entry: Entry): Promise<void> {
 
     // Every background answer below is bound to the rom THIS load resolved, so a
     // version switch landing while one is open cannot fold it into a page that
-    // has moved on. The identity write above is the one write that cannot take
-    // the binding — it is what establishes the identity.
+    // has moved on. Two writes stay on the unbound `write` deliberately: the
+    // identity write above, which installs the very identity a binding would
+    // check against, and the `cached.bios_status` fold below, which runs in the
+    // same tick as it — no await in between for a switch to land in, so binding
+    // it would be a no-op.
     const writeForRom = writerForRom(entry, generation, romId);
 
     // The live save status carries what the cached detail does not: the active
