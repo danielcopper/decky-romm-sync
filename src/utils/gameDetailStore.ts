@@ -133,6 +133,11 @@ interface Entry {
   /** Bumped when the entry is torn down, so a read that resolves afterwards
    *  cannot write into a state nobody is showing any more. */
   generation: number;
+  /** Bumped by every load. Two loads for one appId can be open at once — a
+   *  version switch and a re-read both re-derive the entry without closing it —
+   *  and can finish in either order, so a load that no longer holds this number
+   *  has been overtaken and writes nothing. */
+  loadSeq: number;
   saveStatusInFlight: InFlightSaveStatus | null;
   detachListeners: () => void;
 }
@@ -178,6 +183,7 @@ function openEntry(appId: number): Entry {
     state: DEFAULT_STATE,
     listeners: new Set(),
     generation: 0,
+    loadSeq: 0,
     saveStatusInFlight: null,
     detachListeners: () => {},
   };
@@ -208,9 +214,11 @@ function writerFor(entry: Entry, generation: number): Dispatch<SetStateAction<Ga
 
 /** A writer additionally bound to the rom identity a read was issued for: it
  *  refuses a fold once the entry has moved on to another ROM. A version switch
- *  re-keys the entry without closing it, so the generation is unchanged and the
+ *  re-keys the entry without closing it, so the generation is unchanged, and for
+ *  a read issued outside a load — a BIOS re-read, a core-change handler — the
  *  identity is the only thing separating this page's answer from its
- *  predecessor's.
+ *  predecessor's. A read issued by {@link loadDetail} is fenced by that load's
+ *  sequence number too, which separates two answers about the SAME ROM.
  *
  *  The gate is the question, not the answer: it compares the rom the read was
  *  ISSUED for against the entry's rom now, where {@link applySaveStatus} can
@@ -230,10 +238,22 @@ function writerForRom(entry: Entry, generation: number, romId: number): Dispatch
  * the entry, and fire the background refreshes (save status, metadata,
  * achievements, BIOS, core) whose results are merged in as they land — unless a
  * version switch re-keyed the entry to another ROM while one was open.
+ *
+ * Loads are ordered by {@link Entry.loadSeq} rather than by the order their
+ * reads happen to resolve: a load a later one has overtaken writes nothing at
+ * all. The identity write below is why that fence has to exist alongside the rom
+ * binding — it is what INSTALLS the identity every other write compares itself
+ * against, so binding it to a rom would refuse the very switch that re-keys the
+ * entry (#1674). An overtaken load therefore leaves the newer load's identity
+ * standing, including when that newer load found nothing to install: the older
+ * answer describes a state the newer load has already been told is gone.
  */
 async function loadDetail(appId: number, entry: Entry): Promise<void> {
   const generation = entry.generation;
-  const cancelled = () => entry.generation !== generation;
+  const loadSeq = ++entry.loadSeq;
+  // Two separate ends: the generation covers an entry nobody is showing any
+  // more, the sequence a load a later one has moved past.
+  const cancelled = () => entry.generation !== generation || entry.loadSeq !== loadSeq;
   const write = writerFor(entry, generation);
   try {
     const cached = await getCachedGameDetail(appId);
@@ -270,11 +290,13 @@ async function loadDetail(appId: number, entry: Entry): Promise<void> {
 
     // Every background answer below is bound to the rom THIS load resolved, so a
     // version switch landing while one is open cannot fold it into a page that
-    // has moved on. Two writes stay on the unbound `write` deliberately: the
-    // identity write above, which installs the very identity a binding would
-    // check against, and the `cached.bios_status` fold below, which runs in the
-    // same tick as it — no await in between for a switch to land in, so binding
-    // it would be a no-op.
+    // has moved on — and, through `cancelled`, to this load, so an answer a
+    // later load of the SAME rom has already superseded is dropped rather than
+    // overwriting the newer one. Two writes stay on the unbound `write`: the
+    // identity write above, which installs the very identity a rom binding would
+    // check against, and the `cached.bios_status` fold below. Both run in the
+    // same tick as the `cancelled()` check that admitted this load, with no
+    // await in between for a newer load to land in.
     const writeForRom = writerForRom(entry, generation, romId);
 
     // The live save status carries what the cached detail does not: the active
@@ -462,7 +484,11 @@ export async function refreshCoreAndBios(appId: number): Promise<void> {
   invalidateCachedGameDetail(appId);
 }
 
-/** Re-read the cached detail after something invalidated it. */
+/** Re-read the cached detail after something invalidated it. A re-read is a new
+ *  load and so takes the newest sequence number at the moment it is issued: no
+ *  load issued before it can undo it. It is not exempt from the fence — a load
+ *  issued after it refuses it in turn, which is what keeps two re-reads in
+ *  order. */
 async function reloadDetail(appId: number, entry: Entry): Promise<void> {
   invalidateCachedGameDetail(appId);
   await loadDetail(appId, entry);

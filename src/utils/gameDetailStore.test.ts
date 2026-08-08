@@ -117,9 +117,10 @@ const coreInfo: CoreInfo = {
   ],
 };
 
-/** The core the entry reads for the ROM it switches TO — distinct from
- *  {@link coreInfo} so a fold of the previous ROM's answer is visible. */
-const switchedCoreInfo: CoreInfo = {
+/** The answer a second core read returns — after a version switch, or after a
+ *  re-read of the same rom — distinct from {@link coreInfo} so a fold of the
+ *  first read's answer is visible. */
+const laterCoreInfo: CoreInfo = {
   active_core: "genesis_plus_gx.so",
   active_core_label: "Genesis Plus GX",
   platform_core_label: null,
@@ -637,7 +638,7 @@ describe("gameDetailStore", () => {
       await flush();
       vi.mocked(backend.getPlatformCoreInfo).mockClear();
       const previousRomCore = deferred<CoreInfo>();
-      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(switchedCoreInfo);
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(laterCoreInfo);
       vi.mocked(backend.getPlatformCoreInfo).mockReturnValueOnce(previousRomCore.promise);
       vi.mocked(backend.getBiosStatus).mockResolvedValue(biosMissing);
 
@@ -714,13 +715,136 @@ describe("gameDetailStore", () => {
     });
   });
 
+  // #1674 — a version switch and a re-read both re-derive the entry without
+  // closing it, so two loads can be open at once and can finish in either order.
+  // The identity write is the one write no rom binding can fence, because it is
+  // what installs the identity such a binding would compare against.
+  describe("out-of-order loads", () => {
+    /** What the overtaken mount load resolves: a different rom, differing in
+     *  every field of the identity write so a fold of it is visible whichever
+     *  field is read. */
+    const overtakenDetail = found({
+      rom_id: 42,
+      rom_name: "Mount ROM",
+      platform_slug: "snes",
+      installed: true,
+      fs_size_bytes: 4096,
+      save_sync_enabled: true,
+      save_sync_display: { status: "conflict", label: "Conflict", last_sync_check_at: null },
+      ra_id: 7,
+      achievement_summary: achievementSummary(7, 70),
+    });
+
+    const switchedIdentity = found({
+      rom_id: 43,
+      rom_name: "Other version",
+      platform_slug: "genesis",
+      installed: false,
+      fs_size_bytes: 2048,
+      ra_id: 9,
+      achievement_summary: achievementSummary(3, 30),
+    });
+
+    it("refuses the identity write of a load the version switch overtook", async () => {
+      const mountLoad = deferred<CachedGameDetail>();
+      vi.mocked(cachedStore.getCachedGameDetail).mockReturnValueOnce(mountLoad.promise);
+      subscribe(nextAppId);
+      await flush();
+      expect(getGameDetail(nextAppId).romId).toBeNull();
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(switchedIdentity);
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+      expect(getGameDetail(nextAppId).romId).toBe(43);
+
+      mountLoad.resolve(overtakenDetail);
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        romId: 43,
+        romName: "Other version",
+        platformSlug: "genesis",
+        installed: false,
+        fsSizeBytes: 2048,
+        saveSyncEnabled: false,
+        saveSyncStatus: null,
+        saveSyncLabel: "",
+        raId: 9,
+        achievementEarned: 3,
+        achievementTotal: 30,
+      });
+      // The overtaken load is abandoned whole, not merely refused its write: the
+      // save-sync read its own detail asked for is never issued either.
+      expect(vi.mocked(backend.getSaveStatus)).not.toHaveBeenCalled();
+    });
+
+    // The uninstall's re-read is issued first and lands last. Without the
+    // ordering fence the page would end up describing a ROM as gone that the
+    // download has since put back.
+    it("lets a later re-read of the same rom win over an earlier one that lands after it", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: true, fs_size_bytes: 4096 }));
+      subscribe(nextAppId);
+      await flush();
+
+      const afterUninstall = deferred<CachedGameDetail>();
+      vi.mocked(cachedStore.getCachedGameDetail).mockReturnValueOnce(afterUninstall.promise);
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: 42 } }));
+        await Promise.resolve();
+      });
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: true, fs_size_bytes: 8192 }));
+      await act(async () => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(42));
+        await Promise.resolve();
+      });
+      await flush();
+      // The newest load is never the stale one — a deliberate re-read of the same
+      // rom lands rather than being refused by its own fence.
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, installed: true, fsSizeBytes: 8192 });
+
+      afterUninstall.resolve(found({ installed: false, fs_size_bytes: null }));
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, installed: true, fsSizeBytes: 8192 });
+    });
+
+    // Same rom throughout, so the rom binding admits the earlier answer — the
+    // load sequence is the only thing that can tell the two apart.
+    it("drops a background answer read under a load a later load overtook", async () => {
+      const overtakenCore = deferred<CoreInfo>();
+      vi.mocked(backend.getPlatformCoreInfo).mockReturnValueOnce(overtakenCore.promise);
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: false }));
+      subscribe(nextAppId);
+      await flush();
+      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledExactlyOnceWith(42);
+
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(laterCoreInfo);
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: true }));
+      await act(async () => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(42));
+        await Promise.resolve();
+      });
+      await flush();
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, activeCoreLabel: "Genesis Plus GX" });
+
+      overtakenCore.resolve(coreInfo);
+      await flush();
+
+      expect(getGameDetail(nextAppId).activeCoreLabel).toBe("Genesis Plus GX");
+    });
+  });
+
   // The mount load fires its background reads and returns; a switch landing
   // before one of them answers re-keys the entry without closing it, so the
   // generation the read was issued under is still current.
   describe("mount-load background refreshes across a version switch", () => {
     it("does not fold a core answer read for the rom the load resolved", async () => {
       const previousRomCore = deferred<CoreInfo>();
-      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(switchedCoreInfo);
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(laterCoreInfo);
       vi.mocked(backend.getPlatformCoreInfo).mockReturnValueOnce(previousRomCore.promise);
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found());
       subscribe(nextAppId);
@@ -935,7 +1059,7 @@ describe("gameDetailStore", () => {
       await flush();
       vi.mocked(backend.getPlatformCoreInfo).mockClear();
       const previousRomCore = deferred<CoreInfo>();
-      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(switchedCoreInfo);
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(laterCoreInfo);
       vi.mocked(backend.getPlatformCoreInfo).mockReturnValueOnce(previousRomCore.promise);
       vi.mocked(backend.getBiosStatus).mockResolvedValue(biosMissing);
       const inFlight = refreshCoreAndBios(nextAppId);
