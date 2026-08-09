@@ -10,7 +10,7 @@
  * Save Sync and BIOS items only appear when relevant.
  */
 
-import { useState, useEffect, FC, createElement } from "react";
+import { useState, useEffect, FC, Fragment, createElement } from "react";
 import { toaster } from "@decky/api";
 import {
   ConfirmModal,
@@ -1042,6 +1042,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   const playSectionRow = createElement(
     Focusable,
     {
+      key: "play-row",
       "data-romm": "true",
       className: `romm-play-section-row ${basicAppDetailsSectionStylerClasses?.PlaySection || ""}`.trim(),
       "flow-children": "right",
@@ -1135,19 +1136,23 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // the local RetroArch config, not about our setting); the banner asks the user
   // to change that config to re-enable save sync, so it is only worth showing to
   // someone who has save sync on.
-  if (detail.savefilesInContentDir && detail.saveSyncEnabled) {
-    return createElement(
-      "div",
-      { style: { display: "flex", flexDirection: "column" } },
-      createElement(WarningCard, {
-        key: "savefiles-content-dir-warning",
-        title: "Save sync off",
-        message:
-          "RetroArch's 'Write Saves to Content Directory' is enabled, so saves go next to the ROM and can't be synced. Turn it off in RetroArch → Settings → Saving to re-enable save sync.",
-      }),
-      playSectionRow,
-    );
-  }
-
-  return playSectionRow;
+  //
+  // The banner is a keyed sibling under a Fragment, never a branch returning a
+  // different root: the flag lands a moment after the row first paints, and a
+  // root whose element type changes makes React unmount the whole row — the play
+  // button drops back to "loading" and re-runs its init (#1682). A Fragment adds
+  // no DOM node, so the row stays a direct child of the injected panel either way.
+  return createElement(
+    Fragment,
+    null,
+    detail.savefilesInContentDir && detail.saveSyncEnabled
+      ? createElement(WarningCard, {
+          key: "savefiles-content-dir-warning",
+          title: "Save sync off",
+          message:
+            "RetroArch's 'Write Saves to Content Directory' is enabled, so saves go next to the ROM and can't be synced. Turn it off in RetroArch → Settings → Saving to re-enable save sync.",
+        })
+      : null,
+    playSectionRow,
+  );
 };
