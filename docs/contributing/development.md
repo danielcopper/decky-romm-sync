@@ -383,7 +383,7 @@ src/                                 # Frontend TypeScript
   types/                             # TypeScript interfaces and Steam API declarations
   utils/                             # Shortcut CRUD, sync, downloads, collections, session manager
 bin/rom-launcher                     # Pure exec wrapper — runs the launch command baked into the shortcut
-defaults/config.json                 # platform_map: 149 platform slug -> RetroDECK system mappings
+defaults/config.json                 # platform_map: 150 platform slug -> RetroDECK system mappings
 tests/                               # Backend unit tests, mirroring py_modules/ layout
 ```
 

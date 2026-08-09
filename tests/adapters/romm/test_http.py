@@ -827,6 +827,18 @@ class TestPlatformMap:
         assert "snes" in pm
         assert len(pm) > 50  # Should have many entries
 
+    def test_both_romm_3ds_platforms_resolve_to_one_system(self, plugin):
+        """RomM carries "3ds" and "new-nintendo-3ds" as separate platforms.
+
+        RetroDECK has one 3DS system for both, so the map must collapse them.
+        Without the second key ``resolve_system`` passes it through verbatim
+        (ADR-0010 §5) and the download lands in a folder ES-DE never scans
+        (#1678).
+        """
+        adapter = plugin._http_adapter
+        assert adapter.resolve_system("3ds") == "n3ds"
+        assert adapter.resolve_system("new-nintendo-3ds") == "n3ds"
+
     def test_missing_config_returns_empty_map(self, tmp_path):
         """A plugin_dir with no config.json degrades to an empty map, not an error.
 
