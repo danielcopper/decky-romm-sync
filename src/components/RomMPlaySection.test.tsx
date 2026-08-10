@@ -3810,6 +3810,9 @@ describe("RomMPlaySection", () => {
       expect(container.textContent).not.toContain("Write Saves to Content Directory");
       // The play row still renders (game remains playable).
       expect(container.querySelector('[data-testid="play-button"]')).not.toBeNull();
+      // And it is the container's own first child: the banner-less case must add
+      // no wrapper, or the row stops being where the injected panel puts it.
+      expect(container.firstElementChild).toBe(container.querySelector(".romm-play-section-row"));
     });
 
     // The store keeps the content-dir fact whether or not save sync is on, so a
@@ -3852,6 +3855,72 @@ describe("RomMPlaySection", () => {
       await flushAsync();
       expect(vi.mocked(backend.getSaveStatus)).not.toHaveBeenCalled();
       expect(container.textContent).not.toContain("Write Saves to Content Directory");
+    });
+
+    // #1682 — the banner is a conditional SIBLING of the play row, never a
+    // branch returning a different root element. Identity is asserted on the DOM
+    // nodes rather than on a mount counter in the CustomPlayButton mock: the
+    // nodes are what React's reconciler actually preserves or replaces, and the
+    // row is the subtree whose remount resets the real play button. Both tests
+    // also assert the banner crossing in and out, so neither can pass by the
+    // flip never happening.
+    it("keeps the play row's DOM nodes when the banner appears (flag lands after first paint)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 42,
+        save_sync_enabled: true,
+      });
+      stubSaveStatus(42, false);
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).not.toContain("Write Saves to Content Directory");
+
+      const rowBefore = container.querySelector(".romm-play-section-row");
+      const playButtonBefore = container.querySelector('[data-testid="play-button"]');
+      expect(rowBefore).not.toBeNull();
+      expect(playButtonBefore).not.toBeNull();
+
+      stubSaveStatus(42, true);
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: 42 } }));
+        await Promise.resolve();
+      });
+      await flushAsync();
+
+      expect(container.textContent).toContain("Write Saves to Content Directory");
+      expect(container.querySelector(".romm-play-section-row")).toBe(rowBefore);
+      expect(container.querySelector('[data-testid="play-button"]')).toBe(playButtonBefore);
+    });
+
+    it("keeps the play row's DOM nodes when the banner goes away (save sync switched off)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 42,
+        save_sync_enabled: true,
+      });
+      stubSaveStatus(42, true);
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).toContain("Write Saves to Content Directory");
+
+      const rowBefore = container.querySelector(".romm-play-section-row");
+      const playButtonBefore = container.querySelector('[data-testid="play-button"]');
+      expect(rowBefore).not.toBeNull();
+      expect(playButtonBefore).not.toBeNull();
+
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "save_sync_settings", save_sync_enabled: false },
+          }),
+        );
+        await Promise.resolve();
+      });
+      await flushAsync();
+
+      expect(container.textContent).not.toContain("Write Saves to Content Directory");
+      expect(container.querySelector(".romm-play-section-row")).toBe(rowBefore);
+      expect(container.querySelector('[data-testid="play-button"]')).toBe(playButtonBefore);
     });
 
     it("logs via debugLog when the save-status read rejects (non-vacuous catch)", async () => {
