@@ -31,7 +31,7 @@ import {
   setServerRetryProgress,
   getServerRetryProgress,
 } from "../utils/connectionState";
-import type { MigrationStatus, SaveSortMigrationStatus, RomMetadata, DownloadCompleteEvent } from "../types";
+import type { MigrationStatus, SaveSortMigrationStatus, RomMetadata, DownloadCompleteEvent, CoreInfo } from "../types";
 
 // Type-only imports — vi.mock(...) below replaces the runtime impl, but
 // pinning captured-props shapes to the real component keeps assertions in
@@ -3416,6 +3416,128 @@ describe("RomMGameInfoPanel", () => {
       await flushAsync();
       expect(vi.mocked(backend.getAchievements)).toHaveBeenCalledWith(2);
       expect(vi.mocked(backend.getAchievementProgress)).toHaveBeenCalledWith(2);
+    });
+
+    // #1681 — BIOS is the third per-rom tab. The requirement is core-dependent
+    // and the core override is keyed on rom_id, so both the level and the
+    // "Active Core" row it is shown against must follow the new active version.
+    describe("BIOS tab across a version switch (#1681)", () => {
+      /** A `get_platform_core_info` answer whose active core is `label` — the
+       *  BIOS tab's "Active Core" row reads it. */
+      const coreInfoFor = (label: string, coreSo: string): CoreInfo => ({
+        active_core: coreSo,
+        active_core_label: label,
+        platform_core_label: null,
+        has_game_override: false,
+        emulator_data_available: true,
+        emulators: [{ label, kind: "libretro", core_so: coreSo, is_default: true, bakeable: true, reason: null }],
+      });
+
+      /** A cached detail whose core needs BIOS, `localCount` of 3 files present. */
+      const detailNeedingBios = (romId: number, localCount: number) => ({
+        found: true,
+        rom_id: romId,
+        platform_slug: "snes",
+        bios_status: {
+          platform_slug: "snes",
+          server_count: 3,
+          local_count: localCount,
+          all_downloaded: localCount === 3,
+        } as never,
+        bios_level: localCount === 3 ? ("ok" as const) : ("partial" as const),
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+
+      const switchVersion = async () => {
+        await act(async () => {
+          globalThis.dispatchEvent(
+            new CustomEvent("romm_data_changed", {
+              detail: { type: "version_switched", app_id: testAppId, rom_id: 2 },
+            }),
+          );
+        });
+        await flushAsync();
+      };
+
+      const openBiosTab = async () => {
+        await act(async () => {
+          globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        });
+        await flushAsync();
+      };
+
+      it("clears the requirement when the switched-to version's core needs none", async () => {
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailNeedingBios(1, 1));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        expect(container.textContent).toContain("BIOS");
+
+        // The new active version's core needs no BIOS — the cached detail
+        // carries no bios_status at all.
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+          found: true,
+          rom_id: 2,
+          platform_slug: "snes",
+          metadata: makeMetadata(),
+          stale_fields: [],
+        });
+        await switchVersion();
+
+        expect(container.textContent).not.toContain("BIOS");
+      });
+
+      it("re-keys the level and the active core to the new active version", async () => {
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailNeedingBios(1, 1));
+        vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(coreInfoFor("Snes9x", "snes9x_libretro.so"));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        await openBiosTab();
+        expect(container.textContent).toContain("1/3 files ready");
+        expect(container.textContent).toContain("Snes9x");
+
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailNeedingBios(2, 3));
+        vi.mocked(backend.getPlatformCoreInfo).mockClear();
+        vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(coreInfoFor("bsnes", "bsnes_libretro.so"));
+        await switchVersion();
+
+        expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith(2);
+        expect(container.textContent).toContain("All ready (3/3)");
+        expect(container.textContent).toContain("bsnes");
+        expect(container.textContent).not.toContain("Snes9x");
+      });
+
+      // The over-fix this change invites: a read that FAILED is "we don't know",
+      // not "no BIOS need", so it may not blank the tab.
+      it("leaves the shown level standing when the switch's cache read fails", async () => {
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailNeedingBios(1, 1));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        await openBiosTab();
+        expect(container.textContent).toContain("1/3 files ready");
+
+        vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("offline"));
+        vi.mocked(backend.debugLog).mockClear();
+        await switchVersion();
+
+        expect(container.textContent).toContain("1/3 files ready");
+        expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("onDataChanged error"));
+      });
+
+      it("leaves the shown active core standing when the new version's core read fails", async () => {
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailNeedingBios(1, 1));
+        vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(coreInfoFor("Snes9x", "snes9x_libretro.so"));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        await openBiosTab();
+        expect(container.textContent).toContain("Snes9x");
+
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailNeedingBios(2, 3));
+        vi.mocked(backend.getPlatformCoreInfo).mockRejectedValue(new Error("offline"));
+        await switchVersion();
+
+        expect(container.textContent).toContain("Snes9x");
+      });
     });
   });
 

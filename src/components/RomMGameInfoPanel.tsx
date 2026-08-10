@@ -577,6 +577,10 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // the fresh cache (mirroring a fresh mount) so the tab-activation effects
       // re-fetch for the new rom_id — covering both the sitting-on-a-tab case
       // (romId changes → the effect re-runs) and the open-a-tab-later case.
+      //
+      // BIOS is the third per-rom tab: the requirement is core-dependent and the
+      // core override is keyed on rom_id, so the new version's core may need
+      // different files — or none, which hides the tab (#1681).
       if (detail.app_id !== appId) return;
       const cached = await getCachedGameDetail(appId);
       if (cancelled || !cached.found) return;
@@ -585,6 +589,10 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       achievementsLoadedRef.current = false;
       slotsLoadedRef.current = false;
       const saveStatus = newRomId != null ? saveStatusFromCache(newRomId, cached.save_status) : null;
+      const biosStatus = biosStatusFromCache(cached.bios_status);
+      // bios_level comes from the backend cache (compute_bios_level) — thread it
+      // through, never re-derive. null when there's no BIOS need.
+      const biosLevel = biosStatus ? (cached.bios_level ?? null) : null;
       setState((prev) => ({
         ...prev,
         romId: newRomId,
@@ -603,6 +611,8 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
         achievements: [],
         achievementProgress: null,
         achievementsLoading: false,
+        biosStatus,
+        biosLevel,
       }));
       // Re-fetch slot configuration (slotConfirmed) + slots for the new rom_id,
       // mirroring loadData's save-sync branch — this is the authority that keeps
@@ -610,7 +620,16 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       if (cached.save_sync_enabled && newRomId != null) {
         refreshSlotState(newRomId, setState);
       }
-      if (newRomId) await refreshCoverArtInBackground(newRomId, () => cancelled, setState);
+      if (newRomId) {
+        await Promise.all([
+          refreshCoverArtInBackground(newRomId, () => cancelled, setState),
+          // The BIOS tab's "Active Core" row and its per-file core lines come
+          // from the dedicated core-info path (#923), keyed on rom_id so a
+          // per-game override follows the switch. A failed read keeps the
+          // previous reading rather than blanking it.
+          refreshCoreInfoInBackground(newRomId, () => cancelled, setState),
+        ]);
+      }
     };
 
     const handleMetadataChange = async (detail: Extract<RommDataChangedDetail, { type: "metadata" }>) => {
