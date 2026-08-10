@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.30.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.30.0...decky-romm-sync-v0.30.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* **downloads:** do not bake a launch command for a download the system cannot launch ([#1659](https://github.com/danielcopper/decky-romm-sync/issues/1659)) ([19e8f1a](https://github.com/danielcopper/decky-romm-sync/commit/19e8f1ad0b638cb1c531e3c2e320a4ebc7c8519c))
+* **platforms:** map RomM's "new-nintendo-3ds" slug to the n3ds system ([#1689](https://github.com/danielcopper/decky-romm-sync/issues/1689)) ([d331a61](https://github.com/danielcopper/decky-romm-sync/commit/d331a61c36a2c2ec738277990090c4284e6d735c)), closes [#1678](https://github.com/danielcopper/decky-romm-sync/issues/1678)
+* **platforms:** map the atari8bit, mac and sega32 slugs to their systems ([#1691](https://github.com/danielcopper/decky-romm-sync/issues/1691)) ([dd0a21c](https://github.com/danielcopper/decky-romm-sync/commit/dd0a21cd93b742c12fc40602979424f6e036bf14))
+* **platforms:** point both CD-i keys at the cdimono1 system ([#1702](https://github.com/danielcopper/decky-romm-sync/issues/1702)) ([3762073](https://github.com/danielcopper/decky-romm-sync/commit/3762073d5e1dbfe8b7efc7ffa742884c94213132))
+* **ui:** bind the game-detail store's async folds to the rom they were read for ([#1675](https://github.com/danielcopper/decky-romm-sync/issues/1675)) ([f024631](https://github.com/danielcopper/decky-romm-sync/commit/f0246310e0a2e0530b28c6736cc870033b55343b))
+* **ui:** follow the BIOS requirement across a version switch ([#1692](https://github.com/danielcopper/decky-romm-sync/issues/1692)) ([79ca59b](https://github.com/danielcopper/decky-romm-sync/commit/79ca59b2b86e5981c72384068bae4783dc3cd00d))
+* **ui:** keep the play row mounted when the content-dir banner appears ([#1684](https://github.com/danielcopper/decky-romm-sync/issues/1684)) ([db26ec8](https://github.com/danielcopper/decky-romm-sync/commit/db26ec8eeae1908338eb9a07431cfa30df959f24))
+* **ui:** order the game detail store's loads so a slower one cannot reinstall a stale identity ([#1679](https://github.com/danielcopper/decky-romm-sync/issues/1679)) ([6679b26](https://github.com/danielcopper/decky-romm-sync/commit/6679b265cfd17cb61ca7f2d874abb86ab911dd91))
+* **ui:** stop reporting a slow connection check as "RomM offline" ([#1672](https://github.com/danielcopper/decky-romm-sync/issues/1672)) ([3534f4b](https://github.com/danielcopper/decky-romm-sync/commit/3534f4bb03e900d62267bf8644f1130da2cdf209)), closes [#1670](https://github.com/danielcopper/decky-romm-sync/issues/1670)
+* **uninstall:** a removal without a recovery bundle claims by identity, not by content ([#1667](https://github.com/danielcopper/decky-romm-sync/issues/1667)) ([f8436cc](https://github.com/danielcopper/decky-romm-sync/commit/f8436ccfb709ccbf933bd26043ce13302cf98f1d)), closes [#1664](https://github.com/danielcopper/decky-romm-sync/issues/1664)
+
 ## [0.30.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.29.0...decky-romm-sync-v0.30.0) (2026-08-03)
 
 
