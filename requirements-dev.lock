@@ -4,7 +4,7 @@ basedpyright==1.39.9
     # via -r requirements-dev.txt
 click==8.4.2
     # via import-linter
-coverage==7.15.2
+coverage==7.15.4
     # via pytest-cov
 grimp==3.15
     # via import-linter
@@ -20,7 +20,7 @@ mdurl==0.1.2
     # via markdown-it-py
 nodejs-wheel-binaries==24.16.0
     # via basedpyright
-packaging==26.2
+packaging==26.3
     # via pytest
 pluggy==1.6.0
     # via
