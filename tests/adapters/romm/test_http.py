@@ -839,6 +839,19 @@ class TestPlatformMap:
         assert adapter.resolve_system("3ds") == "n3ds"
         assert adapter.resolve_system("new-nintendo-3ds") == "n3ds"
 
+    def test_short_romm_slugs_resolve_to_their_es_de_system(self, plugin):
+        """Three RomM slugs whose ES-DE system is spelled differently.
+
+        Unmapped, ``resolve_system`` passes each through verbatim (ADR-0010 §5)
+        and the download lands in a folder ES-DE never scans. RomM's
+        ``atari8bit`` covers the whole 8-bit line, which RetroDECK serves from
+        ``atari800`` (``atarixe`` is the console variant).
+        """
+        adapter = plugin._http_adapter
+        assert adapter.resolve_system("atari8bit") == "atari800"
+        assert adapter.resolve_system("mac") == "macintosh"
+        assert adapter.resolve_system("sega32") == "sega32x"
+
     def test_missing_config_returns_empty_map(self, tmp_path):
         """A plugin_dir with no config.json degrades to an empty map, not an error.
 
