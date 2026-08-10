@@ -852,6 +852,17 @@ class TestPlatformMap:
         assert adapter.resolve_system("mac") == "macintosh"
         assert adapter.resolve_system("sega32") == "sega32x"
 
+    def test_cd_i_resolves_to_the_declared_es_de_system(self, plugin):
+        """Both CD-i keys name RetroDECK's system, which is ``cdimono1``.
+
+        ``cdi`` is not a RomM platform slug at all — it survives only as a
+        folder-name alias, matched via ``platform_fs_slug``. The key a real
+        library hits is ``philips-cd-i``.
+        """
+        adapter = plugin._http_adapter
+        assert adapter.resolve_system("philips-cd-i") == "cdimono1"
+        assert adapter.resolve_system("unknown-slug", "cdi") == "cdimono1"
+
     def test_missing_config_returns_empty_map(self, tmp_path):
         """A plugin_dir with no config.json degrades to an empty map, not an error.
 
