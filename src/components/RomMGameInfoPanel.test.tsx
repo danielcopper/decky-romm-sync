@@ -3487,6 +3487,32 @@ describe("RomMGameInfoPanel", () => {
         expect(container.textContent).not.toContain("BIOS");
       });
 
+      it("leaves the BIOS tab for the info tab when the requirement is cleared under it", async () => {
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailNeedingBios(1, 1));
+        vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(coreInfoFor("Snes9x", "snes9x_libretro.so"));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        await openBiosTab();
+        expect(container.textContent).toContain("Snes9x");
+
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+          found: true,
+          rom_id: 2,
+          platform_slug: "snes",
+          metadata: makeMetadata(),
+          stale_fields: [],
+        });
+        await switchVersion();
+
+        // The tab the user was standing on is gated on the requirement, so
+        // clearing it removes the button. Without the fallback `activeTab` stays
+        // "bios", the body resolves to null, and the panel is a lone GAME INFO
+        // button over an empty pane — which is why the assertion is on the info
+        // tab's BODY and not on its button.
+        expect(container.textContent).not.toContain("Snes9x");
+        expect(container.textContent).toContain("No metadata available");
+      });
+
       it("re-keys the level and the active core to the new active version", async () => {
         vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailNeedingBios(1, 1));
         vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(coreInfoFor("Snes9x", "snes9x_libretro.so"));

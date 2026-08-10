@@ -79,9 +79,8 @@ vi.mock("../utils/formatters", () => ({
 }));
 vi.mock("../utils/playSection", () => ({
   applySaveSyncDisplay: vi.fn(() => ({ status: null, label: "" })),
-  // Keyed on the requirement argument, not a fixed return — see the re-stub in
-  // beforeEach for why that distinction decides whether this file's other tests
-  // mean anything.
+  // Must stay in sync with the beforeEach re-stub (resetAllMocks wipes this impl) —
+  // a fixed return folds a BIOS need into every mount that resolves a rom.
   extractBiosInfo: vi.fn((status: unknown) =>
     status
       ? { biosNeeded: true, biosStatus: "ok", biosLabel: "OK" }

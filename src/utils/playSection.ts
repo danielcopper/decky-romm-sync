@@ -7,6 +7,7 @@
  * sectionRefresh.ts. Anything stateful belongs in the component itself.
  */
 
+import type { CachedGameDetail } from "../api/backend";
 import type { CoreInfo, EmulatorOption, SaveStatus, SaveSyncDisplay } from "../types";
 import { hasAnySaveConflict } from "./saveStatus";
 import { formatTimeAgo } from "./formatters";
@@ -72,7 +73,7 @@ export function applySaveSyncDisplay(
  *  standing. Core data is sourced separately via `extractCoreInfo` (the BIOS
  *  payload no longer carries it, #923). */
 export function extractBiosInfo(
-  status: Record<string, unknown> | null | undefined,
+  status: CachedGameDetail["bios_status"],
   level: "ok" | "partial" | "missing" | "unmanaged" | null,
   label: string | null,
 ): BiosInfoFields {

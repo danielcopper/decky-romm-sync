@@ -79,7 +79,9 @@ describe("applySaveSyncDisplay", () => {
 });
 
 describe("extractBiosInfo", () => {
-  const requirement = { platform_slug: "snes", server_count: 3, local_count: 3 };
+  // Only the PRESENCE of this object is read, never its contents — but it is
+  // typed as the real payload, so it has to be one.
+  const requirement = { platform_slug: "snes", server_count: 3, local_count: 3, all_downloaded: true };
 
   it("projects the pre-computed level/label into the BIOS-only play-section fields (no core fields, #923)", () => {
     const result = extractBiosInfo(requirement, "ok", "BIOS OK");

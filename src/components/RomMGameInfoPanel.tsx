@@ -613,6 +613,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
         achievementsLoading: false,
         biosStatus,
         biosLevel,
+        // The BIOS tab's button is gated on `biosStatus`, so clearing it while
+        // the user stands on that tab would hide the button and leave the body
+        // empty with nothing selected. Send them back to the tab every version
+        // has.
+        activeTab: !biosStatus && prev.activeTab === "bios" ? "info" : prev.activeTab,
       }));
       // Re-fetch slot configuration (slotConfirmed) + slots for the new rom_id,
       // mirroring loadData's save-sync branch — this is the authority that keeps

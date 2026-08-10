@@ -119,15 +119,14 @@ describe("refreshBiosInBackground", () => {
 
   it("clears the shown requirement when the read reports none", async () => {
     // A read that ANSWERS "no BIOS need" is the only thing that may take a shown
-    // requirement back — the core the answer was read for may genuinely need
-    // none (#1690).
-    //
-    // This case asserted the opposite until #1690: a resolved read reporting no
-    // requirement wrote nothing, which is the defect itself — the BIOS fields
-    // could only ever move one way, so a version switch to a core needing no
-    // BIOS left the previous level standing. The assertion that must NOT be
-    // relaxed is the rejection case below: a read that FAILED still writes
-    // nothing, because that one is "we don't know", not an answer.
+    // requirement back — the core it was read for may genuinely need none. This
+    // case asserted the opposite until #1690, and that expectation was the
+    // defect: the fields could only ever move one way, so a version switch to a
+    // core needing no BIOS left the previous level standing (both writers on the
+    // load path had to move, this one and the cached fold in gameDetailStore).
+    // The assertion that must NOT be relaxed is the rejection case below: a read
+    // that FAILED still writes nothing, because that one is "we don't know",
+    // not an answer.
     vi.mocked(backend.getBiosStatus).mockResolvedValueOnce({
       bios_status: null,
       bios_level: null,
