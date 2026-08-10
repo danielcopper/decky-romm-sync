@@ -1648,7 +1648,9 @@ class TestCheckPlatformBiosNoCoreFields:
         with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
             result = await fw.check_platform_bios("sms")
 
-        assert result == {"needs_bios": False}
+        # Uncovered platform with the fetch failed — the answer is "we don't
+        # know" (#1693), and it still carries no core fields.
+        assert result == {"needs_bios": False, "bios_status_unknown": True}
         assert "active_core" not in result
         assert "available_cores" not in result
         assert core_info.emulator_options_calls == []
@@ -1927,10 +1929,20 @@ class TestCheckPlatformBiosOffline:
         assert result["required_count"] == 2
         assert result["required_downloaded"] == 1
         assert len(result["files"]) == 3
+        # The registry knows what this platform needs, so the degraded answer is
+        # a real one — nothing to flag (#1693).
+        assert "bios_status_unknown" not in result
 
     @pytest.mark.asyncio
     async def test_offline_no_registry_entries(self, plugin, fw, tmp_path):
-        """API fails and no registry entries — returns needs_bios False."""
+        """API fails and no registry entries — needs_bios False, flagged unknown (#1693).
+
+        For a platform the BIOS registry does not cover, the server list is the
+        only source of the requirement. With the fetch failed there is nothing
+        left to answer from, so the payload says it does not know instead of
+        reporting a confident "needs none" — which would clear the "Not managed
+        by the plugin" state a successful check had shown.
+        """
 
         fw._bios_registry = {"platforms": {}}
         fw._bios_files_index = {}
@@ -1942,6 +1954,27 @@ class TestCheckPlatformBiosOffline:
             result = await fw.check_platform_bios("n64")
 
         assert result["needs_bios"] is False
+        assert result["bios_status_unknown"] is True
+
+    @pytest.mark.asyncio
+    async def test_online_no_firmware_is_a_real_negative(self, plugin, fw, tmp_path):
+        """A successful fetch finding no firmware answers needs_bios False, unflagged.
+
+        The counterpart to the offline case above: this negative IS an answer, so
+        it stays unflagged and consumers may clear a shown requirement on it.
+        """
+
+        fw._bios_registry = {"platforms": {}}
+        fw._bios_files_index = {}
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=[]),
+            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))),
+        ):
+            result = await fw.check_platform_bios("n64")
+
+        assert result["needs_bios"] is False
+        assert "bios_status_unknown" not in result
 
     @pytest.mark.asyncio
     async def test_offline_all_required_downloaded(self, plugin, fw, tmp_path):

@@ -1,10 +1,10 @@
-"""Contract tests for ``get_cached_game_detail`` over the real nesting.
+"""Contract tests for the game-detail read callables over the real nesting.
 
-Drives the real ``main.py`` callable through the real ``bootstrap()`` + SQLite,
-pinning the response shape the frontend consumes — including the version-metadata
-keys added in #1295 (ADR-0019). The version dimensions are server-derived facts
-persisted on the ``Rom`` aggregate and surfaced read-only in the play-section
-"Version" row.
+Drives the real ``main.py`` callables through the real ``bootstrap()`` + SQLite,
+pinning the response shapes the frontend consumes — the version-metadata keys
+added in #1295 (ADR-0019), and the BIOS answer both game-detail reads ship. The
+version dimensions are server-derived facts persisted on the ``Rom`` aggregate
+and surfaced read-only in the play-section "Version" row.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ def _seed_versioned_rom(harness, **overrides):
         uow.roms.save(
             Rom.synced(
                 rom_id=42,
-                platform_slug="snes",
+                platform_slug=overrides.get("platform_slug", "snes"),
                 name="Chrono Trigger",
                 fs_name="ct.sfc",
                 shortcut_app_id=app_id,
@@ -97,3 +97,57 @@ async def test_cached_game_detail_unknown_app_id_is_not_found(harness):
     result = await harness.plugin.get_cached_game_detail(999999)
 
     assert result == {"found": False}
+
+
+# ── The BIOS answer both reads ship (#1693) ──────────────────────────────────
+# An absent ``bios_status`` means "the active core needs no BIOS" and clears a
+# shown requirement (#1690); ``bios_status_unknown`` marks the payload that has
+# no answer at all, which must not. Both callables are pinned in both directions.
+# The uncovered platform (psvita) is the one where the BIOS registry cannot stand
+# in for a failed firmware fetch.
+
+
+async def test_cached_game_detail_cold_firmware_cache_is_unknown(harness):
+    """A never-filled firmware cache carries no BIOS answer and says so."""
+    app_id = _seed_versioned_rom(harness, platform_slug="psvita")
+
+    result = await harness.plugin.get_cached_game_detail(app_id)
+
+    assert result["bios_status"] is None
+    assert result["bios_status_unknown"] is True
+
+
+async def test_cached_game_detail_warm_cache_without_firmware_is_answered(harness):
+    """A warm cache finding no firmware is the real negative — unflagged."""
+    app_id = _seed_versioned_rom(harness, platform_slug="psvita")
+    # The System-page read fills the in-memory firmware cache the game-detail
+    # path reads; the fake server has no firmware files.
+    await harness.plugin.get_firmware_status()
+
+    result = await harness.plugin.get_cached_game_detail(app_id)
+
+    assert result["bios_status"] is None
+    assert result["bios_status_unknown"] is False
+
+
+async def test_bios_status_unreachable_server_is_unknown(harness):
+    """A failed firmware fetch with no registry coverage answers "unknown"."""
+    _seed_versioned_rom(harness, platform_slug="psvita")
+    harness.romm.list_firmware_side_effect = RuntimeError("offline")
+
+    result = await harness.plugin.get_bios_status(42)
+
+    assert result["bios_status"] is None
+    assert result["bios_level"] is None
+    assert result["bios_label"] is None
+    assert result["bios_status_unknown"] is True
+
+
+async def test_bios_status_reachable_server_without_firmware_is_answered(harness):
+    """A reachable server with no firmware for the platform is the real negative."""
+    _seed_versioned_rom(harness, platform_slug="psvita")
+
+    result = await harness.plugin.get_bios_status(42)
+
+    assert result["bios_status"] is None
+    assert result["bios_status_unknown"] is False

@@ -745,6 +745,12 @@ class FirmwareService:
         per-game game-detail path passes the ROM's resolved ``.so``. Core info
         reaches the frontend through the dedicated ``get_platform_core_info``
         path, not this payload (#923).
+
+        A failed firmware fetch degrades to the local registry, which still
+        answers the requirement for a covered platform. An uncovered platform has
+        nothing to degrade to, so the ``needs_bios: False`` that comes back then
+        carries ``bios_status_unknown: True`` — no consumer may read that one as
+        "this platform needs none" (#1693).
         """
         system = self._resolve_system(platform_slug)
         fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
@@ -763,8 +769,14 @@ class FirmwareService:
             files = collect_firmware_status(items, registry_platform, active_core_so)
         except Exception:
             if not registry_platform:
+                # Nothing left to answer from: the server list is the only source
+                # of the requirement for a platform the registry does not cover,
+                # so this is "we don't know", not "needs none" (#1693). Reporting
+                # it as a negative would clear the "unmanaged" state a successful
+                # check had shown.
                 return {
                     "needs_bios": False,
+                    "bios_status_unknown": True,
                 }
             registry_items = []
             for file_name, reg_entry in registry_platform.items():

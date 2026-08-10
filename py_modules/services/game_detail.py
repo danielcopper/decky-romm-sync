@@ -91,6 +91,29 @@ class GameDetailService:
         return rom.fs_name
 
     @staticmethod
+    def _bios_answer(
+        bios_status: dict[str, Any] | None = None,
+        bios_level: str | None = None,
+        bios_label: str | None = None,
+        *,
+        unknown: bool = False,
+    ) -> dict[str, Any]:
+        """Build the BIOS half of a game-detail payload.
+
+        ``unknown`` marks a payload that carries no BIOS answer — the check
+        raised, or answered from a source that could not see the requirement —
+        as opposed to the answer "the active core needs no BIOS". The two ship
+        the same absent ``bios_status``, and only the latter may take a shown
+        requirement off the frontend, so the flag is what separates them.
+        """
+        return {
+            "bios_status": bios_status,
+            "bios_level": bios_level,
+            "bios_label": bios_label,
+            "bios_status_unknown": unknown,
+        }
+
+    @staticmethod
     def _build_save_status(save_state: RomSaveSyncState | None) -> dict[str, Any] | None:
         """Build cached save-sync status from the ROM's save state, or None."""
         if save_state is None:
@@ -233,10 +256,15 @@ class GameDetailService:
         bios_status = None
         bios_level = None
         bios_label = None
+        # A cold firmware cache answers None — this payload then carries no BIOS
+        # answer at all, which is not the same as "the active core needs none".
+        bios_status_unknown = False
         if platform_slug:
             active_core_so, _ = self._active_core.active_core_for_rom(rom_id)
             cached_bios = self._bios_checker.check_platform_bios_cached(platform_slug, active_core_so=active_core_so)
-            if cached_bios and cached_bios.get("needs_bios"):
+            if cached_bios is None:
+                bios_status_unknown = True
+            elif cached_bios.get("needs_bios"):
                 bios_obj = format_bios_status(cached_bios, platform_slug, cached_at=cached_bios.get("cached_at", 0.0))
                 bios_status = asdict(bios_obj)
                 bios_level = compute_bios_level(bios_obj)
@@ -268,6 +296,7 @@ class GameDetailService:
             "bios_status": bios_status,
             "bios_level": bios_level,
             "bios_label": bios_label,
+            "bios_status_unknown": bios_status_unknown,
             "rom_file": rom_file,
             "ra_id": ra_id,
             "achievement_summary": achievement_summary,
@@ -289,9 +318,12 @@ class GameDetailService:
         """Return BIOS status for a ROM by looking up platform/rom_file from SQLite.
 
         Response always includes ``bios_status`` (dict or ``None``), ``bios_level``
-        (``"ok"`` / ``"partial"`` / ``"missing"`` or ``None``), and ``bios_label``
-        (str or ``None``). The pre-computed level + label match what the cached
-        ``get_cached_game_detail`` ships so the frontend never re-derives them.
+        (``"ok"`` / ``"partial"`` / ``"missing"`` or ``None``), ``bios_label``
+        (str or ``None``), and ``bios_status_unknown`` (bool). The pre-computed
+        level + label match what the cached ``get_cached_game_detail`` ships so
+        the frontend never re-derives them; the flag separates a check that could
+        not answer from the answer "this core needs no BIOS", which is the only
+        one of the two that clears a shown requirement.
         """
         rom_id = int(rom_id)
 
@@ -301,11 +333,11 @@ class GameDetailService:
             rom = uow.roms.get(rom_id)
 
         if rom is None:
-            return {"bios_status": None, "bios_level": None, "bios_label": None}
+            return self._bios_answer()
 
         platform_slug = rom.platform_slug
         if not platform_slug:
-            return {"bios_status": None, "bios_level": None, "bios_label": None}
+            return self._bios_answer()
 
         # The core-aware BIOS filter keys off the per-game active core (the pin
         # over the system default), resolved by rom_id from the shared seam.
@@ -315,12 +347,15 @@ class GameDetailService:
             bios = await self._bios_checker.check_platform_bios(platform_slug, active_core_so=active_core_so)
             if bios.get("needs_bios"):
                 bios_obj = format_bios_status(bios, platform_slug)
-                return {
-                    "bios_status": asdict(bios_obj),
-                    "bios_level": compute_bios_level(bios_obj),
-                    "bios_label": compute_bios_label(bios_obj),
-                }
+                return self._bios_answer(
+                    asdict(bios_obj),
+                    compute_bios_level(bios_obj),
+                    compute_bios_label(bios_obj),
+                )
         except Exception as e:
             self._logger.warning(f"BIOS status check failed for {platform_slug}: {e}")
+            return self._bios_answer(unknown=True)
 
-        return {"bios_status": None, "bios_level": None, "bios_label": None}
+        # No requirement — but a check that itself degraded to a source blind to
+        # the requirement reports that, and its verdict travels on unchanged.
+        return self._bios_answer(unknown=bool(bios.get("bios_status_unknown")))

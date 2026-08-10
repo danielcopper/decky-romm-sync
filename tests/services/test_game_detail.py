@@ -508,13 +508,21 @@ class TestGetCachedGameDetailBiosFromCache:
     """Test that get_cached_game_detail returns bios_status from firmware cache."""
 
     @pytest.mark.asyncio
-    async def test_bios_status_none_when_cache_empty(self, plugin, game_detail_service):
-        """No firmware cache → bios_status is None."""
+    async def test_cold_cache_flags_bios_status_unknown(self, plugin, game_detail_service):
+        """A cold firmware cache carries NO BIOS answer, and says so (#1693).
+
+        ``check_platform_bios_cached`` answers ``None`` whenever the in-memory
+        firmware cache has never been filled — and every firmware download and
+        every platform BIOS delete invalidates it. The frontend clears a shown
+        requirement on an absent ``bios_status``, so the payload has to separate
+        "not known here" from "this core needs none".
+        """
         _seed_rom(plugin, 42, app_id=50000, name="Pokemon", platform_slug="gba")
         # firmware cache is empty by default (None)
         result = game_detail_service.get_cached_game_detail(50000)
         assert result["found"] is True
         assert result["bios_status"] is None
+        assert result["bios_status_unknown"] is True
 
     @pytest.mark.asyncio
     async def test_bios_status_from_populated_cache(self, plugin, game_detail_service, tmp_path):
@@ -546,6 +554,7 @@ class TestGetCachedGameDetailBiosFromCache:
         assert bs["cached_at"] == pytest.approx(99.0)
         assert bs["server_count"] == 1
         assert bs["local_count"] == 0
+        assert result["bios_status_unknown"] is False
 
     @pytest.mark.asyncio
     async def test_bios_status_none_when_no_platform_slug(self, plugin, game_detail_service):
@@ -553,10 +562,17 @@ class TestGetCachedGameDetailBiosFromCache:
         _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="")
         result = game_detail_service.get_cached_game_detail(50000)
         assert result["bios_status"] is None
+        # Nothing to check against, which is an answer rather than a gap.
+        assert result["bios_status_unknown"] is False
 
     @pytest.mark.asyncio
     async def test_bios_status_none_when_needs_bios_false(self, plugin, game_detail_service):
-        """Cache populated but no firmware for platform → bios_status is None."""
+        """Cache populated but no firmware for platform → bios_status is None.
+
+        A warm cache that finds no files for the platform is the real negative,
+        so it is NOT flagged unknown — this is the answer that still clears a
+        shown requirement (#1690).
+        """
         _seed_rom(plugin, 42, app_id=50000, name="Tetris", platform_slug="gb")
         plugin._firmware_service._firmware_cache = []
         plugin._firmware_service._firmware_cache_epoch = 50.0
@@ -565,6 +581,7 @@ class TestGetCachedGameDetailBiosFromCache:
         result = game_detail_service.get_cached_game_detail(50000)
 
         assert result["bios_status"] is None
+        assert result["bios_status_unknown"] is False
 
 
 # ============================================================================
@@ -609,6 +626,7 @@ class TestGetBiosStatusFound:
         # counts (core-aware badge) by the BIOS checker, NOT a platform default.
         assert result["bios_level"] == "partial"
         assert result["bios_label"] == "1/2 required"
+        assert result["bios_status_unknown"] is False
 
     @pytest.mark.asyncio
     async def test_badge_keys_off_active_core(self, plugin, game_detail_service):
@@ -653,7 +671,11 @@ class TestGetBiosStatusFound:
 
     @pytest.mark.asyncio
     async def test_returns_none_when_no_bios_needed(self, plugin, game_detail_service):
-        """ROM with needs_bios=False returns bios_status / level / label all None."""
+        """ROM with needs_bios=False returns bios_status / level / label all None.
+
+        This is the real negative — the answer the frontend is allowed to clear a
+        shown requirement on, so it must NOT be flagged unknown (#1693).
+        """
         _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="gba")
         game_detail_service._bios_checker.check_platform_bios = AsyncMock(return_value={"needs_bios": False})
 
@@ -661,6 +683,7 @@ class TestGetBiosStatusFound:
         assert result["bios_status"] is None
         assert result["bios_level"] is None
         assert result["bios_label"] is None
+        assert result["bios_status_unknown"] is False
 
     @pytest.mark.asyncio
     async def test_passes_resolved_per_game_core_to_bios_check(self, plugin, game_detail_service, active_core_resolver):
@@ -729,25 +752,63 @@ class TestGetBiosStatusNotFound:
 
     @pytest.mark.asyncio
     async def test_unknown_rom_id(self, game_detail_service):
-        """Unknown rom_id returns bios_status / level / label all None."""
+        """Unknown rom_id returns bios_status / level / label all None, answered."""
         result = await game_detail_service.get_bios_status(999)
-        assert result == {"bios_status": None, "bios_level": None, "bios_label": None}
+        assert result == {
+            "bios_status": None,
+            "bios_level": None,
+            "bios_label": None,
+            "bios_status_unknown": False,
+        }
 
     @pytest.mark.asyncio
     async def test_no_platform_slug(self, plugin, game_detail_service):
-        """ROM without platform_slug returns bios_status / level / label all None."""
+        """ROM without platform_slug returns bios_status / level / label all None, answered."""
         _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="")
         result = await game_detail_service.get_bios_status(42)
-        assert result == {"bios_status": None, "bios_level": None, "bios_label": None}
+        assert result == {
+            "bios_status": None,
+            "bios_level": None,
+            "bios_label": None,
+            "bios_status_unknown": False,
+        }
 
     @pytest.mark.asyncio
-    async def test_firmware_error_returns_none(self, plugin, game_detail_service):
-        """Firmware service exception returns bios_status / level / label all None."""
+    async def test_firmware_error_flags_unknown(self, plugin, game_detail_service):
+        """A raising BIOS check answers ``bios_status_unknown`` — not "no BIOS need" (#1693).
+
+        The frontend clears a shown requirement on an absent ``bios_status``, so
+        a failed check that shipped the same payload as a real negative took the
+        missing-BIOS warning off the page.
+        """
         _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="gba")
         game_detail_service._bios_checker.check_platform_bios = AsyncMock(side_effect=Exception("fail"))
 
         result = await game_detail_service.get_bios_status(42)
-        assert result == {"bios_status": None, "bios_level": None, "bios_label": None}
+        assert result == {
+            "bios_status": None,
+            "bios_level": None,
+            "bios_label": None,
+            "bios_status_unknown": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_checker_unknown_verdict_is_passed_through(self, plugin, game_detail_service):
+        """A check that answered "unknown" itself keeps that verdict on the wire (#1693).
+
+        ``check_platform_bios`` handles a failed firmware fetch internally and
+        flags the answer when it had no registry coverage to degrade to — no
+        exception reaches here, so the flag is the only thing separating it from
+        a platform that genuinely needs nothing.
+        """
+        _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="gba")
+        game_detail_service._bios_checker.check_platform_bios = AsyncMock(
+            return_value={"needs_bios": False, "bios_status_unknown": True}
+        )
+
+        result = await game_detail_service.get_bios_status(42)
+        assert result["bios_status"] is None
+        assert result["bios_status_unknown"] is True
 
 
 class TestGetCachedGameDetailSaveStatusConflicts:
