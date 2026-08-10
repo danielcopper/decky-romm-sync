@@ -79,6 +79,9 @@ vi.mock("../utils/formatters", () => ({
 }));
 vi.mock("../utils/playSection", () => ({
   applySaveSyncDisplay: vi.fn(() => ({ status: null, label: "" })),
+  // Keyed on the requirement argument, not a fixed return — see the re-stub in
+  // beforeEach for why that distinction decides whether this file's other tests
+  // mean anything.
   extractBiosInfo: vi.fn((status: unknown) =>
     status
       ? { biosNeeded: true, biosStatus: "ok", biosLabel: "OK" }
@@ -298,9 +301,13 @@ describe("RomMPlaySection", () => {
       status: "synced",
       label: "synced label",
     });
-    // Honours the requirement argument the way the real helper does: an absent
-    // `bios_status` is the answer "no BIOS need" and yields the cleared shape
-    // (#1690). A fixed return here would fold a BIOS need into every mount.
+    // MUST honour the requirement argument, the way the real helper does: an
+    // absent `bios_status` is the answer "no BIOS need" and yields the cleared
+    // shape (#1690). The store folds this in unconditionally, so a fixed return
+    // here would fold a BIOS need into EVERY mount — including the cached
+    // details below that carry no `bios_status` — and every test in this file
+    // that renders one would then be asserting against a row state production
+    // never produces.
     vi.mocked(playSectionUtils.extractBiosInfo).mockImplementation((status) =>
       status
         ? { biosNeeded: true, biosStatus: "ok", biosLabel: "OK" }
