@@ -7,7 +7,7 @@
  * sectionRefresh.ts. Anything stateful belongs in the component itself.
  */
 
-import type { CachedGameDetail } from "../api/backend";
+import type { BiosAnswer } from "../api/backend";
 import type { CoreInfo, EmulatorOption, SaveStatus, SaveSyncDisplay } from "../types";
 import { hasAnySaveConflict } from "./saveStatus";
 import { formatTimeAgo } from "./formatters";
@@ -65,23 +65,27 @@ export function applySaveSyncDisplay(
 
 /** Project a whole BIOS answer — the backend's `bios_status` plus the level and
  *  label it pre-computed for it — into the BIOS-only fields the play-section row
- *  needs. `level` and `label` are never re-derived here. Only the PRESENCE of
- *  `status` is read: its absence is the backend answering "this core needs no
- *  BIOS", which clears all three fields, so a requirement can be taken back off
- *  the page (#1690). A read that FAILED is not that answer and must never be
- *  funnelled in as one — the caller drops it and leaves the shown level
- *  standing. Core data is sourced separately via `extractCoreInfo` (the BIOS
- *  payload no longer carries it, #923). */
-export function extractBiosInfo(
-  status: CachedGameDetail["bios_status"],
-  level: "ok" | "partial" | "missing" | "unmanaged" | null,
-  label: string | null,
-): BiosInfoFields {
-  if (!status) return { biosNeeded: false, biosStatus: null, biosLabel: "" };
+ *  needs, or `null` when the payload carries no answer at all. The level and
+ *  label are never re-derived here.
+ *
+ *  Three payloads, three outcomes. `bios_status` present: the requirement, with
+ *  its level and label. `bios_status` absent: the backend answering "this core
+ *  needs no BIOS", which clears all three fields so a requirement can be taken
+ *  back off the page (#1690). `bios_status_unknown` set: the check could not
+ *  answer — the same absent `bios_status` as the clear, and folding it would
+ *  take a real requirement off the page, so the caller writes nothing and the
+ *  shown level stands (#1693). The flag decides before the requirement is even
+ *  looked at, so an unknown payload is never partially adopted.
+ *
+ *  Core data is sourced separately via `extractCoreInfo` (the BIOS payload no
+ *  longer carries it, #923). */
+export function extractBiosInfo(answer: BiosAnswer): BiosInfoFields | null {
+  if (answer.bios_status_unknown) return null;
+  if (!answer.bios_status) return { biosNeeded: false, biosStatus: null, biosLabel: "" };
   return {
     biosNeeded: true,
-    biosStatus: level,
-    biosLabel: label ?? "",
+    biosStatus: answer.bios_level ?? null,
+    biosLabel: answer.bios_label ?? "",
   };
 }
 

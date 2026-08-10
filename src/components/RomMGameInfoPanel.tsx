@@ -37,6 +37,7 @@ import {
   refreshMigrationState,
   logError,
 } from "../api/backend";
+import type { BiosAnswer } from "../api/backend";
 import { SlotSetupWizard } from "./SlotSetupWizard";
 import { SavesTab } from "./SavesTab";
 import { ConnectingIndicator } from "./saves/ConnectingIndicator";
@@ -177,12 +178,21 @@ function refreshMetadataInBackground(
     .catch(() => {});
 }
 
-/** Build a `BiosStatus` from a cached game detail's `bios_status` field. */
-function biosStatusFromCache(cachedBios: Record<string, unknown> | null | undefined): BiosStatus | null {
-  if (!cachedBios) return null;
+/** The panel's two BIOS fields as a cached game detail answers them, or `null`
+ *  when the payload carries no BIOS answer — a detail derived while the firmware
+ *  cache was cold, which every BIOS download and delete makes it. The caller then
+ *  leaves the shown status standing instead of hiding the BIOS tab on a
+ *  non-answer (#1693).
+ *
+ *  `bios_level` is computed by the backend (`compute_bios_level`) and threaded
+ *  straight through, never re-derived; it is null whenever there is no
+ *  requirement. */
+function biosFieldsFromCache(cached: BiosAnswer): Pick<PanelState, "biosStatus" | "biosLevel"> | null {
+  if (cached.bios_status_unknown) return null;
+  if (!cached.bios_status) return { biosStatus: null, biosLevel: null };
   return {
-    needs_bios: true,
-    ...cachedBios,
+    biosStatus: { needs_bios: true, ...cached.bios_status },
+    biosLevel: cached.bios_level ?? null,
   };
 }
 
@@ -323,10 +333,9 @@ async function loadData(
     romIdRef.current = romId;
     platformSlugRef.current = platformSlug;
 
-    const biosStatus = biosStatusFromCache(cached.bios_status);
-    // bios_level is computed by the backend (`compute_bios_level`) and shipped on
-    // the cached payload — thread it straight through, never re-derive here.
-    const biosLevel = biosStatus ? (cached.bios_level ?? null) : null;
+    // Nothing is shown yet on a first render, so a payload carrying no BIOS
+    // answer starts the panel out with none either.
+    const { biosStatus, biosLevel } = biosFieldsFromCache(cached) ?? { biosStatus: null, biosLevel: null };
     const saveStatus = saveStatusFromCache(romId, cached.save_status);
     const conflicts: SyncConflict[] = cached.save_status?.conflicts ?? [];
     const raId = cached.ra_id ?? null;
@@ -531,8 +540,12 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // and to skip the wasted checkPlatformBios fetch (#1082). Read via ref
       // to avoid a stale closure.
       if (!detail.platform_slug || detail.platform_slug !== platformSlugRef.current) return;
-      const updated = await checkPlatformBios(detail.platform_slug).catch((): BiosStatus => ({ needs_bios: false }));
-      if (cancelled) return;
+      // A rejected check and one that could not determine the requirement are
+      // both "we don't know" — writing either would drop the whole BIOS tab
+      // while the play row above keeps its level (#1693). Only an ANSWER moves
+      // the tab, in either direction.
+      const updated = await checkPlatformBios(detail.platform_slug).catch((): BiosStatus | null => null);
+      if (cancelled || !updated || updated.bios_status_unknown) return;
       const biosLevel = updated.needs_bios ? (updated.bios_level ?? null) : null;
       setState((prev) => ({ ...prev, biosStatus: updated.needs_bios ? updated : null, biosLevel }));
     };
@@ -551,17 +564,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
         getCachedGameDetail(appId),
       ]);
       if (cancelled || !cached.found) return;
-      let biosStatus: BiosStatus | null = null;
-      if (cached.bios_status) {
-        biosStatus = {
-          needs_bios: true,
-          ...cached.bios_status,
-        };
-      }
-      // bios_level comes from the backend cache (compute_bios_level) — thread it
-      // through, never re-derive. null when there's no BIOS need.
-      const biosLevel = biosStatus ? (cached.bios_level ?? null) : null;
-      setState((prev) => ({ ...prev, biosStatus, biosLevel, coreInfo: coreInfo ?? prev.coreInfo }));
+      // A detail carrying no BIOS answer leaves the shown status alone — the
+      // core switch invalidated the cached detail, but a cold firmware cache
+      // makes the re-read a non-answer rather than a "needs none" (#1693).
+      const biosFields = biosFieldsFromCache(cached);
+      setState((prev) => ({ ...prev, ...biosFields, coreInfo: coreInfo ?? prev.coreInfo }));
     };
 
     const handleVersionSwitched = async (detail: Extract<RommDataChangedDetail, { type: "version_switched" }>) => {
@@ -589,36 +596,37 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       achievementsLoadedRef.current = false;
       slotsLoadedRef.current = false;
       const saveStatus = newRomId != null ? saveStatusFromCache(newRomId, cached.save_status) : null;
-      const biosStatus = biosStatusFromCache(cached.bios_status);
-      // bios_level comes from the backend cache (compute_bios_level) — thread it
-      // through, never re-derive. null when there's no BIOS need.
-      const biosLevel = biosStatus ? (cached.bios_level ?? null) : null;
-      setState((prev) => ({
-        ...prev,
-        romId: newRomId,
-        romName: cached.rom_name || prev.romName,
-        installed: cached.installed ?? false,
-        regions: cached.regions ?? [],
-        languages: cached.languages ?? [],
-        // Re-key per-rom tab state so nothing lingers from the previous version.
-        saveSyncEnabled: cached.save_sync_enabled ?? false,
-        saveStatus,
-        conflicts: cached.save_status?.conflicts ?? [],
-        raId: cached.ra_id ?? null,
-        activeSlot: "default",
-        availableSlots: [],
-        slotsLoading: false,
-        achievements: [],
-        achievementProgress: null,
-        achievementsLoading: false,
-        biosStatus,
-        biosLevel,
-        // The BIOS tab's button is gated on `biosStatus`, so clearing it while
-        // the user stands on that tab would hide the button and leave the body
-        // empty with nothing selected. Send them back to the tab every version
-        // has.
-        activeTab: !biosStatus && prev.activeTab === "bios" ? "info" : prev.activeTab,
-      }));
+      // A detail carrying no BIOS answer keeps the shown status: the switched-to
+      // version's requirement is unread, not absent (#1693).
+      const biosFields = biosFieldsFromCache(cached);
+      setState((prev) => {
+        const biosStatus = biosFields ? biosFields.biosStatus : prev.biosStatus;
+        return {
+          ...prev,
+          romId: newRomId,
+          romName: cached.rom_name || prev.romName,
+          installed: cached.installed ?? false,
+          regions: cached.regions ?? [],
+          languages: cached.languages ?? [],
+          // Re-key per-rom tab state so nothing lingers from the previous version.
+          saveSyncEnabled: cached.save_sync_enabled ?? false,
+          saveStatus,
+          conflicts: cached.save_status?.conflicts ?? [],
+          raId: cached.ra_id ?? null,
+          activeSlot: "default",
+          availableSlots: [],
+          slotsLoading: false,
+          achievements: [],
+          achievementProgress: null,
+          achievementsLoading: false,
+          ...biosFields,
+          // The BIOS tab's button is gated on `biosStatus`, so clearing it while
+          // the user stands on that tab would hide the button and leave the body
+          // empty with nothing selected. Send them back to the tab every version
+          // has.
+          activeTab: !biosStatus && prev.activeTab === "bios" ? "info" : prev.activeTab,
+        };
+      });
       // Re-fetch slot configuration (slotConfirmed) + slots for the new rom_id,
       // mirroring loadData's save-sync branch — this is the authority that keeps
       // the SlotSetupWizard-vs-SavesTab gate correct across the switch.

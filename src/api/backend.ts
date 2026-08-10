@@ -66,7 +66,37 @@ export function isCallableFailure(value: object): value is CallableFailure {
   return "success" in value && value.success === false;
 }
 
-export interface CachedGameDetail {
+/**
+ * The BIOS half of a backend answer: the requirement, plus the level and label
+ * the backend pre-computed for it. Shipped by `get_bios_status` and, under the
+ * same keys, inside a cached game detail — so one projection
+ * (`utils/playSection.extractBiosInfo`) reads both.
+ *
+ * An absent `bios_status` means the active core needs no BIOS and clears a shown
+ * requirement (#1690). `bios_status_unknown` marks the payload that carries no
+ * answer at all — the check raised, or the firmware cache it would have been
+ * read from is cold — and it ships the identical absent `bios_status`, so the
+ * flag is the only thing keeping a failed check from taking a missing-BIOS
+ * warning off the page (#1693).
+ */
+export interface BiosAnswer {
+  bios_status?: {
+    needs_bios?: boolean;
+    platform_slug: string;
+    server_count: number;
+    local_count: number;
+    all_downloaded: boolean;
+    required_count?: number;
+    required_downloaded?: number;
+    cached_at?: number;
+    files?: BiosFileStatus[];
+  } | null;
+  bios_level?: "ok" | "partial" | "missing" | "unmanaged" | null;
+  bios_label?: string | null;
+  bios_status_unknown?: boolean;
+}
+
+export interface CachedGameDetail extends BiosAnswer {
   found: boolean;
   rom_id?: number;
   rom_name?: string;
@@ -81,22 +111,9 @@ export interface CachedGameDetail {
   } | null;
 
   metadata?: Record<string, unknown> | null;
-  bios_status?: {
-    needs_bios?: boolean;
-    platform_slug: string;
-    server_count: number;
-    local_count: number;
-    all_downloaded: boolean;
-    required_count?: number;
-    required_downloaded?: number;
-    cached_at?: number;
-    files?: BiosFileStatus[];
-  } | null;
   rom_file?: string;
   ra_id?: number | null;
   achievement_summary?: AchievementSummary | null;
-  bios_level?: "ok" | "partial" | "missing" | "unmanaged" | null;
-  bios_label?: string | null;
   save_sync_display?: SaveSyncDisplay | null;
   stale_fields?: string[];
   // Version metadata (ADR-0021) — the RomM sibling-group dimensions of the
@@ -364,14 +381,7 @@ export const getFirmwareStatus = callable<[], FirmwareStatus>("get_firmware_stat
 export const downloadAllFirmware = callable<[string], FirmwareDownloadResult>("download_all_firmware");
 export const downloadRequiredFirmware = callable<[string], FirmwareDownloadResult>("download_required_firmware");
 export const checkPlatformBios = callable<[string], BiosStatus>("check_platform_bios");
-export const getBiosStatus = callable<
-  [number],
-  {
-    bios_status: CachedGameDetail["bios_status"];
-    bios_level: "ok" | "partial" | "missing" | "unmanaged" | null;
-    bios_label: string | null;
-  }
->("get_bios_status");
+export const getBiosStatus = callable<[number], BiosAnswer>("get_bios_status");
 /**
  * A single shortcut whose baked `launch_options` must be confirm-set after a
  * per-platform core change. The backend returns one entry per installed + bound

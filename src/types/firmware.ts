@@ -114,6 +114,11 @@ export interface BiosStatus {
   // files but none map to a registry entry (no coverage). Present only when
   // needs_bios is true.
   bios_level?: "ok" | "partial" | "missing" | "unmanaged" | null;
+  // Set when the check could not determine the requirement: the firmware fetch
+  // failed and the platform has no registry coverage to fall back on. The
+  // `needs_bios: false` it rides on is ignorance, not an answer, so no consumer
+  // may clear a shown requirement on it (#1693).
+  bios_status_unknown?: boolean;
 }
 
 export interface FirmwareDownloadResult {

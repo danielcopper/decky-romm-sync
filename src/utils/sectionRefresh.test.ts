@@ -147,6 +147,24 @@ describe("refreshBiosInBackground", () => {
     expect(next).toEqual({ biosNeeded: false, biosStatus: null, biosLabel: "", unrelated: "keep" });
   });
 
+  it("writes nothing when the read carries no BIOS answer (#1693)", async () => {
+    // The backend flags a check it could not answer — a cold firmware cache, a
+    // platform check that failed — and it ships the same absent `bios_status` as
+    // a real negative. Folding it would clear the shown requirement.
+    vi.mocked(backend.getBiosStatus).mockResolvedValueOnce({
+      bios_status: null,
+      bios_level: null,
+      bios_label: null,
+      bios_status_unknown: true,
+    } as unknown as Awaited<ReturnType<typeof backend.getBiosStatus>>);
+
+    const setter = vi.fn();
+    refreshBiosInBackground(1, () => false, setter);
+    await flushMicrotasks();
+
+    expect(setter).not.toHaveBeenCalled();
+  });
+
   it("logs the error and skips the setter when the fetch rejects", async () => {
     // The counterpart to the clear above: a FAILED read is "we don't know", not
     // "no BIOS need", so the shown level stands (#1690).

@@ -300,18 +300,20 @@ describe("RomMPlaySection", () => {
       status: "synced",
       label: "synced label",
     });
-    // MUST honour the requirement argument, the way the real helper does: an
+    // MUST honour the answer it is handed, the way the real helper does: an
     // absent `bios_status` is the answer "no BIOS need" and yields the cleared
-    // shape (#1690). The store folds this in unconditionally, so a fixed return
-    // here would fold a BIOS need into EVERY mount — including the cached
-    // details below that carry no `bios_status` — and every test in this file
-    // that renders one would then be asserting against a row state production
-    // never produces.
-    vi.mocked(playSectionUtils.extractBiosInfo).mockImplementation((status) =>
-      status
+    // shape (#1690), while a payload flagged as carrying no answer yields null
+    // and the caller writes nothing (#1693). The store folds the result in, so a
+    // fixed return here would fold a BIOS need into EVERY mount — including the
+    // cached details below that carry no `bios_status` — and every test in this
+    // file that renders one would then be asserting against a row state
+    // production never produces.
+    vi.mocked(playSectionUtils.extractBiosInfo).mockImplementation((answer) => {
+      if (answer.bios_status_unknown) return null;
+      return answer.bios_status
         ? { biosNeeded: true, biosStatus: "ok", biosLabel: "OK" }
-        : { biosNeeded: false, biosStatus: null, biosLabel: "" },
-    );
+        : { biosNeeded: false, biosStatus: null, biosLabel: "" };
+    });
     vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue({
       activeCoreLabel: null,
       activeCoreIsDefault: true,
@@ -519,15 +521,17 @@ describe("RomMPlaySection", () => {
         expect.any(Function),
         expect.any(Function),
       );
-      // Assert exact arg shape: (cached.bios_status, cached.bios_level,
-      // cached.bios_label). The requirement itself leads, so its absence can
-      // clear the row (#1690); the level and label stay pre-computed by the
-      // backend (#923). Catches arg-order regressions that a bare
-      // .toHaveBeenCalled() would miss.
+      // Assert exact arg shape: the WHOLE BIOS answer, not three hand-picked
+      // fields. The requirement drives the clear (#1690) and the level/label
+      // stay pre-computed by the backend (#923) — and `bios_status_unknown`
+      // rides on the same payload, so a call site that unpacked the answer
+      // itself could leave it behind (#1693).
       expect(playSectionUtils.extractBiosInfo).toHaveBeenCalledWith(
-        expect.objectContaining({ platform_slug: "snes" }),
-        "ok",
-        "OK",
+        expect.objectContaining({
+          bios_status: expect.objectContaining({ platform_slug: "snes" }),
+          bios_level: "ok",
+          bios_label: "OK",
+        }),
       );
       // resolveSaveSyncLabel is called with the cached save_sync_display.
       expect(playSectionUtils.resolveSaveSyncLabel).toHaveBeenCalledWith(
@@ -2033,16 +2037,17 @@ describe("RomMPlaySection", () => {
 
     it("dispatch handler throw → onDataChanged outer try/catch fires debugLog", async () => {
       // Drive the outer try/catch in onDataChanged by routing through the
-      // core_changed branch (no inline .catch on getBiosStatus) and making
-      // getBiosStatus reject. The throw escapes handleCoreChange, propagates
-      // to onDataChanged's catch, and surfaces via debugLog.
+      // core_changed branch (no inline .catch on getPlatformCoreInfo) and making
+      // getPlatformCoreInfo reject. The throw escapes handleCoreChange,
+      // propagates to onDataChanged's catch, and surfaces via debugLog. The
+      // sibling BIOS read has its own catch (#1693), so it cannot drive this.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 33,
       });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      vi.mocked(backend.getBiosStatus).mockRejectedValue(new Error("handler-boom"));
+      vi.mocked(backend.getPlatformCoreInfo).mockRejectedValue(new Error("handler-boom"));
       vi.mocked(backend.debugLog).mockClear();
       await act(async () => {
         globalThis.dispatchEvent(

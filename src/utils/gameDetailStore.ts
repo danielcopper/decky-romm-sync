@@ -111,11 +111,16 @@ const DEFAULT_STATE: GameDetailState = {
 
 type BiosStatusResult = Awaited<ReturnType<typeof getBiosStatus>>;
 
-/** Stand-in for a BIOS read that failed, read as "no BIOS need known".
- *  {@link refreshBiosStatus} leaves the shown level standing on it;
- *  {@link refreshCoreAndBios} re-derives from it, because a core switch may
- *  genuinely have removed the requirement. */
-const NO_BIOS_STATUS: BiosStatusResult = { bios_status: null, bios_level: null, bios_label: null };
+/** Stand-in for a BIOS read that failed, carrying the backend's own "no answer"
+ *  flag. Every reader routes it through `extractBiosInfo`, which refuses to
+ *  project it — so a failed read leaves the shown level exactly where it was,
+ *  the same as an answer the backend itself could not determine (#1693). */
+const UNKNOWN_BIOS_STATUS: BiosStatusResult = {
+  bios_status: null,
+  bios_level: null,
+  bios_label: null,
+  bios_status_unknown: true,
+};
 
 /** A save-status read still in flight, together with the rom identity it was
  *  issued for. A version switch re-keys the entry to a new rom_id without
@@ -318,10 +323,11 @@ async function loadDetail(appId: number, entry: Entry): Promise<void> {
     // Folded whether or not the detail reports a requirement: an absent
     // `bios_status` is the backend answering "this version's core needs none",
     // and only an unconditional fold can take a shown requirement back (#1690).
-    write((prev) => ({
-      ...prev,
-      ...extractBiosInfo(cached.bios_status, cached.bios_level ?? null, cached.bios_label ?? null),
-    }));
+    // A detail derived while the firmware cache was cold carries no answer at
+    // all and is refused here instead (#1693) — the `bios` stale field below
+    // then brings the live one.
+    const cachedBios = extractBiosInfo(cached);
+    if (cachedBios) write((prev) => ({ ...prev, ...cachedBios }));
 
     if (staleFields.includes("bios")) {
       refreshBiosInBackground(romId, cancelled, writeForRom);
@@ -429,32 +435,30 @@ export function noteSaveSyncDisplay(appId: number, display: SaveSyncDisplay): vo
 
 /** Re-read the BIOS level after a firmware download. Leaves the shown level
  *  alone when the read fails, when it reports no BIOS need, or when a version
- *  switch re-keyed the entry while the read was open. */
+ *  switch re-keyed the entry while the read was open. Downloading firmware
+ *  cannot remove a requirement — it only fills it — so this path adopts a
+ *  refreshed level and nothing else. */
 export async function refreshBiosStatus(appId: number): Promise<void> {
   const entry = _entries.get(appId);
   const romId = entry?.state.romId;
   if (!entry || !romId) return;
   const generation = entry.generation;
-  const refreshed = await getBiosStatus(romId).catch(() => NO_BIOS_STATUS);
-  if (!refreshed.bios_status) return;
-  writerForRom(
-    entry,
-    generation,
-    romId,
-  )((prev) => ({
-    ...prev,
-    biosStatus: refreshed.bios_level,
-    biosLabel: refreshed.bios_label ?? "",
-  }));
+  const refreshed = await getBiosStatus(romId).catch(() => UNKNOWN_BIOS_STATUS);
+  const biosInfo = extractBiosInfo(refreshed);
+  if (!biosInfo?.biosNeeded) return;
+  writerForRom(entry, generation, romId)((prev) => ({ ...prev, ...biosInfo }));
 }
 
 /**
  * Re-read core selection and BIOS after an override was pinned or cleared, and
  * drop the cached detail so the next read sees the new core.
  *
- * `biosNeeded` is re-derived from the refreshed status rather than kept: the
- * active core just changed, so the BIOS requirement may have changed with it
- * (#923).
+ * The BIOS fields are re-derived from an ANSWER rather than kept: the active
+ * core just changed, so the requirement may have changed with it (#923). A read
+ * that could not answer is not that — it leaves the shown level standing while
+ * the core half of the fold still lands, which is the difference between a core
+ * switch that reports its new BIOS state and one that silently drops a
+ * missing-BIOS warning off a game that still needs it (#1693).
  *
  * A version switch landing while the two reads are open re-keys the entry, and
  * the answers are then about the ROM it moved off — so the fold is refused. The
@@ -469,8 +473,9 @@ export async function refreshCoreAndBios(appId: number): Promise<void> {
   const generation = entry.generation;
   const [coreInfo, refreshed] = await Promise.all([
     getPlatformCoreInfo(romId),
-    getBiosStatus(romId).catch(() => NO_BIOS_STATUS),
+    getBiosStatus(romId).catch(() => UNKNOWN_BIOS_STATUS),
   ]);
+  const biosInfo = extractBiosInfo(refreshed);
   writerForRom(
     entry,
     generation,
@@ -478,9 +483,7 @@ export async function refreshCoreAndBios(appId: number): Promise<void> {
   )((prev) => ({
     ...prev,
     ...extractCoreInfo(coreInfo),
-    biosNeeded: !!refreshed.bios_status,
-    biosStatus: refreshed.bios_level,
-    biosLabel: refreshed.bios_label ?? "",
+    ...biosInfo,
   }));
   invalidateCachedGameDetail(appId);
 }
@@ -547,7 +550,15 @@ async function handleCoreChange(entry: Entry): Promise<void> {
   // the active core reflects a per-game DB override (epic #945). BIOS
   // level/label still come from the (now core-free) BIOS status — the active
   // core just switched, so the BIOS requirements may have changed.
-  const [coreInfo, biosResult] = await Promise.all([getPlatformCoreInfo(romId), getBiosStatus(romId)]);
+  //
+  // Same user action as refreshCoreAndBios, so the same answer to a BIOS read
+  // that failed: the core half still folds, and the shown level stands rather
+  // than the whole fold being lost to the handler's catch (#1693).
+  const [coreInfo, biosResult] = await Promise.all([
+    getPlatformCoreInfo(romId),
+    getBiosStatus(romId).catch(() => UNKNOWN_BIOS_STATUS),
+  ]);
+  const biosInfo = extractBiosInfo(biosResult);
   writerForRom(
     entry,
     generation,
@@ -555,9 +566,7 @@ async function handleCoreChange(entry: Entry): Promise<void> {
   )((prev) => ({
     ...prev,
     ...extractCoreInfo(coreInfo),
-    biosNeeded: !!biosResult.bios_status,
-    biosStatus: biosResult.bios_level,
-    biosLabel: biosResult.bios_label ?? "",
+    ...biosInfo,
   }));
 }
 

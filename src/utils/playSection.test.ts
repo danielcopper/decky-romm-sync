@@ -84,33 +84,59 @@ describe("extractBiosInfo", () => {
   const requirement = { platform_slug: "snes", server_count: 3, local_count: 3, all_downloaded: true };
 
   it("projects the pre-computed level/label into the BIOS-only play-section fields (no core fields, #923)", () => {
-    const result = extractBiosInfo(requirement, "ok", "BIOS OK");
-    expect(result.biosNeeded).toBe(true);
-    expect(result.biosStatus).toBe("ok");
-    expect(result.biosLabel).toBe("BIOS OK");
+    const result = extractBiosInfo({ bios_status: requirement, bios_level: "ok", bios_label: "BIOS OK" });
+    expect(result).not.toBeNull();
+    expect(result!.biosNeeded).toBe(true);
+    expect(result!.biosStatus).toBe("ok");
+    expect(result!.biosLabel).toBe("BIOS OK");
     // Core fields no longer ride the BIOS payload — they come from extractCoreInfo.
     expect(result).not.toHaveProperty("activeCoreLabel");
     expect(result).not.toHaveProperty("availableCores");
   });
 
   it("coerces null label to empty string", () => {
-    const result = extractBiosInfo(requirement, null, null);
-    expect(result.biosLabel).toBe("");
-    expect(result.biosStatus).toBeNull();
+    const result = extractBiosInfo({ bios_status: requirement, bios_level: null, bios_label: null });
+    expect(result!.biosLabel).toBe("");
+    expect(result!.biosStatus).toBeNull();
   });
 
   it("reports the cleared shape when the answer carries no requirement (#1690)", () => {
-    expect(extractBiosInfo(null, null, null)).toEqual({ biosNeeded: false, biosStatus: null, biosLabel: "" });
+    expect(extractBiosInfo({ bios_status: null, bios_level: null, bios_label: null })).toEqual({
+      biosNeeded: false,
+      biosStatus: null,
+      biosLabel: "",
+    });
   });
 
   it("ignores a level and label left over next to an absent requirement (#1690)", () => {
     // The three fields move together — a cleared requirement never leaves a
     // level or label behind for the row to render against nothing.
-    expect(extractBiosInfo(undefined, "missing", "0/3")).toEqual({
+    expect(extractBiosInfo({ bios_level: "missing", bios_label: "0/3" })).toEqual({
       biosNeeded: false,
       biosStatus: null,
       biosLabel: "",
     });
+  });
+
+  it("returns null when the payload carries no BIOS answer (#1693)", () => {
+    // The same absent requirement as the clear above — the flag is the only
+    // thing separating them, and it is what stops a check that could not answer
+    // from taking a shown requirement off the page.
+    expect(
+      extractBiosInfo({ bios_status: null, bios_level: null, bios_label: null, bios_status_unknown: true }),
+    ).toBeNull();
+  });
+
+  it("refuses an unknown payload whatever level and label ride along (#1693)", () => {
+    expect(
+      extractBiosInfo({ bios_status: null, bios_level: "missing", bios_label: "0/3", bios_status_unknown: true }),
+    ).toBeNull();
+  });
+
+  it("treats an explicit bios_status_unknown: false as the answer it is", () => {
+    expect(
+      extractBiosInfo({ bios_status: null, bios_level: null, bios_label: null, bios_status_unknown: false }),
+    ).toEqual({ biosNeeded: false, biosStatus: null, biosLabel: "" });
   });
 });
 

@@ -671,7 +671,7 @@ describe("gameDetailStore", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found());
       subscribe(nextAppId);
       await flush();
-      vi.mocked(backend.getBiosStatus).mockRejectedValue(new Error("handler-boom"));
+      vi.mocked(backend.getPlatformCoreInfo).mockRejectedValue(new Error("handler-boom"));
       vi.mocked(backend.debugLog).mockClear();
 
       await act(async () => {
@@ -681,6 +681,92 @@ describe("gameDetailStore", () => {
       await flush();
 
       expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("onDataChanged error"));
+    });
+
+    // The same user action as refreshCoreAndBios, and it has to answer the same
+    // way: a failed BIOS read is "we don't know", and the core answer that DID
+    // land is still worth showing (#1693).
+    it("folds the core answer and keeps the shown BIOS need when the BIOS read fails", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({
+          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_level: "missing",
+          bios_label: "0/3",
+        }),
+      );
+      subscribe(nextAppId);
+      await flush();
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(laterCoreInfo);
+      vi.mocked(backend.getBiosStatus).mockRejectedValue(new Error("offline"));
+      vi.mocked(backend.debugLog).mockClear();
+
+      await act(async () => {
+        dispatchCoreChanged();
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        activeCoreLabel: "Genesis Plus GX",
+        biosNeeded: true,
+        biosStatus: "missing",
+        biosLabel: "0/3",
+      });
+      // Non-vacuous: the BIOS read's own catch handled it, so the handler-level
+      // catch never fired.
+      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(expect.stringContaining("onDataChanged error"));
+    });
+
+    it("keeps the shown BIOS need when the BIOS read carries no answer", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({
+          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_level: "missing",
+          bios_label: "0/3",
+        }),
+      );
+      subscribe(nextAppId);
+      await flush();
+      vi.mocked(backend.getBiosStatus).mockResolvedValue({
+        bios_status: null,
+        bios_level: null,
+        bios_label: null,
+        bios_status_unknown: true,
+      });
+
+      await act(async () => {
+        dispatchCoreChanged();
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        activeCoreLabel: "Snes9x",
+        biosNeeded: true,
+        biosStatus: "missing",
+        biosLabel: "0/3",
+      });
+    });
+
+    it("clears the BIOS need when the re-read reports the new core needs none", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({
+          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_level: "missing",
+          bios_label: "0/3",
+        }),
+      );
+      subscribe(nextAppId);
+      await flush();
+      vi.mocked(backend.getBiosStatus).mockResolvedValue({ bios_status: null, bios_level: null, bios_label: null });
+
+      await act(async () => {
+        dispatchCoreChanged();
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({ biosNeeded: false, biosStatus: null, biosLabel: "" });
     });
   });
 
@@ -754,6 +840,38 @@ describe("gameDetailStore", () => {
         biosNeeded: true,
         biosStatus: "ok",
         biosLabel: "3/3",
+      });
+    });
+
+    // The cold-cache window (#1693): every firmware download and every platform
+    // BIOS delete invalidates the in-memory firmware cache, and a detail derived
+    // while it is cold carries no BIOS answer at all. It ships the same absent
+    // `bios_status` as the clear above, so only the flag keeps the badge on.
+    it("keeps the shown requirement when the re-derived detail carries no BIOS answer", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({
+          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_level: "missing",
+          bios_label: "0/3",
+        }),
+      );
+      subscribe(nextAppId);
+      await flush();
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({ rom_id: 43, bios_status_unknown: true, stale_fields: [] }),
+      );
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        romId: 43,
+        biosNeeded: true,
+        biosStatus: "missing",
+        biosLabel: "0/3",
       });
     });
 
@@ -1215,14 +1333,81 @@ describe("gameDetailStore", () => {
       expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(nextAppId);
     });
 
-    it("refreshCoreAndBios clears the BIOS need when the refreshed read fails", async () => {
+    it("refreshCoreAndBios clears the BIOS need when the refreshed read reports none", async () => {
+      // The core just changed, so the new core may genuinely need no BIOS — an
+      // ANSWER saying so still takes the requirement off the row (#1690).
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({
+          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_level: "missing",
+          bios_label: "0/3",
+        }),
+      );
+      subscribe(nextAppId);
+      await flush();
+      vi.mocked(backend.getBiosStatus).mockResolvedValue({ bios_status: null, bios_level: null, bios_label: null });
+
+      await refreshCoreAndBios(nextAppId);
+
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        activeCoreLabel: "Snes9x",
+        biosNeeded: false,
+        biosStatus: null,
+        biosLabel: "",
+      });
+    });
+
+    it("refreshCoreAndBios keeps the shown BIOS need when the refreshed read fails (#1693)", async () => {
+      // The gear-menu core switch: the core read is local and succeeds, the BIOS
+      // read goes over HTTP and fails. Clearing here launched the game without
+      // its required BIOS and said nothing.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({
+          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_level: "missing",
+          bios_label: "0/3",
+        }),
+      );
       subscribe(nextAppId);
       await flush();
       vi.mocked(backend.getBiosStatus).mockRejectedValue(new Error("offline"));
 
       await refreshCoreAndBios(nextAppId);
 
-      expect(getGameDetail(nextAppId)).toMatchObject({ activeCoreLabel: "Snes9x", biosNeeded: false });
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        // The core answer still lands — only the BIOS half is missing.
+        activeCoreLabel: "Snes9x",
+        biosNeeded: true,
+        biosStatus: "missing",
+        biosLabel: "0/3",
+      });
+    });
+
+    it("refreshCoreAndBios keeps the shown BIOS need when the read carries no answer (#1693)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({
+          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_level: "missing",
+          bios_label: "0/3",
+        }),
+      );
+      subscribe(nextAppId);
+      await flush();
+      vi.mocked(backend.getBiosStatus).mockResolvedValue({
+        bios_status: null,
+        bios_level: null,
+        bios_label: null,
+        bios_status_unknown: true,
+      });
+
+      await refreshCoreAndBios(nextAppId);
+
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        activeCoreLabel: "Snes9x",
+        biosNeeded: true,
+        biosStatus: "missing",
+        biosLabel: "0/3",
+      });
     });
 
     it("does nothing for an appId nobody is subscribed to", async () => {

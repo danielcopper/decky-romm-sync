@@ -17,9 +17,9 @@ interface AchievementFields {
 }
 
 /** Re-read this ROM's BIOS status and fold the answer in — including an answer
- *  reporting no requirement, which clears the shown one (#1690). A read that
- *  FAILS writes nothing at all, so the shown level stands: a failure is "we
- *  don't know", not "no BIOS need". */
+ *  reporting no requirement, which clears the shown one (#1690). Nothing is
+ *  written when the read fails or comes back carrying no answer, so the shown
+ *  level stands: neither is "no BIOS need", both are "we don't know" (#1693). */
 export function refreshBiosInBackground<S extends BiosInfoFields>(
   romId: number,
   cancelled: () => boolean,
@@ -28,10 +28,9 @@ export function refreshBiosInBackground<S extends BiosInfoFields>(
   getBiosStatus(romId)
     .then((result) => {
       if (cancelled()) return;
-      setter((prev) => ({
-        ...prev,
-        ...extractBiosInfo(result.bios_status, result.bios_level, result.bios_label),
-      }));
+      const biosInfo = extractBiosInfo(result);
+      if (!biosInfo) return;
+      setter((prev) => ({ ...prev, ...biosInfo }));
     })
     .catch((e) => debugLog(`Background BIOS status fetch error: ${e}`));
 }
