@@ -79,8 +79,10 @@ describe("applySaveSyncDisplay", () => {
 });
 
 describe("extractBiosInfo", () => {
+  const requirement = { platform_slug: "snes", server_count: 3, local_count: 3 };
+
   it("projects the pre-computed level/label into the BIOS-only play-section fields (no core fields, #923)", () => {
-    const result = extractBiosInfo("ok", "BIOS OK");
+    const result = extractBiosInfo(requirement, "ok", "BIOS OK");
     expect(result.biosNeeded).toBe(true);
     expect(result.biosStatus).toBe("ok");
     expect(result.biosLabel).toBe("BIOS OK");
@@ -90,9 +92,23 @@ describe("extractBiosInfo", () => {
   });
 
   it("coerces null label to empty string", () => {
-    const result = extractBiosInfo(null, null);
+    const result = extractBiosInfo(requirement, null, null);
     expect(result.biosLabel).toBe("");
     expect(result.biosStatus).toBeNull();
+  });
+
+  it("reports the cleared shape when the answer carries no requirement (#1690)", () => {
+    expect(extractBiosInfo(null, null, null)).toEqual({ biosNeeded: false, biosStatus: null, biosLabel: "" });
+  });
+
+  it("ignores a level and label left over next to an absent requirement (#1690)", () => {
+    // The three fields move together — a cleared requirement never leaves a
+    // level or label behind for the row to render against nothing.
+    expect(extractBiosInfo(undefined, "missing", "0/3")).toEqual({
+      biosNeeded: false,
+      biosStatus: null,
+      biosLabel: "",
+    });
   });
 });
 

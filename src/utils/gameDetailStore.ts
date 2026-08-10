@@ -315,12 +315,13 @@ async function loadDetail(appId: number, entry: Entry): Promise<void> {
       refreshAchievementsInBackground(romId, cancelled, writeForRom);
     }
 
-    if (cached.bios_status) {
-      write((prev) => ({
-        ...prev,
-        ...extractBiosInfo(cached.bios_level ?? null, cached.bios_label ?? null),
-      }));
-    }
+    // Folded whether or not the detail reports a requirement: an absent
+    // `bios_status` is the backend answering "this version's core needs none",
+    // and only an unconditional fold can take a shown requirement back (#1690).
+    write((prev) => ({
+      ...prev,
+      ...extractBiosInfo(cached.bios_status, cached.bios_level ?? null, cached.bios_label ?? null),
+    }));
 
     if (staleFields.includes("bios")) {
       refreshBiosInBackground(romId, cancelled, writeForRom);

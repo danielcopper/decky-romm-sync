@@ -62,16 +62,21 @@ export function applySaveSyncDisplay(
   return { status: "none", label: "No saves" };
 }
 
-/** Project the backend's pre-computed BIOS level/label into the BIOS-only fields
- *  the play-section row needs. `level` and `label` are computed by the backend
- *  so the frontend never re-derives them. Callers only reach this when the
- *  backend reported a BIOS need (a truthy `bios_status`), so `biosNeeded` is
- *  always `true` here. Core data is sourced separately via `extractCoreInfo`
- *  (the BIOS payload no longer carries it, #923). */
+/** Project a whole BIOS answer — the backend's `bios_status` plus the level and
+ *  label it pre-computed for it — into the BIOS-only fields the play-section row
+ *  needs. `level` and `label` are never re-derived here. Only the PRESENCE of
+ *  `status` is read: its absence is the backend answering "this core needs no
+ *  BIOS", which clears all three fields, so a requirement can be taken back off
+ *  the page (#1690). A read that FAILED is not that answer and must never be
+ *  funnelled in as one — the caller drops it and leaves the shown level
+ *  standing. Core data is sourced separately via `extractCoreInfo` (the BIOS
+ *  payload no longer carries it, #923). */
 export function extractBiosInfo(
+  status: Record<string, unknown> | null | undefined,
   level: "ok" | "partial" | "missing" | "unmanaged" | null,
   label: string | null,
 ): BiosInfoFields {
+  if (!status) return { biosNeeded: false, biosStatus: null, biosLabel: "" };
   return {
     biosNeeded: true,
     biosStatus: level,

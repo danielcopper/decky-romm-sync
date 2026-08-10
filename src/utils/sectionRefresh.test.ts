@@ -117,19 +117,33 @@ describe("refreshBiosInBackground", () => {
     expect(setter).not.toHaveBeenCalled();
   });
 
-  it("skips the setter when bios_status is null", async () => {
+  it("clears the shown requirement when the read reports none", async () => {
+    // A read that ANSWERS "no BIOS need" is the only thing that may take a shown
+    // requirement back — the core the answer was read for may genuinely need
+    // none (#1690).
     vi.mocked(backend.getBiosStatus).mockResolvedValueOnce({
       bios_status: null,
       bios_level: null,
       bios_label: null,
     } as unknown as Awaited<ReturnType<typeof backend.getBiosStatus>>);
-    const setter = vi.fn();
-    refreshBiosInBackground(1, () => false, setter);
+
+    const setter = vi.fn<(updater: (prev: BiosState) => BiosState) => void>();
+    refreshBiosInBackground(1, () => false, setter as unknown as Dispatch<SetStateAction<BiosState>>);
     await flushMicrotasks();
-    expect(setter).not.toHaveBeenCalled();
+
+    expect(setter).toHaveBeenCalledOnce();
+    const next = setter.mock.calls[0]![0]({
+      biosNeeded: true,
+      biosStatus: "missing",
+      biosLabel: "0/3",
+      unrelated: "keep",
+    });
+    expect(next).toEqual({ biosNeeded: false, biosStatus: null, biosLabel: "", unrelated: "keep" });
   });
 
   it("logs the error and skips the setter when the fetch rejects", async () => {
+    // The counterpart to the clear above: a FAILED read is "we don't know", not
+    // "no BIOS need", so the shown level stands (#1690).
     vi.mocked(backend.getBiosStatus).mockRejectedValueOnce(new Error("network"));
     vi.mocked(backend.debugLog).mockResolvedValue(undefined);
     const setter = vi.fn();

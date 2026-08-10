@@ -700,6 +700,114 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, romName: "Other version" });
     });
 
+    // #1690 — the BIOS requirement is core-dependent and the core override is
+    // keyed on rom_id, so two versions of one game genuinely can differ here.
+    // The switched-to detail below carries no `stale_fields`, so the cached fold
+    // is the only writer in play.
+    it("clears the BIOS requirement when the switched-to version's core needs none", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({
+          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_level: "missing",
+          bios_label: "0/3",
+        }),
+      );
+      subscribe(nextAppId);
+      await flush();
+      expect(getGameDetail(nextAppId)).toMatchObject({ biosNeeded: true, biosStatus: "missing", biosLabel: "0/3" });
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ rom_id: 43 }));
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        romId: 43,
+        biosNeeded: false,
+        biosStatus: null,
+        biosLabel: "",
+      });
+    });
+
+    it("keeps the requirement when the switched-to version's core needs BIOS too", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({
+          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_level: "missing",
+          bios_label: "0/3",
+        }),
+      );
+      subscribe(nextAppId);
+      await flush();
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found(switchedDetail));
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        romId: 43,
+        biosNeeded: true,
+        biosStatus: "ok",
+        biosLabel: "3/3",
+      });
+    });
+
+    it("clears the requirement when the switched-to version's live BIOS read reports none", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found());
+      subscribe(nextAppId);
+      await flush();
+      // The switched-to detail still carries the previous version's cached
+      // requirement and marks it stale, so the live re-read is what answers.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({ ...switchedDetail, stale_fields: ["bios"] }),
+      );
+      vi.mocked(backend.getBiosStatus).mockResolvedValue({ bios_status: null, bios_level: null, bios_label: null });
+
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledWith(43);
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        romId: 43,
+        biosNeeded: false,
+        biosStatus: null,
+        biosLabel: "",
+      });
+    });
+
+    // The over-fix this change invites: a read that FAILED is "we don't know",
+    // not "no BIOS need", so it may not blank the cell (#1690).
+    it("leaves the shown level standing when the switched-to version's BIOS re-read fails", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found());
+      subscribe(nextAppId);
+      await flush();
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({ ...switchedDetail, stale_fields: ["bios"] }),
+      );
+      vi.mocked(backend.getBiosStatus).mockRejectedValue(new Error("offline"));
+
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({
+        romId: 43,
+        biosNeeded: true,
+        biosStatus: "ok",
+        biosLabel: "3/3",
+      });
+    });
+
     it("ignores a switch for another appId", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found());
       subscribe(nextAppId);
