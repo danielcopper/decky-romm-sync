@@ -465,12 +465,114 @@ class TestWriteTextAtomic:
         assert dest.read_text(encoding="utf-8") == "Final Fantasy VII — Disc 1.cue\n"
 
 
+class TestIsDir:
+    def test_true_for_a_directory(self, adapter, tmp_path):
+        assert adapter.is_dir(str(tmp_path)) is True
+
+    def test_false_for_a_file(self, adapter, tmp_path):
+        f = tmp_path / "a.rom"
+        f.write_bytes(b"x")
+        assert adapter.is_dir(str(f)) is False
+
+    def test_false_for_a_missing_path(self, adapter, tmp_path):
+        assert adapter.is_dir(str(tmp_path / "nope")) is False
+
+
+class TestDescribePath:
+    def test_none_for_a_missing_path(self, adapter, tmp_path):
+        assert adapter.describe_path(str(tmp_path / "nope")) is None
+
+    def test_describes_a_file(self, adapter, tmp_path):
+        f = tmp_path / "Game.sfc"
+        f.write_bytes(b"0123456789")
+        described = adapter.describe_path(str(f))
+        assert described is not None
+        assert described["path"] == str(f)
+        assert described["is_dir"] is False
+        assert described["size_bytes"] == 10
+        assert described["modified_at"] == pytest.approx(f.stat().st_mtime)
+
+    def test_a_directory_reports_its_recursive_total(self, adapter, tmp_path):
+        # Comparable with the server's fs_size_bytes for a multi-file ROM, which
+        # is the sum over every file including the nested ones.
+        game = tmp_path / "Game"
+        (game / "sub").mkdir(parents=True)
+        (game / "disc1.bin").write_bytes(b"a" * 100)
+        (game / "sub" / "disc2.bin").write_bytes(b"b" * 55)
+        described = adapter.describe_path(str(game))
+        assert described is not None
+        assert described["is_dir"] is True
+        assert described["size_bytes"] == 155
+
+    def test_an_empty_directory_reports_zero(self, adapter, tmp_path):
+        empty = tmp_path / "Empty"
+        empty.mkdir()
+        described = adapter.describe_path(str(empty))
+        assert described is not None
+        assert described["size_bytes"] == 0
+
+    def test_a_broken_symlink_inside_a_directory_contributes_zero(self, adapter, tmp_path):
+        # lstat on a dangling link succeeds and reports the link's own size, so
+        # a broken link never aborts the description of the tree around it.
+        game = tmp_path / "Game"
+        game.mkdir()
+        (game / "real.bin").write_bytes(b"a" * 10)
+        (game / "dangling").symlink_to(tmp_path / "gone")
+        described = adapter.describe_path(str(game))
+        assert described is not None
+        assert described["size_bytes"] >= 10
+
+
+class TestChecksum:
+    def test_md5_matches_hashlib(self, adapter, tmp_path):
+        import hashlib
+
+        f = tmp_path / "a.bin"
+        f.write_bytes(b"the quick brown fox" * 100)
+        assert adapter.checksum(str(f), "md5") == hashlib.md5(f.read_bytes()).hexdigest()
+
+    def test_crc32_is_eight_lowercase_hex_digits(self, adapter, tmp_path):
+        import zlib
+
+        f = tmp_path / "a.bin"
+        f.write_bytes(b"\xff" * 3)
+        expected = f"{zlib.crc32(f.read_bytes()) & 0xFFFFFFFF:08x}"
+        assert adapter.checksum(str(f), "crc32") == expected
+        assert len(expected) == 8
+
+    def test_crc32_of_an_empty_file_is_zero_padded(self, adapter, tmp_path):
+        f = tmp_path / "empty.bin"
+        f.write_bytes(b"")
+        assert adapter.checksum(str(f), "crc32") == "00000000"
+
+    def test_progress_reports_byte_deltas_summing_to_the_file_size(self, adapter, tmp_path):
+        f = tmp_path / "big.bin"
+        f.write_bytes(b"x" * (3 * 1024 * 1024 + 7))
+        deltas: list[int] = []
+        adapter.checksum(str(f), "md5", deltas.append)
+        assert sum(deltas) == 3 * 1024 * 1024 + 7
+        assert len(deltas) > 1  # chunked, not one gulp
+
+    def test_an_unknown_algorithm_raises(self, adapter, tmp_path):
+        f = tmp_path / "a.bin"
+        f.write_bytes(b"x")
+        with pytest.raises(ValueError, match="sha512"):
+            adapter.checksum(str(f), "sha512")
+
+    def test_a_missing_file_raises(self, adapter, tmp_path):
+        with pytest.raises(OSError):
+            adapter.checksum(str(tmp_path / "nope.bin"), "md5")
+
+
 class TestProtocolMethodCount:
     """Sanity check that every Protocol method has at least one test class."""
 
     def test_protocol_methods_covered(self):
         method_names = {
             "exists",
+            "is_dir",
+            "describe_path",
+            "checksum",
             "remove_file",
             "remove_tree",
             "make_dirs",

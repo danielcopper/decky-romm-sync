@@ -122,7 +122,7 @@ def plugin(clock):
             active_core=FakeActiveCoreResolver(default=(None, None)),
             path_exists=FakePathExistsReader(),
             retrodeck_paths=FakeRetroDeckPaths(),
-            resolve_system=lambda slug, fs_slug=None: fs_slug or slug,
+            resolve_system=lambda platform_slug, platform_fs_slug=None: platform_fs_slug or platform_slug,
         ),
     )
     return p

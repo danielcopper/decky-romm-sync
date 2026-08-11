@@ -72,7 +72,7 @@ SCOPE_DIRS = (
 # back under the threshold; numbers go down when a refactor banks real slack.
 # A number is never raised — that is the whole point of the gate.
 ALLOWLIST = {
-    "py_modules/services/downloads.py": 1188,
+    "py_modules/services/downloads.py": 1119,
     "py_modules/services/library/fetcher.py": 1150,
     "py_modules/services/library/sync_orchestrator.py": 1480,
 }

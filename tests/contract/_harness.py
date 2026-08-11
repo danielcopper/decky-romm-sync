@@ -69,6 +69,7 @@ _BOUND_SERVICE_ATTRS = {
     "_playtime_service": "playtime_service",
     "_sync_service": "sync_service",
     "_download_service": "download_service",
+    "_rom_adoption_service": "rom_adoption_service",
     "_rom_removal_service": "rom_removal_service",
     "_firmware_service": "firmware_service",
     "_sgdb_service": "sgdb_service",

@@ -233,12 +233,14 @@ Format: **invariant** — tier — enforced by.
   families run against the core (ladder in `tests/adapters/test_gavel_native.py`, decision table in
   `tests/adapters/test_gavel_native_table_vectors.py`); the `.so` and the vectors are pinned to the same upstream
   release tag and are bumped together
-- **`applied_launch_options` is written only by the five recorded-state writer sites (sync ack-commit,
-  download-complete, uninstall, home-migration, version-switch), each recording the exact command the frontend wrote;
+- **`applied_launch_options` is written only by the six recorded-state writer sites (sync ack-commit, download-complete,
+  adopt-complete, uninstall, home-migration, version-switch), each recording the exact command the frontend wrote;
   excluded from the sync UPSERT; the only sanctioned reset is Force Full Sync's clear-to-NULL (a wrong recorded value is
   the only path to a wrong delta-skip)** — test + prompt-only — each writer site carries a value-exact test; new
   launch-options write paths are prompt-only — mechanize via a `set_applied_launch_options` /
-  `record_applied_launch_options` call-site audit
+  `record_applied_launch_options` call-site audit. Download-complete and adopt-complete are one site in the code
+  (`RomInstallRecorder.do_record_applied_launch_options`) and two in the flow, because an adopted install is an install
+  in every respect (ADR-0028)
 - **An abandoned-chunk stash's whole-unit apply staging (`pending_sync` / `pending_all_roms` / `pending_cover_sources`)
   is never mutated while the stash is pending (box IDLE) — every run-entry path passes `try_begin_run`, which clears the
   stash before any staging write** — prompt-only — the invariant holds today rather than being aspirational; mechanize

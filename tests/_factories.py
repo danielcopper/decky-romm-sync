@@ -74,6 +74,7 @@ def _make_testable_plugin():
         _active_core: Any
         _m3u_supported: Any
         _system_extensions: Any
+        _install_recorder: Any
         _renderer_rss: Any
         _renderer_gc: Any
 

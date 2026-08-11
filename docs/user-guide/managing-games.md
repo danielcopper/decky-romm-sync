@@ -218,6 +218,38 @@ downloads the new one — no prompt. This keeps a multi-version game to a single
 touched** by this cleanup, so switching back and re-downloading the earlier version rejoins its saves. Games that still
 carry a separate shortcut per version from an older release are left untouched.
 
+### When the game is already on your device
+
+If you copied ROMs into your RetroDECK folders yourself, a game the plugin has no record of may already be sitting
+exactly where a download would write. The plugin never writes over it. Instead, the Play button reads **Already on
+Device**, and pressing it opens a dialog rather than starting a download.
+
+The dialog shows both sides — what is on your device (name, size, when it last changed) and what the server would send —
+and says plainly whether the two are the same size. From there you have three choices:
+
+- **Use These Files** — the plugin records what is already there as the installed copy. Nothing is downloaded, nothing
+  is renamed, and no playlist is generated: your files are taken exactly as they are. The game becomes playable
+  immediately.
+- **Check Against Server** — compares the files on your device against the checksums RomM published for that game. This
+  reads every file, so a large game takes a few seconds to a minute; it only ever runs when you press the button. There
+  are three possible answers: the files match, they differ (and the dialog names which file and what differed), or the
+  server publishes no checksums at all and simply cannot confirm them.
+- **Download Instead** — replaces what is there. This deletes your files first, so it asks a second time and names what
+  will be removed. If the file is your own dump, a translation patch or a romhack, the server cannot give it back.
+
+**Cancel** does nothing at all.
+
+Once you use the existing files, they are a normal install in every respect — including that **Uninstall** deletes them,
+exactly as it would a downloaded copy. That is the reason for the dialog: the decision is made once, up front, with the
+comparison in front of you.
+
+Two cases the dialog cannot help with:
+
+- The folder or file in the way is the wrong shape for the game — a folder where the server serves a single file, or the
+  reverse. The dialog says so and only offers replace or cancel.
+- The same game sitting elsewhere under a **different name**. The plugin looks only at the exact location it would
+  download to, so a differently-named copy is not found.
+
 ### Pausing and Resuming a Download
 
 A running download can be **paused** and later **resumed** without losing the progress already transferred. On the game
@@ -347,6 +379,11 @@ To remove a downloaded ROM file:
 4. The shortcut remains in your library so you can re-download later
 
 This only removes the ROM file — the Steam shortcut, artwork, and metadata are preserved.
+
+This applies to files you told the plugin to [use from your device](#when-the-game-is-already-on-your-device) as well:
+once they are the installed copy, **Uninstall** deletes them exactly as it would a downloaded one. The plugin has one
+kind of install and does not remember where the files came from — which is why the choice is put to you at the moment
+you make it, not afterwards.
 
 The button switches to **Uninstalling…** as soon as you tap it, and a game made of many files counts them down as they
 go. Pressing it again while that is on screen does nothing — the removal already running is the one that finishes, and

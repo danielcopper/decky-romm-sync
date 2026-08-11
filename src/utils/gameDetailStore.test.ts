@@ -1195,6 +1195,24 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId).installed).toBe(false);
     });
 
+    it("re-derives on rom_adopted for this ROM", async () => {
+      // An adoption writes an install record without a download, so no
+      // download_complete fires — but `installed` changed just the same.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: false }));
+      subscribe(nextAppId);
+      await flush();
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: true }));
+
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "rom_adopted", rom_id: 42 } }));
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(nextAppId);
+      expect(getGameDetail(nextAppId).installed).toBe(true);
+    });
+
     it("ignores install events for another ROM", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: false }));
       subscribe(nextAppId);
@@ -1204,6 +1222,9 @@ describe("gameDetailStore", () => {
       await act(async () => {
         emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(999));
         globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: 999 } }));
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", { detail: { type: "rom_adopted", rom_id: 999 } }),
+        );
         await Promise.resolve();
       });
 

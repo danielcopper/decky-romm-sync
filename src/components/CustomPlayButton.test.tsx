@@ -85,6 +85,11 @@ vi.mock("../components/SyncConflictModal", () => ({
 vi.mock("../components/StopGameModal", () => ({
   showStopGameModal: vi.fn(),
 }));
+// Adopt/replace/cancel dialog — spied so the button's routing off a
+// `target_occupied` refusal is observable without rendering the modal.
+vi.mock("../components/AdoptExistingModal", () => ({
+  showAdoptExistingModal: vi.fn(),
+}));
 
 import { getCachedGameDetail } from "../utils/cachedGameDetailStore";
 import { setRommConnectionState, reportServerReachable, getRommConnectionState } from "../utils/connectionState";
@@ -97,6 +102,7 @@ import { showOfflineDriftModal } from "../components/OfflineDriftModal";
 import { showFallbackLaunchModal } from "../components/FallbackLaunchModal";
 import { handleConflicts } from "../components/SyncConflictModal";
 import { showStopGameModal } from "../components/StopGameModal";
+import { showAdoptExistingModal } from "../components/AdoptExistingModal";
 import { mountPruneLeasePlugin, releaseAllPruneLeases } from "../utils/pruneLease";
 import { resetBoundVanished, setBoundVanished } from "../utils/vanishedBinding";
 import type { SyncConflict, SaveStatus } from "../types";
@@ -3194,5 +3200,177 @@ describe("CustomPlayButton — active-download button never takes the idle blue 
     expect(fill.style.width).toBe("30%");
     const group = utils.container.querySelector('[data-testid="focusable"]') as HTMLElement;
     expect(group.style.getPropertyValue("--romm-pulse-color")).toContain("212,167,44");
+  });
+});
+
+describe("CustomPlayButton â content already on disk (#260)", () => {
+  const OCCUPIED = {
+    success: false as const,
+    reason: "target_occupied" as const,
+    message: "A file named 'game.z64' is already in place",
+    existing: { name: "game.z64", path: "/roms/n64/game.z64", is_dir: false, size_bytes: 2048, modified_at: 0 },
+    incoming: { name: "game.z64", size_bytes: 1024 },
+    sizes_match: false,
+    adoptable: true,
+  };
+
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(backend.startDownload).mockReset();
+    vi.mocked(backend.adoptExistingRom).mockReset();
+    vi.mocked(showAdoptExistingModal).mockReset();
+    vi.mocked(setLaunchOptionsConfirmed).mockClear();
+    vi.mocked(toaster.toast).mockClear();
+  });
+
+  it("labels the button 'Already on Device' when the cached stat found content", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Already on Device");
+  });
+
+  it("still says Download when nothing is in the way", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: false });
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Download");
+  });
+
+  it("opens the dialog on a target_occupied refusal instead of toasting a failure", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue(OCCUPIED);
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("cancel");
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(showAdoptExistingModal)).toHaveBeenCalledWith(42, OCCUPIED);
+    expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
+    await utils.findByText("Already on Device");
+  });
+
+  it("replace re-runs the download with the replace flag set", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload)
+      .mockResolvedValueOnce(OCCUPIED)
+      .mockResolvedValueOnce({ success: true, message: "Download started" });
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("replace");
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(backend.startDownload).mock.calls).toEqual([
+      [42, false],
+      [42, true],
+    ]);
+  });
+
+  it("cancel starts nothing", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue(OCCUPIED);
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("cancel");
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(backend.startDownload)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(backend.adoptExistingRom)).not.toHaveBeenCalled();
+  });
+
+  it("adopt records the install and writes the launch command onto the shortcut", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue(OCCUPIED);
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("adopt");
+    vi.mocked(backend.adoptExistingRom).mockResolvedValue({
+      success: true,
+      message: "Using the files already on this device",
+      file_path: "/roms/n64/game.z64",
+      rom_dir: null,
+      app_id: 100,
+      launch_options: 'flatpak run … "/roms/n64/game.z64"',
+    });
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(backend.adoptExistingRom)).toHaveBeenCalledWith(42);
+    expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledWith(100, 'flatpak run … "/roms/n64/game.z64"');
+    await utils.findByText("Play");
+  });
+
+  it("an unbound adopted ROM writes no launch options", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue(OCCUPIED);
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("adopt");
+    vi.mocked(backend.adoptExistingRom).mockResolvedValue({
+      success: true,
+      message: "ok",
+      file_path: "/roms/n64/game.z64",
+      rom_dir: null,
+      app_id: null,
+      launch_options: "",
+    });
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
+    await utils.findByText("Play");
+  });
+
+  it("a refused adoption surfaces its message and leaves the button on the download state", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue(OCCUPIED);
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("adopt");
+    vi.mocked(backend.adoptExistingRom).mockResolvedValue({
+      success: false,
+      reason: "nothing_to_adopt",
+      message: "The files are no longer there — nothing was adopted",
+    });
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
+      title: "RomM Sync",
+      body: "The files are no longer there — nothing was adopted",
+    });
+    await utils.findByText("Already on Device");
+  });
+
+  it("a thrown adoption is surfaced rather than swallowed", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue(OCCUPIED);
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("adopt");
+    vi.mocked(backend.adoptExistingRom).mockRejectedValue(new Error("bridge down"));
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
+      title: "RomM Sync",
+      body: "Couldn't use the existing files — is RomM server running?",
+    });
+    await utils.findByText("Already on Device");
   });
 });

@@ -327,7 +327,7 @@ async def test_detached_writer_lifetime_blocks_prune_admission(harness, monkeypa
     else:
         task = asyncio.create_task(release.wait())
 
-        async def start_download(_rom_id):
+        async def start_download(_rom_id, _replace_existing=False):
             return {"success": True, "message": "started"}
 
         monkeypatch.setattr(harness.plugin._download_service, "start_download", start_download)

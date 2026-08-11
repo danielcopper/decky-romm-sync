@@ -293,6 +293,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             install_recorder=rom_install_recorder,
             m3u_support=cfg.callbacks.m3u_support,
+            uow_factory=cfg.callbacks.uow_factory,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             emit=cfg.runtime.emit,

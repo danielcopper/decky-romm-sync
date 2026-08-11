@@ -148,6 +148,10 @@ class FakeDownloadFileStore:
     def disk_free(self, path: str) -> int:
         return self.disk_free_bytes
 
+    def file_size(self, path: str) -> int:
+        """Size of the stored bytes, or 0 for a path the store does not hold."""
+        return len(self.files.get(path, b""))
+
     def is_dir(self, path: str) -> bool:
         if path in self.dirs:
             return True

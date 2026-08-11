@@ -826,6 +826,11 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "sync_cancel_preview",
     "cancel_download",
     "pause_download",
+    # Read-only content check: hashes files already on disk and compares them
+    # against RomM's checksums. Writes nothing, so a pending migration has
+    # nothing to protect from it — and the adopt dialog it answers for is
+    # reachable through the (blocked) download itself.
+    "verify_existing_content",
     # Terminating the running game — signals host processes only, never a
     # RetroDECK path, and the user must be able to stop a live game whatever the
     # migration marker says (same reasoning as the cancel/pause group above).
@@ -1073,6 +1078,7 @@ class TestMainStartupOrdering:
             "playtime_service": MagicMock(),
             "sync_service": MagicMock(),
             "download_service": download_service,
+            "rom_adoption_service": MagicMock(),
             "rom_removal_service": MagicMock(),
             "firmware_service": firmware_service,
             "sgdb_service": sgdb_service,

@@ -49,6 +49,7 @@ if TYPE_CHECKING:
         RommRomReader,
         SystemM3uSupportFn,
         SystemResolver,
+        UnitOfWorkFactory,
     )
 
 # Minimum seconds between two ``verify_progress`` frames. Matches the download
@@ -93,6 +94,7 @@ class RomAdoptionServiceConfig:
     retrodeck_paths: RetroDeckPaths
     install_recorder: RomInstallRecorder
     m3u_support: SystemM3uSupportFn
+    uow_factory: UnitOfWorkFactory
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     emit: EventEmitter
@@ -109,6 +111,7 @@ class RomAdoptionService:
         self._retrodeck_paths = config.retrodeck_paths
         self._install_recorder = config.install_recorder
         self._m3u_support = config.m3u_support
+        self._uow_factory = config.uow_factory
         self._loop = config.loop
         self._logger = config.logger
         self._emit = config.emit
@@ -121,14 +124,16 @@ class RomAdoptionService:
     ) -> dict[str, Any] | None:
         """Decide whether a download may write to *checked_path*.
 
-        ``None`` means proceed: the path was free, or it was cleared because the
-        user chose to replace what was there. Anything else is a canonical
-        failure the caller returns untouched — the ``target_occupied`` refusal
-        carrying both sides of the comparison, or a removal that could not be
-        completed.
+        ``None`` means proceed: the path was free, it already belongs to this
+        ROM's own install, or it was cleared because the user chose to replace
+        what was there. Anything else is a canonical failure the caller returns
+        untouched — the ``target_occupied`` refusal carrying both sides of the
+        comparison, or a removal that could not be completed.
         """
         existing = self._download_file_store.describe_path(checked_path)
         if existing is None:
+            return None
+        if self._is_own_install(rom_detail, checked_path):
             return None
         if not replace:
             return occupied_target_refusal(
@@ -141,6 +146,24 @@ class RomAdoptionService:
                 adoptable=existing["is_dir"] == is_multi_file_download(rom_detail),
             )
         return self._clear_for_replace(rom_detail, checked_path, is_dir=existing["is_dir"])
+
+    def _is_own_install(self, rom_detail: dict[str, Any], checked_path: str) -> bool:
+        """Whether *checked_path* is already this ROM's recorded install.
+
+        A re-download of a ROM the plugin installed itself finds its own files in
+        the way. Those are not content to ask about — the install record is the
+        plugin's claim on them, the same authority ``installed`` and Uninstall
+        act on — so the download proceeds and replaces them as it always has.
+        The dialog exists for content **no** row accounts for (ADR-0028).
+        """
+        rom_id = int(rom_detail.get("id") or 0)
+        if rom_id <= 0:
+            return False
+        with self._uow_factory() as uow:
+            install = uow.rom_installs.get(rom_id)
+        if install is None:
+            return False
+        return checked_path in (install.rom_dir, install.file_path)
 
     def _clear_for_replace(
         self, rom_detail: dict[str, Any], checked_path: str, *, is_dir: bool
