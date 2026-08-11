@@ -174,6 +174,31 @@ Unlaunchable is always a **proven** verdict, never the absence of one: an unread
 a pre-migration row all read as launchable. The foil is a **folder-boot** install, whose `file_path` extension is
 irrelevant because the baked target is the game directory.
 
+### Adopt
+
+To take something already present into the plugin's records without having produced it. The object varies — a local save
+file becomes a tracked baseline (`adopt_baseline(...)`), a play session survives a frontend reload, an identity-only
+claim picks up the debris of an interrupted removal
+([ADR-0027](docs/adr/0027-claim-discipline-follows-the-recovery-bundle.md)), a ROM already on disk becomes an install —
+but the rule does not: the recorded state derives from what was found, not from what the plugin did. _Avoid_: claim
+(reserved for the removal machinery's authorization), import, link, register.
+
+### Adopted install
+
+A `rom_installs` row for content the plugin did not download. Indistinguishable from a downloaded one in every respect,
+**including deletion authority**: uninstall and removed-game cleanup delete an adopted ROM's files exactly as they would
+a downloaded ROM's. The protection therefore sits at the moment of adoption — proving the content is the ROM the row
+will claim — never in a downstream exemption, because a second class of install row would need a second branch in every
+consumer (uninstall, cleanup, home migration, version switch).
+
+### Adoption candidate
+
+A file or directory in the platform's ROM directory that no `rom_installs` row accounts for and that the server's
+manifest could describe. "Candidate" carries the uncertainty deliberately: the match is made on cheap evidence — file
+size, and for a directory the top-level name set — so until the content is verified it is a guess. The verification
+(CRC32/MD5, read from a ZIP's central directory where the content is archived) is always user-triggered, never a wait
+imposed before the plugin will say anything.
+
 ### platform_slug (denormalized)
 
 The RomM platform identifier (e.g. `gba`, `psx`) carried as a plain string on the rows that need it (`roms`,
