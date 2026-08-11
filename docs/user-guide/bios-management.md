@@ -33,11 +33,16 @@ ok/partial/missing classification used everywhere in the plugin:
 The classification is computed against the **active core** for that game — so switching to a core that needs no BIOS (or
 that treats a file as optional) clears the warning, while switching to a core that requires a missing file surfaces it.
 
-A BIOS warning only ever disappears on an **answer**. When the plugin cannot work out the requirement — your RomM server
-is unreachable while it checks, or the BIOS state has not been re-read yet after a download or a delete — it keeps
-showing the last status it knew rather than reporting "no BIOS needed". So a check that failed never quietly clears a
-missing-BIOS warning and lets the game launch without its files; it just leaves the warning where it was until a check
-gets through.
+A BIOS warning only ever disappears on an **answer**. When the plugin cannot work out the requirement — most often right
+after a BIOS download or delete, before the state has been read again — it keeps showing the last status it knew rather
+than reporting "no BIOS needed". So a check that could not be completed never quietly clears a missing-BIOS warning and
+lets the game launch without its files; it leaves the warning where it was until a check gets through.
+
+An unreachable RomM server usually does **not** put the plugin in that position: it falls back to its built-in registry
+of known BIOS files and still tells you what the platform needs. Only a platform that registry does not cover depends
+entirely on the server — see
+[Platforms Without Plugin Coverage](#platforms-without-plugin-coverage-not-managed-by-the-plugin) — and that is where an
+unreachable server leaves the requirement unknown.
 
 Tap the BIOS status indicator to see a detailed list of individual files and which ones are present or missing. Each
 file lists the cores that use it (e.g. _Beetle PSX HW (required)_, _SwanStation (optional)_); the **active core**'s line

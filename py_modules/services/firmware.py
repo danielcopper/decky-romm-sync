@@ -299,7 +299,12 @@ class FirmwareService:
 
         TTL is checked against the wall-clock cache epoch so a cache
         restored from disk after a plugin restart still expires.
-        On HTTP error, falls back to cached data (if any) or empty list.
+
+        On HTTP error, falls back to cached data if there is any and RAISES
+        otherwise. Returning an empty list instead would be indistinguishable
+        from a server that genuinely holds no firmware, and ``check_platform_bios``
+        answers a confident "needs none" for that — so the raise is what lets a
+        failed fetch be reported as unknown rather than as a negative (#1693).
         """
         now = self._clock.time()
         if self._firmware_cache is not None and (now - self._firmware_cache_epoch) < _FIRMWARE_CACHE_TTL:

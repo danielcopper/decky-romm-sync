@@ -433,11 +433,11 @@ export function noteSaveSyncDisplay(appId: number, display: SaveSyncDisplay): vo
   }));
 }
 
-/** Re-read the BIOS level after a firmware download. Leaves the shown level
+/** Re-read the BIOS answer after a firmware download. Leaves what is shown
  *  alone when the read fails, when it reports no BIOS need, or when a version
  *  switch re-keyed the entry while the read was open. Downloading firmware
- *  cannot remove a requirement — it only fills it — so this path adopts a
- *  refreshed level and nothing else. */
+ *  cannot remove a requirement — it only fills one, or reveals one the cache had
+ *  not seen — so this path adopts a refreshed answer and never clears one. */
 export async function refreshBiosStatus(appId: number): Promise<void> {
   const entry = _entries.get(appId);
   const romId = entry?.state.romId;
