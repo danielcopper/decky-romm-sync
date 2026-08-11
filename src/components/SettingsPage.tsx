@@ -1,6 +1,6 @@
 import { useState, useEffect, FC } from "react";
 import { PanelSection, PanelSectionRow, ButtonItem, ConfirmModal, showModal } from "@decky/ui";
-import { toaster } from "@decky/api";
+import { showToast } from "../utils/toast";
 import {
   getSettings,
   saveServerUrl,
@@ -375,10 +375,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   const handleResetDefaultSlot = () => {
     setSaveSyncSettings((prev) => (prev ? { ...prev, default_slot: "default" } : prev));
     detach(handleSaveSyncSettingChange({ default_slot: "default" }));
-    toaster.toast({
-      title: "RomM Sync",
-      body: 'Default save slot reset to "default".',
-    });
+    showToast('Default save slot reset to "default".');
   };
   const handleDefaultSlotSubmit = (value: string) => {
     const trimmed = value.trim();
@@ -481,10 +478,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
       setSaveSortResult(result.message);
       if (result.success) {
         clearSaveSortMigration();
-        toaster.toast({
-          title: "RomM Sync",
-          body: result.message || "Migration complete.",
-        });
+        showToast(result.message || "Migration complete.");
       }
     } catch {
       setSaveSortResult("Migration failed");

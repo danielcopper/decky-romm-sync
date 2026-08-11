@@ -6,7 +6,7 @@
 
 import { useState, useRef, useEffect, createElement, FC } from "react";
 import { ConfirmModal, DialogButton, showModal } from "@decky/ui";
-import { toaster } from "@decky/api";
+import { showToast } from "../../utils/toast";
 import { getSlotSaves, switchSlot, debugLog, getSlotDeleteInfo, deleteSlot } from "../../api/backend";
 import type {
   SaveStatus,
@@ -242,7 +242,7 @@ export const SlotPanel: FC<SlotPanelProps> = ({
     try {
       const info: SlotDeleteInfo = await getSlotDeleteInfo(romId, slotName);
       if (!info.success) {
-        toaster.toast({ title: "RomM Sync", body: slotDeleteFailureToast(info) });
+        showToast(slotDeleteFailureToast(info));
         return;
       }
 
@@ -274,14 +274,14 @@ export const SlotPanel: FC<SlotPanelProps> = ({
                 try {
                   const result = await deleteSlot(romId, slotName);
                   if (result.success) {
-                    toaster.toast({ title: "RomM Sync", body: `Slot '${slotName}' deleted` });
+                    showToast(`Slot '${slotName}' deleted`);
                     onSlotDeleted();
                   } else {
-                    toaster.toast({ title: "RomM Sync", body: result.message ?? "Failed to delete slot" });
+                    showToast(result.message ?? "Failed to delete slot");
                   }
                 } catch (e) {
                   detach(debugLog(`SavesTab: deleteSlot error: ${e}`));
-                  toaster.toast({ title: "RomM Sync", body: "An error occurred while deleting the slot" });
+                  showToast("An error occurred while deleting the slot");
                 }
               })(),
             );
@@ -290,7 +290,7 @@ export const SlotPanel: FC<SlotPanelProps> = ({
       );
     } catch (e) {
       detach(debugLog(`SavesTab: getSlotDeleteInfo error: ${e}`));
-      toaster.toast({ title: "RomM Sync", body: "Failed to load slot info" });
+      showToast("Failed to load slot info");
     } finally {
       setDeleting(false);
     }

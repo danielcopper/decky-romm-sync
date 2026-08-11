@@ -28,7 +28,8 @@
  */
 
 import { useState, useEffect, useRef, FC, ReactNode } from "react";
-import { toaster, addEventListener, removeEventListener } from "@decky/api";
+import { addEventListener, removeEventListener } from "@decky/api";
+import { showToast } from "../utils/toast";
 import { Menu, MenuItem, showContextMenu, DialogButton } from "@decky/ui";
 import { FaChevronDown, FaCompactDisc, FaLayerGroup, FaTrash } from "react-icons/fa";
 import {
@@ -287,7 +288,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
       admission,
     );
     if (!confirmed) {
-      toaster.toast({ title: "RomM Sync", body: "Switched — re-switch if launch fails" });
+      showToast("Switched — re-switch if launch fails");
     }
   };
 
@@ -300,7 +301,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   const handleSwitchFailure = (result: SwitchVersionFailure | SwitchVersionUnsyncedSaves): void => {
     if (result.reason === "server_unreachable") reportServerReachable(false);
     setSwitching(false);
-    toaster.toast({ title: "RomM Sync", body: "Could not switch version", subtext: result.message });
+    showToast("Could not switch version", { subtext: result.message });
     if (result.reason === "version_vanished") detach(refreshAfterVanishedRefusal());
   };
 
@@ -328,7 +329,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
       // Every sync-then-switch failure is terminal for this attempt — release the
       // in-flight guard so the trigger re-enables (it never reaches a reload).
       setSwitching(false);
-      toaster.toast({ title: "RomM Sync", body });
+      showToast(body);
       refreshStrandedSaveStatus();
     };
     if (!isPruneLeaseAdmissionCurrent(admission)) return;
@@ -435,7 +436,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
       }
       setSwitching(false);
       logError(`VersionPicker: switchVersion failed: ${e}`);
-      toaster.toast({ title: "RomM Sync", body: "Could not switch version" });
+      showToast("Could not switch version");
     }
   };
 
@@ -443,11 +444,11 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     detach(
       openRemovedGamesCleanupModal(romId)
         .then((opened) => {
-          if (!opened) toaster.toast({ title: "RomM Sync", body: "This local entry already changed." });
+          if (!opened) showToast("This local entry already changed.");
         })
         .catch((error) => {
           logError(`VersionPicker: cleanup preview failed for rom ${romId}: ${error}`);
-          toaster.toast({ title: "RomM Sync", body: "Could not prepare local cleanup." });
+          showToast("Could not prepare local cleanup.");
         }),
     );
   };

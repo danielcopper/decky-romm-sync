@@ -16,7 +16,7 @@
  */
 
 import { useState, useEffect, useRef, FC, ReactNode } from "react";
-import { addEventListener, removeEventListener, toaster } from "@decky/api";
+import { addEventListener, removeEventListener } from "@decky/api";
 import { Menu, MenuItem, showContextMenu, DialogButton } from "@decky/ui";
 import { FaCompactDisc, FaChevronDown } from "react-icons/fa";
 import { getCachedGameDetail, getDiscSelection, selectDisc, logError, logWarn } from "../api/backend";
@@ -24,6 +24,7 @@ import type { DiscSelection } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { getEventTarget } from "../utils/events";
 import { detach } from "../utils/detach";
+import { showToast } from "../utils/toast";
 import type { DownloadCompleteEvent } from "../types";
 import {
   capturePruneLeaseAdmission,
@@ -152,7 +153,7 @@ export const DiscSelector: FC<DiscSelectorProps> = ({ appId }) => {
             if (signal.aborted) return;
             setSelected(result.selected ?? null);
           } else {
-            toaster.toast({ title: "RomM Sync", body: result.message || "Failed to select disc" });
+            showToast(result.message || "Failed to select disc");
           }
         },
         leaseOwner,
@@ -168,7 +169,7 @@ export const DiscSelector: FC<DiscSelectorProps> = ({ appId }) => {
       // Observable catch effect: surface the failure so the user knows the pick
       // didn't take, and leave `selected` unchanged (revert to the prior pin).
       logError(`DiscSelector: selectDisc failed: ${e}`);
-      toaster.toast({ title: "RomM Sync", body: "Failed to select disc" });
+      showToast("Failed to select disc");
     }
   };
 
