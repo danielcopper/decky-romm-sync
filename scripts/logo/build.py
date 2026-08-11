@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Renders the mark's shipped files: the static asset and the animated loop.
+"""Renders the mark's shipped files: the static asset, the banner lockup and the animated loop.
 
 Wraps the two external tools the drawing code deliberately knows nothing about
 — `rsvg-convert` to rasterise an SVG and `ffmpeg` to pack frames into a GIF.
@@ -9,7 +9,7 @@ Both must be on PATH.
     build.py --install            everything, into the paths the repo ships from
     build.py --out <dir>          somewhere else
     build.py --palette <name>     a palette other than the chosen one
-    build.py --static             only the static SVG + PNGs
+    build.py --static             only the static SVG + PNGs and the lockup
     build.py --gif                only the animated GIF
     build.py --size <px>          master raster size (default 512)
 
@@ -31,9 +31,13 @@ import sys
 
 import anim
 import gen
+import lockup
 
 HERE = pathlib.Path(__file__).parent
 PNG_SIZES = (1024, 512, 256, 128, 64, 32)
+# The README renders the banner around 300px wide; three times that covers the
+# densest display anyone reads it on.
+LOCKUP_PNG_WIDTH = 900
 
 
 # One palette for the whole sequence, then mapped against it. `stats_mode=full`
@@ -83,6 +87,19 @@ def build_static(out: pathlib.Path, pal: gen.Palette, size: int) -> None:
     sheet.write_text(gen.sheet())
     _run(["rsvg-convert", "-w", "1400", str(sheet), "-o", str(out / "contact-sheet.png")])
     print("  contact-sheet.png")
+
+
+def build_lockup(out: pathlib.Path, pal: gen.Palette) -> None:
+    """The banner: mark over wordmark, in the two variants the grounds need."""
+    _require("rsvg-convert")
+    out.mkdir(parents=True, exist_ok=True)
+    for stem, dark in (("lockup", False), ("lockup-dark", True)):
+        svg = out / f"{stem}.svg"
+        svg.write_text(lockup.lockup(pal, dark))
+        png = out / f"{stem}.png"
+        _run(["rsvg-convert", "-w", str(LOCKUP_PNG_WIDTH), str(svg), "-o", str(png)])
+        print(f"  {svg.name}  ({svg.stat().st_size:,}b)")
+        print(f"  {png.name}  ({png.stat().st_size:,}b)")
 
 
 def _gif(
@@ -136,6 +153,10 @@ INSTALL = {
     "logo.svg": ("assets/logo.svg", "docs/assets/logo.svg"),
     "logo.png": ("assets/logo.png", "docs/assets/logo.png"),
     "logo-animated.gif": ("assets/logo-animated.gif", "docs/assets/logo-animated.gif"),
+    "lockup.svg": ("assets/lockup.svg", "docs/assets/lockup.svg"),
+    "lockup.png": ("assets/lockup.png", "docs/assets/lockup.png"),
+    "lockup-dark.svg": ("assets/lockup-dark.svg", "docs/assets/lockup-dark.svg"),
+    "lockup-dark.png": ("assets/lockup-dark.png", "docs/assets/lockup-dark.png"),
 }
 # The Decky store pulls this one straight off the default branch by URL.
 STORE_IMAGE = ("logo-1024.png", "assets/store_image.png")
@@ -164,6 +185,7 @@ if __name__ == "__main__":
     print(f"palette: {pal.name}   out: {out}")
     if not only_gif:
         build_static(out, pal, size)
+        build_lockup(out, pal)
     if not only_static:
         build_gif(out, pal, size, anim.DEFAULT_ANIMATION)
     if "--install" in argv:

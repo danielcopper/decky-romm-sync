@@ -3,6 +3,9 @@
 The plugin mark: a button diamond ringed by a pair of sync arrows, set in a disc and split along a facet that runs
 parallel to the buttons' own slant. It animates — the ring turns while the diamond folds into a d-pad cross and back.
 
+The banner lockup sets **TENDER** beneath the mark. Versals are for the banner alone; everywhere the name appears as
+text — the plugin's display name, the QAM header, toasts, prose — it is `Tender`.
+
 ![The palette candidates on a dark and a light ground](preview.png)
 
 ## Regenerating
@@ -15,12 +18,18 @@ That renders everything and writes each shipped copy from the same render, so `a
 apart. Needs `rsvg-convert` and `ffmpeg` on PATH. Without `--install` it writes to `out/` instead, which is the way to
 look at a change before it lands.
 
-| File                        | Where it goes                                       |
-| --------------------------- | --------------------------------------------------- |
-| `logo.svg`                  | `assets/`, `docs/assets/` — MkDocs' nav-bar mark    |
-| `logo.png` (512px)          | `assets/`, `docs/assets/` — the docs site's favicon |
-| `logo-animated.gif` (512px) | `assets/`, `docs/assets/` — README and docs landing |
-| `store_image.png` (1024px)  | `assets/` — the Decky store pulls this one by URL   |
+| File                                 | Where it goes                                        |
+| ------------------------------------ | ---------------------------------------------------- |
+| `logo.svg`                           | `assets/`, `docs/assets/` — MkDocs' nav-bar mark     |
+| `logo.png` (512px)                   | `assets/`, `docs/assets/` — the docs site's favicon  |
+| `logo-animated.gif` (512px)          | `assets/`, `docs/assets/` — README and docs landing  |
+| `lockup.svg`, `lockup.png` (900px)   | `assets/`, `docs/assets/` — the banner, light ground |
+| `lockup-dark.svg`, `lockup-dark.png` | `assets/`, `docs/assets/` — the banner, dark ground  |
+| `store_image.png` (1024px)           | `assets/` — the Decky store pulls this one by URL    |
+
+Two lockups ship because one cannot serve both grounds: the mark's ink falls to roughly 1.3:1 against GitHub's dark
+canvas, so the dark variant sets the wordmark in the disc's blue instead. The README chooses between them with
+`<picture>` and `prefers-color-scheme`.
 
 `gen.py` and `anim.py` also stand alone, for looking at one thing:
 
@@ -35,7 +44,7 @@ python3 anim.py --frame 18         # one frame's SVG
 
 ## Changing things
 
-Three config objects, and nothing else worth editing:
+Four config objects, and nothing else worth editing:
 
 - **`gen.Palette`** — one row per candidate in `PALETTES`; `CHOSEN` names the one that ships. Each carries two facet
   pairs, disc and ink, given as (above-left, below-right), plus the two warm dot colours. How dark a candidate can go is
@@ -43,6 +52,31 @@ Three config objects, and nothing else worth editing:
 - **`gen.Geometry`** — every position and size, in a 200-unit square. Grouped by what they describe: the disc, the sync
   arrows, the button diamond, the dot shapes, the cross.
 - **`anim.Animation`** — frame count, rate, how far the ring turns, and where the morph's holds and ramps meet.
+- **`lockup`'s module constants** — which typeface was cut and at what letter-spacing, the wordmark's cap height as a
+  fraction of the disc, and the air between the two. Changing the typeface or the tracking means re-cutting (below); the
+  two ratios take effect on the next render.
+
+## The wordmark
+
+`wordmark.path` holds **TENDER** already cut into outlines, with `wordmark.json` recording what it was cut from.
+Rendering therefore needs neither the typeface nor `fonttools` — only re-cutting does:
+
+```sh
+pip install fonttools brotli
+python3 lockup.py --cut
+```
+
+That fetches Roboto Slab from Google Fonts (SIL Open Font License), sets the word at the configured letter-spacing,
+flips it into SVG's y-down space and rewrites both files. The typeface is not vendored: it is needed by this one
+function and nothing else, and a font file sitting in the repo would read as a dependency of the build, which it is not.
+
+Roboto Slab was chosen over seven other candidates because the slab serif is the typographic register of the steam era —
+railway posters, timetables, station boards — while its skeleton stays geometric enough to sit beside a mark built from
+a disc, a diamond and two arrows. A true Clarendon carried the same reference but read as period costume next to it.
+
+The letter-spacing is wide, at 0.20em. A slab's serifs already bind the letters horizontally, so it takes more tracking
+than a grotesque before the word falls into separate glyphs, and the gap under the mark is set near the same value: a
+wide-set wordmark tucked tight against the disc reads as inconsistent.
 
 ## Notes
 
