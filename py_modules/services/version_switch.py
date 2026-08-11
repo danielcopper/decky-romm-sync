@@ -722,7 +722,7 @@ class VersionSwitchService:
 
         A version switch moves the binding and the frontend writes the resolved
         launch command onto the (sticky) shortcut, so recording it keeps the next
-        sync from re-touching the now-correct shortcut. Fifth of the five
+        sync from re-touching the now-correct shortcut. Sixth of the six
         recorded-state writer sites. Runs its own short write UoW on the executor,
         outside any open UoW.
         """

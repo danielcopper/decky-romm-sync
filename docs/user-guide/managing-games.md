@@ -233,7 +233,9 @@ and says plainly whether the two are the same size. From there you have three ch
 - **Check Against Server** — compares the files on your device against the checksums RomM published for that game. This
   reads every file, so a large game takes a few seconds to a minute; it only ever runs when you press the button. There
   are three possible answers: the files match, they differ (and the dialog names which file and what differed), or the
-  server publishes no checksums at all and simply cannot confirm them.
+  server publishes no checksums at all and simply cannot confirm them. For a game made of several files, each one has to
+  be in the folder RomM says it belongs in — a file of the right name sitting somewhere else in the game folder is
+  reported as missing, not as a match. Files RomM does not list at all are fine and are never reported.
 - **Download Instead** — replaces what is there. This deletes your files first, so it asks a second time and names what
   will be removed. If the file is your own dump, a translation patch or a romhack, the server cannot give it back.
 

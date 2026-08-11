@@ -218,7 +218,7 @@ class RomRemovalService:
         uninstalled placeholder (``""``) in the same UoW: the frontend resets the
         kept shortcut's launch command to ``""`` on uninstall (#1146), so recording
         ``""`` keeps the next sync from re-touching an already-correct shortcut
-        (delta apply, #1383). Third of the five recorded-state writer sites.
+        (delta apply, #1383). Fourth of the six recorded-state writer sites.
         """
         outcome = self._delete_rom_files(install, on_progress=self._make_progress_callback(rom_id))
         if not outcome["success"]:

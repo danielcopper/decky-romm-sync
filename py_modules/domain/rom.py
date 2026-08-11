@@ -210,10 +210,10 @@ class Rom:
         The delta-restricted apply (#1383) compares each item's freshly built
         target ``launch_options`` against this recorded value to decide whether
         the shortcut is already correct (skip) or must be re-applied (changed).
-        Written by the five recorded-state writer sites — sync ack-commit,
-        download-complete, uninstall (records ``""``), RetroDECK-home migration
-        re-resolve, and version switch — each recording the value it just had the
-        frontend write onto the shortcut. ``""`` is the uninstalled placeholder,
+        Written by the six recorded-state writer sites — sync ack-commit,
+        download-complete, adopt-complete, uninstall (records ``""``),
+        RetroDECK-home migration re-resolve, and version switch — each recording
+        the value it just had the frontend write onto the shortcut. ``""`` is the uninstalled placeholder,
         not a missing value; ``None`` (never set here) is "unknown" and always
         forces a re-apply. Excluded from the sync UPSERT (persisted only via the
         pin-only ``set_applied_launch_options`` write path) so an unrelated

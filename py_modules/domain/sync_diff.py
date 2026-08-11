@@ -46,7 +46,7 @@ def classify_roms(
     stale ROMs whose stored platform no longer appears in fetched_platform_names.
 
     ``applied_launch_options`` is the launch command last written to the ROM's
-    Steam shortcut (recorded by the five writer sites, #1383). Comparing the
+    Steam shortcut (recorded by the six writer sites, #1383). Comparing the
     built target ``launch_options`` against it is what lets the delta-restricted
     apply skip a content-correct shortcut rather than re-touching it: an identity
     match with a launch-options match is genuinely unchanged, while an

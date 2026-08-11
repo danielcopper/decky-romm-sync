@@ -721,7 +721,7 @@ class MigrationService:
             # Record each re-baked command as the shortcut's applied state (the
             # value the frontend confirm-sets onto the relocated shortcut), so the
             # next sync skips the now-correct shortcut instead of re-touching it
-            # (delta apply, #1383). Fourth of the five recorded-state writer sites.
+            # (delta apply, #1383). Fifth of the six recorded-state writer sites.
             await self._loop.run_in_executor(None, self._record_migration_applied_io, relaunch_items)
         return result
 

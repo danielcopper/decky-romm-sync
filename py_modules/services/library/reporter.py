@@ -583,9 +583,9 @@ class SyncReporter:
         # this now-correct shortcut (delta-restricted apply, #1383). A skipped or
         # non-representative row is absent from ``binding`` and keeps its recorded
         # value — the pin-only ``set_applied_launch_options`` write never wipes it,
-        # unlike ``save()``. This is the first of the five recorded-state writer
-        # sites (the others: download-complete, uninstall, home migration, version
-        # switch).
+        # unlike ``save()``. This is the first of the six recorded-state writer
+        # sites (the others: download-complete, adopt-complete, uninstall, home
+        # migration, version switch).
         if rom_id in binding:
             rom.record_applied_launch_options(built.get("launch_options", ""))
             uow.roms.set_applied_launch_options(rom_id, rom.applied_launch_options)

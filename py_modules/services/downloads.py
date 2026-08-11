@@ -815,7 +815,7 @@ class DownloadService:
         # value the frontend confirm-sets onto the shortcut), so the next sync
         # skips the now-correct shortcut instead of re-touching it (delta apply,
         # #1383). Only when the ROM has a bound shortcut — an unbound ROM has none
-        # to record, and the next sync creates + records it. Second of the five
+        # to record, and the next sync creates + records it. Second of the six
         # writer sites.
         if app_id is not None:
             await self._loop.run_in_executor(

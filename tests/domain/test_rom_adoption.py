@@ -66,6 +66,68 @@ class TestServerManifest:
         assert manifest[0].size_bytes == 0
 
 
+class TestManifestRelativePaths:
+    """Where the server says each file belongs inside the ROM's own directory.
+
+    ``RomFile.is_top_level`` compares ``rom.full_path`` against ``file_path``, so
+    the two are one coordinate system and the ROM-relative path is a subtraction.
+    Everything the payload does not state falls back to the bare filename rather
+    than to a guessed prefix.
+    """
+
+    def _manifest(self, *, full_path=None, file_path=None, name="a.bin"):
+        detail = {"files": [{"file_name": name}]}
+        if file_path is not None:
+            detail["files"][0]["file_path"] = file_path
+        if full_path is not None:
+            detail["full_path"] = full_path
+        return server_manifest(detail)[0]
+
+    def test_a_top_level_file_sits_at_the_rom_root(self):
+        entry = self._manifest(full_path="roms/psx/Game", file_path="roms/psx/Game")
+        assert entry.rel_path == "a.bin"
+        assert entry.lookup_key == "a.bin"
+
+    def test_a_nested_file_keeps_its_subdirectory(self):
+        entry = self._manifest(full_path="roms/psx/Game", file_path="roms/psx/Game/PS3_GAME/USRDIR", name="EBOOT.BIN")
+        assert entry.rel_path == "PS3_GAME/USRDIR/EBOOT.BIN"
+
+    def test_untidy_separators_and_slashes_are_normalized(self):
+        entry = self._manifest(full_path="/roms/psx/Game/", file_path="roms//psx/Game/sub")
+        assert entry.rel_path == "sub/a.bin"
+
+    def test_backslash_separators_are_normalized(self):
+        entry = self._manifest(full_path="roms/psx/Game", file_path="roms\\psx\\Game\\sub")
+        assert entry.rel_path == "sub/a.bin"
+
+    def test_a_missing_rom_full_path_falls_back_to_the_name(self):
+        entry = self._manifest(file_path="roms/psx/Game/sub")
+        assert entry.rel_path == ""
+        assert entry.lookup_key == "a.bin"
+
+    def test_a_missing_file_path_falls_back_to_the_name(self):
+        entry = self._manifest(full_path="roms/psx/Game")
+        assert entry.rel_path == ""
+        assert entry.lookup_key == "a.bin"
+
+    def test_a_non_nesting_file_path_falls_back_rather_than_guessing(self):
+        # "roms/psx/Other" is not under "roms/psx/Game" — there is nothing to
+        # subtract, and a guessed prefix would assert a location confidently and
+        # wrongly.
+        entry = self._manifest(full_path="roms/psx/Game", file_path="roms/psx/Other")
+        assert entry.rel_path == ""
+
+    def test_a_sibling_directory_sharing_a_name_prefix_does_not_nest(self):
+        # "Game 2" starts with "Game" textually but is not inside it; the
+        # separator is what makes the prefix a containment.
+        entry = self._manifest(full_path="roms/psx/Game", file_path="roms/psx/Game 2")
+        assert entry.rel_path == ""
+
+    def test_a_non_string_full_path_is_ignored(self):
+        entry = self._manifest(full_path=42, file_path="roms/psx/Game")
+        assert entry.rel_path == ""
+
+
 class TestSizesAgree:
     def test_equal_sizes_agree(self):
         assert sizes_agree(1024, 1024) is True
@@ -153,6 +215,17 @@ class TestCompareManifest:
 
     def test_an_uncomputed_local_digest_is_not_a_difference(self):
         assert compare_manifest((self._ENTRY,), {"a.bin": LocalFile(size_bytes=10, digest="")}) == ()
+
+    def test_a_located_entry_is_looked_up_by_its_relative_path(self):
+        entry = ServerFile(name="a.bin", size_bytes=10, algorithm="md5", digest="ab", rel_path="sub/a.bin")
+        # Keyed by the bare name it is NOT found; keyed by where it belongs it is.
+        assert compare_manifest((entry,), {"a.bin": LocalFile(size_bytes=10, digest="ab")})[0].actual == "missing"
+        assert compare_manifest((entry,), {"sub/a.bin": LocalFile(size_bytes=10, digest="ab")}) == ()
+
+    def test_a_located_entry_is_reported_under_its_relative_path(self):
+        entry = ServerFile(name="a.bin", size_bytes=10, algorithm="md5", digest="ab", rel_path="sub/a.bin")
+        (difference,) = compare_manifest((entry,), {"sub/a.bin": LocalFile(size_bytes=10, digest="cd")})
+        assert difference.name == "sub/a.bin"
 
 
 class TestVerificationStatus:

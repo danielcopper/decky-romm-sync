@@ -195,3 +195,52 @@ async def test_verify_reports_a_server_failure_as_error(harness):
     assert result["status"] == "error"
     assert isinstance(result["message"], str) and result["message"]
     assert result["differences"] == []
+
+
+def _stage_directory_rom(harness, *, data: bytes, on_disk_subdir: str) -> None:
+    """A directory ROM whose one manifest file RomM locates under ``inner/``.
+
+    *on_disk_subdir* is where the bytes actually sit, so a caller can put them in
+    the right place or the wrong one.
+    """
+    _stage_detail(
+        harness,
+        fs_name="rom-41.zip",
+        fs_name_no_ext="rom-41",
+        fs_size_bytes=len(data),
+        has_multiple_files=True,
+        full_path="roms/gba/rom-41",
+        files=[
+            {
+                "file_name": "data.bin",
+                "file_path": "roms/gba/rom-41/inner",
+                "file_size_bytes": len(data),
+                "md5_hash": _md5(data),
+            }
+        ],
+    )
+    placed = Path(harness.retrodeck_paths.roms_path()) / "gba" / "rom-41" / on_disk_subdir / "data.bin"
+    placed.parent.mkdir(parents=True, exist_ok=True)
+    placed.write_bytes(data)
+
+
+async def test_verify_holds_a_directory_file_to_the_place_the_server_named(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage_directory_rom(harness, data=b"nested payload", on_disk_subdir="inner")
+
+    result = await harness.plugin.verify_existing_content(_ROM_ID)
+
+    assert result["status"] == "match"
+
+
+async def test_verify_reports_a_file_in_the_wrong_subdirectory_as_missing(harness):
+    # The bytes are present and correct, just not where this game's file belongs.
+    # An adopted row carries deletion authority, so "somewhere in the tree" is
+    # not evidence enough to bless it.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage_directory_rom(harness, data=b"nested payload", on_disk_subdir="elsewhere")
+
+    result = await harness.plugin.verify_existing_content(_ROM_ID)
+
+    assert result["status"] == "mismatch"
+    assert result["differences"] == [{"name": "inner/data.bin", "expected": "present", "actual": "missing"}]

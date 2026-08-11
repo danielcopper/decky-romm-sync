@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.rom_adoption import (
+    FileDifference,
     LocalFile,
     ServerFile,
     compare_manifest,
@@ -268,6 +269,13 @@ class RomAdoptionService:
         if error is not None or recorded is None:
             return {"success": False, "reason": "invalid_install", "message": error or "Could not record the install"}
         app_id, launch_options = self._install_recorder.do_resolve_launch_bake(rom_id, rom_detail, recorded)
+        # Record the freshly baked command as this ROM's applied state (the value
+        # the frontend writes onto the shortcut on this result), so the next sync
+        # skips the now-correct shortcut instead of re-touching it (delta apply,
+        # #1383). Only when the ROM has a bound shortcut — an unbound ROM has none
+        # to record, and the next sync creates + records it. Third of the six
+        # writer sites, immediately after download-complete: the same moment in
+        # the flow, because an adopted install is an install (ADR-0028).
         if app_id is not None:
             self._install_recorder.do_record_applied_launch_options(rom_id, launch_options)
         self._logger.info(f"Adopted existing content for rom {rom_id}: {recorded}")
@@ -333,8 +341,12 @@ class RomAdoptionService:
                 "message": "This RomM server publishes no checksums, so it cannot confirm these files",
                 "differences": [],
             }
-        observed = self._observe(rom_id, manifest, target)
-        differences = compare_manifest(manifest, observed)
+        checkable, escaping = self._partition_escaping(manifest, target)
+        observed = self._observe(rom_id, checkable, target)
+        differences = escaping + compare_manifest(checkable, observed)
+        # The FULL manifest decides verifiability: an entry refused for escaping
+        # the ROM directory was still a digest the server published, so dropping
+        # it from that question could turn a mismatch into "cannot confirm".
         status = verification_status(manifest, differences)
         return {
             "status": status,
@@ -342,50 +354,94 @@ class RomAdoptionService:
             "differences": [{"name": d.name, "expected": d.expected, "actual": d.actual} for d in differences],
         }
 
+    def _partition_escaping(
+        self, manifest: tuple[ServerFile, ...], target: _Target
+    ) -> tuple[tuple[ServerFile, ...], tuple[FileDifference, ...]]:
+        """Split the manifest into entries that may be looked up and entries that may not.
+
+        A relative path is server-supplied, so it passes ``safe_join`` before it
+        is used to address anything. One that escapes the ROM directory is
+        refused outright rather than looked up somewhere else — and reported, so
+        the check names the problem instead of quietly reading as "missing".
+        """
+        checkable: list[ServerFile] = []
+        escaping: list[FileDifference] = []
+        for entry in manifest:
+            if not entry.rel_path:
+                checkable.append(entry)
+                continue
+            try:
+                safe_join(target.path, entry.rel_path)
+            except PathTraversalError:
+                self._logger.error(f"Manifest entry escapes the ROM directory: {entry.rel_path!r}")
+                escaping.append(
+                    FileDifference(
+                        name=entry.lookup_key,
+                        expected="a path inside this game's folder",
+                        actual="a path outside it",
+                    )
+                )
+                continue
+            checkable.append(entry)
+        return (tuple(checkable), tuple(escaping))
+
     def _observe(self, rom_id: int, manifest: tuple[ServerFile, ...], target: _Target) -> dict[str, LocalFile]:
         """Read each manifest entry's counterpart on disk, hashing where it is worth it.
 
-        A directory's files are matched to the manifest **by name**: RomM states
-        each file's path relative to its own library root, and the prefix that
-        maps onto the ROM directory is server-side knowledge the plugin does not
-        model. A digest is computed only when the server has one to compare
-        against and the sizes already agree — a size mismatch is proof enough,
-        and re-reading a gigabyte to restate it would cost the user 20 seconds
-        (measured: 77 MiB/s on a Steam Deck SD card).
+        The result is keyed by each entry's ``lookup_key``, so an entry the server
+        located is read from exactly that place and one it did not locate falls
+        back to a search by filename.
+
+        A digest is computed only when the server has one to compare against and
+        the sizes already agree — a size mismatch is proof enough, and re-reading
+        a gigabyte to restate it would cost the user 20 seconds (measured:
+        77 MiB/s on a Steam Deck SD card).
         """
-        by_name = self._local_files_by_name(target)
-        hashable = [
-            entry
+        located = self._locate(manifest, target)
+        hashable = {
+            entry.lookup_key
             for entry in manifest
-            if entry.verifiable and entry.name in by_name and by_name[entry.name][1] == entry.size_bytes
-        ]
-        total_bytes = sum(by_name[entry.name][1] for entry in hashable)
+            if entry.verifiable and entry.lookup_key in located and located[entry.lookup_key][1] == entry.size_bytes
+        }
+        total_bytes = sum(located[key][1] for key in hashable)
         report = self._make_verify_progress(rom_id, total_bytes)
+        algorithms = {entry.lookup_key: entry.algorithm for entry in manifest}
         observed: dict[str, LocalFile] = {}
-        hashable_names = {entry.name for entry in hashable}
-        algorithms = {entry.name: entry.algorithm for entry in manifest}
-        for name, (path, size) in by_name.items():
-            digest = ""
-            if name in hashable_names:
-                digest = self._download_file_store.checksum(path, algorithms[name], report)
-            observed[name] = LocalFile(size_bytes=size, digest=digest)
+        for key, (path, size) in located.items():
+            digest = self._download_file_store.checksum(path, algorithms[key], report) if key in hashable else ""
+            observed[key] = LocalFile(size_bytes=size, digest=digest)
         return observed
 
-    def _local_files_by_name(self, target: _Target) -> dict[str, tuple[str, int]]:
-        """Map each on-disk file's basename to its ``(path, size)``.
+    def _locate(self, manifest: tuple[ServerFile, ...], target: _Target) -> dict[str, tuple[str, int]]:
+        """Resolve each manifest entry to the ``(path, size)`` on disk it names.
 
-        A single-file ROM contributes the one path under the manifest entry's own
-        name, because the local filename is derived from ``fs_name`` while the
-        manifest states the server's, and the two need not spell the same thing.
-        Within a directory the first of two files sharing a basename wins;
-        nothing in the manifest can distinguish them.
+        A single-file ROM has exactly one entry and one file, so the entry's key
+        addresses the target path directly — the local filename comes from
+        ``fs_name`` while the manifest states the server's, and the two need not
+        spell the same thing.
+
+        Within a directory an entry the server located is looked up by its
+        ROM-relative path, which is what distinguishes two files sharing a
+        basename in different subdirectories. An entry the server did **not**
+        locate falls back to a search by basename (first match wins) — weaker,
+        but honest about what the payload said.
         """
         if not target.is_multi:
-            return {target.manifest_name: (target.path, self._download_file_store.file_size(target.path))}
+            key = manifest[0].lookup_key if manifest else target.manifest_name
+            return {key: (target.path, self._download_file_store.file_size(target.path))}
+
+        by_rel: dict[str, tuple[str, int]] = {}
         by_name: dict[str, tuple[str, int]] = {}
         for path, size in self._download_file_store.scan_files_with_sizes(target.path):
+            by_rel[os.path.relpath(path, target.path).replace(os.sep, "/")] = (path, size)
             by_name.setdefault(os.path.basename(path), (path, size))
-        return by_name
+
+        located: dict[str, tuple[str, int]] = {}
+        for entry in manifest:
+            found = by_rel.get(entry.rel_path) if entry.rel_path else by_name.get(entry.name)
+            if found is not None:
+                located[entry.lookup_key] = found
+        return located
 
     def _make_verify_progress(self, rom_id: int, total_bytes: int):
         """Build the throttled byte-delta callback the hashing loop reports through.

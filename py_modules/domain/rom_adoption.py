@@ -31,17 +31,32 @@ class ServerFile:
     *algorithm* and *digest* are empty strings together when the server holds no
     hash for this file — a state the comparison reports as its own outcome
     rather than folding into either a match or a mismatch.
+
+    *rel_path* is where the file belongs **inside the ROM's own directory**, and
+    is the empty string when the payload did not state enough to derive one.
     """
 
     name: str
     size_bytes: int
     algorithm: str
     digest: str
+    rel_path: str = ""
 
     @property
     def verifiable(self) -> bool:
         """Whether the server stated a digest this file's content can be held to."""
         return bool(self.algorithm and self.digest)
+
+    @property
+    def lookup_key(self) -> str:
+        """The path this entry is matched by: ROM-relative where derivable, else the bare name.
+
+        Falling back to the bare name is weaker — it finds the file wherever it
+        sits in the tree — but it is what the plugin can honestly assert when the
+        server did not say where the file belongs, and it is the behaviour every
+        entry had before ``file_path`` was read.
+        """
+        return self.rel_path or self.name
 
 
 @dataclass(frozen=True)
@@ -67,13 +82,14 @@ class FileDifference:
 
 
 def server_manifest(rom_detail: dict[str, Any]) -> tuple[ServerFile, ...]:
-    """Reduce RomM's ``files`` list to the (name, size, digest) triples a check needs.
+    """Reduce RomM's ``files`` list to what a content check needs, per file.
 
     Entries without a usable ``file_name`` are dropped: they cannot be located on
     disk, so carrying them would turn every comparison into a false "missing".
     An absent or empty ``files`` list yields an empty manifest, which
     :func:`verification_status` reads as "the server cannot confirm this".
     """
+    rom_root = _normalize_server_path(rom_detail.get("full_path"))
     manifest: list[ServerFile] = []
     for entry in rom_detail.get("files") or []:
         name = entry.get("file_name") or ""
@@ -86,9 +102,46 @@ def server_manifest(rom_detail: dict[str, Any]) -> tuple[ServerFile, ...]:
                 size_bytes=int(entry.get("file_size_bytes") or 0),
                 algorithm=algorithm,
                 digest=digest,
+                rel_path=_relative_path(rom_root, entry.get("file_path"), name),
             )
         )
     return tuple(manifest)
+
+
+def _normalize_server_path(raw: object) -> str:
+    """Reduce a server-supplied path to ``a/b/c`` — no leading, trailing or empty segments.
+
+    RomM is not guaranteed to hand back a tidy string, and both sides of the
+    prefix subtraction below have to be in the same shape for it to mean
+    anything.
+    """
+    if not isinstance(raw, str):
+        return ""
+    return "/".join(segment for segment in raw.replace("\\", "/").split("/") if segment)
+
+
+def _relative_path(rom_root: str, raw_file_path: object, name: str) -> str:
+    """Where this file belongs inside the ROM's own directory, or ``""``.
+
+    ``RomFile.is_top_level`` in RomM's own model reads
+    ``rom.full_path == (file_path if is_nested else full_path)``, so ``file_path``
+    and the ROM's ``full_path`` are in one coordinate system: subtracting the
+    latter as a prefix yields the file's directory within the ROM, and appending
+    ``file_name`` yields its place. That is RomM's comparison, not an inference.
+
+    Returns ``""`` — and the caller then matches on the bare filename — when the
+    payload omits ``full_path``, omits ``file_path``, or the two do not actually
+    nest. Guessing a prefix from partial data would produce a confident wrong
+    location, which is worse than the weaker match it replaces.
+    """
+    file_dir = _normalize_server_path(raw_file_path)
+    if not rom_root or not file_dir:
+        return ""
+    if file_dir == rom_root:
+        return name
+    if file_dir.startswith(rom_root + "/"):
+        return f"{file_dir[len(rom_root) + 1 :]}/{name}"
+    return ""
 
 
 def _preferred_digest(entry: dict[str, Any]) -> tuple[str, str]:
@@ -154,6 +207,12 @@ def compare_manifest(
 ) -> tuple[FileDifference, ...]:
     """Name every way *local* departs from *manifest*, most specific first per file.
 
+    *local* is keyed by each entry's :attr:`ServerFile.lookup_key`, so a file the
+    server placed in a subdirectory is looked for **there** and a file sitting in
+    the wrong one reads as missing. Each difference is reported under that same
+    key, which is what tells two same-named files in different subdirectories
+    apart.
+
     Files present on disk but absent from *manifest* are **not** differences: the
     plugin's own multi-file installs carry a generated ``.m3u`` and a healed
     ``PS3_DISC.SFB`` that the server never listed, and a user's dump may carry a
@@ -162,14 +221,15 @@ def compare_manifest(
     """
     differences: list[FileDifference] = []
     for entry in manifest:
-        found = local.get(entry.name)
+        key = entry.lookup_key
+        found = local.get(key)
         if found is None:
-            differences.append(FileDifference(name=entry.name, expected="present", actual="missing"))
+            differences.append(FileDifference(name=key, expected="present", actual="missing"))
             continue
         if entry.size_bytes and found.size_bytes != entry.size_bytes:
             differences.append(
                 FileDifference(
-                    name=entry.name,
+                    name=key,
                     expected=f"{entry.size_bytes} bytes",
                     actual=f"{found.size_bytes} bytes",
                 )
@@ -178,7 +238,7 @@ def compare_manifest(
         if entry.verifiable and found.digest and found.digest != entry.digest:
             differences.append(
                 FileDifference(
-                    name=entry.name,
+                    name=key,
                     expected=f"{entry.algorithm} {entry.digest}",
                     actual=f"{entry.algorithm} {found.digest}",
                 )

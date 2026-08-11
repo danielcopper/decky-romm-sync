@@ -50,9 +50,18 @@ def _single_file_detail(
 
 
 def _multi_file_detail(
-    *, dir_name: str = "Game", size: int = 20, files: list[dict[str, Any]] | None = None
+    *,
+    dir_name: str = "Game",
+    size: int = 20,
+    files: list[dict[str, Any]] | None = None,
+    full_path: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    """A directory ROM. *full_path* is RomM's own path for the ROM directory.
+
+    Passing it turns on exact relative-path matching for the manifest entries
+    that also carry ``file_path``; leaving it out exercises the by-name fallback.
+    """
+    detail: dict[str, Any] = {
         "id": _ROM_ID,
         "name": "Game",
         "platform_slug": "psx",
@@ -61,6 +70,23 @@ def _multi_file_detail(
         "fs_size_bytes": size,
         "has_multiple_files": True,
         "files": files if files is not None else [{"file_name": "a.bin"}, {"file_name": "b.bin"}],
+    }
+    if full_path is not None:
+        detail["full_path"] = full_path
+    return detail
+
+
+_ROM_FULL_PATH = "roms/psx/Game"
+
+
+def _located(name: str, *, size: int, digest: str, in_dir: str = "") -> dict[str, Any]:
+    """A manifest entry RomM located: ``file_path`` is the ROM root plus *in_dir*."""
+    file_path = f"{_ROM_FULL_PATH}/{in_dir}" if in_dir else _ROM_FULL_PATH
+    return {
+        "file_name": name,
+        "file_path": file_path,
+        "file_size_bytes": size,
+        "md5_hash": digest,
     }
 
 
@@ -587,7 +613,9 @@ class TestVerify:
         assert result["status"] == "mismatch"
         assert [d["name"] for d in result["differences"]] == ["b.bin"]
 
-    async def test_a_nested_listed_file_is_found_by_name(self, h):
+    async def test_a_nested_listed_file_is_found_by_name_when_the_server_did_not_locate_it(self, h):
+        # No `full_path` in the payload → no relative path can be derived, so the
+        # entry falls back to a search by filename anywhere in the tree.
         nested = b"n" * 8
         h.stage_detail(
             _multi_file_detail(files=[{"file_name": "EBOOT.BIN", "file_size_bytes": 8, "md5_hash": _md5(nested)}])
@@ -597,6 +625,135 @@ class TestVerify:
         result = await h.service.verify_existing_content(_ROM_ID)
 
         assert result["status"] == "match"
+
+
+class TestVerifyLocatesFilesExactly:
+    """RomM states where each file belongs, so the check holds it to that place.
+
+    ``RomFile.is_top_level`` compares ``rom.full_path`` against ``file_path``, so
+    the two are one coordinate system and the ROM-relative path is a subtraction,
+    not a guess. An adopted row carries deletion authority (ADR-0028), and "the
+    file exists somewhere in the tree" is weaker evidence than that row deserves.
+    """
+
+    async def test_a_correctly_nested_file_verifies_as_present(self, h):
+        nested = b"n" * 8
+        h.stage_detail(
+            _multi_file_detail(
+                full_path=_ROM_FULL_PATH,
+                files=[_located("EBOOT.BIN", size=8, digest=_md5(nested), in_dir="PS3_GAME/USRDIR")],
+            )
+        )
+        h.store.files["/roms/psx/Game/PS3_GAME/USRDIR/EBOOT.BIN"] = nested
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "match"
+
+    async def test_a_file_in_the_wrong_subdirectory_reads_as_missing(self, h):
+        # The case that motivated the exact match: the bytes are there, but not
+        # where the server says this game's file belongs.
+        nested = b"n" * 8
+        h.stage_detail(
+            _multi_file_detail(
+                full_path=_ROM_FULL_PATH,
+                files=[_located("EBOOT.BIN", size=8, digest=_md5(nested), in_dir="PS3_GAME/USRDIR")],
+            )
+        )
+        h.store.files["/roms/psx/Game/somewhere/else/EBOOT.BIN"] = nested
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "mismatch"
+        assert result["differences"] == [
+            {"name": "PS3_GAME/USRDIR/EBOOT.BIN", "expected": "present", "actual": "missing"}
+        ]
+
+    async def test_two_same_named_files_in_different_subdirectories_are_told_apart(self, h):
+        good, wrong = b"g" * 4, b"w" * 4
+        h.stage_detail(
+            _multi_file_detail(
+                full_path=_ROM_FULL_PATH,
+                files=[
+                    _located("data.bin", size=4, digest=_md5(good), in_dir="disc1"),
+                    _located("data.bin", size=4, digest=_md5(good), in_dir="disc2"),
+                ],
+            )
+        )
+        h.store.files["/roms/psx/Game/disc1/data.bin"] = good
+        h.store.files["/roms/psx/Game/disc2/data.bin"] = wrong
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "mismatch"
+        # disc1 matched; only disc2's copy is reported, under its own path.
+        assert [d["name"] for d in result["differences"]] == ["disc2/data.bin"]
+        assert _md5(wrong) in result["differences"][0]["actual"]
+
+    async def test_a_top_level_file_is_located_at_the_rom_root(self, h):
+        top = b"t" * 5
+        h.stage_detail(
+            _multi_file_detail(full_path=_ROM_FULL_PATH, files=[_located("a.bin", size=5, digest=_md5(top))])
+        )
+        h.store.files["/roms/psx/Game/a.bin"] = top
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "match"
+
+    async def test_untidy_server_paths_still_line_up(self, h):
+        # RomM is not guaranteed to hand back a tidy string; both sides are
+        # normalised before the prefix subtraction.
+        top = b"t" * 5
+        detail = _multi_file_detail(
+            full_path="/roms/psx/Game/",
+            files=[{"file_name": "a.bin", "file_path": "roms//psx/Game", "file_size_bytes": 5, "md5_hash": _md5(top)}],
+        )
+        h.stage_detail(detail)
+        h.store.files["/roms/psx/Game/a.bin"] = top
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "match"
+
+    async def test_a_file_path_that_does_not_nest_falls_back_to_the_name(self, h):
+        # The server stated a path, but not one under this ROM — nothing can be
+        # subtracted, so the entry keeps the weaker by-name match rather than
+        # inventing a location.
+        top = b"t" * 5
+        detail = _multi_file_detail(
+            full_path=_ROM_FULL_PATH,
+            files=[
+                {"file_name": "a.bin", "file_path": "roms/psx/Other Game", "file_size_bytes": 5, "md5_hash": _md5(top)}
+            ],
+        )
+        h.stage_detail(detail)
+        h.store.files["/roms/psx/Game/deep/a.bin"] = top
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "match"
+
+    async def test_an_entry_escaping_the_rom_directory_is_refused_not_looked_up(self, h):
+        outside = b"o" * 5
+        detail = _multi_file_detail(
+            full_path=_ROM_FULL_PATH,
+            files=[
+                {
+                    "file_name": "passwd",
+                    "file_path": f"{_ROM_FULL_PATH}/../../../etc",
+                    "file_size_bytes": 5,
+                    "md5_hash": _md5(outside),
+                }
+            ],
+        )
+        h.stage_detail(detail)
+        h.store.files["/roms/psx/Game/passwd"] = outside
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "mismatch"
+        assert result["differences"][0]["actual"] == "a path outside it"
 
     async def test_progress_is_reported_as_bytes_over_the_hashed_total(self, h):
         a, b = b"a" * 4, b"b" * 6
