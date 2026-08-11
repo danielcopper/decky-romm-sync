@@ -288,7 +288,7 @@ describe("gameDetailStore", () => {
       expect(result.current).toMatchObject({ romId: 42, installed: true });
 
       act(() => {
-        noteSaveSyncDisplay(nextAppId, { status: "none", label: "No saves", last_sync_check_at: null });
+        noteSaveSyncDisplay(nextAppId, 42, { status: "none", label: "No saves", last_sync_check_at: null });
       });
       expect(result.current.saveSyncLabel).toBe("No saves");
 
@@ -1242,8 +1242,29 @@ describe("gameDetailStore", () => {
       subscribe(nextAppId);
       await flush();
 
-      noteSaveSyncDisplay(nextAppId, { status: "synced", label: "Just now", last_sync_check_at: null });
+      noteSaveSyncDisplay(nextAppId, 42, { status: "synced", label: "Just now", last_sync_check_at: null });
 
+      expect(getGameDetail(nextAppId)).toMatchObject({ saveSyncStatus: "synced", saveSyncLabel: "Just now" });
+    });
+
+    it("noteSaveSyncDisplay does not record a display for the rom the entry has since left", async () => {
+      subscribe(nextAppId);
+      await flush();
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42 });
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ rom_id: 43 }));
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+
+      noteSaveSyncDisplay(nextAppId, 42, { status: "synced", label: "Just now", last_sync_check_at: null });
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, saveSyncStatus: null, saveSyncLabel: "" });
+
+      // The refusal is about whose display it is, not about the note being
+      // inert: the same display for the rom the entry now holds still lands.
+      noteSaveSyncDisplay(nextAppId, 43, { status: "synced", label: "Just now", last_sync_check_at: null });
       expect(getGameDetail(nextAppId)).toMatchObject({ saveSyncStatus: "synced", saveSyncLabel: "Just now" });
     });
 
@@ -1432,7 +1453,7 @@ describe("gameDetailStore", () => {
     });
 
     it("does nothing for an appId nobody is subscribed to", async () => {
-      noteSaveSyncDisplay(nextAppId, { status: "none", label: "No saves", last_sync_check_at: null });
+      noteSaveSyncDisplay(nextAppId, 42, { status: "none", label: "No saves", last_sync_check_at: null });
       await refreshBiosStatus(nextAppId);
       await refreshCoreAndBios(nextAppId);
 

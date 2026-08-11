@@ -528,9 +528,10 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
   const handleSyncSaves = async () => {
     if (actionPending || !detail.romId) return;
+    const romId = detail.romId;
     setActionPending("savesync");
     try {
-      const result = await syncRomSaves(detail.romId);
+      const result = await syncRomSaves(romId);
       if (result.success) {
         // Directional completion toast via the shared helper — the single source
         // of that copy across every save-sync surface (#1481).
@@ -552,11 +553,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         if (c > 0) {
           showToast(`${c} conflict(s) need resolution`);
         }
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: detail.romId } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
         // Refresh save sync status — last_sync_check_at was just set by the backend
-        noteSaveSyncDisplay(appId, { status: "synced", label: "Just now", last_sync_check_at: null });
+        noteSaveSyncDisplay(appId, romId, { status: "synced", label: "Just now", last_sync_check_at: null });
       } else {
         showToast(result.message || "Save sync failed");
       }
@@ -644,7 +643,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
                 if (result.success) {
                   showToast(result.message);
                   // Directly update the shown status — no local saves remain
-                  noteSaveSyncDisplay(appId, { status: "none", label: "No saves", last_sync_check_at: null });
+                  noteSaveSyncDisplay(appId, romId, { status: "none", label: "No saves", last_sync_check_at: null });
                   globalThis.dispatchEvent(
                     new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }),
                   );
