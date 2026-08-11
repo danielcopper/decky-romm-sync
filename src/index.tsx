@@ -1,4 +1,5 @@
 import { definePlugin, addEventListener, removeEventListener, toaster } from "@decky/api";
+import { showToast, PLUGIN_NAME } from "./utils/toast";
 import { useState, useRef, useEffect, FC, type ReactNode } from "react";
 import { FaGamepad } from "react-icons/fa";
 import { MainPage } from "./components/MainPage";
@@ -447,10 +448,7 @@ export default definePlugin(() => {
         const status = await getSaveSortMigrationStatus();
         if (status.pending) {
           setSaveSortMigrationStatus(status);
-          toaster.toast({
-            title: "RomM Sync",
-            body: "RetroArch save sorting changed. Go to Settings to migrate save files.",
-          });
+          showToast("RetroArch save sorting changed. Go to Settings to migrate save files.");
         }
       } catch (e) {
         logError(`Failed to check save sort migration status: ${e}`);
@@ -519,7 +517,7 @@ export default definePlugin(() => {
     logInfo(`sync_complete received: ${data.total_games} games, cancelled=${data.cancelled ?? false}`);
 
     const { body, duration } = buildSyncCompleteToast(data, getSyncDelta());
-    toaster.toast({ title: "RomM Sync", body, ...(duration !== undefined ? { duration } : {}) });
+    showToast(body, duration !== undefined ? { duration } : undefined);
 
     // Drive the terminal UI teardown from ``sync_complete`` — the guaranteed
     // terminal signal. The backend ALSO emits a separate stage:"done"/"cancelled"
@@ -821,10 +819,7 @@ export default definePlugin(() => {
         total_bytes: prev?.total_bytes ?? 0,
         resumable: data.resumable ?? prev?.resumable ?? false,
       });
-      toaster.toast({
-        title: "RomM Sync",
-        body: `Downloaded ${data.rom_name}`,
-      });
+      showToast(`Downloaded ${data.rom_name}`);
 
       // The ROM is now installed — its shortcut's launch options must carry the
       // full launch command (was "" while uninstalled). The backend resolved
@@ -883,10 +878,7 @@ export default definePlugin(() => {
       },
     ]
   >("save_sort_changed", () => {
-    toaster.toast({
-      title: "RomM Sync",
-      body: "RetroArch save sorting changed. Go to Settings to migrate save files.",
-    });
+    showToast("RetroArch save sorting changed. Go to Settings to migrate save files.");
   });
 
   const saveStatusListener = addEventListener<[SaveStatus]>("save_status_updated", (data: SaveStatus) => {
@@ -1007,11 +999,12 @@ export default definePlugin(() => {
       // every conflicting callable in the meantime (#1570 F13).
       detach(releasePruneLease(completed.prune_lease_token, "Cleanup completion with nothing to publish"));
     }
-    toaster.toast({ title: "RomM Sync", ...buildPruneCompleteToast(completed) });
+    const { body, subtext } = buildPruneCompleteToast(completed);
+    showToast(body, { subtext });
   });
 
   return {
-    name: "RomM Sync",
+    name: PLUGIN_NAME,
     icon: <FaGamepad />,
     content: <QAMPanel />,
     alwaysRender: true,

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, FC, createElement, ChangeEvent, KeyboardEvent } from "react";
-import { toaster } from "@decky/api";
+import { showToast } from "../utils/toast";
 import { DialogButton, ConfirmModal, ModalRoot, TextField, showModal } from "@decky/ui";
 import { getSaveSetupInfo, confirmSlotChoice, logError } from "../api/backend";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
@@ -258,7 +258,7 @@ function createConfirmHandler({ romId, setConfirming, setError, onComplete }: Co
       // never log-only. Only a migration reports counts; a plain confirm doesn't.
       if (migrate) {
         const body = wizardMigrationOutcomeToastBody(result.migrated ?? 0, result.failed ?? 0, slot);
-        if (body) toaster.toast({ title: "RomM Sync", body });
+        if (body) showToast(body);
       }
       onComplete();
     } catch (e) {

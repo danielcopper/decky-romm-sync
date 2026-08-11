@@ -1,5 +1,5 @@
 import { FC, useState } from "react";
-import { toaster } from "@decky/api";
+import { showToast } from "../utils/toast";
 import { ModalRoot, DialogButton, showModal } from "@decky/ui";
 import { resolveSyncConflict, logError } from "../api/backend";
 import type { SyncConflict } from "../types";
@@ -184,7 +184,7 @@ const SyncConflictModalHost: FC<SyncConflictModalHostProps> = ({ conflict, close
         action === "keep_local"
           ? "Conflict resolved — kept your local save (uploaded to server)."
           : "Conflict resolved — used the server save · your local was backed up.";
-      toaster.toast({ title: "RomM Sync", body: successBody });
+      showToast(successBody);
       closeModal?.();
       onDone(action);
     } catch (e) {

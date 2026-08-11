@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, FC, Fragment } from "react";
-import { toaster } from "@decky/api";
+import { showToast } from "../utils/toast";
 import {
   ButtonItem,
   DialogButton,
@@ -790,11 +790,11 @@ export const RemovedGamesCleanupSection: FC = () => {
     setScanning(true);
     try {
       if (!(await openRemovedGamesCleanupModal())) {
-        toaster.toast({ title: "RomM Sync", body: "No removed RomM entries were found." });
+        showToast("No removed RomM entries were found.");
       }
     } catch (e) {
       logError(`Removed-game cleanup scan failed: ${e}`);
-      toaster.toast({ title: "RomM Sync", body: "Could not scan removed RomM games." });
+      showToast("Could not scan removed RomM games.");
     } finally {
       setScanning(false);
     }

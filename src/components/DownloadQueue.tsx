@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, FC, Fragment } from "react";
 import { PanelSection, PanelSectionRow, ButtonItem, Field } from "@decky/ui";
-import { toaster } from "@decky/api";
+import { showToast } from "../utils/toast";
 import {
   getDownloadQueue,
   cancelDownload,
@@ -74,10 +74,10 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
     try {
       const result = await cancelDownload(romId);
       if (!result.success) {
-        toaster.toast({ title: "RomM Sync", body: result.message || "Could not cancel the download" });
+        showToast(result.message || "Could not cancel the download");
       }
     } catch {
-      toaster.toast({ title: "RomM Sync", body: "Could not cancel the download" });
+      showToast("Could not cancel the download");
     }
   };
 

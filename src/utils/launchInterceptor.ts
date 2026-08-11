@@ -15,7 +15,7 @@
  * Registered on plugin load, unregistered on unload.
  */
 
-import { toaster } from "@decky/api";
+import { showToast } from "./toast";
 import { isRomMAppId } from "../patches/gameDetailPatch";
 import {
   refreshMigrationState,
@@ -220,7 +220,7 @@ async function relaunch(appId: number, romId: number, admission: PruneLeaseAdmis
     // The watcher has no game-page UI to fall back to, so the refusal would
     // otherwise be a silently dead Play press — say it out loud instead
     // (CustomPlayButton's twin path returns its trigger to "Play").
-    toaster.toast({ title: "RomM Sync", body: "Launch cancelled — try again" });
+    showToast("Launch cancelled — try again");
     return;
   }
   bareRelaunch(appId);
@@ -251,9 +251,9 @@ async function handleWatcherVerdict(
       return "done";
     case "block":
       if (verdict.reason === "migration_pending") {
-        toaster.toast({ title: "RomM Sync", body: MIGRATION_TOAST_BODY });
+        showToast(MIGRATION_TOAST_BODY);
       } else if (verdict.reason === "no_launch_target") {
-        toaster.toast({ title: "RomM Sync", body: NO_LAUNCH_TARGET_TOAST_BODY });
+        showToast(NO_LAUNCH_TARGET_TOAST_BODY);
       }
       return "done";
     case "conflict": {
@@ -381,10 +381,7 @@ export function registerLaunchInterceptor(prompts: LaunchPrompts): void {
             // (no relaunch): the ROM is gone.
             if (!(await isRomInstalled(appId, romId))) {
               if (!isPruneLeaseAdmissionCurrent(admission)) return;
-              toaster.toast({
-                title: "RomM Sync",
-                body: "ROM not downloaded. Open the plugin to download it first.",
-              });
+              showToast("ROM not downloaded. Open the plugin to download it first.");
               return;
             }
 

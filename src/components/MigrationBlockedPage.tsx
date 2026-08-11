@@ -1,6 +1,6 @@
 import { FC, useEffect, useState } from "react";
 import { PanelSection, PanelSectionRow, ButtonItem, Field, ConfirmModal, showModal } from "@decky/ui";
-import { toaster } from "@decky/api";
+import { showToast } from "../utils/toast";
 import { migrateRetroDeckFiles, dismissRetrodeckMigration } from "../api/backend";
 import type { MigrationStatus } from "../types";
 import { getMigrationState, onMigrationChange, clearMigration } from "../utils/migrationStore";
@@ -46,10 +46,7 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
       setMigrateResult(result.message);
       if (result.success) {
         clearMigration();
-        toaster.toast({
-          title: "RomM Sync",
-          body: result.message || "Migration complete.",
-        });
+        showToast(result.message || "Migration complete.");
       }
     } catch {
       setMigrateResult("Migration failed");
@@ -79,10 +76,7 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
                 const result = await dismissRetrodeckMigration();
                 if (result.success) {
                   clearMigration();
-                  toaster.toast({
-                    title: "RomM Sync",
-                    body: "Migration dismissed.",
-                  });
+                  showToast("Migration dismissed.");
                 }
               } catch {
                 setMigrateResult("Dismiss failed");

@@ -20,7 +20,7 @@
 
 import { FC, useState, KeyboardEvent } from "react";
 import { ConfirmModal, DialogButton, Focusable, GamepadButton, TextField, Spinner, type GamepadEvent } from "@decky/ui";
-import { toaster } from "@decky/api";
+import { showToast } from "../utils/toast";
 import { searchSgdbGames, applySgdbGameId, debugLog, type SgdbCandidate } from "../api/backend";
 import { applyArtwork } from "../utils/artwork";
 import { scrollToTop, scrollFocusedToCenter } from "../utils/scrollHelpers";
@@ -136,7 +136,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
         return { success: false };
       });
       if (!result.success) {
-        toaster.toast({ title: "RomM Sync", body: "Failed to apply artwork selection" });
+        showToast("Failed to apply artwork selection");
         return;
       }
       const applied = await applyArtwork(romId, appId).catch((e): number => {
@@ -144,11 +144,11 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
         return 0;
       });
       if (applied === -1) {
-        toaster.toast({ title: "RomM Sync", body: "Set a SteamGridDB API key in settings first" });
+        showToast("Set a SteamGridDB API key in settings first");
       } else if (applied > 0) {
-        toaster.toast({ title: "RomM Sync", body: `Artwork refreshed (${applied}/4 images applied)` });
+        showToast(`Artwork refreshed (${applied}/4 images applied)`);
       } else {
-        toaster.toast({ title: "RomM Sync", body: "No artwork available for this game" });
+        showToast("No artwork available for this game");
       }
       onApplied(applied);
       closeModal?.();

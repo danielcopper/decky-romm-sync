@@ -10,7 +10,8 @@
  */
 
 import { useState, useEffect, useRef, FC, ReactElement } from "react";
-import { addEventListener, removeEventListener, toaster } from "@decky/api";
+import { addEventListener, removeEventListener } from "@decky/api";
+import { showToast, SAVE_SYNC_TOAST_TITLE } from "../utils/toast";
 import { Focusable, DialogButton, Menu, MenuItem, Navigation, showContextMenu } from "@decky/ui";
 import { appActionButtonClasses, basicAppDetailsSectionStylerClasses } from "../utils/deckyUiInternals";
 import { hideNativePlaySection, showNativePlaySection } from "../utils/styleInjector";
@@ -484,7 +485,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     return applyLaunchGateSetupOutcome(resolveSaveSetupOutcome(setupInfo), {
       rid,
       confirmSlotChoice,
-      toast: (body) => toaster.toast({ title: "RomM Save Sync", body }),
+      toast: (body) => showToast(body, { title: SAVE_SYNC_TOAST_TITLE }),
       dispatchSavesTab: () =>
         globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } })),
     });
@@ -565,7 +566,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
 
     const toastBody = saveSyncToastBody(result.uploaded, result.downloaded);
     if (toastBody) {
-      toaster.toast({ title: "RomM Save Sync", body: toastBody });
+      showToast(toastBody, { title: SAVE_SYNC_TOAST_TITLE });
     }
     return { success: true, message: result.message };
   };
@@ -700,7 +701,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         // block/no_launch_target has no such standing surface at the moment of the
         // press — the page states it, but the press must not read as a dead button.
         if (verdict.decision === "block" && verdict.reason === "no_launch_target") {
-          toaster.toast({ title: "RomM Sync", body: NO_LAUNCH_TARGET_TOAST_BODY });
+          showToast(NO_LAUNCH_TARGET_TOAST_BODY);
         }
         setState("play");
         return "done";
@@ -846,7 +847,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     // leave the overlay up so Resume stays reachable.
     if (romId == null) {
       detach(debugLog(`CustomPlayButton: Stop on appId=${appId} but the rom id is not resolved yet — not stopping`));
-      toaster.toast({ title: "RomM Sync", body: "Couldn't stop the game — still loading its details" });
+      showToast("Couldn't stop the game — still loading its details");
       return;
     }
 
@@ -883,12 +884,12 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       detach(
         debugLog(`CustomPlayButton: stop_running_game refused for appId=${appId} — reason=${result.reason ?? "none"}`),
       );
-      toaster.toast({ title: "RomM Sync", body: result.message || "Couldn't stop the game" });
+      showToast(result.message || "Couldn't stop the game");
     } catch (e) {
       // The overlay deliberately stays up: the call never reached a verdict, so
       // the game may well still be running and Resume must stay reachable.
       detach(debugLog(`CustomPlayButton: stop_running_game threw for appId=${appId}: ${e}`));
-      toaster.toast({ title: "RomM Sync", body: "Couldn't stop the game" });
+      showToast("Couldn't stop the game");
     } finally {
       // Released on every path, so a failed stop can be retried deliberately
       // (the backend, not this flag, is what makes a retry safe).
@@ -930,7 +931,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
 
       if (isCallableFailure(result)) {
         detach(debugLog(`CustomPlayButton: resolve conflict deferred: ${result.message}`));
-        toaster.toast({ title: "RomM Sync", body: result.message });
+        showToast(result.message);
         setState("conflict");
         return;
       }
@@ -948,12 +949,11 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           reportServerReachable(false);
         }
         detach(debugLog(`CustomPlayButton: resolve conflict — server query failed for rom ${romId}`));
-        toaster.toast({
-          title: "RomM Sync",
-          body: unreachable
+        showToast(
+          unreachable
             ? "Couldn't reach server to resolve conflict"
             : "RomM couldn't find this game's save data — conflict left unresolved",
-        });
+        );
         setState("conflict");
         return;
       }
@@ -973,7 +973,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       setState("play");
     } catch (e) {
       detach(debugLog(`CustomPlayButton: resolve conflict failed: ${e}`));
-      toaster.toast({ title: "RomM Sync", body: "Couldn't reach server to resolve conflict" });
+      showToast("Couldn't reach server to resolve conflict");
       setState("conflict");
     }
   };
@@ -984,11 +984,11 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     try {
       const result = await startDownload(romId);
       if (!result.success) {
-        toaster.toast({ title: "RomM Sync", body: result.message || "Download failed" });
+        showToast(result.message || "Download failed");
         setActionPending(false);
       }
     } catch {
-      toaster.toast({ title: "RomM Sync", body: "Download failed — is RomM server running?" });
+      showToast("Download failed — is RomM server running?");
       setActionPending(false);
     }
   };
@@ -1046,17 +1046,17 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           admission,
         );
         globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: romId } }));
-        toaster.toast({ title: "RomM Sync", body: `${romName || "ROM"} uninstalled` });
+        showToast(`${romName || "ROM"} uninstalled`);
         // Dark pulse transition before showing Download button
         setState("uninstalling");
         transitionTimerRef.current = setTimeout(() => setState("download"), 500);
         return;
       } else {
-        toaster.toast({ title: "RomM Sync", body: result.message || "Uninstall failed" });
+        showToast(result.message || "Uninstall failed");
         setState(stateBeforeUninstall);
       }
     } catch {
-      toaster.toast({ title: "RomM Sync", body: "Uninstall failed" });
+      showToast("Uninstall failed");
       setState(stateBeforeUninstall);
     } finally {
       uninstallPendingRef.current = false;

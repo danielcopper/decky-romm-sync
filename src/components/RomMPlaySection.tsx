@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect, FC, Fragment, createElement } from "react";
-import { toaster } from "@decky/api";
+import { showToast, SAVE_SYNC_TOAST_TITLE } from "../utils/toast";
 import {
   ConfirmModal,
   DialogButton,
@@ -432,7 +432,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   const handleRefreshArtwork = async () => {
     if (actionPending) return;
     if (!detail.romId) {
-      toaster.toast({ title: "RomM Sync", body: "ROM info not loaded yet" });
+      showToast("ROM info not loaded yet");
       return;
     }
     const romId = detail.romId;
@@ -466,22 +466,22 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         return null;
       });
       if (!resolution) {
-        toaster.toast({ title: "RomM Sync", body: "Failed to refresh artwork" });
+        showToast("Failed to refresh artwork");
         return;
       }
 
       switch (resolution.decision) {
         case "no_api_key":
-          toaster.toast({ title: "RomM Sync", body: "Set a SteamGridDB API key in settings first" });
+          showToast("Set a SteamGridDB API key in settings first");
           break;
         case "resolved": {
           const applied = await applyArtwork(romId, appId);
           if (applied === -1) {
-            toaster.toast({ title: "RomM Sync", body: "Set a SteamGridDB API key in settings first" });
+            showToast("Set a SteamGridDB API key in settings first");
           } else if (applied > 0) {
-            toaster.toast({ title: "RomM Sync", body: `Artwork refreshed (${applied}/4 images applied)` });
+            showToast(`Artwork refreshed (${applied}/4 images applied)`);
           } else {
-            toaster.toast({ title: "RomM Sync", body: "No artwork available for this game" });
+            showToast("No artwork available for this game");
           }
           break;
         }
@@ -504,7 +504,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         detach(debugLog(`handleRefreshArtwork: continuation was cancelled: ${e}`));
         return;
       }
-      toaster.toast({ title: "RomM Sync", body: "Failed to refresh artwork" });
+      showToast("Failed to refresh artwork");
     } finally {
       setActionPending(null);
     }
@@ -515,12 +515,12 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     setActionPending("metadata");
     try {
       await getRomMetadata(detail.romId);
-      toaster.toast({ title: "RomM Sync", body: "Metadata refreshed" });
+      showToast("Metadata refreshed");
       globalThis.dispatchEvent(
         new CustomEvent("romm_data_changed", { detail: { type: "metadata", rom_id: detail.romId } }),
       );
     } catch {
-      toaster.toast({ title: "RomM Sync", body: "Failed to refresh metadata" });
+      showToast("Failed to refresh metadata");
     } finally {
       setActionPending(null);
     }
@@ -537,20 +537,20 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         const directionalBody = saveSyncToastBody(result.uploaded, result.downloaded);
         const c = result.conflicts?.length ?? 0;
         if (directionalBody) {
-          toaster.toast({ title: "RomM Save Sync", body: directionalBody });
+          showToast(directionalBody, { title: SAVE_SYNC_TOAST_TITLE });
         } else if (c === 0) {
           // Manual surface only (#1486): an explicit per-game "Sync Saves" click
           // that moved nothing and hit no conflicts gets a short acknowledgement,
           // so the click doesn't read as a no-op. The automatic surfaces
           // (pre-launch, post-exit) stay silent on this zero-case.
-          toaster.toast({ title: "RomM Save Sync", body: "Saves already up to date" });
+          showToast("Saves already up to date", { title: SAVE_SYNC_TOAST_TITLE });
         }
         // Preserve the conflict signal as its own additive toast (mirroring the
         // post-exit conflicts_toast) — it must stay visible even when nothing
         // transferred. Gated above so "up to date" never contradicts pending
         // conflicts.
         if (c > 0) {
-          toaster.toast({ title: "RomM Save Sync", body: `${c} conflict(s) need resolution` });
+          showToast(`${c} conflict(s) need resolution`, { title: SAVE_SYNC_TOAST_TITLE });
         }
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: detail.romId } }),
@@ -558,10 +558,10 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         // Refresh save sync status — last_sync_check_at was just set by the backend
         noteSaveSyncDisplay(appId, { status: "synced", label: "Just now", last_sync_check_at: null });
       } else {
-        toaster.toast({ title: "RomM Sync", body: result.message || "Save sync failed" });
+        showToast(result.message || "Save sync failed");
       }
     } catch {
-      toaster.toast({ title: "RomM Sync", body: "Save sync failed" });
+      showToast("Save sync failed");
     } finally {
       setActionPending(null);
     }
@@ -573,17 +573,17 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     try {
       const result = await downloadAllFirmware(detail.platformSlug);
       if (result.success) {
-        toaster.toast({ title: "RomM Sync", body: `BIOS downloaded (${result.downloaded ?? 0} files)` });
+        showToast(`BIOS downloaded (${result.downloaded ?? 0} files)`);
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: detail.platformSlug } }),
         );
         // Refresh BIOS status — getBiosStatus ships pre-computed level/label so we don't re-derive.
         await refreshBiosStatus(appId);
       } else {
-        toaster.toast({ title: "RomM Sync", body: result.message || "BIOS download failed" });
+        showToast(result.message || "BIOS download failed");
       }
     } catch {
-      toaster.toast({ title: "RomM Sync", body: "BIOS download failed" });
+      showToast("BIOS download failed");
     } finally {
       setActionPending(null);
     }
@@ -608,9 +608,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           `game-detail:${appId}`,
           admission,
         );
-        toaster.toast({ title: "RomM Sync", body: `${detail.romName || "ROM"} uninstalled` });
+        showToast(`${detail.romName || "ROM"} uninstalled`);
       } else {
-        toaster.toast({ title: "RomM Sync", body: result.message || "Uninstall failed" });
+        showToast(result.message || "Uninstall failed");
       }
     } catch (e) {
       // The backend uninstall already committed before the continuation was torn
@@ -619,7 +619,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         detach(debugLog(`handleUninstall: continuation was cancelled: ${e}`));
         return;
       }
-      toaster.toast({ title: "RomM Sync", body: "Uninstall failed" });
+      showToast("Uninstall failed");
     } finally {
       setActionPending(null);
     }
@@ -642,17 +642,17 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
               try {
                 const result = await deleteLocalSaves(romId);
                 if (result.success) {
-                  toaster.toast({ title: "RomM Sync", body: result.message });
+                  showToast(result.message);
                   // Directly update the shown status — no local saves remain
                   noteSaveSyncDisplay(appId, { status: "none", label: "No saves", last_sync_check_at: null });
                   globalThis.dispatchEvent(
                     new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }),
                   );
                 } else {
-                  toaster.toast({ title: "RomM Sync", body: result.message || "Failed to delete saves" });
+                  showToast(result.message || "Failed to delete saves");
                 }
               } catch {
-                toaster.toast({ title: "RomM Sync", body: "Failed to delete saves" });
+                showToast("Failed to delete saves");
               } finally {
                 setActionPending(null);
               }
@@ -686,7 +686,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   ) => {
     await withPruneLease(result.prune_lease_token, "Core selection", async (signal) => {
       if (!result.success) {
-        toaster.toast({ title: "RomM Sync", body: result.message || "Failed to set core" });
+        showToast(result.message || "Failed to set core");
         return;
       }
       // Installed + bound: confirm the re-baked launch_options landed before
@@ -698,12 +698,12 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         if (!confirmed) {
           // Never toast success on an unconfirmed bake. Keep the DB row — a Steam
           // restart (or the next migration/re-sync) re-bakes from the override.
-          toaster.toast({ title: "RomM Sync", body: "Core saved — restart Steam to apply" });
+          showToast("Core saved — restart Steam to apply");
           return;
         }
       }
       // Confirmed (or uninstalled/unbound: nothing to confirm) → success.
-      toaster.toast({ title: "RomM Sync", body: successBody });
+      showToast(successBody);
       await refreshCoreDisplay(platformSlug);
     }, `game-detail:${appId}`, admission);
   };
@@ -725,7 +725,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         detach(debugLog(`handleChangeGameCore: continuation was cancelled: ${e}`));
         return;
       }
-      toaster.toast({ title: "RomM Sync", body: "Failed to set core" });
+      showToast("Failed to set core");
     }
   };
 
@@ -744,7 +744,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         detach(debugLog(`handleResetGameCore: continuation was cancelled: ${e}`));
         return;
       }
-      toaster.toast({ title: "RomM Sync", body: "Failed to reset core" });
+      showToast("Failed to reset core");
     }
   };
 

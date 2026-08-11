@@ -1,6 +1,6 @@
 import { FC, ReactNode } from "react";
 import { PanelSectionRow, ButtonItem, Focusable } from "@decky/ui";
-import { toaster } from "@decky/api";
+import { showToast } from "../utils/toast";
 import { isAnyAppRunning } from "../utils/runningApps";
 
 /**
@@ -52,7 +52,7 @@ export function memoryLevelColor(rssKb: number, warnKb: number, ceilingKb: numbe
  */
 function restartSteam(): void {
   if (isAnyAppRunning()) {
-    toaster.toast({ title: "RomM Sync", body: "Close your running game before restarting Steam." });
+    showToast("Close your running game before restarting Steam.");
     return;
   }
   SteamClient.User.StartRestart(false);

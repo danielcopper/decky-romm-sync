@@ -6,7 +6,7 @@
 
 import { useState, useEffect, createElement, FC } from "react";
 import { DialogButton } from "@decky/ui";
-import { toaster } from "@decky/api";
+import { showToast } from "../../utils/toast";
 import { debugLog, savesListFileVersions, savesRollbackToVersion } from "../../api/backend";
 import type { SaveVersionEntry, RollbackStatus, ListFileVersionsResult } from "../../types";
 import { showSyncConflictModal } from "../SyncConflictModal";
@@ -103,7 +103,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
     try {
       const result: RollbackStatus = await savesRollbackToVersion(romId, slot, version.id);
       if (result.status === "ok") {
-        toaster.toast({ title: "RomM Sync", body: `Save restored from ${formatRelativeTime(version.updated_at)}` });
+        showToast(`Save restored from ${formatRelativeTime(version.updated_at)}`);
         setVersions(null);
         setExpanded(false);
         onRestored();
@@ -123,21 +123,17 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
           // Degenerate: the server blocked on a conflict but sent none to
           // show, so there is no modal to surface it — nudge the user directly
           // instead of failing silently.
-          toaster.toast({
-            title: "RomM Sync",
-            body: "Restore blocked by a sync conflict. Sync this save, then try again.",
-          });
+          showToast("Restore blocked by a sync conflict. Sync this save, then try again.");
         }
       } else if (result.status === "preflight_failed") {
         const detail = result.errors[0] ?? "preflight error";
-        toaster.toast({ title: "RomM Sync", body: `Sync failed before restore: ${detail}` });
+        showToast(`Sync failed before restore: ${detail}`);
       } else if (result.status === "put_failed") {
         // Local download succeeded but the server-side bump didn't — switch
         // is locally complete, just won't propagate to other devices yet.
-        toaster.toast({
-          title: "RomM Sync",
-          body: "Restored locally, but the server didn't update. Other devices will see the previous version until you retry.",
-        });
+        showToast(
+          "Restored locally, but the server didn't update. Other devices will see the previous version until you retry.",
+        );
         setVersions(null);
         setExpanded(false);
         onRestored();
@@ -145,20 +141,20 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
         // Distinct from ``version_deleted``: the chosen version may well
         // still exist on the server; the local ROM install is what's gone
         // (uninstalled between version-list load and restore tap).
-        toaster.toast({ title: "RomM Sync", body: "ROM is no longer installed locally. Reinstall and try again." });
+        showToast("ROM is no longer installed locally. Reinstall and try again.");
       } else if (result.status === "version_deleted") {
-        toaster.toast({ title: "RomM Sync", body: "This version no longer exists on the server" });
+        showToast("This version no longer exists on the server");
       } else if (result.status === "server_unreachable") {
         // Distinct from ``not_found``: the version may well still exist;
         // we just couldn't reach the server to confirm. Prompt for retry
         // instead of telling the user the version is gone.
-        toaster.toast({ title: "RomM Sync", body: "Couldn't reach RomM. Check your connection and try again." });
+        showToast("Couldn't reach RomM. Check your connection and try again.");
       } else if (result.status === "not_found") {
         // Mirror of the branch above: RomM answered, so a retry cannot help.
-        toaster.toast({ title: "RomM Sync", body: "RomM couldn't find this game's save data — nothing was restored." });
+        showToast("RomM couldn't find this game's save data — nothing was restored.");
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- exhaustive final branch of the 9-member RollbackStatus union; an explicit check (vs. plain `else`) keeps the per-status symmetry and leaves any future-added status unhandled instead of silently routing it to the "unsupported" toast
       } else if (result.status === "unsupported") {
-        toaster.toast({ title: "RomM Sync", body: "Version history requires RomM 4.7+" });
+        showToast("Version history requires RomM 4.7+");
       }
     } catch (e) {
       detach(debugLog(`VersionHistoryPanel: restore error for save ${version.id}: ${e}`));
