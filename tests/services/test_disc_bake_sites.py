@@ -9,7 +9,8 @@ behavior.
 
 Bake sites covered:
   * ``services.library.sync_orchestrator`` — the ``installed_paths`` map.
-  * ``services.downloads`` — ``_finalize_download_complete`` (via ``_resolve_bound_app_id``).
+  * ``services.rom_install_recorder`` — ``do_resolve_launch_bake``, which both a
+    completed download and an adoption re-bake through.
 
 The migration relaunch path (``services.migration._build_relaunch_items``) and
 the startup reconcile both bake through the shared ``RelaunchOptionsResolver``;
@@ -20,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
@@ -160,55 +161,47 @@ class TestSyncOrchestratorBakeSite:
         assert orch._read_installed_paths({1}) == {1: ""}
 
 
-# ── downloads bake site ──────────────────────────────────────────────────
+# ── install-recorder bake site ───────────────────────────────────────────
 
 
-class TestDownloadsBakeSite:
-    def _service(self, uow_factory, disc_resolver):
-        from services.downloads import DownloadService, DownloadServiceConfig
+class TestInstallRecorderBakeSite:
+    """The bake both a completed download and an adoption resolve through."""
 
-        return DownloadService(
-            config=DownloadServiceConfig(
-                romm_api=MagicMock(),
-                download_file_store=MagicMock(),
-                resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
-                loop=MagicMock(),
+    def _recorder(self, uow_factory, disc_resolver):
+        from services.rom_install_recorder import RomInstallRecorder, RomInstallRecorderConfig
+
+        return RomInstallRecorder(
+            config=RomInstallRecorderConfig(
                 logger=logging.getLogger("test_disc_bake"),
-                emit=MagicMock(),
                 clock=FakeClock(),
-                sleeper=FakeSleeper(),
-                retrodeck_paths=MagicMock(),
+                uow_factory=uow_factory,
+                system_extensions=lambda system_name: frozenset(),
                 active_core=FakeActiveCoreResolver(default=(None, None)),
                 disc_resolver=disc_resolver,
-                m3u_support=lambda system_name: False,
-                system_extensions=lambda system_name: frozenset(),
-                uow_factory=uow_factory,
-                rom_remover=lambda: AsyncMock(),
             )
         )
 
-    def test_resolve_bound_app_id_returns_pinned_bake_path(self, disc_resolver):
+    def test_resolve_launch_bake_bakes_the_pinned_disc(self, disc_resolver):
         uow = FakeUnitOfWork()
         _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, app_id=1234)
-        svc = self._service(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
-        app_id, core_so, bake_path = svc._resolve_bound_app_id(1, _DISC1_PATH)
+        recorder = self._recorder(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        app_id, launch_options = recorder.do_resolve_launch_bake(1, {}, _DISC1_PATH)
         assert app_id == 1234
-        assert core_so is None
-        assert bake_path == _DISC2_PATH
+        assert launch_options.endswith(f'"{_DISC2_PATH}"')
 
-    def test_resolve_bound_app_id_unpinned_defaults_to_disc_1(self, disc_resolver):
+    def test_resolve_launch_bake_unpinned_defaults_to_disc_1(self, disc_resolver):
         uow = FakeUnitOfWork()
         _seed_multi_disc(uow, rom_id=1, selected_disc=None, app_id=1234)
-        svc = self._service(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
-        _app_id, _core_so, bake_path = svc._resolve_bound_app_id(1, _DISC1_PATH)
-        assert bake_path == _DISC1_PATH
+        recorder = self._recorder(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        _app_id, launch_options = recorder.do_resolve_launch_bake(1, {}, _DISC1_PATH)
+        assert launch_options.endswith(f'"{_DISC1_PATH}"')
 
-    def test_resolve_bound_app_id_returns_the_empty_path_for_an_unlaunchable_install(self, disc_resolver):
+    def test_resolve_launch_bake_returns_the_empty_command_for_an_unlaunchable_install(self, disc_resolver):
         # download_complete's re-bake reads through the same seam, so the freshly
         # downloaded ROM's shortcut gets no launch command either (#1652).
         uow = FakeUnitOfWork()
         _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, app_id=1234, launchable=False)
-        svc = self._service(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
-        app_id, _core_so, bake_path = svc._resolve_bound_app_id(1, _DISC1_PATH)
+        recorder = self._recorder(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        app_id, launch_options = recorder.do_resolve_launch_bake(1, {}, _DISC1_PATH)
         assert app_id == 1234
-        assert bake_path == ""
+        assert launch_options == ""

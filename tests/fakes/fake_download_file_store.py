@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import urllib.parse
+import zlib
 from typing import TYPE_CHECKING
 
 from lib.path_safety import safe_path_component
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from models.adoption import ExistingContent
 
 
 class FakeDownloadFileStore:
@@ -40,6 +44,7 @@ class FakeDownloadFileStore:
 
     def __init__(self, files: dict[str, bytes] | None = None) -> None:
         self.files: dict[str, bytes] = dict(files) if files else {}
+        self.mtimes: dict[str, float] = {}
         self.dirs: set[str] = set()
         self.disk_free_bytes: int = 10 * 1024 * 1024 * 1024  # 10 GiB
         self.fail_on_atomic_write: bool = False
@@ -55,6 +60,37 @@ class FakeDownloadFileStore:
 
     def exists(self, path: str) -> bool:
         return path in self.files or self.is_dir(path)
+
+    def describe_path(self, path: str) -> ExistingContent | None:
+        """Describe *path*, summing a directory's contents like the real adapter.
+
+        ``mtimes`` is an explicit per-path override; anything unset reports 0.0
+        so a test that does not care about the timestamp does not have to stage
+        one.
+        """
+        if not self.exists(path):
+            return None
+        is_dir = self.is_dir(path)
+        size = sum(size for _p, size in self.scan_files_with_sizes(path)) if is_dir else len(self.files.get(path, b""))
+        return {
+            "path": path,
+            "is_dir": is_dir,
+            "size_bytes": size,
+            "modified_at": self.mtimes.get(path, 0.0),
+        }
+
+    def checksum(self, path: str, algorithm: str, progress_callback: Callable[[int], None] | None = None) -> str:
+        """Hash the stored bytes, reporting the whole file as one progress chunk."""
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        data = self.files[path]
+        if progress_callback is not None:
+            progress_callback(len(data))
+        if algorithm == "crc32":
+            return f"{zlib.crc32(data) & 0xFFFFFFFF:08x}"
+        if algorithm != "md5":
+            raise ValueError(f"unsupported checksum algorithm: {algorithm!r}")
+        return hashlib.md5(data, usedforsecurity=False).hexdigest()
 
     def remove_file(self, path: str) -> None:
         if path in self.remove_failures:

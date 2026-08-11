@@ -19,6 +19,8 @@ import { hasAnySaveConflict } from "../utils/saveStatus";
 import {
   getCachedGameDetail,
   startDownload,
+  adoptExistingRom,
+  isTargetOccupied,
   cancelDownload,
   pauseDownload,
   resumeDownload,
@@ -44,6 +46,7 @@ import { scrollToTop } from "../utils/scrollHelpers";
 import { getEventTarget } from "../utils/events";
 import { applyLaunchGateSetupOutcome, resolveSaveSetupOutcome } from "../utils/saveSetup";
 import { handleButtonDownloadFailure } from "../utils/downloadFailure";
+import { showAdoptExistingModal } from "./AdoptExistingModal";
 import { showCoreChangeModal } from "./CoreChangeModal";
 import { handleConflicts } from "./SyncConflictModal";
 import { showOfflineDriftModal } from "./OfflineDriftModal";
@@ -59,6 +62,7 @@ import type {
   DownloadProgressEvent,
   DownloadCompleteEvent,
   DownloadFailedEvent,
+  TargetOccupiedResult,
   UninstallProgressEvent,
 } from "../types";
 import { SAVEFILES_IN_CONTENT_DIR_REASON } from "../types";
@@ -155,6 +159,10 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // reads "Stopping..." and is disabled while the ladder runs, which can be
   // several seconds of no visible change.
   const [stopPending, setStopPending] = useState(false);
+  // Something already sits where this ROM would be downloaded (#260). Read from
+  // the cached detail's single `stat`, so the button says so instead of offering
+  // an undifferentiated Download; the comparison itself arrives at click time.
+  const [targetOccupied, setTargetOccupied] = useState(false);
   // Per-file progress of an in-flight uninstall (multi-file ROMs only).
   const [uninstallProgress, setUninstallProgress] = useState<{ removed: number; total: number } | null>(null);
   // Set synchronously before the uninstall's first await, so a second press
@@ -267,6 +275,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           }
         } else {
           detach(debugLog(`CustomPlayButton: -> download`));
+          setTargetOccupied(cached.target_path_occupied === true);
           setState("download");
           await rehydrateInflightDownload(rid);
         }
@@ -978,17 +987,79 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
   };
 
-  const handleDownload = async () => {
+  const handleDownload = async (replaceExisting = false) => {
     if (!romId || actionPending) return;
     setActionPending(true);
     try {
-      const result = await startDownload(romId);
+      const result = await startDownload(romId, replaceExisting);
+      if (isTargetOccupied(result)) {
+        // Nothing was written and no transfer started — the backend refused so
+        // the user can choose (#260). The button goes back to idle either way;
+        // an adopt or a replace re-enters through its own path.
+        setTargetOccupied(true);
+        setActionPending(false);
+        await resolveOccupiedTarget(romId, result);
+        return;
+      }
       if (!result.success) {
         showToast(result.message || "Download failed");
         setActionPending(false);
       }
     } catch {
       showToast("Download failed — is RomM server running?");
+      setActionPending(false);
+    }
+  };
+
+  // Run the adopt/replace/cancel dialog and carry out the chosen exit. Replace
+  // re-enters `handleDownload`, which is why the caller has already cleared
+  // `actionPending`: the second call must not be swallowed by its own guard.
+  const resolveOccupiedTarget = async (rid: number, occupied: TargetOccupiedResult) => {
+    const choice = await showAdoptExistingModal(rid, occupied);
+    if (choice === "replace") {
+      await handleDownload(true);
+      return;
+    }
+    if (choice === "adopt") {
+      await handleAdopt(rid);
+    }
+  };
+
+  // Record what is on disk as the install, then write the launch command onto
+  // the shortcut exactly as the download-complete listener does — an adopted
+  // install is an install (ADR-0028), so it must be as launchable as a
+  // downloaded one the moment the dialog closes.
+  const handleAdopt = async (rid: number) => {
+    setActionPending(true);
+    const admission = capturePruneLeaseAdmission(leaseOwner);
+    try {
+      const result = await adoptExistingRom(rid);
+      if (!result.success) {
+        toaster.toast({ title: "RomM Sync", body: result.message || "Couldn't use the existing files" });
+        return;
+      }
+      const adoptedAppId = result.app_id;
+      if (adoptedAppId != null && result.launch_options !== undefined) {
+        const launchOptions = result.launch_options;
+        await withPruneLease(
+          result.prune_lease_token,
+          "ROM adopt",
+          async (signal) => {
+            if (signal.aborted) return;
+            await setLaunchOptionsConfirmed(adoptedAppId, launchOptions).catch(() => false);
+          },
+          leaseOwner,
+          admission,
+        );
+      }
+      setTargetOccupied(false);
+      setState("play");
+      globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "rom_adopted", rom_id: rid } }));
+      toaster.toast({ title: "RomM Sync", body: `${romName || "ROM"} is ready to play` });
+    } catch (e) {
+      detach(debugLog(`CustomPlayButton: adopt failed: ${e}`));
+      toaster.toast({ title: "RomM Sync", body: "Couldn't use the existing files — is RomM server running?" });
+    } finally {
       setActionPending(false);
     }
   };
@@ -1272,6 +1343,11 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       dlLabel = formatProgress(dlProgress.bytesDownloaded, dlProgress.totalBytes);
     } else if (actionPending) {
       dlLabel = "Starting...";
+    } else if (targetOccupied) {
+      // Something is already at this game's location (#260). Pressing opens the
+      // comparison dialog rather than a download, so the label must not promise
+      // one.
+      dlLabel = "Already on Device";
     } else {
       dlLabel = "Download";
     }

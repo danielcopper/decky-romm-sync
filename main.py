@@ -159,6 +159,7 @@ class Plugin:
         self._playtime_service = services["playtime_service"]
         self._sync_service = services["sync_service"]
         self._download_service = services["download_service"]
+        self._rom_adoption_service = services["rom_adoption_service"]
         self._rom_removal_service = services["rom_removal_service"]
         self._firmware_service = services["firmware_service"]
         self._sgdb_service = services["sgdb_service"]
@@ -616,12 +617,25 @@ class Plugin:
 
     @migration_blocked
     @prune_active_blocked
-    async def start_download(self, rom_id):
-        result = await self._download_service.start_download(rom_id)
+    async def start_download(self, rom_id, replace_existing=False):
+        result = await self._download_service.start_download(rom_id, replace_existing)
         task = self._download_service.task_for_rom(int(rom_id)) if result.get("success") else None
         if task is not None:
             await retain_prune_conflict(self, task, "start_download")
         return result
+
+    @migration_blocked
+    @prune_active_blocked
+    async def adopt_existing_rom(self, rom_id):
+        """Record content already on disk as this ROM's install, without downloading."""
+        result = await self._rom_adoption_service.adopt_existing_rom(rom_id)
+        if result.get("success"):
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "adopt_existing_rom")
+        return result
+
+    async def verify_existing_content(self, rom_id):
+        """Compare the content at this ROM's target path against RomM's checksums."""
+        return await self._rom_adoption_service.verify_existing_content(rom_id)
 
     async def cancel_download(self, rom_id):
         return self._download_service.cancel_download(rom_id)

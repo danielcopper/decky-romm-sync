@@ -30,6 +30,8 @@ from lib.list_result import ErrorCode
 from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolverConfig
 from services.downloads import DownloadService, DownloadServiceConfig, _DownloadControl
 from services.library import LibraryService, LibraryServiceConfig
+from services.rom_adoption import RomAdoptionService, RomAdoptionServiceConfig
+from services.rom_install_recorder import RomInstallRecorder, RomInstallRecorderConfig
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 
 
@@ -171,29 +173,54 @@ def plugin():
             renderer_gc=FakeRendererGc(),
         ),
     )
+    retrodeck_paths = FakeRetroDeckPaths(
+        roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
+        bios=os.path.join(os.path.expanduser("~"), "retrodeck", "bios"),
+    )
+    download_file_store = DownloadFileAdapter()
+    p._install_recorder = RomInstallRecorder(
+        config=RomInstallRecorderConfig(
+            logger=decky.logger,
+            clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
+            uow_factory=FakeUnitOfWorkFactory(p._uow),
+            # Default-empty ("ES-DE could not answer") so the launch-target check
+            # accepts every existing test's install; a test that exercises the
+            # check seeds ``p._system_extensions`` with a real accept-list.
+            system_extensions=lambda system_name: p._system_extensions.get(system_name, frozenset()),
+            active_core=p._active_core,
+            disc_resolver=FakeDiscResolver(),
+        ),
+    )
+    p._rom_adoption_service = RomAdoptionService(
+        config=RomAdoptionServiceConfig(
+            romm_api=p._romm_api,
+            download_file_store=download_file_store,
+            resolve_system=p._resolve_system,
+            retrodeck_paths=retrodeck_paths,
+            install_recorder=p._install_recorder,
+            m3u_support=lambda system_name: p._m3u_supported,
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            emit=decky.emit,
+            clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
+        ),
+    )
     p._download_service = DownloadService(
         config=DownloadServiceConfig(
             romm_api=p._romm_api,
-            download_file_store=DownloadFileAdapter(),
+            download_file_store=download_file_store,
             resolve_system=p._resolve_system,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             emit=decky.emit,
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             sleeper=FakeSleeper(),
-            retrodeck_paths=FakeRetroDeckPaths(
-                roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
-                bios=os.path.join(os.path.expanduser("~"), "retrodeck", "bios"),
-            ),
-            active_core=p._active_core,
-            disc_resolver=FakeDiscResolver(),
+            retrodeck_paths=retrodeck_paths,
+            install_recorder=p._install_recorder,
+            target_gate=p._rom_adoption_service.check_download_target,
             # Default-True so the existing M3U/launch-file tests are unaffected;
             # a test that exercises a non-m3u platform repoints this seam.
             m3u_support=lambda system_name: p._m3u_supported,
-            # Default-empty ("ES-DE could not answer") so the launch-target check
-            # accepts every existing test's install; a test that exercises the
-            # check seeds ``p._system_extensions`` with a real accept-list.
-            system_extensions=lambda system_name: p._system_extensions.get(system_name, frozenset()),
             uow_factory=FakeUnitOfWorkFactory(p._uow),
             # Late-bound remover for the #1298 sibling supersede — resolved at call
             # time, by which point ``p._rom_removal_service`` is constructed below.
@@ -570,238 +597,6 @@ class TestRomInstallForeignKey:
                 )
             )
         assert uow.committed is False
-
-
-class TestRecordInstallLaunchTarget:
-    """The launch-target verdict recorded at install time (#1652).
-
-    The accept-lists seeded here are ES-DE's real per-system ``<extension>``
-    sets, so a passing case is not a tautology over a made-up list.
-    """
-
-    _PS3 = frozenset({".desktop", ".iso", ".ps3", ".ps3dir"})
-    _DREAMCAST = frozenset({".cdi", ".chd", ".cue", ".dat", ".elf", ".gdi", ".iso", ".lst", ".m3u", ".7z", ".zip"})
-
-    def _record(self, plugin, *, file_path, rom_dir, system, cleanup=lambda: None):
-        _seed_rom(plugin._uow, 42)
-        return plugin._download_service._record_install_io(
-            rom_id=42,
-            rom_detail={"platform_slug": system},
-            file_path=file_path,
-            rom_dir=rom_dir,
-            system=system,
-            cleanup=cleanup,
-        )
-
-    def test_ps3_pkg_records_an_unlaunchable_install_and_keeps_the_files(self, plugin):
-        # The reported case (#1582). The row is written, the install is NOT
-        # refused, and cleanup is NEVER called — the package stays on disk so the
-        # user can install it by hand in RPCS3.
-        plugin._system_extensions = {"ps3": self._PS3}
-        cleanup_calls = []
-
-        file_path, error = self._record(
-            plugin,
-            file_path="/roms/ps3/Puppeteer/Puppeteer.pkg",
-            rom_dir="/roms/ps3/Puppeteer",
-            system="ps3",
-            cleanup=lambda: cleanup_calls.append(1),
-        )
-
-        assert error is None
-        assert file_path == "/roms/ps3/Puppeteer/Puppeteer.pkg"
-        assert cleanup_calls == []
-        install = plugin._uow.rom_installs.get(42)
-        assert install is not None
-        assert install.launchable is False
-        assert install.file_path == "/roms/ps3/Puppeteer/Puppeteer.pkg"
-        assert install.rom_dir == "/roms/ps3/Puppeteer"
-
-    def test_dreamcast_track_bin_records_an_unlaunchable_install(self, plugin):
-        # A multi-file GDI rip with no .cue: the fallback picks the largest track
-        # file, and dreamcast's accept-list carries no .bin.
-        plugin._system_extensions = {"dreamcast": self._DREAMCAST}
-
-        _, error = self._record(
-            plugin, file_path="/roms/dc/Game/track03.bin", rom_dir="/roms/dc/Game", system="dreamcast"
-        )
-
-        assert error is None
-        install = plugin._uow.rom_installs.get(42)
-        assert install is not None
-        assert install.launchable is False
-
-    def test_ps3_folder_boot_dump_stays_launchable(self, plugin):
-        # The carve-out that protects every working PS3 dump: file_path records
-        # the nested EBOOT (a .bin, absent from ps3's list) but the bake target
-        # is the game directory, which ES-DE spells .ps3dir (ADR-0019).
-        plugin._system_extensions = {"ps3": self._PS3}
-
-        _, error = self._record(
-            plugin,
-            file_path="/roms/ps3/MyGame/PS3_GAME/USRDIR/EBOOT.BIN",
-            rom_dir="/roms/ps3/MyGame",
-            system="ps3",
-        )
-
-        assert error is None
-        install = plugin._uow.rom_installs.get(42)
-        assert install is not None
-        assert install.launchable is True
-
-    def test_ps3_folder_boot_dump_still_bakes_the_game_directory_end_to_end(self, plugin):
-        # The one shape that can silently break a working install, walked end to
-        # end: record the install through the real check, then resolve the
-        # persisted row through the REAL DiscLaunchResolver the bake sites use.
-        # A False verdict anywhere in that chain collapses the bake path to ""
-        # and the PS3 dump loses the launch command it has today. No installed
-        # ROM in a typical library has this shape, so only this fixture pins it.
-        from services.disc_launch_resolver import DiscLaunchResolver, DiscLaunchResolverConfig
-
-        plugin._system_extensions = {"ps3": self._PS3}
-        rom_dir = "/roms/ps3/MyGame"
-        eboot = f"{rom_dir}/PS3_GAME/USRDIR/EBOOT.BIN"
-
-        self._record(plugin, file_path=eboot, rom_dir=rom_dir, system="ps3")
-
-        install = plugin._uow.rom_installs.get(42)
-        assert install is not None
-        assert install.launchable is True
-        resolver = DiscLaunchResolver(
-            config=DiscLaunchResolverConfig(
-                list_files=lambda directory: [eboot] if directory == rom_dir else [],
-                system_extensions=lambda system_name: plugin._system_extensions.get(system_name, frozenset()),
-                logger=logging.getLogger("test_downloads"),
-            ),
-        )
-        assert resolver.resolve_for_install(install, None) == rom_dir
-
-    def test_desktop_entry_stays_launchable(self, plugin):
-        plugin._system_extensions = {"ps3": self._PS3}
-
-        _, error = self._record(plugin, file_path="/roms/ps3/Game.desktop", rom_dir=None, system="ps3")
-
-        assert error is None
-        install = plugin._uow.rom_installs.get(42)
-        assert install is not None
-        assert install.launchable is True
-
-    def test_unknown_system_stays_launchable(self, plugin):
-        # ES-DE could not answer (empty accept-list). A missing answer must never
-        # turn a working install into an unlaunchable one.
-        plugin._system_extensions = {}
-
-        _, error = self._record(
-            plugin, file_path="/roms/ps3/Puppeteer/Puppeteer.pkg", rom_dir="/roms/ps3/Puppeteer", system="ps3"
-        )
-
-        assert error is None
-        install = plugin._uow.rom_installs.get(42)
-        assert install is not None
-        assert install.launchable is True
-
-    def test_unlaunchable_install_is_logged(self, plugin, caplog):
-        plugin._system_extensions = {"ps3": self._PS3}
-
-        with caplog.at_level(logging.WARNING):
-            self._record(
-                plugin, file_path="/roms/ps3/Puppeteer/Puppeteer.pkg", rom_dir="/roms/ps3/Puppeteer", system="ps3"
-            )
-
-        assert any("No launch target for rom_id=42" in r.message for r in caplog.records)
-
-    def test_launchable_install_logs_nothing(self, plugin, caplog):
-        plugin._system_extensions = {"ps3": self._PS3}
-
-        with caplog.at_level(logging.WARNING):
-            self._record(plugin, file_path="/roms/ps3/Game.iso", rom_dir=None, system="ps3")
-
-        assert not any("No launch target" in r.message for r in caplog.records)
-
-
-class TestRecordInstallFsSizeWriteBack:
-    """A completed install tops up ``roms.fs_size_bytes`` from the ROM detail (#1395).
-
-    The between-syncs freshness write-back: guarded on truthiness so a
-    missing/zero server size never clobbers a good persisted value.
-    """
-
-    def test_successful_install_stamps_server_size(self, plugin):
-        uow = plugin._uow
-        _seed_rom(uow, 42)
-
-        file_path, error = plugin._download_service._record_install_io(
-            rom_id=42,
-            rom_detail={"platform_slug": "n64", "fs_size_bytes": 3_145_728},
-            file_path="/roms/n64/game_42.z64",
-            rom_dir=None,
-            system="n64",
-            cleanup=lambda: None,
-        )
-
-        assert error is None
-        assert file_path == "/roms/n64/game_42.z64"
-        rom = uow.roms.get(42)
-        assert rom is not None
-        assert rom.fs_size_bytes == 3_145_728
-        # The install itself still persisted in the same UoW.
-        assert uow.rom_installs.get(42) is not None
-
-    def test_missing_fs_size_bytes_does_not_overwrite(self, plugin):
-        # The guard protects a good persisted value when the detail omits the size.
-        uow = plugin._uow
-        seeded = Rom.synced(
-            rom_id=42,
-            platform_slug="n64",
-            name="Game 42",
-            fs_name="game_42.z64",
-            shortcut_app_id=1042,
-            synced_at="2026-01-01T00:00:00+00:00",
-            fs_size_bytes=999_000,
-        )
-        uow.roms.save(seeded)
-
-        _, error = plugin._download_service._record_install_io(
-            rom_id=42,
-            rom_detail={"platform_slug": "n64"},  # no fs_size_bytes key
-            file_path="/roms/n64/game_42.z64",
-            rom_dir=None,
-            system="n64",
-            cleanup=lambda: None,
-        )
-
-        assert error is None
-        rom = uow.roms.get(42)
-        assert rom is not None
-        assert rom.fs_size_bytes == 999_000
-
-    def test_zero_fs_size_bytes_does_not_overwrite(self, plugin):
-        # A zero size is falsy — the guard skips the write, preserving the value.
-        uow = plugin._uow
-        seeded = Rom.synced(
-            rom_id=42,
-            platform_slug="n64",
-            name="Game 42",
-            fs_name="game_42.z64",
-            shortcut_app_id=1042,
-            synced_at="2026-01-01T00:00:00+00:00",
-            fs_size_bytes=999_000,
-        )
-        uow.roms.save(seeded)
-
-        _, error = plugin._download_service._record_install_io(
-            rom_id=42,
-            rom_detail={"platform_slug": "n64", "fs_size_bytes": 0},
-            file_path="/roms/n64/game_42.z64",
-            rom_dir=None,
-            system="n64",
-            cleanup=lambda: None,
-        )
-
-        assert error is None
-        rom = uow.roms.get(42)
-        assert rom is not None
-        assert rom.fs_size_bytes == 999_000
 
 
 class TestRemoveRom:
@@ -1711,7 +1506,6 @@ class TestDoDownloadOverrideRebake:
     @pytest.mark.asyncio
     async def test_reinstall_with_stale_override_rebakes_plain_and_warns(self, plugin, tmp_path, caplog):
         """A stale override LABEL reinstall emits the PLAIN launch + WARNs (B4)."""
-        import logging
 
         # available_cores does not carry the pinned label → resolution returns None.
         plugin._core_info.available_cores = [
@@ -2552,7 +2346,6 @@ class TestEsDeCollapseRename:
     @pytest.mark.asyncio
     async def test_collision_skips_rename_and_keeps_staging_dir(self, plugin, tmp_path, caplog):
         """Pre-existing rename target → rename skipped, no clobber, install under the staging name."""
-        import logging
         import zipfile as zf
         from unittest.mock import patch
 
@@ -2768,7 +2561,6 @@ class TestDoDownloadNestedSingleFile:
     @pytest.mark.asyncio
     async def test_nested_single_file_empty_files_falls_back(self, plugin, tmp_path, caplog):
         """Defensive: empty files list falls back to fs_name and logs a warning."""
-        import logging
         from unittest.mock import AsyncMock
 
         import decky
@@ -2814,7 +2606,6 @@ class TestDoDownloadNestedSingleFile:
     @pytest.mark.asyncio
     async def test_nested_single_file_missing_files_key_falls_back(self, plugin, tmp_path, caplog):
         """Defensive: missing files key falls back to fs_name and logs a warning."""
-        import logging
         from unittest.mock import AsyncMock
 
         import decky
@@ -3171,7 +2962,6 @@ class TestResolveSafeExtractDirName:
         assert name == "Metal Gear Solid 4"
 
     def test_sanitizes_relative_traversal(self, plugin, caplog):
-        import logging
 
         with caplog.at_level(logging.WARNING, logger="test_romm"):
             name = plugin._download_service._resolve_safe_extract_dir_name({"fs_name_no_ext": "../../etc/pwned"})
@@ -3179,7 +2969,6 @@ class TestResolveSafeExtractDirName:
         assert any("Sanitized extract dir name" in rec.message for rec in caplog.records)
 
     def test_sanitizes_absolute_path(self, plugin, caplog):
-        import logging
 
         with caplog.at_level(logging.WARNING, logger="test_romm"):
             name = plugin._download_service._resolve_safe_extract_dir_name({"fs_name": "/etc/passwd"})
@@ -3191,7 +2980,6 @@ class TestResolveSafeExtractDirName:
         """A server-supplied name that basenames to ``..``/``.``/empty/whitespace
         must NOT resolve to the roms root or platform dir — it falls back to the
         synthetic rom_<id> identity + one warning (the HIGH-severity guard)."""
-        import logging
 
         with caplog.at_level(logging.WARNING, logger="test_romm"):
             name = plugin._download_service._resolve_safe_extract_dir_name({"id": 4778, "fs_name_no_ext": degenerate})
@@ -3202,7 +2990,6 @@ class TestResolveSafeExtractDirName:
         """An empty ``fs_name_no_ext`` is upstream-handled by
         ``resolve_extract_dir_name`` (it falls through to the synthetic name), so
         the guard sees an already-clean component — safe result, no coercion warning."""
-        import logging
 
         with caplog.at_level(logging.WARNING, logger="test_romm"):
             name = plugin._download_service._resolve_safe_extract_dir_name({"id": 4778, "fs_name_no_ext": ""})
@@ -4001,7 +3788,6 @@ class TestCleanupLeftoverTmpFiles:
         plugin._download_service.cleanup_leftover_tmp_files()
 
     def test_handles_permission_error(self, plugin, tmp_path, caplog):
-        import logging
 
         import decky
         from fakes.fake_download_file_store import FakeDownloadFileStore
@@ -4362,7 +4148,6 @@ class TestCleanupPartialDownloadFailureInjection:
     """
 
     def test_remove_failures_are_logged_and_other_paths_still_removed(self, plugin, caplog):
-        import logging
 
         from fakes.fake_download_file_store import FakeDownloadFileStore
 
@@ -4393,7 +4178,6 @@ class TestCleanupPartialDownloadFailureInjection:
         )
 
     def test_remove_tree_failure_is_logged_and_swallowed(self, plugin, caplog):
-        import logging
 
         from fakes.fake_download_file_store import FakeDownloadFileStore
 
@@ -5847,7 +5631,6 @@ class TestSiblingSupersedeRemoval:
     @pytest.mark.asyncio
     async def test_supersede_logs_both_rom_ids_on_success(self, plugin, caplog):
         # S7: a successful supersede logs both the sibling id and the group's rom id.
-        import logging
         from unittest.mock import AsyncMock
 
         _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
@@ -5861,7 +5644,6 @@ class TestSiblingSupersedeRemoval:
     @pytest.mark.asyncio
     async def test_supersede_logs_failure_with_message(self, plugin, caplog):
         # S7: a failed supersede logs at ERROR with both rom ids and the failure message.
-        import logging
         from unittest.mock import AsyncMock
 
         _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)

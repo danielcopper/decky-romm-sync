@@ -20,6 +20,7 @@ from models.metadata import AchievementSummary
 from domain.bios import compute_bios_label, compute_bios_level, format_bios_status
 from domain.platform_names import decode_platform_names
 from domain.save_status import compute_save_sync_display
+from lib.path_safety import PathTraversalError, safe_join
 
 if TYPE_CHECKING:
     import logging
@@ -34,6 +35,9 @@ if TYPE_CHECKING:
         ActiveCoreReader,
         BiosChecker,
         Clock,
+        PathExistsReader,
+        RetroDeckPaths,
+        SystemResolver,
         UnitOfWorkFactory,
     )
 
@@ -59,7 +63,9 @@ class GameDetailServiceConfig:
     ``AchievementsReader``, ``ActiveCoreReader``) GameDetailService consults to
     assemble the game-detail payload. The active-core resolver answers "which
     ``.so`` will this ROM launch with?" so the core-aware BIOS filter keys off
-    the per-game pin, not a platform default.
+    the per-game pin, not a platform default. ``path_exists`` /
+    ``retrodeck_paths`` / ``resolve_system`` are the single ``stat`` the page
+    runs on an uninstalled ROM's target path, and nothing more.
     """
 
     settings: dict[str, Any]
@@ -69,6 +75,9 @@ class GameDetailServiceConfig:
     bios_checker: BiosChecker
     achievements: AchievementsReader
     active_core: ActiveCoreReader
+    path_exists: PathExistsReader
+    retrodeck_paths: RetroDeckPaths
+    resolve_system: SystemResolver
 
 
 class GameDetailService:
@@ -82,6 +91,9 @@ class GameDetailService:
         self._bios_checker = config.bios_checker
         self._achievements = config.achievements
         self._active_core = config.active_core
+        self._path_exists = config.path_exists
+        self._retrodeck_paths = config.retrodeck_paths
+        self._resolve_system = config.resolve_system
 
     @staticmethod
     def _resolve_rom_file(install: RomInstall | None, rom: Rom) -> str:
@@ -234,6 +246,7 @@ class GameDetailService:
 
         installed = install is not None
         rom_file = self._resolve_rom_file(install, rom)
+        target_occupied = False if installed else self._target_path_occupied(rom)
 
         # Save sync
         save_sync_enabled = bool(self._settings.get("save_sync_enabled", False))
@@ -312,7 +325,32 @@ class GameDetailService:
             # Server-reported ROM size in bytes (#1395), surfaced read-only so the
             # frontend can show the space a download needs. NULL = size unknown.
             "fs_size_bytes": rom.fs_size_bytes,
+            "target_path_occupied": target_occupied,
         }
+
+    def _target_path_occupied(self, rom: Rom) -> bool:
+        """Whether something already sits where a download of *rom* would write.
+
+        The one ``stat`` this network-free page runs, and only for a ROM with no
+        install record — an existing row already answers the question. It exists
+        so the page can say a file is already in place instead of offering an
+        undifferentiated Download; the full comparison happens at click time
+        (ADR-0028).
+
+        The path is derived from ``roms.fs_name``, which is exact for the
+        ordinary case. For a ROM RomM serves as a folder holding a single nested
+        file, the on-disk name comes from server data this page does not have, so
+        the computed path simply misses and this stays false. That degradation is
+        intended: it goes quiet rather than claiming something it cannot know.
+        """
+        roms_path = self._retrodeck_paths.roms_path()
+        if not roms_path or not rom.fs_name or not rom.platform_slug:
+            return False
+        try:
+            target = safe_join(roms_path, self._resolve_system(rom.platform_slug), rom.fs_name)
+        except PathTraversalError:
+            return False
+        return self._path_exists.exists(target)
 
     async def get_bios_status(self, rom_id) -> dict[str, Any]:
         """Return BIOS status for a ROM by looking up platform/rom_file from SQLite.

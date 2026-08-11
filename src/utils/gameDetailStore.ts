@@ -592,6 +592,12 @@ function attachListeners(appId: number, entry: Entry): () => void {
               // entry is enough to re-key every rom_id-driven read.
               if (detail.app_id === appId) await loadDetail(appId, entry);
               break;
+            case "rom_adopted":
+              // Adoption writes an install record without a download, so no
+              // `download_complete` fires — but `installed` and `fs_size_bytes`
+              // changed just the same and the cached detail must be dropped.
+              if (detail.rom_id === entry.state.romId) await reloadDetail(appId, entry);
+              break;
           }
         } catch (err) {
           detach(debugLog(`gameDetailStore: onDataChanged error: ${err}`));

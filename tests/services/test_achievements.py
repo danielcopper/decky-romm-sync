@@ -8,8 +8,10 @@ import pytest
 from _factories import _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_disc_resolver import FakeDiscResolver
+from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_renderer_gc import FakeRendererGc
 from fakes.fake_renderer_rss import FakeRendererRss
+from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
@@ -118,6 +120,9 @@ def plugin(clock):
             bios_checker=bios_checker,
             achievements=p._achievements_service,
             active_core=FakeActiveCoreResolver(default=(None, None)),
+            path_exists=FakePathExistsReader(),
+            retrodeck_paths=FakeRetroDeckPaths(),
+            resolve_system=lambda slug, fs_slug=None: fs_slug or slug,
         ),
     )
     return p

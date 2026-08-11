@@ -44,6 +44,9 @@ import type {
   ListFileVersionsResult,
   CopySaveToSlotStatus,
   ListDevicesResponse,
+  TargetOccupiedResult,
+  AdoptResult,
+  VerifyContentResult,
 } from "../types";
 
 export interface BackendResult {
@@ -64,6 +67,15 @@ export interface CallableFailure {
 
 export function isCallableFailure(value: object): value is CallableFailure {
   return "success" in value && value.success === false;
+}
+
+/**
+ * Narrow a `start_download` reply to the refusal that carries the collision
+ * comparison. Keyed on the `reason` slug rather than the presence of `existing`,
+ * so a future refusal that happens to carry a payload is not mistaken for one.
+ */
+export function isTargetOccupied(value: object): value is TargetOccupiedResult {
+  return "reason" in value && (value as { reason?: unknown }).reason === "target_occupied";
 }
 
 /**
@@ -129,6 +141,12 @@ export interface CachedGameDetail extends BiosAnswer {
   // (a pre-migration row or a not-yet-re-applied platform); the frontend hides
   // the size in that case.
   fs_size_bytes?: number | null;
+  // Whether something already sits where a download would write (#260). Only
+  // ever true for a ROM with no install record — one `stat`, no network — so the
+  // page can offer "already here" instead of an undifferentiated Download. False
+  // is "nothing found or nothing knowable"; the full comparison runs at click
+  // time (ADR-0028).
+  target_path_occupied?: boolean;
 }
 
 // get_cached_game_detail wiring lives in utils/cachedGameDetailStore.ts so the
@@ -164,7 +182,17 @@ export const getSyncStatus = callable<[], SyncProgress>("get_sync_status");
 export const getSessionBudgetStatus = callable<[], SessionBudgetStatus>("get_session_budget_status");
 export const clearSyncCache = callable<[], BackendResult>("clear_sync_cache");
 export const getSyncStats = callable<[], SyncStats>("get_sync_stats");
-export const startDownload = callable<[number], BackendResult>("start_download");
+/**
+ * Start a download. `replaceExisting` is the user's answer to a
+ * `target_occupied` refusal: pass `true` only after the second confirmation
+ * that names the deletion, because the backend then clears whatever is in the
+ * way before fetching (ADR-0028).
+ */
+export const startDownload = callable<[number, boolean], BackendResult | TargetOccupiedResult>("start_download");
+/** Record content already on disk as this ROM's install — nothing is fetched. */
+export const adoptExistingRom = callable<[number], AdoptResult>("adopt_existing_rom");
+/** Hash what is on disk and compare it against RomM's checksums. User-triggered only. */
+export const verifyExistingContent = callable<[number], VerifyContentResult>("verify_existing_content");
 export const cancelDownload = callable<[number], BackendResult>("cancel_download");
 export const pauseDownload = callable<[number], BackendResult>("pause_download");
 export const resumeDownload = callable<[number], BackendResult>("resume_download");

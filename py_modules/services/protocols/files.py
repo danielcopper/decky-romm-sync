@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractContextManager
 
+    from models.adoption import ExistingContent
     from models.prune import (
         MutationOutcome,
         RecoveryArtifact,
@@ -122,6 +123,32 @@ class DownloadFileStore(Protocol):
 
     def exists(self, path: str) -> bool:
         """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def is_dir(self, path: str) -> bool:
+        """Return True when *path* exists and is a directory."""
+        ...
+
+    def describe_path(self, path: str) -> ExistingContent | None:
+        """Describe whatever occupies *path*, or ``None`` when nothing does.
+
+        The one ``stat`` the download pre-flight runs before it commits to
+        writing: it answers what is in the way, how big it is and when it was
+        last touched, so the collision can be shown rather than overwritten. A
+        directory reports the recursive total of its contents, comparable with
+        the server's ``fs_size_bytes`` for a multi-file ROM.
+        """
+        ...
+
+    def checksum(self, path: str, algorithm: str, progress_callback: Callable[[int], None] | None = None) -> str:
+        """Return *path*'s hex digest under *algorithm* (``"md5"`` or ``"crc32"``).
+
+        The content check the adopt dialog runs on request, matched against the
+        digest RomM published for the same file. One read pass; the callback
+        receives each chunk's byte count as a delta so a caller hashing a whole
+        directory accumulates across files. Raises ``ValueError`` for an
+        algorithm the store cannot compute.
+        """
         ...
 
     def remove_file(self, path: str) -> None:

@@ -132,6 +132,8 @@ modules =
     services.playtime
     services.prune
     services.relaunch_options_resolver
+    services.rom_adoption
+    services.rom_install_recorder
     services.rom_removal
     services.saves
     services.session_lifecycle

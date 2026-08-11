@@ -12,6 +12,7 @@ from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
+from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_renderer_gc import FakeRendererGc
@@ -36,6 +37,11 @@ from services.playtime import PlaytimeService, PlaytimeServiceConfig
 from services.saves import SaveService, SaveServiceConfig
 
 _GAVEL = GavelNativeAdapter()
+
+# RetroDECK ROMs root the target-path probe resolves against. Never touched on
+# disk — the probe is a fake set of paths, so the base only has to be absolute
+# and normalized for the containment guard to accept a child of it.
+_ROMS_BASE = "/fake/retrodeck/roms"
 
 
 @pytest.fixture
@@ -184,7 +190,17 @@ def active_core_resolver():
 
 
 @pytest.fixture
-def game_detail_service(plugin, clock, active_core_resolver):
+def path_probe():
+    """Existence probe backing the page's single target-path ``stat``.
+
+    Empty by default, so an uninstalled ROM reports nothing in the way; a test
+    that exercises the occupied case adds the exact path to ``paths``.
+    """
+    return FakePathExistsReader()
+
+
+@pytest.fixture
+def game_detail_service(plugin, clock, active_core_resolver, path_probe):
     """Create a GameDetailService wired to the plugin's shared UoW and pinned clock."""
     return GameDetailService(
         config=GameDetailServiceConfig(
@@ -195,6 +211,9 @@ def game_detail_service(plugin, clock, active_core_resolver):
             bios_checker=plugin._firmware_service,
             achievements=plugin._achievements_service,
             active_core=active_core_resolver,
+            path_exists=path_probe,
+            retrodeck_paths=FakeRetroDeckPaths(roms=_ROMS_BASE),
+            resolve_system=lambda slug, fs_slug=None: fs_slug or slug,
         ),
     )
 

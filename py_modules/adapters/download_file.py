@@ -10,10 +10,12 @@ adapter exposes only the I/O seams declared by
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import shutil
 import urllib.parse
 import zipfile
+import zlib
 from typing import TYPE_CHECKING
 
 from lib.path_safety import safe_path_component
@@ -21,7 +23,10 @@ from lib.path_safety import safe_path_component
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from models.adoption import ExistingContent
+
 _EXTRACT_CHUNK = 1024 * 1024
+_HASH_CHUNK = 1024 * 1024
 
 
 class DownloadFileAdapter:
@@ -35,6 +40,77 @@ class DownloadFileAdapter:
     def exists(self, path: str) -> bool:
         """Return True when *path* refers to an existing file or directory."""
         return os.path.exists(path)
+
+    def is_dir(self, path: str) -> bool:
+        """Return True when *path* exists and is a directory."""
+        return os.path.isdir(path)
+
+    def describe_path(self, path: str) -> ExistingContent | None:
+        """Describe whatever occupies *path*, or ``None`` when nothing does.
+
+        A directory reports the recursive total of its contents so the number is
+        comparable with the server's ``fs_size_bytes`` for a multi-file ROM; the
+        walk accumulates sizes rather than collecting paths, because a single
+        multi-file install can hold tens of thousands of files. A file whose size
+        cannot be read contributes 0 instead of aborting the description — the
+        caller is deciding whether to *ask* the user, and a partial total is a
+        better answer than none.
+        """
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return None
+        is_dir = os.path.isdir(path)
+        return {
+            "path": path,
+            "is_dir": is_dir,
+            "size_bytes": self._tree_size(path) if is_dir else stat.st_size,
+            "modified_at": stat.st_mtime,
+        }
+
+    @staticmethod
+    def _tree_size(directory: str) -> int:
+        """Sum the sizes of every file under *directory*, unreadable entries as 0."""
+        total = 0
+        for root, _dirs, files in os.walk(directory):
+            for name in files:
+                try:
+                    total += os.lstat(os.path.join(root, name)).st_size
+                except OSError:
+                    continue
+        return total
+
+    def checksum(self, path: str, algorithm: str, progress_callback: Callable[[int], None] | None = None) -> str:
+        """Return *path*'s hex digest under *algorithm* (``"md5"`` or ``"crc32"``).
+
+        One read pass, fixed-size chunks, so memory stays bounded on a
+        multi-gigabyte disc image. *progress_callback* receives the number of
+        bytes consumed by each chunk — a delta, not a running total, so a caller
+        hashing a whole directory can accumulate across files without tracking
+        per-file offsets. Non-security use: both digests are matched against the
+        value RomM published for the same file to decide whether the content on
+        disk is that file.
+        """
+        if algorithm == "crc32":
+            crc = 0
+            for chunk in self._read_chunks(path, progress_callback):
+                crc = zlib.crc32(chunk, crc)
+            return f"{crc & 0xFFFFFFFF:08x}"
+        if algorithm != "md5":
+            raise ValueError(f"unsupported checksum algorithm: {algorithm!r}")
+        digest = hashlib.md5(usedforsecurity=False)
+        for chunk in self._read_chunks(path, progress_callback):
+            digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _read_chunks(path: str, progress_callback: Callable[[int], None] | None):
+        """Yield *path* in fixed-size chunks, reporting each chunk's length."""
+        with open(path, "rb") as f:
+            while chunk := f.read(_HASH_CHUNK):
+                if progress_callback is not None:
+                    progress_callback(len(chunk))
+                yield chunk
 
     def remove_file(self, path: str) -> None:
         """Delete *path*. Idempotent: a missing file is not an error."""
