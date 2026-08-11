@@ -1,6 +1,6 @@
 # Development
 
-Guide for setting up a development environment and contributing to decky-romm-sync.
+Guide for setting up a development environment and contributing to Tender.
 
 ## Prerequisites
 
@@ -16,8 +16,8 @@ Guide for setting up a development environment and contributing to decky-romm-sy
 ## Setup
 
 ```bash
-git clone https://github.com/danielcopper/decky-romm-sync.git
-cd decky-romm-sync
+git clone https://github.com/danielcopper/romm-tender.git
+cd romm-tender
 mise install          # installs Node LTS, pnpm, Python
 mise run setup        # installs JS + Python dependencies
 ```

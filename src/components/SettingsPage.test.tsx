@@ -1248,7 +1248,7 @@ describe("SettingsPage", () => {
       expect(vi.mocked(showModal)).not.toHaveBeenCalled();
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "RomM Sync",
+          title: "Tender",
           body: 'Default save slot reset to "default".',
         }),
       );
@@ -1267,7 +1267,7 @@ describe("SettingsPage", () => {
       );
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "RomM Sync",
+          title: "Tender",
           body: 'Default save slot reset to "default".',
         }),
       );
@@ -1590,7 +1590,7 @@ describe("SettingsPage", () => {
       expect(vi.mocked(clearSaveSortMigration)).toHaveBeenCalled();
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "RomM Sync",
+          title: "Tender",
           body: "Moved 2 files",
         }),
       );

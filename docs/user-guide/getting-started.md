@@ -1,8 +1,8 @@
 # Getting Started
 
-## What is decky-romm-sync?
+## What is Tender?
 
-decky-romm-sync is a [Decky Loader](https://decky.xyz/) plugin that connects your self-hosted
+Tender is a [Decky Loader](https://decky.xyz/) plugin that connects your self-hosted
 [RomM](https://github.com/rommapp/romm) ROM library to Steam. Every game in your RomM library appears as a Non-Steam
 shortcut in the Steam Library, complete with cover art, metadata, and collections. Games launch through
 [RetroDECK](https://retrodeck.net/).
@@ -38,27 +38,27 @@ Before installing the plugin, you need:
    The URL for the latest release follows this pattern:
 
    ```text
-   https://github.com/danielcopper/decky-romm-sync/releases/download/decky-romm-sync-v{VERSION}/decky-romm-sync.zip
+   https://github.com/danielcopper/romm-tender/releases/download/decky-romm-sync-v{VERSION}/decky-romm-sync.zip
    ```
 
    For example, for v0.9.3:
 
    ```text
-   https://github.com/danielcopper/decky-romm-sync/releases/download/decky-romm-sync-v0.9.3/decky-romm-sync.zip
+   https://github.com/danielcopper/romm-tender/releases/download/decky-romm-sync-v0.9.3/decky-romm-sync.zip
    ```
 
 6. Decky downloads and installs the plugin automatically — no restart needed
 
-**Tip:** You can also open the [releases page](https://github.com/danielcopper/decky-romm-sync/releases) in Steam's
-built-in browser (Gaming Mode → long-press the Steam button → Web Browser), long-press the zip download link, and copy
-the URL from there.
+**Tip:** You can also open the [releases page](https://github.com/danielcopper/romm-tender/releases) in Steam's built-in
+browser (Gaming Mode → long-press the Steam button → Web Browser), long-press the zip download link, and copy the URL
+from there.
 
 Any direct URL to the zip file works (GitHub releases, a self-hosted mirror, etc.) as long as it points to a valid
 `.zip` containing the plugin.
 
 ### Manual installation (alternative)
 
-1. Download `decky-romm-sync.zip` from the [releases page](https://github.com/danielcopper/decky-romm-sync/releases)
+1. Download `decky-romm-sync.zip` from the [releases page](https://github.com/danielcopper/romm-tender/releases)
 2. Extract the zip to `~/homebrew/plugins/` on your device (via SSH, file manager, or USB)
 3. Restart Decky Loader — either reboot, or run `sudo systemctl restart plugin_loader` via SSH
 4. The plugin appears in your QAM under the Decky tab
@@ -67,7 +67,7 @@ Any direct URL to the zip file works (GitHub releases, a self-hosted mirror, etc
 
 After installation, you need to connect the plugin to your RomM server:
 
-1. Open the QAM and find **decky-romm-sync**
+1. Open the QAM and find **Tender**
 2. Tap **Connection Settings**
 3. Enter your RomM server URL (e.g. `http://192.168.1.100:8080`) — this saves automatically
 4. Tap **Sign in**, enter your RomM username and password once, and confirm

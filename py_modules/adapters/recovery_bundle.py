@@ -35,10 +35,10 @@ if TYPE_CHECKING:
 
 _SAFE_BUNDLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*_\d{4}-\d{2}-\d{2}_[A-Za-z0-9]{4,32}$", re.ASCII)
 _ROOT_README_NAME = "README.txt"
-_ROOT_README_TEXT = """decky-romm-sync recovery bundles
-================================
+_ROOT_README_TEXT = """Tender recovery bundles
+=======================
 
-This folder holds snapshots the RomM Sync plugin took immediately BEFORE it
+This folder holds snapshots the Tender plugin took immediately BEFORE it
 deleted a game's local data, during "Clean Up Removed RomM Games".
 
   bundles/   one folder per cleaned-up game, named <game>_<date>_<id>.

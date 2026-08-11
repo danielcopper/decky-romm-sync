@@ -14,7 +14,7 @@ Only the latest release receives security fixes.
 If you discover a security vulnerability in decky-romm-sync, please report it responsibly:
 
 1. **Do NOT open a public GitHub issue.**
-2. Use [GitHub Security Advisories](https://github.com/danielcopper/decky-romm-sync/security/advisories/new) to report
+2. Use [GitHub Security Advisories](https://github.com/danielcopper/romm-tender/security/advisories/new) to report
    privately.
 3. Include:
    - Description of the vulnerability

@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect, FC, Fragment, createElement } from "react";
-import { showToast, SAVE_SYNC_TOAST_TITLE } from "../utils/toast";
+import { showToast } from "../utils/toast";
 import {
   ConfirmModal,
   DialogButton,
@@ -537,20 +537,20 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         const directionalBody = saveSyncToastBody(result.uploaded, result.downloaded);
         const c = result.conflicts?.length ?? 0;
         if (directionalBody) {
-          showToast(directionalBody, { title: SAVE_SYNC_TOAST_TITLE });
+          showToast(directionalBody);
         } else if (c === 0) {
           // Manual surface only (#1486): an explicit per-game "Sync Saves" click
           // that moved nothing and hit no conflicts gets a short acknowledgement,
           // so the click doesn't read as a no-op. The automatic surfaces
           // (pre-launch, post-exit) stay silent on this zero-case.
-          showToast("Saves already up to date", { title: SAVE_SYNC_TOAST_TITLE });
+          showToast("Saves already up to date");
         }
         // Preserve the conflict signal as its own additive toast (mirroring the
         // post-exit conflicts_toast) — it must stay visible even when nothing
         // transferred. Gated above so "up to date" never contradicts pending
         // conflicts.
         if (c > 0) {
-          showToast(`${c} conflict(s) need resolution`, { title: SAVE_SYNC_TOAST_TITLE });
+          showToast(`${c} conflict(s) need resolution`);
         }
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: detail.romId } }),

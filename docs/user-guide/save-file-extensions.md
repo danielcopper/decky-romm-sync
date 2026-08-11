@@ -135,7 +135,7 @@ Again, standalone emulator formats that don't apply to RetroDECK's RetroArch-bas
 
 ## Implementation Decision
 
-For decky-romm-sync (RetroDECK-only):
+For Tender (RetroDECK-only):
 
 | Extension                      | Include?                          | Reason                                                       |
 | ------------------------------ | --------------------------------- | ------------------------------------------------------------ |

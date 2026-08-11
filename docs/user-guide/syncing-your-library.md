@@ -22,7 +22,7 @@ games appear in the Steam Library with cover art, metadata, and organized into c
    number of shortcuts added and/or removed this run (e.g. "Sync complete — 42 added, 3 removed."), omitting a part that
    is zero. If nothing changed, it reads "Library up to date."
 
-![RomM Sync QAM panel with connection status and the Sync Library button](../assets/screenshot-qam.jpg)
+![Tender QAM panel with connection status and the Sync Library button](../assets/screenshot-qam.jpg)
 
 <!-- Screenshot: Sync in progress with progress bar -->
 

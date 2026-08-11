@@ -516,7 +516,7 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     });
 
     expect(log).toHaveBeenCalledWith(expect.stringContaining("offline"));
-    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Could not prepare local cleanup." });
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "Tender", body: "Could not prepare local cleanup." });
   });
 });
 
@@ -920,7 +920,7 @@ describe("VersionPicker — switching", () => {
       await clickRow(menu.container, "Game (Japan)");
     });
 
-    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Switched — re-switch if launch fails" });
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "Tender", body: "Switched — re-switch if launch fails" });
     expect(invalidateCachedGameDetail).toHaveBeenCalledWith(APP_ID);
     expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(true);
   });
@@ -945,7 +945,7 @@ describe("VersionPicker — switching", () => {
 
       // A throw is treated like a failed confirm: warn + still complete the switch.
       expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("launch-options confirm threw"));
-      expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Switched — re-switch if launch fails" });
+      expect(toaster.toast).toHaveBeenCalledWith({ title: "Tender", body: "Switched — re-switch if launch fails" });
       expect(invalidateCachedGameDetail).toHaveBeenCalledWith(APP_ID);
       expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(true);
     } finally {
@@ -978,7 +978,7 @@ describe("VersionPicker — switching", () => {
 
     // Short body (Steam truncates it to one line), backend detail in subtext (#1359).
     expect(toaster.toast).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "Could not switch version",
       subtext: "That version is bound to another shortcut.",
     });
@@ -993,7 +993,7 @@ describe("VersionPicker — switching", () => {
     const { menu } = await renderAndOpen();
     await clickRow(menu.container, "Game (Japan)");
 
-    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Could not switch version" });
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "Tender", body: "Could not switch version" });
     expect(invalidateCachedGameDetail).not.toHaveBeenCalled();
   });
 
@@ -1067,7 +1067,7 @@ describe("VersionPicker — switch target liveness (#1570)", () => {
     const dispatched = await captureDataChanged(() => clickRow(menu.container, "Game (Japan)"));
 
     expect(toaster.toast).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "Could not switch version",
       subtext: vanishedFailure.message,
     });
@@ -1291,7 +1291,7 @@ describe("VersionPicker — switch target liveness (#1570)", () => {
       const dispatched = await captureDataChanged(() => clickRow(menu.container, "Game (Japan)"));
 
       expect(toaster.toast).toHaveBeenCalledWith({
-        title: "RomM Sync",
+        title: "Tender",
         body: "Could not switch version",
         subtext: vanishedFailure.message,
       });
@@ -1390,7 +1390,7 @@ describe("VersionPicker — unsynced-saves soft-block", () => {
 
     expect(backend.switchVersion).toHaveBeenNthCalledWith(2, APP_ID, 2, true);
     expect(toaster.toast).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "Could not switch version",
       subtext: "That version is bound to another shortcut.",
     });
@@ -1520,7 +1520,7 @@ describe("VersionPicker — unsynced-saves soft-block", () => {
 
     expect(backend.switchVersion).toHaveBeenNthCalledWith(2, APP_ID, 2, true);
     expect(toaster.toast).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "Could not switch version",
       subtext: vanished.message,
     });
@@ -1572,7 +1572,7 @@ describe("VersionPicker — unsynced-saves soft-block", () => {
 
     expect(backend.switchVersion).toHaveBeenNthCalledWith(2, APP_ID, 2, false);
     expect(toaster.toast).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "Could not switch version",
       subtext: vanished.message,
     });
@@ -1606,7 +1606,7 @@ describe("VersionPicker — unsynced-saves soft-block", () => {
     expect(backend.refreshSaveStatus).toHaveBeenCalledWith(block.unsynced_rom_id);
     // The refusal toast still fires — the refresh is additive, not a replacement.
     expect(toaster.toast).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "Could not switch version",
       subtext: refused.message,
     });
@@ -1639,7 +1639,7 @@ describe("VersionPicker — unsynced-saves soft-block", () => {
       await clickRow(menu.container, "Game (Japan)");
     });
 
-    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Couldn't sync saves — try again" });
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "Tender", body: "Couldn't sync saves — try again" });
     // The stranded version's status is refreshed so the conflict UI can surface.
     expect(backend.refreshSaveStatus).toHaveBeenCalledWith(1);
     expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(false);
@@ -1659,7 +1659,7 @@ describe("VersionPicker — unsynced-saves soft-block", () => {
     const { menu } = await renderAndOpen();
     await clickRow(menu.container, "Game (Japan)");
 
-    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Resolve save conflicts first" });
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "Tender", body: "Resolve save conflicts first" });
     expect(backend.refreshSaveStatus).toHaveBeenCalledWith(1);
     expect(backend.switchVersion).toHaveBeenCalledTimes(1);
   });
@@ -1677,7 +1677,7 @@ describe("VersionPicker — unsynced-saves soft-block", () => {
       await clickRow(menu.container, "Game (Japan)");
     });
 
-    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Saves still unsynced — try again" });
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "Tender", body: "Saves still unsynced — try again" });
     expect(backend.refreshSaveStatus).toHaveBeenCalledWith(1);
     expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(false);
   });
@@ -1694,7 +1694,7 @@ describe("VersionPicker — unsynced-saves soft-block", () => {
       await clickRow(menu.container, "Game (Japan)");
 
       // The abort toast still fires, and the rejected refresh is warned (not swallowed silently).
-      expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Couldn't sync saves — try again" });
+      expect(toaster.toast).toHaveBeenCalledWith({ title: "Tender", body: "Couldn't sync saves — try again" });
       expect(logWarnSpy).toHaveBeenCalledWith(expect.stringContaining("post-abort save-status refresh failed"));
     } finally {
       logWarnSpy.mockRestore();

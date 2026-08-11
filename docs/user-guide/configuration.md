@@ -1,7 +1,7 @@
 # Configuration
 
 All settings are accessible from the plugin's QAM panel. Open the Quick Access Menu (**...** button) and navigate to the
-decky-romm-sync plugin.
+Tender plugin.
 
 ## Connection Settings
 

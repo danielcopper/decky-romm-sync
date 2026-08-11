@@ -53,7 +53,7 @@ describe("handleGlobalDownloadFailure", () => {
     });
     expect(toast.toast).toHaveBeenCalledOnce();
     expect(toast.toast).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "Download failed: Super Mario 64 — disk full",
     });
   });
@@ -91,7 +91,7 @@ describe("handleGlobalDownloadFailure", () => {
     handleGlobalDownloadFailure(makeEvent({ error_message: "" }), store, toast);
 
     expect(toast.toast).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "Download failed: Super Mario 64 — ",
     });
     const [updatedCall] = (store.updateDownload as unknown as { mock: { calls: [DownloadItem][] } }).mock.calls;

@@ -86,7 +86,7 @@ async function captureShortcutSnapshot(appId: number): Promise<PruneSteamSnapsho
   if (!liveApps) throw new Error("Steam shortcut store was unavailable");
   if (!liveApps.has(appId)) throw new Error("Steam shortcut is absent");
   const details = await getAppDetails(appId);
-  if (!isRomMShortcutDetails(details)) throw new Error("The live shortcut is not owned by RomM Sync");
+  if (!isRomMShortcutDetails(details)) throw new Error("The live shortcut is not owned by Tender");
   const overview = appStore.GetAppOverviewByAppID(appId);
   if (!overview) throw new Error("Steam shortcut playtime state was unavailable");
   const collections = collectionStore.userCollections
@@ -190,7 +190,7 @@ async function repointShortcutReport(
   attempt: SteamMutationAttempt,
 ): Promise<CompletePruneActionRequest> {
   const details = await getAppDetails(action.app_id);
-  if (!isRomMShortcutDetails(details)) throw new Error("The live shortcut is not owned by RomM Sync");
+  if (!isRomMShortcutDetails(details)) throw new Error("The live shortcut is not owned by Tender");
   assertCurrent(generation);
   const result: SwitchVersionSuccess = {
     success: true,

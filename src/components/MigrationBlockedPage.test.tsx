@@ -133,7 +133,7 @@ describe("MigrationBlockedPage component", () => {
       // clearMigration() was invoked → store is { pending: false }.
       expect(getMigrationState()).toEqual({ pending: false });
       expect(toaster.toast).toHaveBeenCalledWith({
-        title: "RomM Sync",
+        title: "Tender",
         body: "Migrated 3 ROMs",
       });
       // Field now visible with the result message.
@@ -152,7 +152,7 @@ describe("MigrationBlockedPage component", () => {
         await flushAsync();
       });
       expect(toaster.toast).toHaveBeenCalledWith({
-        title: "RomM Sync",
+        title: "Tender",
         body: "Migration complete.",
       });
     });
@@ -210,7 +210,7 @@ describe("MigrationBlockedPage component", () => {
       expect(backend.migrateRetroDeckFiles).toHaveBeenNthCalledWith(2, "overwrite");
       // Second call's success path fired the toast.
       expect(toaster.toast).toHaveBeenCalledWith({
-        title: "RomM Sync",
+        title: "Tender",
         body: "Done after overwrite",
       });
     });
@@ -321,7 +321,7 @@ describe("MigrationBlockedPage component", () => {
       expect(backend.dismissRetrodeckMigration).toHaveBeenCalled();
       expect(getMigrationState()).toEqual({ pending: false });
       expect(toaster.toast).toHaveBeenCalledWith({
-        title: "RomM Sync",
+        title: "Tender",
         body: "Migration dismissed.",
       });
     });

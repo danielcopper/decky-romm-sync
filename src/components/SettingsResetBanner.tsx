@@ -27,7 +27,7 @@ export function settingsResetCardMessage(backedUpTo: string | null): string {
   const backup = backedUpTo
     ? `A backup of your old settings was saved to ${backedUpTo}.`
     : "A backup of your old settings was saved.";
-  return `Your settings file was corrupt and has been reset. Re-enter your server URL and sign in again. ${backup} Open the RomM Sync menu (QAM) to dismiss this.`;
+  return `Your settings file was corrupt and has been reset. Re-enter your server URL and sign in again. ${backup} Open the Tender menu (QAM) to dismiss this.`;
 }
 
 interface SettingsResetBannerProps {

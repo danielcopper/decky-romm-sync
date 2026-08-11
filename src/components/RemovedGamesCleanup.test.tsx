@@ -316,7 +316,7 @@ describe("RemovedGamesCleanup", () => {
     fireEvent.click(button);
     await waitFor(() =>
       expect(toaster.toast).toHaveBeenCalledWith({
-        title: "RomM Sync",
+        title: "Tender",
         body: "Could not scan removed RomM games.",
       }),
     );

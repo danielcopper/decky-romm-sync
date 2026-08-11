@@ -98,7 +98,7 @@ export function scrollToTop(e: FocusLike): void {
 
 // Resolution-relative top clearance for scrollElementToTop, derived from the
 // scroll parent's clientHeight so it scales with the viewport. The QAM's fixed
-// "RomM Sync" header sits over the scroll parent's top:0, and its height scales
+// "Tender" header sits over the scroll parent's top:0, and its height scales
 // with resolution / UI scale (Deck 1280x800 vs Big Picture 1080p/1440p/4K), so
 // a fixed px clears the header on only one display. `fraction * clientHeight`
 // lands ~64px on the Deck QAM (on-device-tuned so the heading sits just clear of

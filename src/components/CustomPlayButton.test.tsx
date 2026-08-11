@@ -1075,7 +1075,7 @@ describe("CustomPlayButton — uninstall is visible and single-shot (#1664)", ()
 
     await findByText("Play");
     expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "This ROM is already being uninstalled",
     });
   });
@@ -1555,7 +1555,7 @@ describe("CustomPlayButton — resolve conflict reads the known conflict (#1276)
     });
 
     expect(vi.mocked(handleConflicts)).not.toHaveBeenCalled();
-    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Cleanup is active." });
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "Tender", body: "Cleanup is active." });
     await utils.findByText("Resolve Conflict");
   });
 });
@@ -1653,7 +1653,7 @@ describe("CustomPlayButton — shared launch gate (ADR-0015)", () => {
     await clickPlay();
 
     expect(toaster.toast).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "This download has no file the emulator can launch. The files are on disk — see the game page.",
     });
     expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
@@ -2636,7 +2636,7 @@ describe("CustomPlayButton — Stop Game", () => {
     // action that cannot be carried out.
     expect(showStopGameModal).not.toHaveBeenCalled();
     expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "Couldn't stop the game — still loading its details",
     });
     // Nothing was stopped, so Resume must stay reachable.
@@ -2663,7 +2663,7 @@ describe("CustomPlayButton — Stop Game", () => {
     });
 
     expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "RetroDECK is running, but not this game — nothing was stopped.",
     });
     expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
@@ -2759,7 +2759,7 @@ describe("CustomPlayButton — Stop Game", () => {
     });
 
     expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "Couldn't signal the emulator",
     });
     // The game may well still be running — Resume must stay reachable.
@@ -2782,7 +2782,7 @@ describe("CustomPlayButton — Stop Game", () => {
     // logged, and the overlay is deliberately NOT cleared (no verdict was
     // reached, so the game may still be running).
     expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "Couldn't stop the game",
     });
     expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(

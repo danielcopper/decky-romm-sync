@@ -8,7 +8,7 @@
  * used only for LIVENESS at reload-adoption, never to identify a launching app.
  */
 
-import { showToast, SAVE_SYNC_TOAST_TITLE } from "./toast";
+import { showToast } from "./toast";
 import { recordSessionStart, getAppIdRomIdMap, finalizeGameSession, logInfo, logError, debugLog } from "../api/backend";
 import { saveSyncToastBody } from "./saveSyncToast";
 import { setMigrationStatus } from "./migrationStore";
@@ -278,9 +278,9 @@ async function handleGameStop(stoppedAppId: number): Promise<void> {
       ? saveSyncToastBody(result.sync.uploaded, result.sync.downloaded)
       : null;
     if (directionalBody) {
-      showToast(directionalBody, { title: SAVE_SYNC_TOAST_TITLE });
+      showToast(directionalBody);
     } else if (result.sync.failure_toast) {
-      showToast(result.sync.failure_toast, { title: SAVE_SYNC_TOAST_TITLE });
+      showToast(result.sync.failure_toast);
     }
 
     // Save-sync event dispatch — fires unconditionally so open surfaces refresh
@@ -291,7 +291,7 @@ async function handleGameStop(stoppedAppId: number): Promise<void> {
 
     // Additive conflicts toast — backend renders the count string.
     if (result.sync.conflicts_toast) {
-      showToast(result.sync.conflicts_toast, { title: SAVE_SYNC_TOAST_TITLE });
+      showToast(result.sync.conflicts_toast);
     }
 
     // Migration store updates — backend ran refresh_state, frontend just

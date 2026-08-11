@@ -6,14 +6,14 @@ Common issues and how to fix them.
 
 ### Connection shows "Backend error"
 
-**Symptom**: The RomM Sync QAM panel's **Connection** row shows a "Backend error" badge with the note "Plugin backend
+**Symptom**: The Tender QAM panel's **Connection** row shows a "Backend error" badge with the note "Plugin backend
 failed to start — check Decky logs", and the Sync buttons are disabled. This state means the plugin's own Python backend
 process never started — it is **not** the same as an unreachable RomM server, which shows **Not connected** instead.
 
 **Fix**: The backend aborted during startup — most often a failed data migration after an update — so the UI can't reach
-it. Open the Decky plugin log to find the underlying error, then reload RomM Sync from the Decky plugin list. If it
-still fails after a reload, restart Steam (or the Steam Deck); if the error persists, include the log output when you
-report it.
+it. Open the Decky plugin log to find the underlying error, then reload Tender from the Decky plugin list. If it still
+fails after a reload, restart Steam (or the Steam Deck); if the error persists, include the log output when you report
+it.
 
 ## Games Won't Launch
 
@@ -30,7 +30,7 @@ for details.
 
 **Symptom**: Pressing Play does nothing, or you get a toast saying the ROM needs to be downloaded.
 
-**Fix**: Open the game's detail page and tap **Download** in the RomM Sync panel. The game will be playable once the
+**Fix**: Open the game's detail page and tap **Download** in the Tender panel. The game will be playable once the
 download completes.
 
 ### The download has no launchable file
@@ -198,8 +198,8 @@ shortcut's tile image and does not always refresh it right away. A tile that is 
 the first time you open that game's detail page, scroll it back into view, or the next time Steam restarts — the cover
 is already on disk; Steam just hasn't re-rendered the tile yet.
 
-**Fix**: If a tile stays blank after that, open the game's detail page and tap **Refresh Metadata** in the RomM Sync
-panel. This re-fetches all artwork and metadata. (Hero banners, logos, and wide grid images additionally need a
+**Fix**: If a tile stays blank after that, open the game's detail page and tap **Refresh Metadata** in the Tender panel.
+This re-fetches all artwork and metadata. (Hero banners, logos, and wide grid images additionally need a
 [SteamGridDB API key](configuration.md#steamgriddb-api-key) — see above.)
 
 ## Shortcuts Appear on Other Devices

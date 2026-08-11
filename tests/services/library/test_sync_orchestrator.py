@@ -268,7 +268,12 @@ class TestShortcutDataFormat:
         result = build_shortcuts_data([{"id": 1, "name": "Game"}], decky.DECKY_PLUGIN_DIR, {}, {})
         exe = result[0]["exe"]
         assert exe.endswith("/bin/rom-launcher"), f"Exe path should end with /bin/rom-launcher, got: {exe}"
-        assert "decky-romm-sync" in exe, f"Exe path should contain plugin name, got: {exe}"
+        # Anchored to the directory it was handed, not to a name: DECKY_PLUGIN_DIR
+        # is the checkout root under test, so asserting a literal name here pins
+        # whatever the working copy happens to be called.
+        assert exe.startswith(f"{decky.DECKY_PLUGIN_DIR}/"), (
+            f"Exe path should sit inside the plugin directory it was given, got: {exe}"
+        )
 
     def test_installed_rom_gets_launch_command(self, plugin):
         """An installed ROM's launch_options is the full RetroDECK launch command."""

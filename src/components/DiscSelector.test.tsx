@@ -261,7 +261,7 @@ describe("DiscSelector — selecting a disc", () => {
 
     // Non-vacuous: the exact backend message is toasted, and no shortcut write.
     expect(toaster.toast).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "Disc not found in the install directory",
     });
     expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
@@ -280,7 +280,7 @@ describe("DiscSelector — selecting a disc", () => {
     });
 
     // Observable catch effect: a fallback toast, and no confirm-set.
-    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Failed to select disc" });
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "Tender", body: "Failed to select disc" });
     expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
   });
 });

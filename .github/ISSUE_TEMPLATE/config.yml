@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Documentation
-    url: https://danielcopper.github.io/decky-romm-sync/
+    url: https://danielcopper.github.io/romm-tender/
     about: Architecture, file structure, user guide, and contributing docs
   - name: Discussions
-    url: https://github.com/danielcopper/decky-romm-sync/discussions
+    url: https://github.com/danielcopper/romm-tender/discussions
     about: Questions, ideas, and general conversation that aren't bug reports or specific feature requests

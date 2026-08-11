@@ -32,7 +32,7 @@ body:
       label: Repro steps
       description: Numbered steps that reproduce the bug from a known-good state. Even a one-line description of what you were doing helps.
       placeholder: |
-        1. Open QAM > Decky > RomM Sync
+        1. Open QAM > Decky > Tender
         2. Click "Sync Library"
         3. ...
     validations:

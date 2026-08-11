@@ -253,7 +253,7 @@ class TestEvaluateBlock:
 
         assert verdict.action == "block"
         assert verdict.reason == "not_installed"
-        assert verdict.toast_title == "RomM Sync"
+        assert verdict.toast_title == "Tender"
         assert verdict.toast_body == "ROM not downloaded. Open the game page to download it first."
         # Save-status reader must not be consulted when the ROM is not installed.
         assert save_status_reader.calls == []
@@ -285,7 +285,7 @@ class TestEvaluateBlock:
 
         assert verdict.action == "block"
         assert verdict.reason == "save_conflict"
-        assert verdict.toast_title == "RomM Save Sync"
+        assert verdict.toast_title == "Tender"
         assert verdict.toast_body == "Save conflict detected — open game page to resolve before playing"
 
 
@@ -310,7 +310,7 @@ class TestEvaluateWarn:
 
         assert verdict.action == "warn"
         assert verdict.reason == "save_status_failed"
-        assert verdict.toast_title == "RomM Save Sync"
+        assert verdict.toast_title == "Tender"
         assert verdict.toast_body == "Save-status check failed — retry?"
         assert save_status_reader.calls == [99]
         assert save_status_reader.tracked_calls == [99]

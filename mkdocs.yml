@@ -1,6 +1,6 @@
-site_name: decky-romm-sync
+site_name: Tender
 site_description: A Decky Loader plugin that syncs your self-hosted RomM library into Steam
-site_url: https://danielcopper.github.io/decky-romm-sync/
+site_url: https://danielcopper.github.io/romm-tender/
 
 # Architectural Decision Records (`docs/adr/`) are kept in the repo for
 # contributors and AI agents — they're internal design history, not user
@@ -9,8 +9,8 @@ site_url: https://danielcopper.github.io/decky-romm-sync/
 exclude_docs: |
   adr/
 
-repo_url: https://github.com/danielcopper/decky-romm-sync
-repo_name: danielcopper/decky-romm-sync
+repo_url: https://github.com/danielcopper/romm-tender
+repo_name: danielcopper/romm-tender
 edit_uri: edit/main/docs/
 
 theme:

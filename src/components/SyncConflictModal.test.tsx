@@ -216,7 +216,7 @@ describe("SyncConflictModal", () => {
       await flushAsync();
 
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
-        title: "RomM Sync",
+        title: "Tender",
         body: "Conflict resolved — kept your local save (uploaded to server).",
       });
     });
@@ -232,7 +232,7 @@ describe("SyncConflictModal", () => {
       await flushAsync();
 
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
-        title: "RomM Sync",
+        title: "Tender",
         body: "Conflict resolved — used the server save · your local was backed up.",
       });
     });

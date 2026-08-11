@@ -1,24 +1,25 @@
 <div align="center">
 
-<img src="assets/logo-animated.gif" alt="" width="200">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/lockup-dark.png">
+  <img src="assets/lockup.png" alt="Tender" width="300">
+</picture>
 
-# decky-romm-sync
+<h3>Your RomM library, running native in Steam</h3>
 
-<h3>Your self-hosted RomM library, in your Steam library</h3>
+[Getting Started](https://danielcopper.github.io/romm-tender/user-guide/getting-started/) ·
+[Configuration](https://danielcopper.github.io/romm-tender/user-guide/configuration/) ·
+[Syncing](https://danielcopper.github.io/romm-tender/user-guide/syncing-your-library/) ·
+[Managing Games](https://danielcopper.github.io/romm-tender/user-guide/managing-games/)
 
-[Getting Started](https://danielcopper.github.io/decky-romm-sync/user-guide/getting-started/) ·
-[Configuration](https://danielcopper.github.io/decky-romm-sync/user-guide/configuration/) ·
-[Syncing](https://danielcopper.github.io/decky-romm-sync/user-guide/syncing-your-library/) ·
-[Managing Games](https://danielcopper.github.io/decky-romm-sync/user-guide/managing-games/)
+[BIOS &amp; Cores](https://danielcopper.github.io/romm-tender/user-guide/bios-management/) ·
+[Save Sync](https://danielcopper.github.io/romm-tender/user-guide/save-sync/) ·
+[Troubleshooting](https://danielcopper.github.io/romm-tender/user-guide/troubleshooting/)
 
-[BIOS &amp; Cores](https://danielcopper.github.io/decky-romm-sync/user-guide/bios-management/) ·
-[Save Sync](https://danielcopper.github.io/decky-romm-sync/user-guide/save-sync/) ·
-[Troubleshooting](https://danielcopper.github.io/decky-romm-sync/user-guide/troubleshooting/)
-
-<a href="https://danielcopper.github.io/decky-romm-sync/"><img alt="Documentation" src="https://img.shields.io/badge/user%20guide-read-4795c9?style=for-the-badge&labelColor=16202c"></a>
-<a href="https://github.com/danielcopper/decky-romm-sync/releases/latest"><img alt="Release" src="https://img.shields.io/github/package-json/v/danielcopper/decky-romm-sync?style=for-the-badge&label=release&color=4795c9&labelColor=16202c"></a>
-<a href="https://github.com/danielcopper/decky-romm-sync/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/danielcopper/decky-romm-sync?style=for-the-badge&color=4795c9&labelColor=16202c"></a>
-<a href="https://github.com/danielcopper/decky-romm-sync/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/danielcopper/decky-romm-sync/total?style=for-the-badge&color=4795c9&labelColor=16202c"></a>
+<a href="https://danielcopper.github.io/romm-tender/"><img alt="Documentation" src="https://img.shields.io/badge/user%20guide-read-4795c9?style=for-the-badge&labelColor=16202c"></a>
+<a href="https://github.com/danielcopper/romm-tender/releases/latest"><img alt="Release" src="https://img.shields.io/github/package-json/v/danielcopper/romm-tender?style=for-the-badge&label=release&color=4795c9&labelColor=16202c"></a>
+<a href="https://github.com/danielcopper/romm-tender/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/danielcopper/romm-tender?style=for-the-badge&color=4795c9&labelColor=16202c"></a>
+<a href="https://github.com/danielcopper/romm-tender/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/danielcopper/romm-tender/total?style=for-the-badge&color=4795c9&labelColor=16202c"></a>
 <a href="https://github.com/rommapp/romm/releases"><img alt="Requires RomM 4.9.0 or newer" src="https://img.shields.io/badge/RomM-%E2%89%A5%204.9.0-4795c9?style=for-the-badge&labelColor=16202c"></a>
 
 </div>
@@ -31,11 +32,12 @@ A [Decky Loader](https://decky.xyz/) plugin that syncs your self-hosted [RomM](h
 into Steam as non-steam shortcuts. Games appear directly in your Steam library, launch through
 [RetroDECK](https://retrodeck.net/), and can keep their saves in sync across devices through your RomM server.
 
+_Named after the railway car behind a steam locomotive, or the boat that shuttles out to a ship at anchor._
+
 > **Pre-1.0 (v0.x).** The feature set isn't complete yet. Save sync covers standard cartridge saves; the memory-card
 > systems — PlayStation, PS2, Dreamcast, GameCube, PSP, 3DS — don't sync their saves yet, and the
-> [support matrix](https://danielcopper.github.io/decky-romm-sync/user-guide/save-sync-support-matrix/) has the
-> per-system detail. The [Decky Store](https://plugins.deckbrew.xyz/) listing comes with v1.0; until then it's a manual
-> install.
+> [support matrix](https://danielcopper.github.io/romm-tender/user-guide/save-sync-support-matrix/) has the per-system
+> detail. The [Decky Store](https://plugins.deckbrew.xyz/) listing comes with v1.0; until then it's a manual install.
 
 ## Features
 
@@ -45,7 +47,7 @@ into Steam as non-steam shortcuts. Games appear directly in your Steam library, 
   capsules and custom icons, with a manual picker for games that don't match automatically
 - **Save sync** — Opt-in save syncing across devices through your RomM server, automatically before launch and after you
   quit; identical saves resolve silently, and if both sides genuinely changed you decide which one wins
-  ([not every system syncs yet](https://danielcopper.github.io/decky-romm-sync/user-guide/save-sync-support-matrix/))
+  ([not every system syncs yet](https://danielcopper.github.io/romm-tender/user-guide/save-sync-support-matrix/))
 - **Save slots & version history** — Multiple named save profiles per game, plus per-file version history with restore
 - **ROM downloads** — Download on demand with progress, pause/resume/cancel, and a managed queue
 - **BIOS management** — Per-platform BIOS status, download all or only what your active core requires, hash-verified
@@ -88,7 +90,7 @@ into Steam as non-steam shortcuts. Games appear directly in your Steam library, 
 > **v1.0** release. Until then, use the manual install below.
 
 Once published, install it straight from Decky's built-in store — open the Quick Access Menu → **Decky** → store icon,
-search for **RomM Sync**, and install. No Developer Mode required.
+search for **Tender**, and install. No Developer Mode required.
 
 </details>
 
@@ -99,36 +101,36 @@ This is the current method while v1.0 is in progress. It requires **Developer Mo
 gear icon → toggle **Developer Mode**).
 
 1. Download the latest `decky-romm-sync.zip` from the
-   [releases page](https://github.com/danielcopper/decky-romm-sync/releases)
+   [releases page](https://github.com/danielcopper/romm-tender/releases)
 2. In Decky settings → **Developer** tab → **Install Plugin from ZIP** (or **from URL** with the
-   [latest release link](https://github.com/danielcopper/decky-romm-sync/releases/latest/download/decky-romm-sync.zip))
+   [latest release link](https://github.com/danielcopper/romm-tender/releases/latest/download/decky-romm-sync.zip))
 
 </details>
 
 > Full step-by-step instructions, including first-time setup, are in
-> [Getting Started](https://danielcopper.github.io/decky-romm-sync/user-guide/getting-started/).
+> [Getting Started](https://danielcopper.github.io/romm-tender/user-guide/getting-started/).
 
 ## Quick start
 
-1. Open the Quick Access Menu and select **RomM Sync**
+1. Open the Quick Access Menu and select **Tender**
 2. In **Settings**, enter your RomM server URL and credentials, then hit **Test Connection**
 3. In **Platforms**, enable the platforms you want to sync
 4. Hit **Sync Library** — your ROMs appear as non-steam shortcuts
 
-See the [User Guide](https://danielcopper.github.io/decky-romm-sync/user-guide/syncing-your-library/) for syncing
-details, [save sync](https://danielcopper.github.io/decky-romm-sync/user-guide/save-sync/), and
-[BIOS management](https://danielcopper.github.io/decky-romm-sync/user-guide/bios-management/).
+See the [User Guide](https://danielcopper.github.io/romm-tender/user-guide/syncing-your-library/) for syncing details,
+[save sync](https://danielcopper.github.io/romm-tender/user-guide/save-sync/), and
+[BIOS management](https://danielcopper.github.io/romm-tender/user-guide/bios-management/).
 
 ## Contributing
 
 Build from source, run the tests, and read the architecture reference on the documentation site:
 
-- [Development setup](https://danielcopper.github.io/decky-romm-sync/contributing/development/)
-- [Frontend dev loop](https://danielcopper.github.io/decky-romm-sync/contributing/frontend-dev-loop/) — live-reload the
-  UI into a windowed Big Picture on the Deck, no Game Mode switching
-- [Backend architecture](https://danielcopper.github.io/decky-romm-sync/architecture/backend-architecture/)
+- [Development setup](https://danielcopper.github.io/romm-tender/contributing/development/)
+- [Frontend dev loop](https://danielcopper.github.io/romm-tender/contributing/frontend-dev-loop/) — live-reload the UI
+  into a windowed Big Picture on the Deck, no Game Mode switching
+- [Backend architecture](https://danielcopper.github.io/romm-tender/architecture/backend-architecture/)
 
-[![CI](https://github.com/danielcopper/decky-romm-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/danielcopper/decky-romm-sync/actions/workflows/ci.yml)
+[![CI](https://github.com/danielcopper/romm-tender/actions/workflows/ci.yml/badge.svg)](https://github.com/danielcopper/romm-tender/actions/workflows/ci.yml)
 [![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
 [![Coverage](https://img.shields.io/sonar/coverage/danielcopper_decky-romm-sync?server=https%3A%2F%2Fsonarcloud.io)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
 [![Maintainability](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)

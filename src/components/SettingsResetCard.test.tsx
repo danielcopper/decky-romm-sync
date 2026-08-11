@@ -30,7 +30,7 @@ describe("SettingsResetCard", () => {
     });
     expect(capturedWarningCard[0]?.message).toContain("settings.json.corrupt-9");
     // Informational only — the copy points the user to the QAM to dismiss.
-    expect(capturedWarningCard[0]?.message).toContain("Open the RomM Sync menu (QAM) to dismiss this.");
+    expect(capturedWarningCard[0]?.message).toContain("Open the Tender menu (QAM) to dismiss this.");
   });
 
   it("forwards compact=true and the generic message when backup path is null", () => {
@@ -38,7 +38,7 @@ describe("SettingsResetCard", () => {
     render(<SettingsResetCard backedUpTo={null} compact />);
     expect(capturedWarningCard[0]?.compact).toBe(true);
     expect(capturedWarningCard[0]?.message).toContain("A backup of your old settings was saved.");
-    expect(capturedWarningCard[0]?.message).toContain("Open the RomM Sync menu (QAM) to dismiss this.");
+    expect(capturedWarningCard[0]?.message).toContain("Open the Tender menu (QAM) to dismiss this.");
   });
 
   it("renders NO dismiss button — it delegates only to the (button-less) WarningCard", () => {

@@ -415,7 +415,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
               <PanelSectionRow>
                 <Field
                   label={`${unknownFiles.length} file(s) not recognized`}
-                  description="Report at github.com/danielcopper/decky-romm-sync/issues if needed."
+                  description="Report at github.com/danielcopper/romm-tender/issues if needed."
                   bottomSeparator="none"
                 />
               </PanelSectionRow>

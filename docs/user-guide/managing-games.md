@@ -1,12 +1,11 @@
 # Managing Games
 
-After syncing, each game in your Steam Library that came from RomM has an injected **RomM Sync** panel on its detail
-page. This panel handles downloads, artwork, BIOS status, save sync, and more.
+After syncing, each game in your Steam Library that came from RomM has an injected **Tender** panel on its detail page.
+This panel handles downloads, artwork, BIOS status, save sync, and more.
 
 ## The Game Detail Panel
 
-When you open a RomM game in the Steam Library, you'll see the RomM Sync panel below the standard Steam content. It
-shows:
+When you open a RomM game in the Steam Library, you'll see the Tender panel below the standard Steam content. It shows:
 
 - **Status badge** — "Installed", "Downloading", or "Not Installed"
 - **Platform name** — which system the game belongs to (e.g. "Game Boy Advance")
@@ -20,7 +19,7 @@ shows:
   installed games); it's also omitted when RomM doesn't report the size.
 - **Action buttons** — Download, Pause/Resume, Uninstall, Cancel, or Refresh Metadata depending on state
 
-![Game detail page showing the RomM Sync panel for an installed game](../assets/screenshot-game-detail.jpg)
+![Game detail page showing the Tender panel for an installed game](../assets/screenshot-game-detail.jpg)
 
 ## Versions
 
@@ -199,7 +198,7 @@ Games appear as shortcuts in your library even before the ROM file is downloaded
 **Space Required** cell next to the Play button so you know how much disk space the ROM needs. To download:
 
 1. Open the game's detail page in the Steam Library
-2. In the RomM Sync panel, tap **Download**
+2. In the Tender panel, tap **Download**
 3. A progress bar shows download status with bytes transferred
 4. When complete, the status changes to "Installed" and the game is ready to play
 
@@ -343,7 +342,7 @@ the plugin doesn't manage.
 To remove a downloaded ROM file:
 
 1. Open the game's detail page
-2. Tap **Uninstall** in the RomM Sync panel
+2. Tap **Uninstall** in the Tender panel
 3. The ROM file is deleted from disk
 4. The shortcut remains in your library so you can re-download later
 

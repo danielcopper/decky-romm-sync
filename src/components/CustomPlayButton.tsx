@@ -11,7 +11,7 @@
 
 import { useState, useEffect, useRef, FC, ReactElement } from "react";
 import { addEventListener, removeEventListener } from "@decky/api";
-import { showToast, SAVE_SYNC_TOAST_TITLE } from "../utils/toast";
+import { showToast } from "../utils/toast";
 import { Focusable, DialogButton, Menu, MenuItem, Navigation, showContextMenu } from "@decky/ui";
 import { appActionButtonClasses, basicAppDetailsSectionStylerClasses } from "../utils/deckyUiInternals";
 import { hideNativePlaySection, showNativePlaySection } from "../utils/styleInjector";
@@ -485,7 +485,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     return applyLaunchGateSetupOutcome(resolveSaveSetupOutcome(setupInfo), {
       rid,
       confirmSlotChoice,
-      toast: (body) => showToast(body, { title: SAVE_SYNC_TOAST_TITLE }),
+      toast: (body) => showToast(body),
       dispatchSavesTab: () =>
         globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } })),
     });
@@ -566,7 +566,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
 
     const toastBody = saveSyncToastBody(result.uploaded, result.downloaded);
     if (toastBody) {
-      showToast(toastBody, { title: SAVE_SYNC_TOAST_TITLE });
+      showToast(toastBody);
     }
     return { success: true, message: result.message };
   };

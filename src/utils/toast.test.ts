@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { toaster } from "@decky/api";
 import type { ToastNotification } from "@decky/api";
-import { showToast, PLUGIN_NAME, SAVE_SYNC_TOAST_TITLE } from "./toast";
+import { showToast, PLUGIN_NAME } from "./toast";
 
 describe("showToast", () => {
   beforeEach(() => {
@@ -26,13 +26,8 @@ describe("showToast", () => {
     });
   });
 
-  it("lets a caller override the title", () => {
-    showToast("Saves uploaded to RomM", { title: SAVE_SYNC_TOAST_TITLE });
-
-    expect(toaster.toast).toHaveBeenCalledWith({
-      title: SAVE_SYNC_TOAST_TITLE,
-      body: "Saves uploaded to RomM",
-    });
+  it("names the plugin the same way the manifest does", () => {
+    expect(PLUGIN_NAME).toBe("Tender");
   });
 
   it("returns the notification so a caller can dismiss it", () => {

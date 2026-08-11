@@ -1,5 +1,5 @@
 {
-  "name": "RomM Sync",
+  "name": "Tender",
   "version": "0.30.1",
   "author": "danielcopper",
   "flags": [],
@@ -12,6 +12,6 @@
       "emulation"
     ],
     "description": "Sync your self-hosted RomM library to Steam. Games appear as native shortcuts with cover art, metadata, and launch via RetroDECK. Includes ROM downloads, BIOS management, save file sync, and SteamGridDB artwork.",
-    "image": "https://raw.githubusercontent.com/danielcopper/decky-romm-sync/main/assets/store_image.png"
+    "image": "https://raw.githubusercontent.com/danielcopper/romm-tender/main/assets/store_image.png"
   }
 }

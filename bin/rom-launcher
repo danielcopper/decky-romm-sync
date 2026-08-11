@@ -1,5 +1,5 @@
 #!/bin/bash
-# rom-launcher — Steam shortcut launcher for the RomM Sync plugin.
+# rom-launcher — Steam shortcut launcher for the Tender plugin.
 # Steam invokes it with the full launch command (emulator invocation + ROM
 # path) in the shortcut's launch options. Pure exec wrapper: it runs exactly
 # what it is handed and owns no state, no path resolution, no emulator knowledge.
