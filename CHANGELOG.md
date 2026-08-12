@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.31.0](https://github.com/danielcopper/romm-tender/compare/decky-romm-sync-v0.30.1...decky-romm-sync-v0.31.0) (2026-08-12)
+
+
+### Features
+
+* **brand:** add the TENDER banner lockup ([#1706](https://github.com/danielcopper/romm-tender/issues/1706)) ([17ccb76](https://github.com/danielcopper/romm-tender/commit/17ccb76da991144ba00d2161cbfd9e16b7ac354c))
+* **brand:** rename the plugin to Tender ([#1707](https://github.com/danielcopper/romm-tender/issues/1707)) ([96b4e54](https://github.com/danielcopper/romm-tender/commit/96b4e54a4b81d8a6150ec8b1fcf13c34a17dd9e6))
+
+
+### Bug Fixes
+
+* **bios:** tell a check that could not answer apart from one reporting no requirement ([#1703](https://github.com/danielcopper/romm-tender/issues/1703)) ([f528e23](https://github.com/danielcopper/romm-tender/commit/f528e233caa0454143884b230c9bf91da7f37f85))
+
 ## [0.30.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.30.0...decky-romm-sync-v0.30.1) (2026-08-10)
 
 
