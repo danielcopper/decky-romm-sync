@@ -269,6 +269,12 @@ from where it left off. Two cases can't resume, so they show only **Cancel** (no
 In those cases, cancelling and starting over is the only option — but a fresh download is safe, as cancelling never
 removes an already-installed copy.
 
+If you chose **Download Instead** on the [already-on-your-device dialog](#when-the-game-is-already-on-your-device) and
+then paused, resuming picks up where it left off as usual: your existing file is still there until the download
+finishes, and the answer you gave covers it. Resume is only refused if something _new_ has turned up at the game's
+location in the meantime — Tender says so rather than deleting it, since you were never shown that content. Cancel the
+download and start again to see the dialog for what is there now.
+
 ### Multi-Disc and Multi-File Games
 
 Some games ship as more than one file — multi-disc PS1 titles, a base game plus updates and DLC, a BIN+CUE pair. RomM

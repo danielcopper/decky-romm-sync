@@ -502,6 +502,71 @@ describe("CustomPlayButton — pause/resume on active download (#1124)", () => {
     expect(backend.resumeDownload).toHaveBeenCalledWith(42);
   });
 
+  it("a refused resume is said out loud rather than doing nothing", async () => {
+    // The backend can turn a resume down — content appeared at the game's
+    // location while it sat paused. Swallowing that leaves the user pressing a
+    // button with no effect and no explanation.
+    vi.mocked(backend.resumeDownload).mockResolvedValue({
+      success: false,
+      reason: "target_occupied",
+      message: "A folder named 'Game 1' is already in place",
+      existing: { name: "Game 1", path: "/roms/psx/Game 1", is_dir: true, size_bytes: 2048, modified_at: 0 },
+      incoming: { name: "Game 1", size_bytes: 2048 },
+      sizes_match: true,
+      adoptable: true,
+    });
+    const { findByLabelText } = await renderActive(42, { status: "paused", resumable: true });
+    const menu = openMenu(await findByLabelText("Download actions"));
+    const resumeItem = await menu.findByText("Resume");
+
+    await act(async () => {
+      resumeItem.click();
+      await Promise.resolve();
+    });
+
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
+      title: "Tender",
+      body: "Something else is at this game's location now — cancel the download and start again",
+    });
+  });
+
+  it("a resume refused for any other reason surfaces the backend's own message", async () => {
+    vi.mocked(backend.resumeDownload).mockResolvedValue({
+      success: false,
+      message: "Another version is now active",
+    });
+    const { findByLabelText } = await renderActive(42, { status: "paused", resumable: true });
+    const menu = openMenu(await findByLabelText("Download actions"));
+    const resumeItem = await menu.findByText("Resume");
+
+    await act(async () => {
+      resumeItem.click();
+      await Promise.resolve();
+    });
+
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
+      title: "Tender",
+      body: "Another version is now active",
+    });
+  });
+
+  it("a thrown resume is surfaced rather than swallowed", async () => {
+    vi.mocked(backend.resumeDownload).mockRejectedValue(new Error("bridge down"));
+    const { findByLabelText } = await renderActive(42, { status: "paused", resumable: true });
+    const menu = openMenu(await findByLabelText("Download actions"));
+    const resumeItem = await menu.findByText("Resume");
+
+    await act(async () => {
+      resumeItem.click();
+      await Promise.resolve();
+    });
+
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
+      title: "Tender",
+      body: "Couldn't resume the download — is RomM server running?",
+    });
+  });
+
   it("Cancel from the resumable dropdown still cancels the download", async () => {
     const { findByLabelText } = await renderActive(42, { status: "downloading", resumable: true });
     const dropdownBtn = await findByLabelText("Download actions");
@@ -3203,7 +3268,7 @@ describe("CustomPlayButton — active-download button never takes the idle blue 
   });
 });
 
-describe("CustomPlayButton â content already on disk (#260)", () => {
+describe("CustomPlayButton — content already on disk (#260)", () => {
   const OCCUPIED = {
     success: false as const,
     reason: "target_occupied" as const,
@@ -3233,6 +3298,22 @@ describe("CustomPlayButton â content already on disk (#260)", () => {
     mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: false });
     const { findByText } = render(<CustomPlayButton appId={100} />);
     await findByText("Download");
+  });
+
+  it("stops saying 'Already on Device' once the files are uninstalled", async () => {
+    // The stat that set the flag ran at mount. An uninstall deletes exactly the
+    // content it found, so the label has to go back — otherwise it names files
+    // that are no longer there.
+    mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
+    const utils = render(<CustomPlayButton appId={100} />);
+    await utils.findByText("Already on Device");
+
+    await act(async () => {
+      globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: 42 } }));
+      await Promise.resolve();
+    });
+
+    await utils.findByText("Download");
   });
 
   it("opens the dialog on a target_occupied refusal instead of toasting a failure", async () => {

@@ -464,8 +464,7 @@ class DownloadService:
         platform_name = rom_detail.get("platform_name", platform_slug)
         # Carry the prior resumability verdict across a resume so the UI keeps
         # showing Pause before the resumed transfer's headers re-confirm it.
-        prior = self._download_queue.get(rom_id, {})
-        resumable = bool(prior.get("resumable", False))
+        resumable = bool(self._download_queue.get(rom_id, {}).get("resumable", False))
 
         # Create the control token BEFORE the task so the closure captured inside
         # ``_do_download``'s progress callback polls this exact object. A later
@@ -496,6 +495,15 @@ class DownloadService:
             # Whether the server proved byte-range resume support for this ROM.
             # Re-confirmed live by the ``on_meta`` callback once headers arrive.
             "resumable": resumable,
+            # The user's replace answer, carried across a pause so a resumed
+            # replace-download is not refused by the very file it is replacing.
+            # Kept only where the answer is still LIVE: a single-file replace
+            # deliberately deletes nothing (``os.replace`` is atomic), so the
+            # original is still there and still the content the user was shown. A
+            # multi-file replace already removed its directory, so the answer is
+            # spent — anything at that path now is content the user has never
+            # seen, and the gate must ask about it rather than delete it.
+            "_replace_existing": replace_existing and not is_multi_file_download(rom_detail),
         }
         self._download_tasks[rom_id] = task
         # Reserve this download's required bytes so a concurrent sibling's
@@ -1310,16 +1318,16 @@ class DownloadService:
         binding to a sibling while this download was paused (#1298 S1): if another
         member now owns the shortcut, this target is stale — the resume is refused
         (``superseded``) and its queue entry dropped rather than re-downloading a
-        version the picker has already moved away from. Otherwise the download
-        re-begins with ``resume=True`` so the transfer appends onto the existing
-        bytes (when the server honoured the original ``Range`` probe) instead of
-        restarting.
+        version the picker has already moved away from. Otherwise the transfer
+        appends onto the existing bytes instead of restarting (when the server
+        honoured the original ``Range`` probe).
 
-        The sibling supersede runs here too, inside ``_begin_download`` and behind
-        the same occupancy gate. A resume's target is a partial ``.tmp`` the plugin
-        wrote, so the gate normally passes — but if something has appeared there
-        while it sat paused, the same rule holds: refuse before another version's
-        files are deleted, not after.
+        The occupancy gate runs again, against the **final** path rather than the
+        partial ``.tmp``. A single-file replace's final path still holds the file
+        the user chose to replace, so the entry's stored answer goes back to the
+        gate — without it the resume is refused by the very file it is replacing,
+        every time. Anything else faces a free path, or a refusal if content
+        appeared there while it sat paused.
         """
         rom_id = int(rom_id)
         entry = self._download_queue.get(rom_id)
@@ -1328,7 +1336,7 @@ class DownloadService:
         if self._resume_target_superseded(rom_id):
             self.evict(rom_id)
             return {"success": False, "reason": "superseded", "message": "Another version is now active"}
-        return await self._begin_download(rom_id, resume=True)
+        return await self._begin_download(rom_id, resume=True, replace_existing=bool(entry.get("_replace_existing")))
 
     def _resume_target_superseded(self, rom_id: int) -> bool:
         """True when a sibling now owns the group's shortcut, stranding this resume.

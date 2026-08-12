@@ -214,7 +214,11 @@ Format: **invariant** — tier — enforced by.
   Removed-game cleanup takes the **confirm** leg for one case deliberately: installed ROM content the user did not
   select for the recovery bundle is deleted with its row. The ROM is re-downloadable from RomM where a save is not, the
   per-candidate opt-in and its consequence are stated in the confirmation dialog and the user guide, and the row cannot
-  be removed at all without a fresh 404 — so this is a disclosed choice, not an exception that drifted in
+  be removed at all without a fresh 404 — so this is a disclosed choice, not an exception that drifted in. The adopt
+  dialog's **replace** exit is the second such case, and it does **not** rest on that justification: the premise is that
+  the content is the user's own — a different rip, a patch, a romhack — which is exactly what the server cannot hand
+  back. What carries it instead is that the user is shown both sides, offered a content check, and chooses between two
+  named outcomes behind a second confirmation ([ADR-0028](docs/adr/0028-adopted-install-is-an-install.md))
 - **Every read-mutate-write of a `RomSaveSyncState` runs under `SyncEngine.rom_lock(rom_id)`** — prompt-only — sync
   paths, `get_save_status`, and the four slot mutations hold the lock; mechanize via a `rom_save_sync_states.save`
   call-site audit

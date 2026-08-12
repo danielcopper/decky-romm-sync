@@ -195,7 +195,12 @@ export const adoptExistingRom = callable<[number], AdoptResult>("adopt_existing_
 export const verifyExistingContent = callable<[number], VerifyContentResult>("verify_existing_content");
 export const cancelDownload = callable<[number], BackendResult>("cancel_download");
 export const pauseDownload = callable<[number], BackendResult>("pause_download");
-export const resumeDownload = callable<[number], BackendResult>("resume_download");
+/**
+ * Resume a paused download. Answers the collision refusal too: the occupancy
+ * gate runs again on resume, so content that appeared at the game's location
+ * while it sat paused turns the resume down rather than being written over.
+ */
+export const resumeDownload = callable<[number], BackendResult | TargetOccupiedResult>("resume_download");
 export const getDownloadQueue = callable<[], { downloads: DownloadItem[] }>("get_download_queue");
 export const clearCompletedDownloads = callable<[], { success: boolean; cleared: number }>("clear_completed_downloads");
 export const getInstalledRom = callable<[number], InstalledRom | null>("get_installed_rom");

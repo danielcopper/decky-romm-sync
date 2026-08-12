@@ -3,7 +3,7 @@ import logging
 import os
 import sqlite3
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -606,6 +606,27 @@ class TestRomInstallForeignKey:
         assert uow.committed is False
 
 
+_SINGLE_DETAIL: dict[str, Any] = {
+    "id": 1,
+    "name": "Game 1",
+    "fs_name": "game1.z64",
+    "fs_size_bytes": 1024,
+    "platform_slug": "n64",
+    "platform_name": "Nintendo 64",
+}
+_MULTI_DETAIL: dict[str, Any] = {
+    "id": 1,
+    "name": "Game 1",
+    "fs_name": "Game 1.zip",
+    "fs_name_no_ext": "Game 1",
+    "fs_size_bytes": 2048,
+    "platform_slug": "psx",
+    "platform_name": "PlayStation",
+    "has_multiple_files": True,
+    "files": [{"file_name": "a.bin"}, {"file_name": "b.bin"}],
+}
+
+
 class TestOccupiedTargetPreFlight:
     """A download refuses rather than writing over content already in place (#260).
 
@@ -614,26 +635,6 @@ class TestOccupiedTargetPreFlight:
     behind — including the in-progress claim, which a stuck download would
     otherwise hold until a plugin reload.
     """
-
-    _SINGLE: ClassVar[dict[str, Any]] = {
-        "id": 1,
-        "name": "Game 1",
-        "fs_name": "game1.z64",
-        "fs_size_bytes": 1024,
-        "platform_slug": "n64",
-        "platform_name": "Nintendo 64",
-    }
-    _MULTI: ClassVar[dict[str, Any]] = {
-        "id": 1,
-        "name": "Game 1",
-        "fs_name": "Game 1.zip",
-        "fs_name_no_ext": "Game 1",
-        "fs_size_bytes": 2048,
-        "platform_slug": "psx",
-        "platform_name": "PlayStation",
-        "has_multiple_files": True,
-        "files": [{"file_name": "a.bin"}, {"file_name": "b.bin"}],
-    }
 
     def _stage(self, plugin, detail, *, occupied_path, is_dir=False, size=4096):
         """Point the detail fetch at *detail* and stage one occupied path."""
@@ -658,7 +659,7 @@ class TestOccupiedTargetPreFlight:
     @pytest.mark.asyncio
     async def test_single_file_refuses_with_the_comparison(self, plugin):
         target = os.path.join(self._roms_path(plugin, "n64"), "game1.z64")
-        self._stage(plugin, self._SINGLE, occupied_path=target)
+        self._stage(plugin, _SINGLE_DETAIL, occupied_path=target)
 
         result = await plugin.start_download(1)
 
@@ -671,7 +672,7 @@ class TestOccupiedTargetPreFlight:
     @pytest.mark.asyncio
     async def test_a_refusal_starts_nothing_and_releases_the_claim(self, plugin):
         target = os.path.join(self._roms_path(plugin, "n64"), "game1.z64")
-        store = self._stage(plugin, self._SINGLE, occupied_path=target)
+        store = self._stage(plugin, _SINGLE_DETAIL, occupied_path=target)
         made_dirs = []
         store.make_dirs = made_dirs.append
 
@@ -685,7 +686,7 @@ class TestOccupiedTargetPreFlight:
     @pytest.mark.asyncio
     async def test_multi_file_checks_the_extract_directory_not_the_archive(self, plugin):
         extract_dir = os.path.join(self._roms_path(plugin, "psx"), "Game 1")
-        self._stage(plugin, self._MULTI, occupied_path=extract_dir, is_dir=True, size=2048)
+        self._stage(plugin, _MULTI_DETAIL, occupied_path=extract_dir, is_dir=True, size=2048)
 
         result = await plugin.start_download(1)
 
@@ -696,7 +697,7 @@ class TestOccupiedTargetPreFlight:
 
     @pytest.mark.asyncio
     async def test_a_free_target_proceeds(self, plugin):
-        self._stage(plugin, self._SINGLE, occupied_path="/nowhere")
+        self._stage(plugin, _SINGLE_DETAIL, occupied_path="/nowhere")
         plugin._download_service._download_file_store.disk_free = lambda _path: 900 * 1024 * 1024
 
         result = await plugin.start_download(1)
@@ -706,7 +707,7 @@ class TestOccupiedTargetPreFlight:
     @pytest.mark.asyncio
     async def test_replace_clears_an_occupied_directory_and_proceeds(self, plugin):
         extract_dir = os.path.join(self._roms_path(plugin, "psx"), "Game 1")
-        store = self._stage(plugin, self._MULTI, occupied_path=extract_dir, is_dir=True)
+        store = self._stage(plugin, _MULTI_DETAIL, occupied_path=extract_dir, is_dir=True)
         store.disk_free = lambda _path: 900 * 1024 * 1024
         removed = []
         store.remove_tree = removed.append
@@ -719,7 +720,7 @@ class TestOccupiedTargetPreFlight:
     @pytest.mark.asyncio
     async def test_replace_leaves_a_single_file_to_the_atomic_rename(self, plugin):
         target = os.path.join(self._roms_path(plugin, "n64"), "game1.z64")
-        store = self._stage(plugin, self._SINGLE, occupied_path=target)
+        store = self._stage(plugin, _SINGLE_DETAIL, occupied_path=target)
         store.disk_free = lambda _path: 900 * 1024 * 1024
         removed = []
         store.remove_file = removed.append
@@ -733,7 +734,7 @@ class TestOccupiedTargetPreFlight:
     @pytest.mark.asyncio
     async def test_a_failed_replace_aborts_the_download(self, plugin):
         extract_dir = os.path.join(self._roms_path(plugin, "psx"), "Game 1")
-        store = self._stage(plugin, self._MULTI, occupied_path=extract_dir, is_dir=True)
+        store = self._stage(plugin, _MULTI_DETAIL, occupied_path=extract_dir, is_dir=True)
 
         def _boom(_path):
             raise OSError("read-only filesystem")
@@ -781,7 +782,7 @@ class TestOccupiedTargetPreFlight:
             )
 
         plugin._download_service._loop = MagicMock()
-        plugin._download_service._loop.run_in_executor = AsyncMock(return_value=self._SINGLE)
+        plugin._download_service._loop.run_in_executor = AsyncMock(return_value=_SINGLE_DETAIL)
         plugin._download_service._loop.create_task = MagicMock(side_effect=lambda coro: (coro.close(), MagicMock())[1])
 
         result = await plugin.start_download(1)
@@ -789,6 +790,99 @@ class TestOccupiedTargetPreFlight:
         assert result["reason"] == "target_occupied"
         assert sibling_file.read_bytes() == b"the other version"
         assert plugin._uow.rom_installs.get(2) is not None
+
+
+class TestResumingAReplaceDownload:
+    """A paused replace-download can still be resumed (#260).
+
+    A single-file replace deliberately deletes nothing at admission — the final
+    ``os.replace`` is what swaps the bytes in — so on resume the gate meets the
+    very file the download is replacing. Without the user's stored answer it
+    refuses, every time, and Cancel (which discards the transferred bytes) is the
+    only way out. A multi-file replace is NOT symmetric: its directory was
+    removed when the answer was given, so a directory found there on resume is
+    content the user has never seen and must be asked about, not deleted.
+    """
+
+    def _stage(self, plugin, detail, *, occupied_path):
+        """Point the detail fetch at *detail* and hold one path permanently occupied."""
+        from unittest.mock import AsyncMock
+
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._loop.run_in_executor = AsyncMock(return_value=detail)
+        plugin._download_service._loop.create_task = MagicMock(side_effect=lambda coro: (coro.close(), MagicMock())[1])
+        store = plugin._download_service._download_file_store
+        store.describe_path = lambda path: (
+            {
+                "path": path,
+                "is_dir": path == occupied_path and detail is _MULTI_DETAIL,
+                "size_bytes": 8,
+                "modified_at": 0.0,
+            }
+            if path == occupied_path
+            else None
+        )
+        store.disk_free = lambda _path: 900 * 1024 * 1024
+        store.remove_tree = lambda _path: None
+        return store
+
+    def _roms(self, plugin, system):
+        return os.path.join(plugin._download_service._retrodeck_paths.roms_path(), system)
+
+    @pytest.mark.asyncio
+    async def test_a_paused_single_file_replace_resumes(self, plugin):
+        target = os.path.join(self._roms(plugin, "n64"), "game1.z64")
+        self._stage(plugin, _SINGLE_DETAIL, occupied_path=target)
+
+        assert (await plugin.start_download(1, True))["success"] is True
+        # The file the user chose to replace is still there — os.replace swaps it
+        # at the end — so a resume that forgot the answer would be refused by it.
+        plugin._download_service._download_queue[1]["status"] = "paused"
+
+        result = await plugin.resume_download(1)
+
+        assert result == {"success": True, "message": "Download started"}
+
+    @pytest.mark.asyncio
+    async def test_a_resume_without_a_replace_answer_is_still_refused(self, plugin):
+        # The stored answer is scoped to the download that was admitted — it is
+        # not a blanket exemption for the path.
+        target = os.path.join(self._roms(plugin, "n64"), "game1.z64")
+        self._stage(plugin, _SINGLE_DETAIL, occupied_path=target)
+        plugin._download_service._download_queue[1] = {"rom_id": 1, "status": "paused"}
+
+        result = await plugin.resume_download(1)
+
+        assert result["reason"] == "target_occupied"
+
+    @pytest.mark.asyncio
+    async def test_a_multi_file_replace_answer_is_spent_and_not_carried(self, plugin):
+        # Its directory was removed at admission. A directory found there on
+        # resume is new content the user has never been shown, so the resume is
+        # refused rather than deleting it — this PR's own failure mode arriving
+        # through the back door.
+        extract_dir = os.path.join(self._roms(plugin, "psx"), "Game 1")
+        store = self._stage(plugin, _MULTI_DETAIL, occupied_path=extract_dir)
+        assert (await plugin.start_download(1, True))["success"] is True
+        assert plugin._download_service._download_queue[1]["_replace_existing"] is False
+        plugin._download_service._download_queue[1]["status"] = "paused"
+        removed: list[str] = []
+        store.remove_tree = removed.append
+
+        result = await plugin.resume_download(1)
+
+        assert result["reason"] == "target_occupied"
+        assert removed == []
+
+    @pytest.mark.asyncio
+    async def test_the_stored_answer_never_crosses_the_wire(self, plugin):
+        target = os.path.join(self._roms(plugin, "n64"), "game1.z64")
+        self._stage(plugin, _SINGLE_DETAIL, occupied_path=target)
+        await plugin.start_download(1, True)
+
+        (item,) = (await plugin.get_download_queue())["downloads"]
+
+        assert "_replace_existing" not in item
 
 
 class TestRemoveRom:
@@ -5939,7 +6033,9 @@ class TestResumeSupersede:
 
         result = await plugin.resume_download(2)
         assert result["success"] is True
-        plugin._download_service._begin_download.assert_awaited_once_with(2, resume=True)
+        # No stored replace answer on this entry, so the resume carries False —
+        # the exemption is scoped to the download that was actually admitted.
+        plugin._download_service._begin_download.assert_awaited_once_with(2, resume=True, replace_existing=False)
 
     @pytest.mark.asyncio
     async def test_resume_aborts_and_releases_in_progress_on_removal_failure(self, plugin):

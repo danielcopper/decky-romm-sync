@@ -359,6 +359,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       // Don't override uninstalling animation if we triggered it ourselves
       setState((prev) => (prev === "uninstalling" ? prev : "download"));
       setActionPending(false);
+      // The files that made the target occupied were just deleted, so the label
+      // must go back to "Download" — the stat that set this flag ran at mount.
+      setTargetOccupied(false);
     };
     globalThis.addEventListener("romm_rom_uninstalled", onUninstall);
 
@@ -1082,12 +1085,27 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     detach(pauseDownload(romId).catch(() => {}));
   };
 
-  // Resume a paused download. Fire-and-forget: the backend re-begins the
-  // transfer from the partial .tmp and emits "downloading" frames the listener
-  // reacts to (clears the paused flag). .catch keeps the click safe.
+  // Resume a paused download. The success path is fire-and-forget — the backend
+  // re-begins the transfer from the partial .tmp and emits "downloading" frames
+  // the listener reacts to (clears the paused flag). A REFUSAL has to be said out
+  // loud: a resume can be turned down (content appeared at the game's location
+  // while it sat paused, or a version switch stranded this target), and a silent
+  // refusal leaves the user pressing a button that does nothing, with Cancel —
+  // which discards the transferred bytes — as their only way out.
   const handleResume = () => {
     if (romId == null) return;
-    detach(resumeDownload(romId).catch(() => {}));
+    detach(
+      resumeDownload(romId)
+        .then((result) => {
+          if (result.success) return;
+          showToast(
+            isTargetOccupied(result)
+              ? "Something else is at this game's location now — cancel the download and start again"
+              : result.message || "Couldn't resume the download",
+          );
+        })
+        .catch(() => showToast("Couldn't resume the download — is RomM server running?")),
+    );
   };
 
   const handleUninstall = async () => {
@@ -1120,6 +1138,8 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         );
         globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: romId } }));
         showToast(`${romName || "ROM"} uninstalled`);
+        // The files that made the target occupied are the ones just deleted.
+        setTargetOccupied(false);
         // Dark pulse transition before showing Download button
         setState("uninstalling");
         transitionTimerRef.current = setTimeout(() => setState("download"), 500);
