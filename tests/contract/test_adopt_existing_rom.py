@@ -62,7 +62,8 @@ async def test_start_download_refuses_an_occupied_target_with_the_comparison(har
 
     assert result["success"] is False
     assert result["reason"] == "target_occupied"
-    assert isinstance(result["message"], str) and result["message"]
+    assert isinstance(result["message"], str)
+    assert result["message"]
     assert result["existing"] == {
         "name": "rom-41",
         "path": str(path),
@@ -122,7 +123,8 @@ async def test_a_bound_adopt_carries_a_prune_lease_for_the_frontend_s_steam_writ
     result = await harness.plugin.adopt_existing_rom(_ROM_ID)
 
     assert result["app_id"] == _ROM_ID  # seed_rom binds shortcut_app_id to rom_id
-    assert isinstance(result["prune_lease_token"], str) and result["prune_lease_token"]
+    assert isinstance(result["prune_lease_token"], str)
+    assert result["prune_lease_token"]
 
 
 async def test_an_unbound_adopt_is_issued_no_prune_lease(harness):
@@ -194,7 +196,8 @@ async def test_adopt_refuses_when_nothing_is_there(harness):
 
     assert result["success"] is False
     assert result["reason"] == "nothing_to_adopt"
-    assert isinstance(result["message"], str) and result["message"]
+    assert isinstance(result["message"], str)
+    assert result["message"]
     assert await harness.plugin.get_installed_rom(_ROM_ID) is None
 
 
@@ -206,8 +209,10 @@ async def test_adopt_surfaces_a_server_failure_in_the_canonical_shape(harness):
     result = await harness.plugin.adopt_existing_rom(_ROM_ID)
 
     assert result["success"] is False
-    assert isinstance(result["reason"], str) and result["reason"]
-    assert isinstance(result["message"], str) and result["message"]
+    assert isinstance(result["reason"], str)
+    assert result["reason"]
+    assert isinstance(result["message"], str)
+    assert result["message"]
     assert "error" not in result
     assert "error_code" not in result
 
@@ -271,7 +276,8 @@ async def test_verify_reports_a_server_failure_as_error(harness):
     result = await harness.plugin.verify_existing_content(_ROM_ID)
 
     assert result["status"] == "error"
-    assert isinstance(result["message"], str) and result["message"]
+    assert isinstance(result["message"], str)
+    assert result["message"]
     assert result["differences"] == []
 
 

@@ -3291,13 +3291,13 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
   it("labels the button 'Use Existing Files' when the cached stat found content", async () => {
     mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
     const { findByText } = render(<CustomPlayButton appId={100} />);
-    await findByText("Use Existing Files");
+    expect(await findByText("Use Existing Files")).toBeTruthy();
   });
 
   it("still says Download when nothing is in the way", async () => {
     mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: false });
     const { findByText } = render(<CustomPlayButton appId={100} />);
-    await findByText("Download");
+    expect(await findByText("Download")).toBeTruthy();
   });
 
   it("stops saying 'Use Existing Files' once the files are uninstalled", async () => {
@@ -3306,14 +3306,14 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
     // that are no longer there.
     mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
     const utils = render(<CustomPlayButton appId={100} />);
-    await utils.findByText("Use Existing Files");
+    expect(await utils.findByText("Use Existing Files")).toBeTruthy();
 
     await act(async () => {
       globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: 42 } }));
       await Promise.resolve();
     });
 
-    await utils.findByText("Download");
+    expect(await utils.findByText("Download")).toBeTruthy();
   });
 
   it("stops saying 'Use Existing Files' when a transfer is cancelled", async () => {
@@ -3321,7 +3321,7 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
     // at admission, so the stat behind the label is spent.
     mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
     const utils = render(<CustomPlayButton appId={100} />);
-    await utils.findByText("Use Existing Files");
+    expect(await utils.findByText("Use Existing Files")).toBeTruthy();
 
     act(() => {
       emitDeckyEvent<[DownloadProgressEvent]>("download_progress", {
@@ -3336,13 +3336,13 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
       });
     });
 
-    await utils.findByText("Download");
+    expect(await utils.findByText("Download")).toBeTruthy();
   });
 
   it("stops saying 'Use Existing Files' when a download fails", async () => {
     mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
     const utils = render(<CustomPlayButton appId={100} />);
-    await utils.findByText("Use Existing Files");
+    expect(await utils.findByText("Use Existing Files")).toBeTruthy();
 
     act(() => {
       emitDeckyEvent<[DownloadFailedEvent]>("download_failed", {
@@ -3353,14 +3353,14 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
       });
     });
 
-    await utils.findByText("Download");
+    expect(await utils.findByText("Download")).toBeTruthy();
   });
 
   it("a version switch takes the incoming ROM's occupancy, not the outgoing one's", async () => {
     // The outgoing version's answer says nothing about where the new one lives.
     mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
     const utils = render(<CustomPlayButton appId={100} />);
-    await utils.findByText("Use Existing Files");
+    expect(await utils.findByText("Use Existing Files")).toBeTruthy();
 
     vi.mocked(getCachedGameDetail).mockResolvedValue({
       found: true,
@@ -3376,13 +3376,13 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
       await Promise.resolve();
     });
 
-    await utils.findByText("Download");
+    expect(await utils.findByText("Download")).toBeTruthy();
   });
 
   it("a version switch to an occupied ROM says so", async () => {
     mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: false });
     const utils = render(<CustomPlayButton appId={100} />);
-    await utils.findByText("Download");
+    expect(await utils.findByText("Download")).toBeTruthy();
 
     vi.mocked(getCachedGameDetail).mockResolvedValue({
       found: true,
@@ -3398,7 +3398,7 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
       await Promise.resolve();
     });
 
-    await utils.findByText("Use Existing Files");
+    expect(await utils.findByText("Use Existing Files")).toBeTruthy();
   });
 
   it("opens the dialog on a target_occupied refusal instead of toasting a failure", async () => {

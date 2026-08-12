@@ -16,7 +16,8 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from domain.disc_formats import DISC_IMAGE_EXTENSIONS
-from domain.download_frames import cancelled_frame
+from domain.disk_space import disk_space_verdict
+from domain.download_frames import cancelled_frame, failed_frame
 from domain.rom_files import (
     build_m3u_content,
     detect_launch_file,
@@ -53,6 +54,13 @@ if TYPE_CHECKING:
     )
 
 _DOWNLOAD_QUEUE_MAX_TERMINAL = 50
+# One wording for every way a download fails to get off the ground: the user
+# reads the same sentence whichever step raised.
+_START_FAILED_MESSAGE = "Failed to start download"
+# Said twice for a single refusal — once to the frontend as a failure frame,
+# once to the caller as the refusal itself — so the two cannot drift apart.
+_UNSAFE_PATH_MESSAGE = "Server sent an unsafe platform path — download aborted"
+
 _ZIP_TMP_EXT = ".zip.tmp"
 _TMP_EXT = ".tmp"
 # A download in one of these statuses has run to a terminal end — it is no
@@ -363,33 +371,11 @@ class DownloadService:
             except PathTraversalError as e:
                 self._download_in_progress.discard(rom_id)
                 self._logger.error(f"Rejected download for ROM {rom_id}: unsafe platform slug {system!r}: {e}")
-                await self._emit(
-                    "download_failed",
-                    {
-                        "rom_id": rom_id,
-                        "rom_name": rom_detail.get("name", ""),
-                        "platform_name": rom_detail.get("platform_name", platform_slug),
-                        "error_message": "Server sent an unsafe platform path — download aborted",
-                    },
-                )
-                return {
-                    "success": False,
-                    "reason": "path_traversal",
-                    "message": "Server sent an unsafe platform path — download aborted",
-                }
-            file_name, files_missing = resolve_local_file_name(rom_detail)
-            if files_missing:
-                self._logger.warning(
-                    f"has_nested_single_file=true but files list is empty; falling back to fs_name='{file_name}'"
-                )
-            # Coerce the server-supplied name to a single safe component: strip
-            # any directory portion and reject a degenerate result (``..`` would
-            # escape the platform dir, ``.``/``""`` would resolve to it) — falling
-            # back to the synthetic rom_<id> identity.
-            safe_name, name_changed = coerce_safe_component(file_name, synthetic_rom_name(rom_detail))
-            if name_changed:
-                self._logger.warning(f"Sanitized fs_name from '{file_name}' to '{safe_name}'")
-                file_name = safe_name
+                name = rom_detail.get("name", "")
+                platform = rom_detail.get("platform_name", platform_slug)
+                await self._emit("download_failed", failed_frame(rom_id, name, platform, _UNSAFE_PATH_MESSAGE))
+                return {"success": False, "reason": "path_traversal", "message": _UNSAFE_PATH_MESSAGE}
+            file_name = self._safe_local_file_name(rom_detail)
             file_size = rom_detail.get("fs_size_bytes", 0)
             target_path = os.path.join(roms_dir, file_name)
 
@@ -407,7 +393,7 @@ class DownloadService:
         except Exception as e:
             self._download_in_progress.discard(rom_id)
             self._logger.error(f"Failed to prepare download for ROM {rom_id}: {e}")
-            return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "Failed to start download"}
+            return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": _START_FAILED_MESSAGE}
 
         # At most one downloaded version per shortcut binding (#1298): strip a
         # sibling install bound to this shortcut (or unbound) before this one
@@ -432,33 +418,25 @@ class DownloadService:
             return cleanup_failure
 
         try:
-            # Check disk space: multi-file ROMs need space for ZIP + extracted contents
             self._download_file_store.make_dirs(roms_dir)
-            free_space = self._download_file_store.disk_free(roms_dir)
-            buffer = 100 * 1024 * 1024
-            required = file_size * 2 + buffer if is_multi_file_download(rom_detail) else file_size + buffer
-            # On resume, the partial ``.tmp`` already holds some of the bytes, so
-            # only the remainder still needs free space — discount what's on disk
-            # so a near-complete resume isn't rejected for the full size.
-            if resume:
-                required = max(required - self._partial_tmp_size(target_path, rom_detail), 0)
-            # Account for siblings already reserved but not yet written to disk,
-            # so two concurrent downloads can't each pass a pre-flight that only
-            # one of them actually fits (#1053).
-            reserved_total = sum(self._reserved_bytes.values())
-            if file_size and free_space - reserved_total < required:
+            verdict = disk_space_verdict(
+                file_size=file_size,
+                free_space=self._download_file_store.disk_free(roms_dir),
+                reserved_bytes=sum(self._reserved_bytes.values()),
+                multi_file=is_multi_file_download(rom_detail),
+                already_on_disk=self._partial_tmp_size(target_path, rom_detail) if resume else 0,
+            )
+            if not verdict.fits:
                 self._download_in_progress.discard(rom_id)
-                free_mb = max(free_space - reserved_total, 0) // (1024 * 1024)
-                need_mb = required // (1024 * 1024)
                 return {
                     "success": False,
                     "reason": "insufficient_space",
-                    "message": f"Not enough disk space ({free_mb}MB free, need {need_mb}MB)",
+                    "message": f"Not enough disk space ({verdict.free_mb}MB free, need {verdict.needed_mb}MB)",
                 }
         except Exception as e:
             self._download_in_progress.discard(rom_id)
             self._logger.error(f"Failed to prepare download for ROM {rom_id}: {e}")
-            return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "Failed to start download"}
+            return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": _START_FAILED_MESSAGE}
 
         rom_name = rom_detail.get("name", file_name)
         platform_name = rom_detail.get("platform_name", platform_slug)
@@ -478,7 +456,7 @@ class DownloadService:
         except Exception as e:
             self._download_in_progress.discard(rom_id)
             self._logger.error(f"Failed to start download task for ROM {rom_id}: {e}")
-            return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "Failed to start download"}
+            return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": _START_FAILED_MESSAGE}
 
         self._download_queue[rom_id] = {
             "rom_id": rom_id,
@@ -509,13 +487,32 @@ class DownloadService:
         # Reserve this download's required bytes so a concurrent sibling's
         # pre-flight sees the outstanding claim (released in ``_do_download``'s
         # ``finally``).
-        self._reserved_bytes[rom_id] = required
+        self._reserved_bytes[rom_id] = verdict.needed_bytes
         self._control_tokens[rom_id] = control
         return {"success": True, "message": "Download started"}
 
     def task_for_rom(self, rom_id: int) -> asyncio.Task[None] | None:
         """Return the detached task whose lifetime owns this ROM's install write."""
         return self._download_tasks.get(int(rom_id))
+
+    def _safe_local_file_name(self, rom_detail: dict[str, Any]) -> str:
+        """The on-disk name for this ROM: the server's, coerced to one safe component.
+
+        Strips any directory portion and rejects a degenerate result — ``..``
+        would escape the platform directory and ``.`` or ``""`` would resolve to
+        it — falling back to the synthetic ``rom_<id>`` identity. Both repairs
+        are logged, because the name the user sees on disk then differs from the
+        one the server states.
+        """
+        file_name, files_missing = resolve_local_file_name(rom_detail)
+        if files_missing:
+            self._logger.warning(
+                f"has_nested_single_file=true but files list is empty; falling back to fs_name='{file_name}'"
+            )
+        safe_name, name_changed = coerce_safe_component(file_name, synthetic_rom_name(rom_detail))
+        if name_changed:
+            self._logger.warning(f"Sanitized fs_name from '{file_name}' to '{safe_name}'")
+        return safe_name
 
     def _partial_tmp_size(self, target_path, rom_detail) -> int:
         """Bytes already on disk in the partial ``.tmp`` for *target_path*.
@@ -1089,15 +1086,7 @@ class DownloadService:
             self._download_queue[rom_id]["error"] = str(e)
             self._cleanup_partial_download(target_path, has_multiple, extract_dir_name, final_path)
             self._logger.error(f"Download failed for {rom_name}: {e}")
-            await self._emit(
-                "download_failed",
-                {
-                    "rom_id": rom_id,
-                    "rom_name": rom_name,
-                    "platform_name": platform_name,
-                    "error_message": str(e),
-                },
-            )
+            await self._emit("download_failed", failed_frame(rom_id, rom_name, platform_name, str(e)))
 
         finally:
             # A re-download (or resume) can overwrite these per-download

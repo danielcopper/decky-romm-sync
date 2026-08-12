@@ -156,7 +156,8 @@ class TestOccupiedTargetRefusal:
         payload = _refusal()
         assert payload["success"] is False
         assert payload["reason"] == "target_occupied"
-        assert isinstance(payload["message"], str) and payload["message"]
+        assert isinstance(payload["message"], str)
+        assert payload["message"]
         assert "error" not in payload
         assert "error_code" not in payload
 

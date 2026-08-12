@@ -356,52 +356,58 @@ def compare_manifest(
         found = local.get(key)
         if found is None:
             differences.append(FileDifference(name=key, detail="missing"))
-        elif found.members is not None:
-            differences.extend(_inside_archive_differences(entry, found))
-        elif entry.archived:
-            differences.extend(_unpacked_differences(entry, found))
-        elif not found.is_archive:
-            differences.extend(_file_differences(entry, found))
-        # An archive that could not be opened is the remaining case, and it has
-        # no branch: the server's digest speaks for content this plugin cannot
-        # produce, so there is nothing to compare and nothing to allege.
+        elif found.members is not None and entry.archived:
+            differences.extend(_stated_member_differences(entry, found))
+        else:
+            difference = _single_difference(entry, found)
+            if difference is not None:
+                differences.append(difference)
     return tuple(differences)
 
 
-def _file_differences(entry: ServerFile, found: LocalFile) -> tuple[FileDifference, ...]:
+def _single_difference(entry: ServerFile, found: LocalFile) -> FileDifference | None:
+    """The one way this entry can depart from the manifest, or ``None``.
+
+    Everything but a set of stated archive members has at most one finding, and
+    which comparison is available depends on what is on disk. An archive that
+    could not be opened falls through to ``None`` on purpose: the server's digest
+    speaks for content this plugin cannot produce, so there is nothing to compare
+    and nothing to allege.
+    """
+    if found.members is not None:
+        return _sole_member_difference(entry, found)
+    if entry.archived:
+        return _unpacked_difference(entry, found)
+    if found.is_archive:
+        return None
+    return _file_difference(entry, found)
+
+
+def _file_difference(entry: ServerFile, found: LocalFile) -> FileDifference | None:
     """Hold one unarchived entry to the bytes of the file on disk."""
     # A zero server size is "no size stated", so there is nothing to compare —
     # never a size that agrees. Passing this check is therefore not on its own
     # evidence of anything; :func:`verification_status` is what refuses to call
     # such an entry confirmed.
     if entry.size_bytes and found.size_bytes != entry.size_bytes:
-        return (FileDifference(entry.lookup_key, f"expected {entry.size_bytes} bytes, found {found.size_bytes}"),)
+        return FileDifference(entry.lookup_key, f"expected {entry.size_bytes} bytes, found {found.size_bytes}")
     if entry.verifiable and found.digest and found.digest != entry.digest:
-        return (FileDifference(entry.lookup_key, _CONTENTS_DIFFER),)
-    return ()
-
-
-def _inside_archive_differences(entry: ServerFile, found: LocalFile) -> tuple[FileDifference, ...]:
-    """Hold an archive on disk to what the server said about its contents.
-
-    The container's own size is deliberately not compared: it describes the
-    packing, and two archives of the same ROM differ in it whenever they were
-    packed differently. Which comparison is available depends on what the
-    payload carried — the stated members where there are any, the sole member
-    otherwise.
-    """
-    if entry.archived:
-        return _stated_member_differences(entry, found)
-    return _sole_member_differences(entry, found)
+        return FileDifference(entry.lookup_key, _CONTENTS_DIFFER)
+    return None
 
 
 def _stated_member_differences(entry: ServerFile, found: LocalFile) -> tuple[FileDifference, ...]:
     """Hold each member the server named to the member of that name on disk.
 
-    Members on disk the server did not name are allowed: RomM's scanner drops
-    excluded names and extensions from ``archive_members``, so even a
-    byte-identical copy of the server's own archive can hold more than it
-    listed.
+    The one comparison that can report several findings at once — a set of
+    members can be wrong in as many ways as it has members. Members on disk the
+    server did not name are allowed: RomM's scanner drops excluded names and
+    extensions from ``archive_members``, so even a byte-identical copy of the
+    server's own archive can hold more than it listed.
+
+    The container's own size is deliberately not compared here or below: it
+    describes the packing, and two archives of the same ROM differ in it
+    whenever they were packed differently.
     """
     on_disk = {member.name: member for member in found.members or ()}
     differences: list[FileDifference] = []
@@ -421,7 +427,7 @@ def _stated_member_differences(entry: ServerFile, found: LocalFile) -> tuple[Fil
     return tuple(differences)
 
 
-def _sole_member_differences(entry: ServerFile, found: LocalFile) -> tuple[FileDifference, ...]:
+def _sole_member_difference(entry: ServerFile, found: LocalFile) -> FileDifference | None:
     """Hold an archive of exactly one member to the digest the server published for it.
 
     That digest is the archive's content identity under every rule RomM has
@@ -434,11 +440,11 @@ def _sole_member_differences(entry: ServerFile, found: LocalFile) -> tuple[FileD
     """
     members = found.members
     if members is None or len(members) != 1 or not entry.verifiable:
-        return ()
+        return None
     member = members[0]
     if _digests_disagree(entry.crc32, member.crc32) or _digests_disagree(entry.digest, member.digest):
-        return (FileDifference(entry.lookup_key, _CONTENTS_DIFFER),)
-    return ()
+        return FileDifference(entry.lookup_key, _CONTENTS_DIFFER)
+    return None
 
 
 def _digests_disagree(stated: str, observed: str) -> bool:
@@ -446,12 +452,12 @@ def _digests_disagree(stated: str, observed: str) -> bool:
     return bool(stated and observed and stated != observed)
 
 
-def _unpacked_differences(entry: ServerFile, found: LocalFile) -> tuple[FileDifference, ...]:
+def _unpacked_difference(entry: ServerFile, found: LocalFile) -> FileDifference | None:
     """Hold a file that is not an archive to the one member it could be."""
     member = unpacked_member(entry, found.size_bytes)
     if member is None or not (member.verifiable and found.digest) or found.digest == member.digest:
-        return ()
-    return (FileDifference(name=_member_key(entry, member.name), detail=_CONTENTS_DIFFER),)
+        return None
+    return FileDifference(name=_member_key(entry, member.name), detail=_CONTENTS_DIFFER)
 
 
 def _member_key(entry: ServerFile, member_name: str) -> str:
@@ -489,32 +495,51 @@ def digests_to_read(entry: ServerFile, found: LocalFile) -> tuple[DigestRequest,
     otherwise re-send — so what earns the strong claim is the digest RomM
     published beside it, over the decompressed content.
     """
+    if found.members is not None and entry.archived:
+        return _stated_member_digests_to_read(entry, found.members)
+    request = _single_digest_to_read(entry, found)
+    planned: list[DigestRequest] = [] if request is None else [request]
+    return tuple(planned)
+
+
+def _single_digest_to_read(entry: ServerFile, found: LocalFile) -> DigestRequest | None:
+    """The one read that can confirm this entry, or ``None`` when none can.
+
+    A file the server described as a whole is answered by one digest whatever it
+    holds: the sole member of an archive it stated nothing about, the loose bytes
+    of a member someone unpacked, or the file itself. An archive that could not
+    be opened, and a file with nothing stated to hold it to, are answered by
+    neither — reading the container's bytes would answer a question the server
+    never asked.
+    """
     if found.members is not None:
-        return _archive_digests_to_read(entry, found.members)
+        return _sole_member_digest_to_read(entry, found.members)
     if entry.archived:
         member = unpacked_member(entry, found.size_bytes)
         if member is None or not member.verifiable:
-            return ()
-        return (DigestRequest(member="", algorithm=member.algorithm, size_bytes=found.size_bytes),)
+            return None
+        return DigestRequest(member="", algorithm=member.algorithm, size_bytes=found.size_bytes)
     if found.is_archive or not entry.verifiable:
-        # An archive that could not be opened, or a file with nothing stated to
-        # hold it to: reading the container's bytes would answer a question the
-        # server never asked.
-        return ()
+        return None
     if entry.size_bytes and found.size_bytes != entry.size_bytes:
-        return ()
-    return (DigestRequest(member="", algorithm=entry.algorithm, size_bytes=found.size_bytes),)
+        return None
+    return DigestRequest(member="", algorithm=entry.algorithm, size_bytes=found.size_bytes)
 
 
-def _archive_digests_to_read(entry: ServerFile, local_members: tuple[LocalMember, ...]) -> tuple[DigestRequest, ...]:
-    """Which members inside an opened archive are worth decompressing."""
-    if not entry.archived:
-        if len(local_members) != 1 or not entry.verifiable:
-            return ()
-        member = local_members[0]
-        if _digests_disagree(entry.crc32, member.crc32):
-            return ()
-        return (DigestRequest(member=member.name, algorithm=entry.algorithm, size_bytes=member.size_bytes),)
+def _sole_member_digest_to_read(entry: ServerFile, local_members: tuple[LocalMember, ...]) -> DigestRequest | None:
+    """The member to decompress when the server described the archive as a whole."""
+    if len(local_members) != 1 or not entry.verifiable:
+        return None
+    member = local_members[0]
+    if _digests_disagree(entry.crc32, member.crc32):
+        return None
+    return DigestRequest(member=member.name, algorithm=entry.algorithm, size_bytes=member.size_bytes)
+
+
+def _stated_member_digests_to_read(
+    entry: ServerFile, local_members: tuple[LocalMember, ...]
+) -> tuple[DigestRequest, ...]:
+    """Which of the members the server named are worth decompressing."""
     on_disk = {found.name: found for found in local_members}
     requests: list[DigestRequest] = []
     for member in entry.members:
