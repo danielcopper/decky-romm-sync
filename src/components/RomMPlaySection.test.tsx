@@ -2468,6 +2468,37 @@ describe("RomMPlaySection", () => {
       });
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Save sync failed" }));
     });
+
+    // The display write lands after the sync's await, so a version switch
+    // arriving in that window would record "Just now" on the ROM the page moved
+    // TO — a display it never earned (#1673).
+    it("a version switch landing before the sync answers leaves the switched-to rom's display alone", async () => {
+      const items = await setupSavesAction();
+      let settleSync: (result: Awaited<ReturnType<typeof backend.syncRomSaves>>) => void = () => {};
+      vi.mocked(backend.syncRomSaves).mockReturnValue(
+        new Promise((resolve) => {
+          settleSync = resolve;
+        }),
+      );
+      act(() => {
+        items[2]!.props.onClick?.();
+      });
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ found: true, rom_id: 43 });
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", { detail: { type: "version_switched", app_id: testAppId, rom_id: 43 } }),
+        );
+        await Promise.resolve();
+      });
+      await flushAsync();
+      expect(getGameDetail(testAppId).romId).toBe(43);
+
+      settleSync({ success: true, message: "", synced: 1, uploaded: 1, downloaded: 0, conflicts: [] });
+      await flushAsync();
+
+      expect(getGameDetail(testAppId)).toMatchObject({ saveSyncStatus: null, saveSyncLabel: "" });
+    });
   });
 
   // ------------------------------------------------------------------

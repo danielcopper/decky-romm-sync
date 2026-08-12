@@ -276,6 +276,15 @@ Format: **invariant** — tier — enforced by.
 - **Every destructive RomM proof is bound to one canonical server-origin/token-origin/user namespace from preview
   through every exact-ID request; a namespace change is uncertainty, never a 404 deletion authority** — test +
   prompt-only — prune service namespace-race tests; new destructive RomM proof paths are prompt-only
+- **Every write into the per-appId game-detail store's state (`src/utils/gameDetailStore.ts`) that crosses an `await` is
+  bound to a rom identity — via `writerForRom` to the rom the read was issued for, or in `applySaveStatus` to the
+  answer's own `rom_id`. Two writes are exempt by construction: the identity write in `loadDetail`, which installs the
+  identity a binding would compare against, and the `cached.bios_status` fold in the same synchronous run. A version
+  switch re-keys the entry without closing it, so the generation counter cannot see this class at all. The game-detail
+  panel and the play button keep their own per-rom state and are NOT covered (#1713, #1714)** — prompt-only — a checker
+  scoped to the store's own function bodies would be green on the case this rule was written for, because the write
+  happens in a synchronous function the caller reaches after its own await; a caller-side checker cannot tell a binding
+  store function from an unbound one syntactically
 
 When a change applies a guard / sanitize / backup / grouping pattern, sweep for sibling sites of the same pattern — the
 register is what that sweep checks against.
