@@ -1623,6 +1623,44 @@ class TestAdoptCandidate:
         assert h.move.moves == []
         assert h.store.files[_NEW] == b"someone else's"
 
+    async def test_content_arriving_between_the_check_and_the_move_refuses_too(self, h):
+        # The window between validating and planning is short but real, and what
+        # lands in it is the occupied-target case the other dialog owns — never
+        # something to overwrite or skip as part of the collision question.
+        h.seed_rom()
+        h.stage_detail(_single_file_detail())
+        h.store.files[_OLD] = b"rom"
+        seen: list[str] = []
+        free_until_planned = h.move.exists
+
+        def exists(path: str) -> bool:
+            if path == _NEW and _NEW not in seen:
+                seen.append(_NEW)
+                return False
+            return free_until_planned(path) or path == _NEW
+
+        h.move.exists = exists
+
+        result = await h.service.adopt_existing_rom(_ROM_ID, _OLD, None)
+
+        assert result["success"] is False
+        assert result["reason"] == "target_taken"
+        assert h.move.moves == []
+        assert h.store.files[_OLD] == b"rom"
+
+    async def test_a_directory_candidate_with_nothing_launchable_inside_still_moves(self, h):
+        # No launch file means no stem, and an empty stem must claim no saves
+        # rather than every file in the save directory.
+        h.seed_rom()
+        h.stage_detail(_multi_file_detail(dir_name="Game"))
+        h.store.dirs.add("/roms/psx/Game (U)")
+        h.store.files["/saves/psx/Game (U).srm"] = b"someone else's"
+
+        result = await h.service.adopt_existing_rom(_ROM_ID, "/roms/psx/Game (U)", None)
+
+        assert result["success"] is True
+        assert h.move.moves == [("/roms/psx/Game (U)", "/roms/psx/Game")]
+
     async def test_the_supersede_runs_only_after_the_rename_succeeded(self, h):
         h.seed_rom()
         h.stage_detail(_single_file_detail())
