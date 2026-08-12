@@ -14,22 +14,30 @@ text — the plugin's display name, the QAM header, toasts, prose — it is `Ten
 python3 build.py --install
 ```
 
-That renders everything and writes each shipped copy from the same render, so `assets/` and `docs/assets/` cannot drift
+That renders everything and writes every shipped copy from the same render, so no two copies of one asset can drift
 apart. Needs `rsvg-convert` and `ffmpeg` on PATH. Without `--install` it writes to `out/` instead, which is the way to
 look at a change before it lands.
 
-| File                                 | Where it goes                                        |
-| ------------------------------------ | ---------------------------------------------------- |
-| `logo.svg`                           | `assets/`, `docs/assets/` — MkDocs' nav-bar mark     |
-| `logo.png` (512px)                   | `assets/`, `docs/assets/` — the docs site's favicon  |
-| `logo-animated.gif` (512px)          | `assets/`, `docs/assets/` — README and docs landing  |
-| `lockup.svg`, `lockup.png` (900px)   | `assets/`, `docs/assets/` — the banner, light ground |
-| `lockup-dark.svg`, `lockup-dark.png` | `assets/`, `docs/assets/` — the banner, dark ground  |
-| `store_image.png` (1024px)           | `assets/` — the Decky store pulls this one by URL    |
+| File                                                      | Where it goes                                       |
+| --------------------------------------------------------- | --------------------------------------------------- |
+| `logo.svg`                                                | `assets/`, `docs/assets/` — MkDocs' nav-bar mark    |
+| `logo.png` (512px)                                        | `assets/`, `docs/assets/` — the docs site's favicon |
+| `logo-animated.gif` (512px)                               | `assets/`, `docs/assets/` — the docs landing hero   |
+| `lockup.svg`, `lockup.png` (900px)                        | `assets/` — the banner at rest, light ground        |
+| `lockup-dark.svg`, `lockup-dark.png`                      | `assets/` — the banner at rest, dark ground         |
+| `lockup-animated.gif`, `lockup-animated-dark.gif` (600px) | `assets/` — the README banner                       |
+| `store_image.png` (1024px)                                | `assets/` — the Decky store pulls this one by URL   |
 
-Two lockups ship because one cannot serve both grounds: the mark's ink falls to roughly 1.3:1 against GitHub's dark
-canvas, so the dark variant sets the wordmark in the disc's blue instead. The README chooses between them with
-`<picture>` and `prefers-color-scheme`.
+Everything ships twice except the lockup, which lands once: it is the README's banner, and the docs site draws its own
+header from the bare mark.
+
+Each lockup ships in two variants because one cannot serve both grounds: the mark's ink falls to roughly 1.3:1 against
+GitHub's dark canvas, so the dark variant sets the wordmark in the disc's blue instead. The README chooses between them
+with `<picture>` and `prefers-color-scheme`.
+
+The animated lockup runs the same fold and spin as the bare mark, at 600px rather than the still's 900px — a GIF pays
+for every pixel in every frame, and the third multiple of the rendered width buys sharpness nobody sees at the cost of
+roughly half the file again.
 
 `gen.py` and `anim.py` also stand alone, for looking at one thing:
 

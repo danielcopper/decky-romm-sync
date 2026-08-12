@@ -23,6 +23,7 @@ import json
 import pathlib
 import sys
 
+import anim
 import gen
 
 HERE = pathlib.Path(__file__).parent
@@ -59,26 +60,58 @@ def geometry() -> tuple[float, float, float]:
     return scale, m["width"] * scale, target_h
 
 
-def lockup(pal: gen.Palette, dark: bool = False, g: gen.Geometry = gen.DEFAULT_GEOMETRY) -> str:
+def lockup(
+    pal: gen.Palette,
+    dark: bool = False,
+    g: gen.Geometry = gen.DEFAULT_GEOMETRY,
+    morph: float = 0.0,
+    width: int | None = None,
+) -> str:
     """The mark over the wordmark, centred on a shared vertical axis.
 
     On a dark ground the wordmark takes the disc's blue: the ink that carries it
     on white falls to roughly 1.3:1 against GitHub's canvas and vanishes.
+
+    *morph* and *g* pass straight through to the mark, so one frame of the fold
+    composes exactly like the resting one — the wordmark never moves, which is
+    what keeps the animated lockup from looking like two separate things.
     """
     scale, word_w, word_h = geometry()
     gap = gen.VIEW * GAP_RATIO
     total_w = max(gen.VIEW, word_w)
     total_h = gen.VIEW + gap + word_h
     ink = pal.disc[0] if dark else pal.ink[0]
+    px = (
+        f'width="{width}" height="{round(width * total_h / total_w)}"'
+        if width
+        else f'width="{total_w:.0f}" height="{total_h:.0f}"'
+    )
 
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {total_w:.2f} {total_h:.2f}" '
-        f'width="{total_w:.0f}" height="{total_h:.0f}">'
-        f'<g transform="translate({(total_w - gen.VIEW) / 2:.2f} 0)">{gen.mark("lk", pal, g)}</g>'
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {total_w:.2f} {total_h:.2f}" {px}>'
+        f'<g transform="translate({(total_w - gen.VIEW) / 2:.2f} 0)">{gen.mark("lk", pal, g, morph)}</g>'
         f'<g transform="translate({(total_w - word_w) / 2:.2f} {gen.VIEW + gap:.2f}) '
         f'scale({scale:.6f})" fill="{ink}"><path d="{outline()}"/></g>'
         f"</svg>"
     )
+
+
+def write_frames(
+    out: pathlib.Path,
+    pal: gen.Palette,
+    a: anim.Animation = anim.DEFAULT_ANIMATION,
+    dark: bool = False,
+    width: int = 600,
+) -> list[pathlib.Path]:
+    """One lockup SVG per animation frame, for the same schedule the mark uses."""
+    out.mkdir(parents=True, exist_ok=True)
+    written = []
+    for i in range(a.frames):
+        t = (i % a.frames) / a.frames
+        p = out / f"f{i:03d}.svg"
+        p.write_text(lockup(pal, dark, anim.geometry_at(t, a), anim.morph_at(t, a), width))
+        written.append(p)
+    return written
 
 
 def cut() -> None:

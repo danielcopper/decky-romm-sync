@@ -1,8 +1,8 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/lockup-dark.png">
-  <img src="assets/lockup.png" alt="Tender" width="300">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/lockup-animated-dark.gif">
+  <img src="assets/lockup-animated.gif" alt="Tender" width="300">
 </picture>
 
 <h3>Your RomM library, running native in Steam</h3>

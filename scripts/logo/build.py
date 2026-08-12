@@ -38,6 +38,10 @@ PNG_SIZES = (1024, 512, 256, 128, 64, 32)
 # The README renders the banner around 300px wide; three times that covers the
 # densest display anyone reads it on.
 LOCKUP_PNG_WIDTH = 900
+# The animated banner stops at twice the rendered width instead of three times:
+# a GIF pays for every pixel in every frame, and the third multiple buys sharpness
+# nobody sees at the cost of roughly half the file again.
+LOCKUP_GIF_WIDTH = 600
 
 
 # One palette for the whole sequence, then mapped against it. `stats_mode=full`
@@ -102,6 +106,22 @@ def build_lockup(out: pathlib.Path, pal: gen.Palette) -> None:
         print(f"  {png.name}  ({png.stat().st_size:,}b)")
 
 
+def build_lockup_gif(out: pathlib.Path, pal: gen.Palette, a: anim.Animation) -> None:
+    """The banner, animated — the same fold and spin the bare mark runs."""
+    _require("rsvg-convert", "ffmpeg")
+    out.mkdir(parents=True, exist_ok=True)
+    for stem, dark in (("lockup-animated", False), ("lockup-animated-dark", True)):
+        work = out / f"frames-{stem}"
+        if work.exists():
+            shutil.rmtree(work)
+        svgs = lockup.write_frames(work, pal, a, dark, LOCKUP_GIF_WIDTH)
+        for i, svg in enumerate(svgs):
+            _run(["rsvg-convert", "-w", str(LOCKUP_GIF_WIDTH), str(svg), "-o", str(work / f"f{i:03d}.png")])
+        gif = out / f"{stem}.gif"
+        _gif(work / "f%03d.png", gif, a.fps)
+        print(f"  {gif.name}  ({gif.stat().st_size:,}b, {LOCKUP_GIF_WIDTH}px wide)")
+
+
 def _gif(
     frames_glob: pathlib.Path,
     dest: pathlib.Path,
@@ -153,10 +173,14 @@ INSTALL = {
     "logo.svg": ("assets/logo.svg", "docs/assets/logo.svg"),
     "logo.png": ("assets/logo.png", "docs/assets/logo.png"),
     "logo-animated.gif": ("assets/logo-animated.gif", "docs/assets/logo-animated.gif"),
-    "lockup.svg": ("assets/lockup.svg", "docs/assets/lockup.svg"),
-    "lockup.png": ("assets/lockup.png", "docs/assets/lockup.png"),
-    "lockup-dark.svg": ("assets/lockup-dark.svg", "docs/assets/lockup-dark.svg"),
-    "lockup-dark.png": ("assets/lockup-dark.png", "docs/assets/lockup-dark.png"),
+    # The lockup lands once: it is the README's banner, and the docs site draws
+    # its own header from the bare mark instead.
+    "lockup.svg": ("assets/lockup.svg",),
+    "lockup.png": ("assets/lockup.png",),
+    "lockup-dark.svg": ("assets/lockup-dark.svg",),
+    "lockup-dark.png": ("assets/lockup-dark.png",),
+    "lockup-animated.gif": ("assets/lockup-animated.gif",),
+    "lockup-animated-dark.gif": ("assets/lockup-animated-dark.gif",),
 }
 # The Decky store pulls this one straight off the default branch by URL.
 STORE_IMAGE = ("logo-1024.png", "assets/store_image.png")
@@ -188,6 +212,7 @@ if __name__ == "__main__":
         build_lockup(out, pal)
     if not only_static:
         build_gif(out, pal, size, anim.DEFAULT_ANIMATION)
+        build_lockup_gif(out, pal, anim.DEFAULT_ANIMATION)
     if "--install" in argv:
         print("installing:")
         install(out)
