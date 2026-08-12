@@ -276,15 +276,25 @@ Format: **invariant** — tier — enforced by.
 - **Every destructive RomM proof is bound to one canonical server-origin/token-origin/user namespace from preview
   through every exact-ID request; a namespace change is uncertainty, never a 404 deletion authority** — test +
   prompt-only — prune service namespace-race tests; new destructive RomM proof paths are prompt-only
-- **Every write into the per-appId game-detail store's state (`src/utils/gameDetailStore.ts`) that crosses an `await` is
-  bound to a rom identity — via `writerForRom` to the rom the read was issued for, or in `applySaveStatus` to the
-  answer's own `rom_id`. Two writes are exempt by construction: the identity write in `loadDetail`, which installs the
-  identity a binding would compare against, and the `cached.bios_status` fold in the same synchronous run. A version
-  switch re-keys the entry without closing it, so the generation counter cannot see this class at all. The game-detail
-  panel and the play button keep their own per-rom state and are NOT covered (#1713, #1714)** — prompt-only — a checker
-  scoped to the store's own function bodies would be green on the case this rule was written for, because the write
-  happens in a synchronous function the caller reaches after its own await; a caller-side checker cannot tell a binding
-  store function from an unbound one syntactically
+- **Every write into per-rom detail state that crosses an `await` is bound to a rom identity — in the per-appId
+  game-detail store (`src/utils/gameDetailStore.ts`) and in the game-detail panel
+  (`src/components/RomMGameInfoPanel.tsx`), which keeps its own state and carries the rule in a different FORM. The
+  store binds through `writerForRom` (or, in `applySaveStatus`, to the answer's own `rom_id`); the panel binds through a
+  `RomBinding` — the rom a read was issued for carried together with the only writer allowed to fold its answer in, so
+  the two cannot drift apart at a call site — which compares `romIdRef` when the answer LANDS and folds the panel's
+  teardown flag in with it. Exempt by construction on both sides: the identity write that installs what a binding would
+  compare against (`loadDetail`, `loadData`), plus in the store the `cached.bios_status` fold in the same synchronous
+  run, and in the panel the version-switch re-key that performs the re-binding and the BIOS re-read issued for a
+  platform slug, which has no rom to bind to. The panel's two lazy tab lanes (achievements, slots) still write through
+  the raw setter: their effects are keyed on `state.romId`, so a re-key re-runs them — a narrower guarantee, left alone
+  because those writers also clear their own loading spinner and a refused write would strand it. A version switch
+  re-keys without closing, so neither the store's generation counter nor the panel's `[appId]` effect can see this class
+  at all. The play button keeps its own per-rom state and is NOT covered (#1714)** — test + prompt-only — each of the
+  panel's ten bound sites carries a version-switch test (`src/components/RomMGameInfoPanel.test.tsx`, the #1713
+  describe); the store side and every new write site on either are prompt-only, because a checker scoped to the store's
+  own function bodies would be green on the case this rule was written for — the write happens in a synchronous function
+  the caller reaches after its own await, and a caller-side checker cannot tell a binding store function from an unbound
+  one syntactically
 
 When a change applies a guard / sanitize / backup / grouping pattern, sweep for sibling sites of the same pattern — the
 register is what that sweep checks against.
