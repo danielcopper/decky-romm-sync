@@ -236,10 +236,18 @@ and says plainly whether the two are the same size. From there you have three ch
   Your saves are not part of it, and that version can be downloaded again whenever you want it back.
 - **Check Against Server** — compares the files on your device against the checksums RomM published for that game. This
   reads every file, so a large game takes a few seconds to a minute; it only ever runs when you press the button. There
-  are three possible answers: the files match, they differ (and the dialog names which file and what differed), or the
-  server publishes no checksums at all and simply cannot confirm them. For a game made of several files, each one has to
-  be in the folder RomM says it belongs in — a file of the right name sitting somewhere else in the game folder is
-  reported as missing, not as a match. Files RomM does not list at all are fine and are never reported.
+  are three possible answers: the files match, they differ (and the dialog names which file and what differed), or they
+  cannot be confirmed — either the server publishes no checksums at all, or something on your device could not be read.
+  For a game made of several files, each one has to be in the folder RomM says it belongs in — a file of the right name
+  sitting somewhere else in the game folder is reported as missing, not as a match. Files RomM does not list at all are
+  fine and are never reported.
+
+  For a game your server keeps zipped, the check looks **inside** the zip and compares each file in there, because that
+  is what RomM's checksums describe — the zip's own bytes match nothing it publishes. So a zip you repacked yourself
+  still matches as long as the games inside it are the same, and a file added inside it is ignored like any other
+  unlisted file. If the archive is a format the plugin cannot open, the answer is that it cannot be confirmed — never
+  that it differs. The one case that still works outside a zip: if you unpacked a single-game archive yourself, the
+  loose file is compared against the game it came from.
 - **Download Instead** — replaces what is there. This deletes your files first, so it asks a second time and names what
   will be removed. If the file is your own dump, a translation patch or a romhack, the server cannot give it back.
 

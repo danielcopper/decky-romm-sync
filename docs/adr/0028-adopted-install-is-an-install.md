@@ -28,8 +28,9 @@ user's own — a different rip, a translation patch, a romhack — which is prec
 
 What makes adoption decidable is that RomM already carries the evidence. `RomFileSchema` exposes `file_size_bytes`,
 `crc_hash`, `md5_hash`, `sha1_hash` and `is_top_level` per file, and `RomArchiveMember` carries `name`, `size` and the
-three digests per member **non-optionally**, so the server knows the content inside its own archives. Hashes are
-computed by default and opt out through `filesystem.skip_hash_calculation`.
+three digests per member **non-optionally**, so the server knows the content inside its own archives. Per-member hashes
+have been stored since RomM 4.9.0, which is the minimum this plugin accepts, so they are there on every server it will
+talk to. Hashes are computed by default and opt out through `filesystem.skip_hash_calculation`.
 
 Cost was measured rather than assumed. On a Steam Deck SD card the read rate is 77 MiB/s, so a 1.53 GiB image hashes in
 19.8 s — I/O-bound, identical for CRC32, MD5 and SHA-1. Across a real library the median ROM is 2 MiB, roughly 70 % sit
@@ -59,6 +60,30 @@ dialog.** Sizes for a file; the top-level name set plus sizes for a directory, m
 extra files allowed — the plugin's own directories carry a generated `.m3u` and a healed `PS3_DISC.SFB` that the
 server's manifest does not list. Where the content is archived the digests come from the central directory at no cost. A
 server without hashes turns the candidate search **off** rather than lowering its bar.
+
+**A content check compares content identity, never container identity.** RomM hashes what is _inside_ an archive: its
+scanner streams every member's decompressed bytes, in ASCII name order, into one accumulator, so an archived ROM's
+file-level digest is a composite over the content while `file_size_bytes` is the container's size on disk. The two
+describe different things, which is why the size agrees and the digest cannot — measured on device, a zipped GBA ROM the
+plugin itself downloaded reported a mismatch on the same bytes RomM sent. So an entry the server states
+`archive_members` for is held to its members and its own digest is not compared, and its own size is not either: two
+archives of the same ROM differ in it whenever they were packed differently, and the members carry the stronger
+evidence. Members on disk the server did not list are allowed, because RomM's scanner drops excluded names and
+extensions from `archive_members` — even its own archive holds more than it listed.
+
+**Cheap evidence disqualifies; the digest RomM published is what qualifies.** A member's uncompressed size and CRC32
+come from the central directory at no cost, and either disagreeing is proof enough to report without decompressing
+anything. Agreement is not the converse: CRC32 is a 32-bit checksum, at a library's member counts an accidental
+collision is credible, and this comparison authorises a row carrying deletion authority — so what earns `match` is the
+MD5 RomM published beside it, over the member's decompressed bytes. That is the same preference the whole-file path
+already applies, extended inside the container rather than weakened to fit it.
+
+**What cannot be enumerated is reported as unconfirmed, never as a mismatch.** A container this plugin cannot open — a
+format the standard library does not read, or one damaged since it was listed — leaves the entry unchecked, which is
+`unverifiable`. The one exception is a single-member archive whose member's uncompressed size the file on disk matches
+exactly: that is the user who unpacked what the server keeps packed, and the loose bytes are that member's. A
+multi-member composite has no counterpart in one file at all. Accusing content of differing on bytes that were never
+read would be the strong claim, and it has not been earned.
 
 **The dialog has three exits.** Adopt records the existing content as the install. Download replaces it, behind a second
 confirmation naming the deletion. Cancel does nothing. For multi-file, Download removes the existing directory and

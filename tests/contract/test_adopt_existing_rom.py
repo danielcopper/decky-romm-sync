@@ -14,6 +14,8 @@ checksums" is neither a match nor a mismatch.
 from __future__ import annotations
 
 import hashlib
+import zipfile
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -268,6 +270,88 @@ async def test_verify_reports_a_server_failure_as_error(harness):
     assert result["status"] == "error"
     assert isinstance(result["message"], str) and result["message"]
     assert result["differences"] == []
+
+
+def _place_archive(harness, members: dict[str, bytes], *, name: str = "rom-41.zip") -> Path:
+    """Write a real ZIP exactly where a download of ``rom-41`` would."""
+    path = Path(harness.retrodeck_paths.roms_path()) / "gba" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for member, data in members.items():
+            archive.writestr(member, data)
+    return path
+
+
+def _stage_archived_detail(harness, archive: Path, members: dict[str, bytes]) -> None:
+    """The payload RomM sends for a ROM it stores as an archive.
+
+    The file-level digest is the composite its scanner accumulates over every
+    member's decompressed bytes in ASCII name order, while ``file_size_bytes``
+    is the container's size on disk. Holding the archive's own bytes to that
+    digest is what reported a mismatch on a byte-perfect copy of what the server
+    sent, so this fixture states the shape a real server sends and nothing
+    tidier.
+    """
+    composite = hashlib.md5(usedforsecurity=False)
+    for member in sorted(members):
+        composite.update(members[member])
+    _stage_detail(
+        harness,
+        fs_name=archive.name,
+        fs_size_bytes=archive.stat().st_size,
+        files=[
+            {
+                "file_name": archive.name,
+                "file_size_bytes": archive.stat().st_size,
+                "md5_hash": composite.hexdigest(),
+                "archive_members": [
+                    {
+                        "name": member,
+                        "size": len(data),
+                        "crc_hash": f"{zlib.crc32(data) & 0xFFFFFFFF:08x}",
+                        "md5_hash": _md5(data),
+                        "sha1_hash": hashlib.sha1(data, usedforsecurity=False).hexdigest(),
+                    }
+                    for member, data in sorted(members.items())
+                ],
+            }
+        ],
+    )
+
+
+async def test_verify_matches_a_zipped_rom_the_plugin_itself_downloaded(harness):
+    # Measured on device: the same bytes RomM served, re-offered to the gate,
+    # reported a mismatch because the digest describes the ROM inside the zip.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    members = {"rom-41.gba": b"cartridge bytes" * 64}
+    archive = _place_archive(harness, members)
+    _stage_archived_detail(harness, archive, members)
+
+    result = await harness.plugin.verify_existing_content(_ROM_ID)
+
+    assert result == {"status": "match", "message": result["message"], "differences": []}
+
+
+async def test_verify_names_the_member_that_differs_inside_an_archive(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    archive = _place_archive(harness, {"rom-41.gba": b"a different dump" * 64})
+    _stage_archived_detail(harness, archive, {"rom-41.gba": b"cartridge bytes" * 64})
+
+    result = await harness.plugin.verify_existing_content(_ROM_ID)
+
+    assert result["status"] == "mismatch"
+    assert [difference["name"] for difference in result["differences"]] == ["rom-41.zip/rom-41.gba"]
+
+
+async def test_verify_reports_a_multi_member_archive_that_lost_a_member(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    archive = _place_archive(harness, {"disc1.bin": b"one" * 32})
+    _stage_archived_detail(harness, archive, {"disc1.bin": b"one" * 32, "disc2.bin": b"two" * 32})
+
+    result = await harness.plugin.verify_existing_content(_ROM_ID)
+
+    assert result["status"] == "mismatch"
+    assert result["differences"] == [{"name": "rom-41.zip/disc2.bin", "expected": "present", "actual": "missing"}]
 
 
 def _stage_directory_rom(harness, *, data: bytes, on_disk_subdir: str) -> None:

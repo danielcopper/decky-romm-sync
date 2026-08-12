@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import urllib.parse
+import zipfile
 import zlib
 from typing import TYPE_CHECKING
 
@@ -13,7 +15,7 @@ from lib.path_safety import safe_path_component
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from models.adoption import ExistingContent
+    from models.adoption import ArchiveMemberInfo, ExistingContent
 
 
 class FakeDownloadFileStore:
@@ -38,8 +40,9 @@ class FakeDownloadFileStore:
       raise ``OSError`` on the respective operation; used by partial-
       failure tests in ``cleanup_leftover_tmp_files`` and
       ``_cleanup_partial_download``.
-    - ``decode_calls`` / ``extract_calls`` / ``walk_calls`` — captured
-      argument lists for tests that need to assert on adapter calls.
+    - ``decode_calls`` / ``extract_calls`` / ``walk_calls`` /
+      ``member_checksum_calls`` — captured argument lists for tests that
+      need to assert on adapter calls.
     """
 
     def __init__(self, files: dict[str, bytes] | None = None) -> None:
@@ -54,6 +57,7 @@ class FakeDownloadFileStore:
         self.walk_calls: list[tuple[str, tuple[str, ...]]] = []
         self.remove_failures: set[str] = set()
         self.remove_tree_failures: set[str] = set()
+        self.member_checksum_calls: list[tuple[str, str, str]] = []
 
     def set_disk_free(self, bytes_free: int) -> None:
         self.disk_free_bytes = bytes_free
@@ -91,6 +95,55 @@ class FakeDownloadFileStore:
         if algorithm != "md5":
             raise ValueError(f"unsupported checksum algorithm: {algorithm!r}")
         return hashlib.md5(data, usedforsecurity=False).hexdigest()
+
+    def list_archive_members(self, path: str) -> tuple[ArchiveMemberInfo, ...] | None:
+        """Read the stored bytes as a real ZIP central directory, or ``None``.
+
+        Deliberately not a scripted answer: the tests stage genuine archive bytes
+        and this reads them exactly as the adapter does, so a fixture cannot
+        claim a member layout the bytes do not have.
+        """
+        data = self.files.get(path)
+        if data is None:
+            return None
+        members: list[ArchiveMemberInfo] = []
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                for info in archive.infolist():
+                    if info.is_dir():
+                        continue
+                    members.append(
+                        {
+                            "name": info.filename,
+                            "size_bytes": info.file_size,
+                            "crc32": f"{info.CRC & 0xFFFFFFFF:08x}",
+                        }
+                    )
+        except (OSError, zipfile.BadZipFile):
+            return None
+        return tuple(members)
+
+    def checksum_archive_member(
+        self,
+        path: str,
+        member_name: str,
+        algorithm: str,
+        progress_callback: Callable[[int], None] | None = None,
+    ) -> str:
+        """Hash one member's decompressed bytes, reporting them as one progress chunk."""
+        self.member_checksum_calls.append((path, member_name, algorithm))
+        data = self.files.get(path)
+        if data is None:
+            raise FileNotFoundError(path)
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            member_bytes = archive.read(member_name)
+        if progress_callback is not None:
+            progress_callback(len(member_bytes))
+        if algorithm == "crc32":
+            return f"{zlib.crc32(member_bytes) & 0xFFFFFFFF:08x}"
+        if algorithm != "md5":
+            raise ValueError(f"unsupported checksum algorithm: {algorithm!r}")
+        return hashlib.md5(member_bytes, usedforsecurity=False).hexdigest()
 
     def remove_file(self, path: str) -> None:
         if path in self.remove_failures:

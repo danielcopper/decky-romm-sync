@@ -22,8 +22,9 @@ from lib.path_safety import safe_path_component
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import IO
 
-    from models.adoption import ExistingContent
+    from models.adoption import ArchiveMemberInfo, ExistingContent
 
 _EXTRACT_CHUNK = 1024 * 1024
 _HASH_CHUNK = 1024 * 1024
@@ -87,26 +88,75 @@ class DownloadFileAdapter:
         value RomM published for the same file to decide whether the content on
         disk is that file.
         """
+        with open(path, "rb") as f:
+            return self._digest_stream(f, algorithm, progress_callback)
+
+    def list_archive_members(self, path: str) -> tuple[ArchiveMemberInfo, ...] | None:
+        """Describe what sits inside the archive at *path*, or ``None``.
+
+        The central directory alone answers this: it states every member's
+        internal name, uncompressed size and CRC32, so nothing is decompressed.
+        ``None`` is returned for anything this adapter cannot open as a ZIP,
+        which the caller reads as "could not look inside" rather than as a
+        statement about the content.
+        """
+        members: list[ArchiveMemberInfo] = []
+        try:
+            with zipfile.ZipFile(path) as archive:
+                for info in archive.infolist():
+                    if info.is_dir():
+                        continue
+                    members.append(
+                        {
+                            "name": info.filename,
+                            "size_bytes": info.file_size,
+                            "crc32": f"{info.CRC & 0xFFFFFFFF:08x}",
+                        }
+                    )
+        except (OSError, zipfile.BadZipFile):
+            return None
+        return tuple(members)
+
+    def checksum_archive_member(
+        self,
+        path: str,
+        member_name: str,
+        algorithm: str,
+        progress_callback: Callable[[int], None] | None = None,
+    ) -> str:
+        """Return the hex digest of *member_name*'s decompressed bytes.
+
+        Streams the member out of the archive, so peak memory stays at one chunk
+        however large the member is. Failures are not caught: an unsupported
+        compression method (``NotImplementedError``), an encrypted member
+        (``RuntimeError``) or a container damaged since it was listed all mean
+        the bytes were never read, which is the caller's to report.
+        """
+        with zipfile.ZipFile(path) as archive, archive.open(member_name) as member:
+            return self._digest_stream(member, algorithm, progress_callback)
+
+    @classmethod
+    def _digest_stream(cls, stream: IO[bytes], algorithm: str, progress_callback: Callable[[int], None] | None) -> str:
+        """Hex-digest *stream* under *algorithm*, reporting each chunk's length."""
         if algorithm == "crc32":
             crc = 0
-            for chunk in self._read_chunks(path, progress_callback):
+            for chunk in cls._read_chunks(stream, progress_callback):
                 crc = zlib.crc32(chunk, crc)
             return f"{crc & 0xFFFFFFFF:08x}"
         if algorithm != "md5":
             raise ValueError(f"unsupported checksum algorithm: {algorithm!r}")
         digest = hashlib.md5(usedforsecurity=False)
-        for chunk in self._read_chunks(path, progress_callback):
+        for chunk in cls._read_chunks(stream, progress_callback):
             digest.update(chunk)
         return digest.hexdigest()
 
     @staticmethod
-    def _read_chunks(path: str, progress_callback: Callable[[int], None] | None):
-        """Yield *path* in fixed-size chunks, reporting each chunk's length."""
-        with open(path, "rb") as f:
-            while chunk := f.read(_HASH_CHUNK):
-                if progress_callback is not None:
-                    progress_callback(len(chunk))
-                yield chunk
+    def _read_chunks(stream: IO[bytes], progress_callback: Callable[[int], None] | None):
+        """Yield *stream* in fixed-size chunks, reporting each chunk's length."""
+        while chunk := stream.read(_HASH_CHUNK):
+            if progress_callback is not None:
+                progress_callback(len(chunk))
+            yield chunk
 
     def remove_file(self, path: str) -> None:
         """Delete *path*. Idempotent: a missing file is not an error."""

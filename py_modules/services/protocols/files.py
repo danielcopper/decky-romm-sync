@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractContextManager
 
-    from models.adoption import ExistingContent
+    from models.adoption import ArchiveMemberInfo, ExistingContent
     from models.prune import (
         MutationOutcome,
         RecoveryArtifact,
@@ -145,6 +145,39 @@ class DownloadFileStore(Protocol):
         receives each chunk's byte count as a delta so a caller hashing a whole
         directory accumulates across files. Raises ``ValueError`` for an
         algorithm the store cannot compute.
+        """
+        ...
+
+    def list_archive_members(self, path: str) -> tuple[ArchiveMemberInfo, ...] | None:
+        """Describe what sits inside the archive at *path*, or ``None``.
+
+        Reads the central directory only, so every member's internal name,
+        uncompressed size and CRC32 arrive without a byte being decompressed.
+        ``None`` says the store could not read *path* as an archive — a loose
+        file, a format it does not open, or a damaged container — which is an
+        absence of evidence for the caller to report as such, never a verdict on
+        the content. Directory entries are omitted: they carry no content and
+        RomM does not list them either.
+        """
+        ...
+
+    def checksum_archive_member(
+        self,
+        path: str,
+        member_name: str,
+        algorithm: str,
+        progress_callback: Callable[[int], None] | None = None,
+    ) -> str:
+        """Return the hex digest of one member's **decompressed** bytes.
+
+        The comparison RomM's ``archive_members`` can be held to: its per-member
+        digests are taken over the same decompressed content, while the
+        archive's own bytes match nothing the server publishes. *member_name* is
+        a name this store returned from :meth:`list_archive_members`. Streams in
+        chunks with the same delta callback as :meth:`checksum`, and raises when
+        the member cannot be read — an unsupported compression method or a
+        container damaged since it was listed — so the caller reports that it
+        could not confirm rather than a mismatch it never observed.
         """
         ...
 

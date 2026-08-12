@@ -15,15 +15,18 @@ adopting, and only inside the RetroDECK ROMs tree.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from domain.rom_adoption import (
+    DigestRequest,
     FileDifference,
     LocalFile,
+    LocalMember,
     ServerFile,
     compare_manifest,
+    digests_to_read,
     occupied_target_refusal,
     server_manifest,
     verification_status,
@@ -41,6 +44,7 @@ from lib.path_safety import PathTraversalError, coerce_safe_component, is_safe_r
 if TYPE_CHECKING:
     import asyncio
     import logging
+    from collections.abc import Callable
 
     from services.protocols import (
         Clock,
@@ -64,6 +68,11 @@ _VERIFY_MESSAGES = {
     "mismatch": "These files differ from the ones on the server",
     "unverifiable": "This RomM server publishes no checksums, so it cannot confirm these files",
 }
+
+# The second way a check can end without a verdict: the server did publish
+# digests and the plugin could not read what they speak for — an archive format
+# it cannot open, or a member it cannot decompress.
+_UNREADABLE_MESSAGE = "Some of this game's files could not be read, so they cannot be confirmed"
 
 
 @dataclass(frozen=True)
@@ -419,9 +428,13 @@ class RomAdoptionService:
         # the ROM directory was still a digest the server published, so dropping
         # it from that question could turn a mismatch into "cannot confirm".
         status = verification_status(manifest, observed, differences)
+        # Past the no-checksums guard above, so "unverifiable" here can only mean
+        # the plugin failed to read something the server did put a digest on —
+        # telling the user their server publishes none would be plainly wrong.
+        message = _UNREADABLE_MESSAGE if status == "unverifiable" else _VERIFY_MESSAGES[status]
         return {
             "status": status,
-            "message": _VERIFY_MESSAGES[status],
+            "message": message,
             "differences": [{"name": d.name, "expected": d.expected, "actual": d.actual} for d in differences],
         }
 
@@ -461,32 +474,73 @@ class RomAdoptionService:
 
         The result is keyed by each entry's ``lookup_key``, so an entry the server
         located is read from exactly that place and one it did not locate falls
-        back to a search by filename.
+        back to a search by filename. An entry the server stated members for is
+        looked inside first: a ZIP's central directory names every member and
+        states its uncompressed size and CRC32 without decompressing a byte,
+        which is both cheaper than reading the file and the only thing RomM's
+        per-member digests can be compared against.
 
-        A digest is computed whenever the server has one to compare against and
-        the sizes do not already **disagree** — a size mismatch is proof enough,
-        and re-reading a gigabyte to restate it would cost the user 20 seconds
-        (measured: 77 MiB/s on a Steam Deck SD card). Note "do not disagree", not
-        "agree": an entry whose ``file_size_bytes`` the payload omitted has no
-        size to compare, which is a reason to fall back on its digest, never a
-        reason to skip both and call the file confirmed.
+        Which bytes are worth reading is :func:`digests_to_read`'s decision; the
+        whole plan is built before the first read so the progress the user sees
+        counts down against the real total.
         """
         located = self._locate(manifest, target)
-        hashable = {
-            entry.lookup_key
-            for entry in manifest
-            if entry.verifiable
-            and entry.lookup_key in located
-            and not (entry.size_bytes and located[entry.lookup_key][1] != entry.size_bytes)
+        entries = [entry for entry in manifest if entry.lookup_key in located]
+        members = {entry.lookup_key: self._inspect_archive(entry, located[entry.lookup_key][0]) for entry in entries}
+        plan = {
+            entry.lookup_key: digests_to_read(entry, located[entry.lookup_key][1], members[entry.lookup_key])
+            for entry in entries
         }
-        total_bytes = sum(located[key][1] for key in hashable)
-        report = self._make_verify_progress(rom_id, total_bytes)
-        algorithms = {entry.lookup_key: entry.algorithm for entry in manifest}
+        report = self._make_verify_progress(
+            rom_id, sum(request.size_bytes for requests in plan.values() for request in requests)
+        )
         observed: dict[str, LocalFile] = {}
-        for key, (path, size) in located.items():
-            digest = self._download_file_store.checksum(path, algorithms[key], report) if key in hashable else ""
-            observed[key] = LocalFile(size_bytes=size, digest=digest)
+        for entry in entries:
+            key = entry.lookup_key
+            path, size = located[key]
+            digests = {request.member: self._read_digest(path, request, report) for request in plan[key]}
+            found = members[key]
+            observed[key] = LocalFile(
+                size_bytes=size,
+                digest=digests.get("", ""),
+                members=None
+                if found is None
+                else tuple(replace(member, digest=digests.get(member.name, "")) for member in found),
+            )
         return observed
+
+    def _inspect_archive(self, entry: ServerFile, path: str) -> tuple[LocalMember, ...] | None:
+        """List what sits inside *path*, or ``None`` when there is nothing to look inside for.
+
+        Only an entry the server stated members for is opened: for every other
+        file the archive's own bytes are what RomM hashed, so looking inside
+        would answer a question nobody asked.
+        """
+        if not entry.archived:
+            return None
+        found = self._download_file_store.list_archive_members(path)
+        if found is None:
+            return None
+        return tuple(
+            LocalMember(name=member["name"], size_bytes=member["size_bytes"], crc32=member["crc32"]) for member in found
+        )
+
+    def _read_digest(self, path: str, request: DigestRequest, report: Callable[[int], None]) -> str:
+        """Compute one planned digest, or ``""`` when the member cannot be read.
+
+        A member the store cannot decompress — an unsupported compression
+        method, or a container damaged since it was listed — leaves the entry
+        unconfirmed, which the verdict reports as "cannot confirm". Accusing the
+        content of differing on bytes that were never read would be the stronger
+        claim and the plugin has not earned it.
+        """
+        if not request.member:
+            return self._download_file_store.checksum(path, request.algorithm, report)
+        try:
+            return self._download_file_store.checksum_archive_member(path, request.member, request.algorithm, report)
+        except Exception as e:
+            self._logger.error(f"Could not read {request.member!r} inside {path} for verification: {e}")
+            return ""
 
     def _locate(self, manifest: tuple[ServerFile, ...], target: _Target) -> dict[str, tuple[str, int]]:
         """Resolve each manifest entry to the ``(path, size)`` on disk it names.

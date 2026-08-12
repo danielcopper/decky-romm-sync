@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import logging
+import zipfile
+import zlib
 from types import SimpleNamespace
 from typing import Any
 
@@ -75,6 +78,49 @@ def _multi_file_detail(
     if full_path is not None:
         detail["full_path"] = full_path
     return detail
+
+
+def _zip_bytes(members: dict[str, bytes]) -> bytes:
+    """A real ZIP holding *members*, so the central directory is genuine."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in members.items():
+            archive.writestr(name, data)
+    return buffer.getvalue()
+
+
+def _archived_detail(*, archive: bytes, members: dict[str, bytes], name: str = "Game.zip") -> dict[str, Any]:
+    """A single-file ROM RomM serves as an archive, shaped as its scanner writes it.
+
+    ``file_size_bytes`` is the container on disk while the file-level digest is
+    the composite RomM accumulates over every member's decompressed bytes in
+    ASCII name order — the two describe different things, which is exactly why a
+    whole-file comparison reports a mismatch on a byte-perfect copy.
+    """
+    composite = hashlib.md5(usedforsecurity=False)
+    for member_name in sorted(members):
+        composite.update(members[member_name])
+    return _single_file_detail(
+        name=name,
+        size=len(archive),
+        files=[
+            {
+                "file_name": name,
+                "file_size_bytes": len(archive),
+                "md5_hash": composite.hexdigest(),
+                "archive_members": [
+                    {
+                        "name": member_name,
+                        "size": len(data),
+                        "crc_hash": f"{zlib.crc32(data) & 0xFFFFFFFF:08x}",
+                        "md5_hash": _md5(data),
+                        "sha1_hash": hashlib.sha1(data, usedforsecurity=False).hexdigest(),
+                    }
+                    for member_name, data in sorted(members.items())
+                ],
+            }
+        ],
+    )
 
 
 _ROM_FULL_PATH = "roms/psx/Game"
@@ -631,6 +677,7 @@ class TestVerify:
 
         assert result["status"] == "unverifiable"
         assert result["differences"] == []
+        assert "publishes no checksums" in result["message"]
 
     async def test_an_entry_with_a_digest_but_no_size_is_still_hashed(self, h):
         # A stated size that is absent means "cannot compare on size", never
@@ -734,6 +781,215 @@ class TestVerify:
         result = await h.service.verify_existing_content(_ROM_ID)
 
         assert result["status"] == "match"
+
+
+class TestVerifyArchives:
+    """RomM's digests describe what is inside an archive, never the archive.
+
+    Its scanner streams every member's decompressed bytes into one accumulator,
+    so a zipped ROM's file-level digest is a composite over the content while
+    ``file_size_bytes`` is the container's size on disk. Comparing that digest
+    with the archive's own bytes reports a mismatch on a byte-perfect copy of
+    what the server itself sent — which is why these fixtures state the shape a
+    real server sends rather than a whole-file digest for a whole-file check.
+    """
+
+    async def test_a_zipped_rom_matches_a_byte_perfect_copy_of_what_the_server_sent(self, h):
+        members = {"Game.gba": b"rom bytes" * 16}
+        archive = _zip_bytes(members)
+        h.stage_detail(_archived_detail(archive=archive, members=members))
+        h.store.files["/roms/snes/Game.zip"] = archive
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "match"
+        assert result["differences"] == []
+
+    async def test_the_containers_own_digest_is_never_what_is_compared(self, h):
+        # The file-level digest is a composite over the members; nothing on disk
+        # answers to it. A verdict that depended on it could only be wrong.
+        members = {"Game.gba": b"rom bytes" * 16}
+        archive = _zip_bytes(members)
+        detail = _archived_detail(archive=archive, members=members)
+        detail["files"][0]["md5_hash"] = "0" * 32
+
+        h.stage_detail(detail)
+        h.store.files["/roms/snes/Game.zip"] = archive
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "match"
+
+    async def test_the_containers_own_size_is_never_what_is_compared(self, h):
+        # Two archives of the same ROM differ in size whenever they were packed
+        # differently, and the members already carry the stronger evidence.
+        members = {"Game.gba": b"rom bytes" * 16}
+        archive = _zip_bytes(members)
+        detail = _archived_detail(archive=archive, members=members)
+        detail["files"][0]["file_size_bytes"] = len(archive) + 4096
+
+        h.stage_detail(detail)
+        h.store.files["/roms/snes/Game.zip"] = archive
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "match"
+
+    async def test_a_changed_byte_inside_the_archive_is_a_mismatch_naming_the_member(self, h):
+        members = {"Game.gba": b"rom bytes" * 16}
+        h.stage_detail(_archived_detail(archive=_zip_bytes(members), members=members))
+        h.store.files["/roms/snes/Game.zip"] = _zip_bytes({"Game.gba": b"rom bytez" * 16})
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "mismatch"
+        assert [d["name"] for d in result["differences"]] == ["Game.zip/Game.gba"]
+        assert result["differences"][0]["expected"] != result["differences"][0]["actual"]
+
+    async def test_a_member_whose_crc_disagrees_is_reported_without_decompressing_it(self, h):
+        # The central directory states every member's CRC32 for free, and a
+        # disagreement is already proof — decompressing to restate it would cost
+        # the user seconds per gigabyte and change nothing.
+        members = {"Game.gba": b"rom bytes" * 16}
+        h.stage_detail(_archived_detail(archive=_zip_bytes(members), members=members))
+        h.store.files["/roms/snes/Game.zip"] = _zip_bytes({"Game.gba": b"rom bytez" * 16})
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["differences"][0]["expected"].startswith("crc32 ")
+        assert h.store.member_checksum_calls == []
+
+    async def test_a_member_the_server_published_no_crc_for_is_still_held_to_its_digest(self, h):
+        members = {"Game.gba": b"rom bytes" * 16}
+        detail = _archived_detail(archive=_zip_bytes(members), members=members)
+        detail["files"][0]["archive_members"][0]["crc_hash"] = ""
+
+        h.stage_detail(detail)
+        h.store.files["/roms/snes/Game.zip"] = _zip_bytes({"Game.gba": b"rom bytez" * 16})
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "mismatch"
+        assert result["differences"][0]["expected"].startswith("md5 ")
+        assert h.store.member_checksum_calls == [("/roms/snes/Game.zip", "Game.gba", "md5")]
+
+    async def test_a_multi_member_archive_matches_when_every_member_agrees(self, h):
+        members = {"disc1.bin": b"one" * 8, "disc1.cue": b"cue sheet", "disc2.bin": b"two" * 8}
+        archive = _zip_bytes(members)
+        h.stage_detail(_archived_detail(archive=archive, members=members))
+        h.store.files["/roms/snes/Game.zip"] = archive
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "match"
+
+    async def test_a_member_the_archive_does_not_hold_is_a_mismatch_naming_it(self, h):
+        members = {"disc1.bin": b"one" * 8, "disc2.bin": b"two" * 8}
+        h.stage_detail(_archived_detail(archive=_zip_bytes(members), members=members))
+        h.store.files["/roms/snes/Game.zip"] = _zip_bytes({"disc1.bin": b"one" * 8})
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "mismatch"
+        assert result["differences"] == [{"name": "Game.zip/disc2.bin", "expected": "present", "actual": "missing"}]
+
+    async def test_a_partial_archive_cannot_read_as_a_match(self, h):
+        # Every member that IS there agrees; the verdict still has to be no.
+        members = {"disc1.bin": b"one" * 8, "disc2.bin": b"two" * 8}
+        h.stage_detail(_archived_detail(archive=_zip_bytes(members), members=members))
+        h.store.files["/roms/snes/Game.zip"] = _zip_bytes({"disc1.bin": b"one" * 8})
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] != "match"
+
+    async def test_members_the_server_did_not_list_are_not_a_difference(self, h):
+        # RomM's scanner drops excluded names and extensions from
+        # ``archive_members``, so its own archive holds more than it listed.
+        listed = {"Game.gba": b"rom bytes" * 16}
+        h.stage_detail(_archived_detail(archive=_zip_bytes(listed), members=listed))
+        h.store.files["/roms/snes/Game.zip"] = _zip_bytes({**listed, "readme.txt": b"scanned by nobody"})
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "match"
+
+    async def test_a_file_unpacked_from_a_single_member_archive_matches_that_member(self, h):
+        # The user unzipped what the server keeps packed: one loose file where
+        # the archive would be, which is the member and nothing else.
+        member = b"rom bytes" * 16
+        h.stage_detail(_archived_detail(archive=_zip_bytes({"Game.gba": member}), members={"Game.gba": member}))
+        h.store.files["/roms/snes/Game.zip"] = member
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "match"
+
+    async def test_an_unpacked_file_that_differs_is_a_mismatch(self, h):
+        member = b"rom bytes" * 16
+        h.stage_detail(_archived_detail(archive=_zip_bytes({"Game.gba": member}), members={"Game.gba": member}))
+        h.store.files["/roms/snes/Game.zip"] = b"rom bytez" * 16
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "mismatch"
+        assert [d["name"] for d in result["differences"]] == ["Game.zip/Game.gba"]
+
+    async def test_a_container_this_plugin_cannot_open_is_unverifiable_never_a_mismatch(self, h):
+        # A 7z holds the same ROM at a different size; hashing its bytes against
+        # a member's digest would accuse content that is correct.
+        members = {"Game.gba": b"rom bytes" * 16}
+        h.stage_detail(_archived_detail(archive=_zip_bytes(members), members=members))
+        h.store.files["/roms/snes/Game.zip"] = b"7z\xbc\xaf\x27\x1c" + b"compressed" * 4
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "unverifiable"
+        assert result["differences"] == []
+        # Not the no-checksums message: this server published them, and saying
+        # otherwise would send the user looking for a problem on the server.
+        assert "could not be read" in result["message"]
+
+    async def test_a_composite_over_several_members_has_no_single_file_to_answer_it(self, h):
+        # One file on disk cannot be what a multi-member archive hashes to, so
+        # there is nothing to compare — not a mismatch, not a match.
+        members = {"disc1.bin": b"one" * 8, "disc2.bin": b"two" * 8}
+        h.stage_detail(_archived_detail(archive=_zip_bytes(members), members=members))
+        h.store.files["/roms/snes/Game.zip"] = b"one" * 8
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "unverifiable"
+        assert result["differences"] == []
+
+    async def test_a_member_that_cannot_be_read_leaves_the_check_unconfirmed(self, h):
+        members = {"Game.gba": b"rom bytes" * 16}
+        archive = _zip_bytes(members)
+        h.stage_detail(_archived_detail(archive=archive, members=members))
+        h.store.files["/roms/snes/Game.zip"] = archive
+
+        def unreadable(*_args, **_kwargs):
+            raise NotImplementedError("compression type 9 (deflate64)")
+
+        h.store.checksum_archive_member = unreadable
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "unverifiable"
+        assert result["differences"] == []
+        assert "could not be read" in result["message"]
+
+    async def test_progress_counts_the_member_bytes_that_are_read(self, h):
+        members = {"disc1.bin": b"one" * 8, "disc2.bin": b"two" * 8}
+        archive = _zip_bytes(members)
+        h.stage_detail(_archived_detail(archive=archive, members=members))
+        h.store.files["/roms/snes/Game.zip"] = archive
+
+        await h.service.verify_existing_content(_ROM_ID)
+        await asyncio.sleep(0)  # let the loop drain the scheduled emit tasks
+
+        frames = [payload for name, payload in h.events if name == "verify_progress"]
+        assert frames[-1] == {"rom_id": _ROM_ID, "bytes_done": 48, "bytes_total": 48}
 
 
 class TestVerifyLocatesFilesExactly:
