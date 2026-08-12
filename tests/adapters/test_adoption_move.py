@@ -291,6 +291,33 @@ class TestMovePairsCrossDevice:
         assert target.read_bytes() == b"someone else's save"
         assert save.read_bytes() == b"save bytes"
 
+    def test_a_link_the_undo_could_not_take_back_is_named_by_the_fallback(
+        self, adapter: AdoptionMoveAdapter, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A staged link that survives the undo occupies a target the rename pass
+        # then needs. Without naming it the refusal reads as "something is
+        # already there" about a file the plugin itself put down.
+        rom = _write(tmp_path / "Game (U).gba", b"rom bytes")
+        save = _write(tmp_path / "Game (U).srm", b"save bytes")
+        rom_target = tmp_path / "Game (USA).gba"
+        real_link = os.link
+
+        def cross_device_on_the_save(source: str, target: str) -> None:
+            if source == str(save):
+                raise OSError(errno.EXDEV, "Invalid cross-device link")
+            real_link(source, target)
+
+        monkeypatch.setattr(os, "link", cross_device_on_the_save)
+        monkeypatch.setattr(os, "unlink", _raising_unlink(str(rom_target)))
+        outcome = adapter.move_pairs(_pairs((rom, rom_target), (save, tmp_path / "Game (USA).srm")))
+
+        assert outcome["moved"] == []
+        assert sorted(outcome["unmoved"]) == sorted([str(rom), str(save)])
+        assert "left behind" in outcome["error"]
+        assert "Game (USA).gba" in outcome["error"]
+        assert rom.read_bytes() == b"rom bytes"
+        assert save.read_bytes() == b"save bytes"
+
     def test_a_target_parent_that_cannot_be_created_moves_nothing(
         self, adapter: AdoptionMoveAdapter, tmp_path: Path
     ) -> None:

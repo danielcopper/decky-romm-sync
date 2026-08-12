@@ -125,7 +125,7 @@ class AdoptionMoveAdapter:
             except OSError as e:
                 leftovers = self._drop_links(staged)
                 if e.errno in _LINK_UNSUPPORTED:
-                    return self._rename_with_rollback(pairs)
+                    return self._rename_with_rollback(pairs, leftovers)
                 return {
                     "moved": [],
                     "stranded": [],
@@ -167,7 +167,9 @@ class AdoptionMoveAdapter:
                 leftovers.append(target)
         return leftovers
 
-    def _rename_with_rollback(self, pairs: tuple[tuple[str, str], ...]) -> MoveOutcome:
+    def _rename_with_rollback(
+        self, pairs: tuple[tuple[str, str], ...], leftovers: list[str] | None = None
+    ) -> MoveOutcome:
         """Rename each pair in turn, undoing the ones already done if one fails.
 
         The fallback for a set hardlinks cannot express. Each target is probed
@@ -175,7 +177,13 @@ class AdoptionMoveAdapter:
         there without a word, and Python exposes no ``RENAME_NOREPLACE``: the
         probe narrows that window rather than closing it, which is the honest
         description of what it buys.
+
+        *leftovers* are links a staging attempt made and could not take back.
+        Each one occupies a target this pass needs, so it is named in the
+        refusal rather than surfacing as an unexplained "something is already
+        there" about a file the plugin itself put down.
         """
+        stray = _describe_leftovers(leftovers)
         done: list[tuple[str, str]] = []
         for source, target in pairs:
             failure = self._rename_one(source, target)
@@ -188,7 +196,7 @@ class AdoptionMoveAdapter:
                     "moved": [],
                     "stranded": [],
                     "unmoved": [pair_source for pair_source, _ in pairs],
-                    "error": failure,
+                    "error": failure + stray,
                 }
             return {
                 "moved": [pair_target for _pair_source, pair_target in stuck],
@@ -199,7 +207,8 @@ class AdoptionMoveAdapter:
                     if pair_target not in {stuck_target for _stuck_source, stuck_target in stuck}
                 ],
                 "error": f"{failure}; these are now at their new names and could not be put back: "
-                + ", ".join(os.path.basename(pair_target) for _pair_source, pair_target in stuck),
+                + ", ".join(os.path.basename(pair_target) for _pair_source, pair_target in stuck)
+                + stray,
             }
         return {"moved": [target for _source, target in pairs], "stranded": [], "unmoved": [], "error": ""}
 
@@ -227,7 +236,11 @@ class AdoptionMoveAdapter:
 
 def _describe_failure(source: str, error: OSError, leftovers: list[str]) -> str:
     """State a staging failure, and any link the undo could not take back with it."""
-    message = f"could not prepare {os.path.basename(source)}: {error}"
+    return f"could not prepare {os.path.basename(source)}: {error}" + _describe_leftovers(leftovers)
+
+
+def _describe_leftovers(leftovers: list[str] | None) -> str:
+    """Name the links a staging attempt made and could not take back, or ``""``."""
     if not leftovers:
-        return message
-    return message + "; these copies were left behind: " + ", ".join(os.path.basename(path) for path in leftovers)
+        return ""
+    return "; these copies were left behind: " + ", ".join(os.path.basename(path) for path in leftovers)
