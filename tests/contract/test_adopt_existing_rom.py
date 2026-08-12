@@ -17,9 +17,10 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from ._seed import seed_rom
+from ._seed import seed_group_member, seed_rom
 
 _ROM_ID = 41
+_GROUP = "igdb:900:gba"
 
 
 def _md5(data: bytes) -> str:
@@ -137,6 +138,50 @@ async def test_an_unbound_adopt_is_issued_no_prune_lease(harness):
     assert result["success"] is True
     assert result["app_id"] is None
     assert "prune_lease_token" not in result
+
+
+async def test_adopting_supersedes_the_group_s_other_installed_version(harness):
+    # #1298 through the real removal service: one installed version per shortcut
+    # binding, whichever route produced it. The sibling's files are content the
+    # plugin downloaded and can fetch again — a different class from the file the
+    # dialog protects, at a different path (ADR-0028).
+    seed_group_member(harness, _ROM_ID, group_key=_GROUP, shortcut_app_id=700)
+    sibling_path = seed_group_member(
+        harness, 42, group_key=_GROUP, shortcut_app_id=None, installed=True, file_name="sibling.gba"
+    )
+    assert sibling_path is not None
+    Path(sibling_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(sibling_path).write_bytes(b"the downloaded version")
+    _stage_detail(harness)
+    _place_single_file(harness)
+
+    result = await harness.plugin.adopt_existing_rom(_ROM_ID)
+
+    assert result["success"] is True
+    assert await harness.plugin.get_installed_rom(_ROM_ID) is not None
+    assert await harness.plugin.get_installed_rom(42) is None
+    assert not Path(sibling_path).exists()
+
+
+async def test_adopting_leaves_a_sibling_bound_to_a_different_shortcut_alone(harness):
+    # ADR-0021 §5: a grandfathered duplicate has its own Steam entry and is never
+    # superseded. The selection rule lives behind the seam — this pins that
+    # adoption inherits it rather than reimplementing it.
+    seed_group_member(harness, _ROM_ID, group_key=_GROUP, shortcut_app_id=700)
+    sibling_path = seed_group_member(
+        harness, 42, group_key=_GROUP, shortcut_app_id=800, installed=True, file_name="sibling.gba"
+    )
+    assert sibling_path is not None
+    Path(sibling_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(sibling_path).write_bytes(b"its own shortcut")
+    _stage_detail(harness)
+    _place_single_file(harness)
+
+    result = await harness.plugin.adopt_existing_rom(_ROM_ID)
+
+    assert result["success"] is True
+    assert await harness.plugin.get_installed_rom(42) is not None
+    assert Path(sibling_path).read_bytes() == b"its own shortcut"
 
 
 async def test_adopt_refuses_when_nothing_is_there(harness):

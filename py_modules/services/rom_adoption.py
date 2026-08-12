@@ -49,6 +49,7 @@ if TYPE_CHECKING:
         RetroDeckPaths,
         RomInstallRecorder,
         RommRomReader,
+        SiblingSupersedeProvider,
         SystemM3uSupportFn,
         SystemResolver,
         UnitOfWorkFactory,
@@ -96,6 +97,9 @@ class RomAdoptionServiceConfig:
     retrodeck_paths: RetroDeckPaths
     install_recorder: RomInstallRecorder
     m3u_support: SystemM3uSupportFn
+    # Deferred: the supersede lives on DownloadService, which is built after
+    # this service (it consumes the occupancy gate below).
+    sibling_supersede: SiblingSupersedeProvider
     uow_factory: UnitOfWorkFactory
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
@@ -113,6 +117,7 @@ class RomAdoptionService:
         self._retrodeck_paths = config.retrodeck_paths
         self._install_recorder = config.install_recorder
         self._m3u_support = config.m3u_support
+        self._sibling_supersede = config.sibling_supersede
         self._uow_factory = config.uow_factory
         self._loop = config.loop
         self._logger = config.logger
@@ -231,6 +236,15 @@ class RomAdoptionService:
         there. The path is re-validated immediately before the row is written, so
         content that vanished between the dialog and the confirmation is a
         refusal rather than a row pointing at nothing.
+
+        **Order: validate, supersede, record.** Every reason this adoption could
+        be refused is decided in the first step, because the second one deletes
+        another version's files: superseding first and refusing afterwards would
+        leave the user with a working version destroyed and nothing bound in its
+        place. Recording first is no better — a supersede that then failed would
+        leave the two installed versions the rule exists to prevent, with the
+        adoption already committed. Only a refusal that has already been ruled
+        out is safe to delete in front of.
         """
         rom_id = int(rom_id)
         try:
@@ -245,10 +259,28 @@ class RomAdoptionService:
                 "reason": "path_traversal",
                 "message": "Server sent an unsafe platform path — adoption aborted",
             }
+        refusal = await self._loop.run_in_executor(None, self._validate_adoption_io, rom_id, target)
+        if refusal is not None:
+            return refusal
+        # At most one installed version per shortcut binding (#1298), whichever
+        # route produced it. The dialog's promise not to delete covers the
+        # content the USER placed, at this ROM's own path; a superseded sibling
+        # is a different thing at a different path — content the plugin
+        # downloaded and can fetch again (ADR-0028). A removal failure aborts,
+        # exactly as it does for a download, so the rule is never half-applied.
+        cleanup_failure = await self._sibling_supersede()(rom_id)
+        if cleanup_failure is not None:
+            return cleanup_failure
         return await self._loop.run_in_executor(None, self._adopt_io, rom_id, rom_detail, target)
 
-    def _adopt_io(self, rom_id: int, rom_detail: dict[str, Any], target: _Target) -> dict[str, Any]:
-        """Re-validate the content and persist the install record. Runs off the loop."""
+    def _validate_adoption_io(self, rom_id: int, target: _Target) -> dict[str, Any] | None:
+        """Every refusal this adoption can produce, decided before anything is deleted.
+
+        ``None`` means the adoption will go through. Runs off the loop: it stats
+        the target and reads the ``roms`` row in one short UoW — the row has to
+        exist for the install's foreign key, and asking here turns what would
+        otherwise be an exception *after* the supersede into a refusal before it.
+        """
         existing = self._download_file_store.describe_path(target.path)
         if existing is None:
             return {
@@ -265,6 +297,31 @@ class RomAdoptionService:
                     if existing["is_dir"]
                     else "A file is in the way where a folder belongs"
                 ),
+            }
+        with self._uow_factory() as uow:
+            known = uow.roms.get(rom_id) is not None
+        if not known:
+            return {
+                "success": False,
+                "reason": "invalid_install",
+                "message": "This game is not in the local library — nothing was adopted",
+            }
+        return None
+
+    def _adopt_io(self, rom_id: int, rom_detail: dict[str, Any], target: _Target) -> dict[str, Any]:
+        """Persist the install record for content ``_validate_adoption_io`` accepted.
+
+        The target is stat'd once more: the supersede ran in between, and content
+        that vanished across it must be refused rather than recorded. That window
+        is the one refusal that can follow a completed supersede, and it cannot
+        be closed — a row pointing at files that are gone would be worse.
+        """
+        existing = self._download_file_store.describe_path(target.path)
+        if existing is None or existing["is_dir"] != target.is_multi:
+            return {
+                "success": False,
+                "reason": "nothing_to_adopt",
+                "message": "The files are no longer there — nothing was adopted",
             }
         file_path = self._adopted_launch_file(target) if target.is_multi else target.path
         rom_dir = target.path if target.is_multi else None

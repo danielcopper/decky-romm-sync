@@ -56,6 +56,8 @@ from services.protocols.cross_service import (
     SessionMigrationReader,
     SessionPlaytimeRecorder,
     SessionPostExitSync,
+    SiblingSupersedeFn,
+    SiblingSupersedeProvider,
     VersionSwitcherFn,
 )
 from services.protocols.determinism import Clock, Sleeper, UuidGen
@@ -225,6 +227,8 @@ __all__ = [
     "SessionPostExitSync",
     "SettingsPersister",
     "SgdbArtworkCache",
+    "SiblingSupersedeFn",
+    "SiblingSupersedeProvider",
     "Sleeper",
     "SteamConfigStore",
     "SteamGridDbApi",

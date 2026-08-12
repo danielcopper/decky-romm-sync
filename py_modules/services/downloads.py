@@ -246,23 +246,23 @@ class DownloadService:
             return {"success": False, "reason": "already_downloading", "message": "Already downloading"}
         return await self._begin_download(rom_id, resume=False, replace_existing=bool(replace_existing))
 
-    async def _remove_conflicting_sibling_installs(self, rom_id: int) -> dict[str, Any] | None:
-        """Strip any other downloaded version of ``rom_id``'s sibling group (#1298 T7).
+    async def supersede_sibling_installs(self, rom_id: int) -> dict[str, Any] | None:
+        """Strip any other installed version of ``rom_id``'s sibling group (#1298 T7).
 
-        Called from ``_begin_download`` once the occupancy gate has passed: a
-        refused download must not already have deleted another version. The group's
-        members are snapshotted in one short read UoW (closed before the removal seam runs
-        — the removal opens its own UoW, which must not nest; ADR-0006). The
-        membership read is a single indexed lookup done directly (like
-        ``get_installed_rom``); each superseded install is then removed through the
+        The single home of the supersede — ``_begin_download`` once its occupancy
+        gate has passed (a refusal must not already have deleted another version),
+        and adoption through ``SiblingSupersedeFn`` for the same reason: an adopted
+        install is an install (ADR-0028). Neither caller may copy the selection
+        rule below. The group's members are snapshotted in one short read UoW,
+        closed before the removal seam runs — the removal opens its own UoW, which
+        must not nest (ADR-0006). Each superseded install is removed through the
         canonical ``RomRemovalService.remove_rom`` (files + ``rom_installs`` row;
         saves untouched per ADR-0007) rather than duplicating its deletion logic.
-        Every removal attempt is logged with both rom ids so a failure is
-        attributable (S7). A removal that reports ``not_installed`` raced clean and
-        is skipped; any other failure is returned so the caller aborts with that
-        shape. A superseded sibling's *paused* queue entry is evicted so the queue
-        stays coherent with disk (S1). Returns ``None`` when the group is clean /
-        all removals succeeded.
+        Every attempt is logged with both rom ids so a failure is attributable (S7).
+        A removal that reports ``not_installed`` raced clean and is skipped; any
+        other failure is returned so the caller aborts with that shape. A superseded
+        sibling's *paused* queue entry is evicted so the queue stays coherent with
+        disk (S1). Returns ``None`` when the group is clean / all removals succeeded.
         """
         sibling_ids = self._conflicting_sibling_install_ids(rom_id)
         if not sibling_ids:
@@ -423,7 +423,7 @@ class DownloadService:
         # held (B1), so a second start_download during this await is rejected by
         # ``start_download``'s guard rather than racing past it.
         try:
-            cleanup_failure = await self._remove_conflicting_sibling_installs(rom_id)
+            cleanup_failure = await self.supersede_sibling_installs(rom_id)
         except Exception:
             self._download_in_progress.discard(rom_id)
             raise

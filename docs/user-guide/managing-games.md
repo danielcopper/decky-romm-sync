@@ -221,8 +221,8 @@ carry a separate shortcut per version from an older release are left untouched.
 ### When the game is already on your device
 
 If you copied ROMs into your RetroDECK folders yourself, a game the plugin has no record of may already be sitting
-exactly where a download would write. The plugin never writes over it. Instead, the Play button reads **Already on
-Device**, and pressing it opens a dialog rather than starting a download.
+exactly where a download would write. The plugin never writes over it. Instead, the Play button reads **Use Existing
+Files**, and pressing it opens a dialog rather than starting a download.
 
 The dialog shows both sides — what is on your device (name, size, when it last changed) and what the server would send —
 and says plainly whether the two are the same size. From there you have three choices:

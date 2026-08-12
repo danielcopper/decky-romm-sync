@@ -83,6 +83,16 @@ nothing would ever reclaim it. At ROM sizes that is silent, unbounded consumptio
 **One case is out of reach by design.** A genuinely different dump under a different name, of different size, is not
 found — and adopting it would be wrong, because it is not the content the row would claim.
 
+**Adoption supersedes the sibling group's other install, for the same reason downloading does.** One downloaded version
+per shortcut binding is a stated rule, and an adopted row is a row like any other — leaving adoption out would make it
+the single route that breaks the rule, with the group self-healing only by accident on the next download. The dialog's
+promise not to delete does not reach the superseded sibling: that sibling is content **the plugin itself downloaded**,
+re-fetchable from RomM, sitting at a different path — the same class the register's cleanup carve-out already covers.
+What the dialog protects is the file the user placed, at this ROM's own location, which is precisely what the server
+cannot hand back. The ordering is the part that had to be got right: every reason the adoption could be refused is
+settled before the supersede runs, because a supersede followed by a refusal would destroy a working version and leave
+nothing bound, and a supersede after the row write would leave two installed versions if the removal failed.
+
 **Adoption becomes a sixth recorded-state writer site for `applied_launch_options`.** One class of install row means one
 class of Steam shortcut behind it: an adopted ROM's shortcut is written the moment the dialog closes, and the value the
 frontend wrote is recorded exactly as the download path records its own. Leaving it `NULL` would have been precisely the

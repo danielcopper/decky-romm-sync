@@ -68,6 +68,36 @@ class RomInstallRecorder(Protocol):
         ...
 
 
+class SiblingSupersedeFn(Protocol):
+    """Strip any other installed version of this ROM's sibling group (#1298).
+
+    One downloaded version per shortcut binding, whichever route produced it —
+    an adopted install is an install (ADR-0028), so adoption is held to the rule
+    the download path already enforces. Returns ``None`` when the group is clean
+    or every removal succeeded, and a canonical failure dict otherwise, which the
+    caller must treat as an abort: a half-applied supersede leaves two installed
+    versions, the state the rule exists to prevent.
+
+    Which siblings qualify is deliberately **not** part of this contract — the
+    "bound to the same shortcut or unbound, never a grandfathered separate
+    shortcut" rule (ADR-0021 §5) has one implementation behind this seam.
+    """
+
+    async def __call__(self, rom_id: int) -> dict[str, Any] | None: ...
+
+
+class SiblingSupersedeProvider(Protocol):
+    """Deferred read of :class:`SiblingSupersedeFn`.
+
+    The supersede lives on DownloadService, which is constructed *after*
+    RomAdoptionService (it consumes the adoption service's occupancy gate), so
+    the composition root binds this after both exist — the same two-phase shape
+    ``RomRemoverProvider`` uses for the download↔removal cycle.
+    """
+
+    def __call__(self) -> SiblingSupersedeFn: ...
+
+
 class DownloadTargetGateFn(Protocol):
     """Decide whether a download may write to the path it has computed.
 

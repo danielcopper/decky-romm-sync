@@ -199,6 +199,8 @@ def plugin():
             retrodeck_paths=retrodeck_paths,
             install_recorder=p._install_recorder,
             m3u_support=lambda system_name: p._m3u_supported,
+            # Late-bound like production: DownloadService is constructed below.
+            sibling_supersede=lambda: p._download_service.supersede_sibling_installs,
             uow_factory=FakeUnitOfWorkFactory(p._uow),
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
@@ -5772,7 +5774,7 @@ class TestSiblingSupersedeSelection:
 
 
 class TestSiblingSupersedeRemoval:
-    """`_remove_conflicting_sibling_installs` + `start_download` — the removal + abort flow."""
+    """`supersede_sibling_installs` + `start_download` — the removal + abort flow."""
 
     @pytest.mark.asyncio
     async def test_removes_superseded_sibling(self, plugin):
@@ -5783,7 +5785,7 @@ class TestSiblingSupersedeRemoval:
         remover = AsyncMock(return_value={"success": True, "message": "ROM removed"})
         plugin._download_service._rom_remover = lambda: remover
 
-        result = await plugin._download_service._remove_conflicting_sibling_installs(1)
+        result = await plugin._download_service.supersede_sibling_installs(1)
 
         assert result is None
         remover.assert_awaited_once_with(2)
@@ -5798,7 +5800,7 @@ class TestSiblingSupersedeRemoval:
         remover = AsyncMock(return_value={"success": False, "reason": "not_installed", "message": "ROM not installed"})
         plugin._download_service._rom_remover = lambda: remover
 
-        result = await plugin._download_service._remove_conflicting_sibling_installs(1)
+        result = await plugin._download_service.supersede_sibling_installs(1)
 
         assert result is None
         remover.assert_awaited_once_with(2)
@@ -5812,7 +5814,7 @@ class TestSiblingSupersedeRemoval:
         failing = AsyncMock(return_value={"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"})
         plugin._download_service._rom_remover = lambda: failing
 
-        result = await plugin._download_service._remove_conflicting_sibling_installs(1)
+        result = await plugin._download_service.supersede_sibling_installs(1)
 
         assert result == {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"}
 
@@ -5824,7 +5826,7 @@ class TestSiblingSupersedeRemoval:
         provider = MagicMock(side_effect=AssertionError("remover must not be resolved when nothing is superseded"))
         plugin._download_service._rom_remover = provider
 
-        assert await plugin._download_service._remove_conflicting_sibling_installs(1) is None
+        assert await plugin._download_service.supersede_sibling_installs(1) is None
         provider.assert_not_called()
 
     @pytest.mark.asyncio
@@ -5926,7 +5928,7 @@ class TestSiblingSupersedeRemoval:
         plugin._download_service._download_queue[2] = {"rom_id": 2, "status": "paused"}
         plugin._download_service._rom_remover = lambda: AsyncMock(return_value={"success": True, "message": "removed"})
 
-        result = await plugin._download_service._remove_conflicting_sibling_installs(1)
+        result = await plugin._download_service.supersede_sibling_installs(1)
         assert result is None
         assert 2 not in plugin._download_service._download_queue
 
@@ -5940,7 +5942,7 @@ class TestSiblingSupersedeRemoval:
         plugin._download_service._download_queue[2] = {"rom_id": 2, "status": "completed"}
         plugin._download_service._rom_remover = lambda: AsyncMock(return_value={"success": True, "message": "removed"})
 
-        await plugin._download_service._remove_conflicting_sibling_installs(1)
+        await plugin._download_service.supersede_sibling_installs(1)
         assert 2 in plugin._download_service._download_queue
 
     @pytest.mark.asyncio
@@ -5953,7 +5955,7 @@ class TestSiblingSupersedeRemoval:
         plugin._download_service._rom_remover = lambda: AsyncMock(return_value={"success": True, "message": "removed"})
 
         with caplog.at_level(logging.INFO):
-            await plugin._download_service._remove_conflicting_sibling_installs(1)
+            await plugin._download_service.supersede_sibling_installs(1)
         assert any("rom 2" in r.message and "rom 1" in r.message and r.levelno == logging.INFO for r in caplog.records)
 
     @pytest.mark.asyncio
@@ -5969,7 +5971,7 @@ class TestSiblingSupersedeRemoval:
         plugin._download_service._rom_remover = lambda: failing
 
         with caplog.at_level(logging.INFO):
-            await plugin._download_service._remove_conflicting_sibling_installs(1)
+            await plugin._download_service.supersede_sibling_installs(1)
         assert any(
             "rom 2" in r.message
             and "rom 1" in r.message

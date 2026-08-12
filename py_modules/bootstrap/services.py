@@ -48,7 +48,7 @@ from services.version_switch import VersionSwitchService, VersionSwitchServiceCo
 if TYPE_CHECKING:
     from typing import Any
 
-    from services.protocols import InstalledRomRemoverFn
+    from services.protocols import InstalledRomRemoverFn, SiblingSupersedeFn
 
     from .adapters import AdapterBundle, CallbackBundle, RuntimeBundle, StateBundle
 
@@ -111,6 +111,10 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
     # supersede, but RomRemovalService needs DownloadService's queue-cleanup seam —
     # a construction cycle. Bind the remover after both services exist.
     rom_remover_binding: LateBinding[InstalledRomRemoverFn] = LateBinding("rom_remover")
+    # RomAdoptionService needs DownloadService's sibling supersede (#1298), but
+    # DownloadService needs the adoption service's occupancy gate — the same
+    # shape of cycle, bound after both exist.
+    sibling_supersede_binding: LateBinding[SiblingSupersedeFn] = LateBinding("sibling_supersede")
 
     # The single read-path core resolver (B1): folds the per-game
     # emulator_override pin over the system-layer ES-DE resolution. Built first
@@ -293,6 +297,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             install_recorder=rom_install_recorder,
             m3u_support=cfg.callbacks.m3u_support,
+            sibling_supersede=sibling_supersede_binding.get,
             uow_factory=cfg.callbacks.uow_factory,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
@@ -335,6 +340,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
     # Close the download↔removal cycle: DownloadService's sibling supersede now
     # resolves the live remover through this binding (#1298).
     rom_remover_binding.set(lambda: rom_removal_service.remove_rom)
+    sibling_supersede_binding.set(lambda: download_service.supersede_sibling_installs)
 
     firmware_service = FirmwareService(
         config=FirmwareServiceConfig(

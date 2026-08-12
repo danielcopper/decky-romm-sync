@@ -3288,10 +3288,10 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
     vi.mocked(toaster.toast).mockClear();
   });
 
-  it("labels the button 'Already on Device' when the cached stat found content", async () => {
+  it("labels the button 'Use Existing Files' when the cached stat found content", async () => {
     mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
     const { findByText } = render(<CustomPlayButton appId={100} />);
-    await findByText("Already on Device");
+    await findByText("Use Existing Files");
   });
 
   it("still says Download when nothing is in the way", async () => {
@@ -3300,13 +3300,13 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
     await findByText("Download");
   });
 
-  it("stops saying 'Already on Device' once the files are uninstalled", async () => {
+  it("stops saying 'Use Existing Files' once the files are uninstalled", async () => {
     // The stat that set the flag ran at mount. An uninstall deletes exactly the
     // content it found, so the label has to go back — otherwise it names files
     // that are no longer there.
     mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
     const utils = render(<CustomPlayButton appId={100} />);
-    await utils.findByText("Already on Device");
+    await utils.findByText("Use Existing Files");
 
     await act(async () => {
       globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: 42 } }));
@@ -3316,12 +3316,12 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
     await utils.findByText("Download");
   });
 
-  it("stops saying 'Already on Device' when a transfer is cancelled", async () => {
+  it("stops saying 'Use Existing Files' when a transfer is cancelled", async () => {
     // A cancelled replace-download already removed a multi-file ROM's directory
     // at admission, so the stat behind the label is spent.
     mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
     const utils = render(<CustomPlayButton appId={100} />);
-    await utils.findByText("Already on Device");
+    await utils.findByText("Use Existing Files");
 
     act(() => {
       emitDeckyEvent<[DownloadProgressEvent]>("download_progress", {
@@ -3339,10 +3339,10 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
     await utils.findByText("Download");
   });
 
-  it("stops saying 'Already on Device' when a download fails", async () => {
+  it("stops saying 'Use Existing Files' when a download fails", async () => {
     mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
     const utils = render(<CustomPlayButton appId={100} />);
-    await utils.findByText("Already on Device");
+    await utils.findByText("Use Existing Files");
 
     act(() => {
       emitDeckyEvent<[DownloadFailedEvent]>("download_failed", {
@@ -3360,7 +3360,7 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
     // The outgoing version's answer says nothing about where the new one lives.
     mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
     const utils = render(<CustomPlayButton appId={100} />);
-    await utils.findByText("Already on Device");
+    await utils.findByText("Use Existing Files");
 
     vi.mocked(getCachedGameDetail).mockResolvedValue({
       found: true,
@@ -3398,7 +3398,7 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
       await Promise.resolve();
     });
 
-    await utils.findByText("Already on Device");
+    await utils.findByText("Use Existing Files");
   });
 
   it("opens the dialog on a target_occupied refusal instead of toasting a failure", async () => {
@@ -3414,7 +3414,7 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
 
     expect(vi.mocked(showAdoptExistingModal)).toHaveBeenCalledWith(42, OCCUPIED);
     expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
-    await utils.findByText("Already on Device");
+    await utils.findByText("Use Existing Files");
   });
 
   it("replace re-runs the download with the replace flag set", async () => {
@@ -3527,7 +3527,7 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
       title: "Tender",
       body: "The files are no longer there — nothing was adopted",
     });
-    await utils.findByText("Already on Device");
+    await utils.findByText("Use Existing Files");
   });
 
   it("a thrown adoption is surfaced rather than swallowed", async () => {
@@ -3546,6 +3546,6 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
       title: "Tender",
       body: "Couldn't use the existing files — is RomM server running?",
     });
-    await utils.findByText("Already on Device");
+    await utils.findByText("Use Existing Files");
   });
 });

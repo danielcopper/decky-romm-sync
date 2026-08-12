@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -112,6 +113,10 @@ class Harness:
             ),
         )
         self.paths = FakeRetroDeckPaths(roms=_ROMS)
+        # Records every rom_id the supersede was asked about, and answers with
+        # whatever a test has staged. Default: nothing to supersede.
+        self.superseded: list[int] = []
+        self.supersede_result: dict[str, Any] | None = None
         self.service = RomAdoptionService(
             config=RomAdoptionServiceConfig(
                 romm_api=self.romm_api,
@@ -120,6 +125,7 @@ class Harness:
                 retrodeck_paths=self.paths,
                 install_recorder=self.recorder,
                 m3u_support=lambda system_name: self.m3u_supported,
+                sibling_supersede=lambda: self._supersede,
                 uow_factory=FakeUnitOfWorkFactory(self.uow),
                 loop=loop,
                 logger=logging.getLogger("test_rom_adoption"),
@@ -130,6 +136,10 @@ class Harness:
 
     async def _emit(self, event: str, /, *args: object) -> None:
         self.events.append((event, args[0] if args else None))
+
+    async def _supersede(self, rom_id: int) -> dict[str, Any] | None:
+        self.superseded.append(rom_id)
+        return self.supersede_result
 
     def seed_rom(self, *, app_id: int | None = 1042) -> None:
         with self.uow:
@@ -453,10 +463,9 @@ class TestAdopt:
         assert result["reason"] == "unexpected_content_kind"
 
     async def test_a_rejected_install_never_deletes_the_content(self, h):
-        # The recorder's cleanup callback removes a download's artifact when the
-        # metadata fails the aggregate invariant (here: a non-positive rom_id).
-        # Adoption passes a no-op instead: the bytes are the user's, and a
-        # refusal must not consume them.
+        # A ROM with no `roms` row cannot carry an install. Refused up front —
+        # before the supersede — so neither the user's bytes nor a sibling's are
+        # touched by an adoption that was never going to be recorded.
         h.romm_api.roms[0] = {**_single_file_detail(), "id": 0}
         h.store.files["/roms/snes/Game.sfc"] = b"mine"
 
@@ -465,6 +474,70 @@ class TestAdopt:
         assert result["success"] is False
         assert result["reason"] == "invalid_install"
         assert h.store.files["/roms/snes/Game.sfc"] == b"mine"
+        assert h.superseded == []
+
+    async def test_adopting_supersedes_the_group_s_other_install(self, h):
+        # One installed version per shortcut binding (#1298), whichever route
+        # produced it — an adopted install is an install (ADR-0028).
+        h.seed_rom()
+        h.stage_detail(_single_file_detail())
+        h.store.files["/roms/snes/Game.sfc"] = b"x" * 10
+
+        result = await h.service.adopt_existing_rom(_ROM_ID)
+
+        assert result["success"] is True
+        assert h.superseded == [_ROM_ID]
+
+    async def test_a_failed_supersede_aborts_the_adoption_with_nothing_written(self, h):
+        h.seed_rom()
+        h.stage_detail(_single_file_detail())
+        h.store.files["/roms/snes/Game.sfc"] = b"x" * 10
+        h.supersede_result = {"success": False, "reason": "in_progress", "message": "boom"}
+
+        result = await h.service.adopt_existing_rom(_ROM_ID)
+
+        assert result == {"success": False, "reason": "in_progress", "message": "boom"}
+        assert h.uow.rom_installs.get(_ROM_ID) is None
+        assert h.store.files["/roms/snes/Game.sfc"] == b"x" * 10
+
+    async def test_the_supersede_runs_after_validation_and_before_the_row(self, h):
+        # The ordering the whole design turns on, pinned so a refactor cannot
+        # invert it: nothing is deleted until every refusal has been ruled out,
+        # and the row is not written until the deletion has succeeded.
+        h.seed_rom()
+        h.stage_detail(_single_file_detail())
+        h.store.files["/roms/snes/Game.sfc"] = b"x" * 10
+        order: list[str] = []
+
+        async def _record_supersede(rom_id: int) -> None:
+            order.append(f"supersede:{rom_id}")
+            return
+
+        recorder_record = h.recorder.do_record_install
+
+        def _record_install(**kwargs):
+            order.append("record")
+            return recorder_record(**kwargs)
+
+        h.service._sibling_supersede = lambda: _record_supersede
+        h.service._install_recorder = SimpleNamespace(
+            do_record_install=_record_install,
+            do_resolve_launch_bake=h.recorder.do_resolve_launch_bake,
+            do_record_applied_launch_options=h.recorder.do_record_applied_launch_options,
+        )
+
+        assert (await h.service.adopt_existing_rom(_ROM_ID))["success"] is True
+
+        assert order == [f"supersede:{_ROM_ID}", "record"]
+
+    async def test_a_vanished_path_is_refused_before_anything_is_superseded(self, h):
+        h.seed_rom()
+        h.stage_detail(_single_file_detail())
+
+        result = await h.service.adopt_existing_rom(_ROM_ID)
+
+        assert result["reason"] == "nothing_to_adopt"
+        assert h.superseded == []
 
     async def test_a_server_failure_surfaces_the_canonical_shape(self, h):
         h.romm_api.fail_on_next(OSError("boom"))

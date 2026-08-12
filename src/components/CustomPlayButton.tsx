@@ -182,7 +182,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
    * ends, a version switch rebinds the shortcut, or an uninstall deletes what
    * the stat found. Defaulting to `false` makes forgetting it under-claim
    * ("Download" for content that is there, which the gate then catches at click
-   * time) rather than over-claim ("Already on Device" for content that is gone).
+   * time) rather than over-claim ("Use Existing Files" for content that is gone).
    * The two callers that know the answer pass it.
    */
   const enterDownloadState = (occupied = false) => {
@@ -1386,10 +1386,12 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     } else if (actionPending) {
       dlLabel = "Starting...";
     } else if (targetOccupied) {
-      // Something is already at this game's location (#260). Pressing opens the
-      // comparison dialog rather than a download, so the label must not promise
-      // one.
-      dlLabel = "Already on Device";
+      // Pressing opens the comparison dialog (#260), so the label names that
+      // action rather than a state: nothing is installed here, and a label
+      // describing the files would read as "installed and ready". The verb
+      // matches the dialog's own adopt button ("Use These Files") so the button
+      // promises exactly what the dialog then offers.
+      dlLabel = "Use Existing Files";
     } else {
       dlLabel = "Download";
     }
