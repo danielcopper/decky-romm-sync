@@ -3316,6 +3316,91 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
     await utils.findByText("Download");
   });
 
+  it("stops saying 'Already on Device' when a transfer is cancelled", async () => {
+    // A cancelled replace-download already removed a multi-file ROM's directory
+    // at admission, so the stat behind the label is spent.
+    mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
+    const utils = render(<CustomPlayButton appId={100} />);
+    await utils.findByText("Already on Device");
+
+    act(() => {
+      emitDeckyEvent<[DownloadProgressEvent]>("download_progress", {
+        rom_id: 42,
+        rom_name: "Test ROM",
+        platform_name: "PSX",
+        file_name: "game.iso",
+        status: "cancelled",
+        progress: 0.4,
+        bytes_downloaded: 400,
+        total_bytes: 1000,
+      });
+    });
+
+    await utils.findByText("Download");
+  });
+
+  it("stops saying 'Already on Device' when a download fails", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
+    const utils = render(<CustomPlayButton appId={100} />);
+    await utils.findByText("Already on Device");
+
+    act(() => {
+      emitDeckyEvent<[DownloadFailedEvent]>("download_failed", {
+        rom_id: 42,
+        rom_name: "Test ROM",
+        platform_name: "PSX",
+        error_message: "boom",
+      });
+    });
+
+    await utils.findByText("Download");
+  });
+
+  it("a version switch takes the incoming ROM's occupancy, not the outgoing one's", async () => {
+    // The outgoing version's answer says nothing about where the new one lives.
+    mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: true });
+    const utils = render(<CustomPlayButton appId={100} />);
+    await utils.findByText("Already on Device");
+
+    vi.mocked(getCachedGameDetail).mockResolvedValue({
+      found: true,
+      rom_id: 43,
+      rom_name: "Other version",
+      installed: false,
+      target_path_occupied: false,
+    });
+    await act(async () => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_data_changed", { detail: { type: "version_switched", app_id: 100, rom_id: 43 } }),
+      );
+      await Promise.resolve();
+    });
+
+    await utils.findByText("Download");
+  });
+
+  it("a version switch to an occupied ROM says so", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false, target_path_occupied: false });
+    const utils = render(<CustomPlayButton appId={100} />);
+    await utils.findByText("Download");
+
+    vi.mocked(getCachedGameDetail).mockResolvedValue({
+      found: true,
+      rom_id: 43,
+      rom_name: "Other version",
+      installed: false,
+      target_path_occupied: true,
+    });
+    await act(async () => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_data_changed", { detail: { type: "version_switched", app_id: 100, rom_id: 43 } }),
+      );
+      await Promise.resolve();
+    });
+
+    await utils.findByText("Already on Device");
+  });
+
   it("opens the dialog on a target_occupied refusal instead of toasting a failure", async () => {
     mockCachedDetail({ rom_id: 42, installed: false });
     vi.mocked(backend.startDownload).mockResolvedValue(OCCUPIED);

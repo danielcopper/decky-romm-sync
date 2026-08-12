@@ -172,6 +172,24 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   const containerRef = useRef<HTMLDivElement>(null);
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  /**
+   * Enter the download state, restating whether something occupies this ROM's
+   * location.
+   *
+   * The single door into that state, because `targetOccupied` decides the
+   * button's LABEL and the value only ever comes from a `stat` the backend took
+   * — so it cannot be derived here, and it goes stale the moment a transfer
+   * ends, a version switch rebinds the shortcut, or an uninstall deletes what
+   * the stat found. Defaulting to `false` makes forgetting it under-claim
+   * ("Download" for content that is there, which the gate then catches at click
+   * time) rather than over-claim ("Already on Device" for content that is gone).
+   * The two callers that know the answer pass it.
+   */
+  const enterDownloadState = (occupied = false) => {
+    setTargetOccupied(occupied);
+    setState("download");
+  };
+
   useEffect(() => {
     mountPruneLeaseOwner(leaseOwner);
     return () => {
@@ -275,8 +293,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           }
         } else {
           detach(debugLog(`CustomPlayButton: -> download`));
-          setTargetOccupied(cached.target_path_occupied === true);
-          setState("download");
+          enterDownloadState(cached.target_path_occupied === true);
           await rehydrateInflightDownload(rid);
         }
       } catch (e) {
@@ -300,7 +317,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       (evt: DownloadProgressEvent) => {
         if (evt.rom_id !== romIdRef.current) return;
         if (evt.status === "failed" || evt.status === "cancelled") {
-          setState("download");
+          // A cancelled replace-download already removed a multi-file ROM's
+          // directory at admission, so the stat behind the label is spent.
+          enterDownloadState();
           setActionPending(false);
           setDlProgress(null);
         } else {
@@ -341,7 +360,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         handleButtonDownloadFailure(evt, romIdRef.current, () => {
           setDlProgress(null);
           setActionPending(false);
-          setState("download");
+          enterDownloadState();
         }),
     );
 
@@ -356,11 +375,12 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     const onUninstall = (e: Event) => {
       const romId = (e as CustomEvent).detail?.rom_id;
       if (romId !== romIdRef.current) return;
-      // Don't override uninstalling animation if we triggered it ourselves
+      // The one site that cannot go through `enterDownloadState`: the transition
+      // is conditional, so as not to override the uninstalling animation when we
+      // triggered the removal ourselves. Clearing the flag is unconditional
+      // either way — the uninstall deleted exactly the content the stat found.
       setState((prev) => (prev === "uninstalling" ? prev : "download"));
       setActionPending(false);
-      // The files that made the target occupied were just deleted, so the label
-      // must go back to "Download" — the stat that set this flag ran at mount.
       setTargetOccupied(false);
     };
     globalThis.addEventListener("romm_rom_uninstalled", onUninstall);
@@ -386,10 +406,12 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         setState(hasAnySaveConflict(cached.save_status) ? "conflict" : "play");
       } else {
         // Switched to a not-installed version — clear any download progress and
-        // drop to the Download button.
+        // drop to the Download button. The occupancy answer comes from the ROM
+        // being switched TO, which the detail just above already carries; the
+        // outgoing version's answer says nothing about this one's location.
         setDlProgress(null);
         setActionPending(false);
-        setState("download");
+        enterDownloadState(cached.target_path_occupied === true);
       }
     };
 
@@ -1138,11 +1160,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         );
         globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: romId } }));
         showToast(`${romName || "ROM"} uninstalled`);
-        // The files that made the target occupied are the ones just deleted.
-        setTargetOccupied(false);
         // Dark pulse transition before showing Download button
         setState("uninstalling");
-        transitionTimerRef.current = setTimeout(() => setState("download"), 500);
+        transitionTimerRef.current = setTimeout(() => enterDownloadState(), 500);
         return;
       } else {
         showToast(result.message || "Uninstall failed");

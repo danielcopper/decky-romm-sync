@@ -226,6 +226,10 @@ def compare_manifest(
         if found is None:
             differences.append(FileDifference(name=key, expected="present", actual="missing"))
             continue
+        # A zero server size is "no size stated", so there is nothing to compare
+        # — never a size that agrees. Passing this check is therefore not on its
+        # own evidence of anything; :func:`verification_status` is what refuses
+        # to call such an entry confirmed.
         if entry.size_bytes and found.size_bytes != entry.size_bytes:
             differences.append(
                 FileDifference(
@@ -246,15 +250,34 @@ def compare_manifest(
     return tuple(differences)
 
 
-def verification_status(manifest: tuple[ServerFile, ...], differences: tuple[FileDifference, ...]) -> str:
+def verification_status(
+    manifest: tuple[ServerFile, ...],
+    local: dict[str, LocalFile],
+    differences: tuple[FileDifference, ...],
+) -> str:
     """``"match"`` / ``"mismatch"`` / ``"unverifiable"`` for a completed comparison.
 
-    ``"unverifiable"`` is reserved for a server that stated no digest for any
-    file — a RomM with ``filesystem.skip_hash_calculation`` set, or a ROM whose
-    detail carries no file list at all. It is deliberately neither of the other
-    two: sizes alone say the content is plausible, never that it is the same.
-    A server that hashed *some* of the files is verifiable on those.
+    ``"match"`` is the strong claim — *every* file the server put a digest on was
+    read and agreed — so it is the one that has to be earned. An absent
+    difference is not enough on its own: a file that was never hashed produces no
+    difference either, and reading that silence as agreement is how a false
+    ``match`` would authorise an adoption whose row carries deletion authority
+    (ADR-0028).
+
+    ``"unverifiable"`` therefore covers both ways of having nothing to stand on:
+    a server that stated no digest for any file (``filesystem.skip_hash_calculation``,
+    or a ROM detail with no file list), and a manifest whose digests were not all
+    checked against something. Files the server put *no* digest on are exempt —
+    there is nothing to confirm — so a server that hashed only some of its files
+    is still verifiable on those.
     """
-    if not any(entry.verifiable for entry in manifest):
+    verifiable = [entry for entry in manifest if entry.verifiable]
+    if not verifiable:
         return "unverifiable"
-    return "mismatch" if differences else "match"
+    if differences:
+        return "mismatch"
+    # No difference AND nothing skipped. A missing local entry already produced a
+    # difference above, so ``.get`` only guards the empty-digest case: an entry
+    # the caller chose not to hash.
+    unchecked = any(not (found := local.get(entry.lookup_key)) or not found.digest for entry in verifiable)
+    return "unverifiable" if unchecked else "match"

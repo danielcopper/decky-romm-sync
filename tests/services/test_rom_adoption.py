@@ -559,6 +559,36 @@ class TestVerify:
         assert result["status"] == "unverifiable"
         assert result["differences"] == []
 
+    async def test_an_entry_with_a_digest_but_no_size_is_still_hashed(self, h):
+        # A stated size that is absent means "cannot compare on size", never
+        # "sizes agree" — so the digest is what decides, and it must be read.
+        payload = b"x" * 10
+        h.stage_detail(_single_file_detail(files=[{"file_name": "Game.sfc", "md5_hash": _md5(payload)}]))
+        h.store.files["/roms/snes/Game.sfc"] = payload
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "match"
+
+    async def test_an_entry_with_a_digest_but_no_size_still_catches_a_mismatch(self, h):
+        # The failure direction that matters: without the size gate skipping the
+        # hash, wrong bytes here used to sail through as a clean "match".
+        h.stage_detail(_single_file_detail(files=[{"file_name": "Game.sfc", "md5_hash": "0" * 32}]))
+        h.store.files["/roms/snes/Game.sfc"] = b"different bytes"
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "mismatch"
+        assert result["differences"][0]["name"] == "Game.sfc"
+
+    async def test_an_entry_with_neither_size_nor_digest_is_unverifiable(self, h):
+        h.stage_detail(_single_file_detail(files=[{"file_name": "Game.sfc"}]))
+        h.store.files["/roms/snes/Game.sfc"] = b"x" * 10
+
+        result = await h.service.verify_existing_content(_ROM_ID)
+
+        assert result["status"] == "unverifiable"
+
     async def test_nothing_on_disk_reports_missing(self, h):
         h.stage_detail(_single_file_detail(files=[{"file_name": "Game.sfc", "md5_hash": "ab"}]))
 

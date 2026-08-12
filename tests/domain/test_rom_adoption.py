@@ -1,5 +1,7 @@
 """Pure adoption judgements: the collision payload and the manifest comparison."""
 
+from typing import ClassVar
+
 from domain.rom_adoption import (
     LocalFile,
     ServerFile,
@@ -229,23 +231,47 @@ class TestCompareManifest:
 
 
 class TestVerificationStatus:
+    """``match`` is the strong claim, so it has to be earned by an actual read.
+
+    A file that was never hashed produces no difference, exactly like a file that
+    matched. Reading that silence as agreement is how a false ``match`` would
+    authorise an adoption whose row carries deletion authority (ADR-0028).
+    """
+
     _VERIFIABLE = ServerFile(name="a.bin", size_bytes=10, algorithm="md5", digest="ab")
     _BARE = ServerFile(name="a.bin", size_bytes=10, algorithm="", digest="")
+    _NO_SIZE = ServerFile(name="b.bin", size_bytes=0, algorithm="md5", digest="cd")
+    _CHECKED: ClassVar[dict[str, LocalFile]] = {"a.bin": LocalFile(size_bytes=10, digest="ab")}
 
     def test_no_digest_anywhere_is_unverifiable(self):
-        assert verification_status((self._BARE,), ()) == "unverifiable"
+        assert verification_status((self._BARE,), {"a.bin": LocalFile(size_bytes=10, digest="")}, ()) == "unverifiable"
 
     def test_an_empty_manifest_is_unverifiable(self):
-        assert verification_status((), ()) == "unverifiable"
+        assert verification_status((), {}, ()) == "unverifiable"
 
     def test_a_clean_comparison_matches(self):
-        assert verification_status((self._VERIFIABLE,), ()) == "match"
+        assert verification_status((self._VERIFIABLE,), self._CHECKED, ()) == "match"
 
     def test_any_difference_is_a_mismatch(self):
         differences = compare_manifest((self._VERIFIABLE,), {})
-        assert verification_status((self._VERIFIABLE,), differences) == "mismatch"
+        assert verification_status((self._VERIFIABLE,), {}, differences) == "mismatch"
 
     def test_a_partly_hashed_manifest_is_still_verifiable(self):
-        # A server that hashed some files can still confirm those; only "no
-        # digest for any file" is the unverifiable outcome.
-        assert verification_status((self._VERIFIABLE, self._BARE), ()) == "match"
+        # A server that hashed some files can still confirm those. The bare entry
+        # is exempt — there is nothing about it to confirm.
+        local = {**self._CHECKED, "b.bin": LocalFile(size_bytes=10, digest="")}
+        assert verification_status((self._VERIFIABLE, self._BARE), local, ()) == "match"
+
+    def test_a_digest_that_was_never_read_is_not_a_match(self):
+        # The finding: an entry the server put a digest on, whose local
+        # counterpart was never hashed, produces no difference — and must not
+        # therefore pass as confirmed.
+        local = {"a.bin": LocalFile(size_bytes=10, digest="")}
+        assert verification_status((self._VERIFIABLE,), local, ()) == "unverifiable"
+
+    def test_one_unread_digest_downgrades_a_whole_clean_run(self):
+        local = {**self._CHECKED, "b.bin": LocalFile(size_bytes=99, digest="")}
+        assert verification_status((self._VERIFIABLE, self._NO_SIZE), local, ()) == "unverifiable"
+
+    def test_a_verifiable_entry_absent_from_the_observations_is_not_a_match(self):
+        assert verification_status((self._VERIFIABLE,), {}, ()) == "unverifiable"

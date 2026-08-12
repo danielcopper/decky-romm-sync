@@ -361,7 +361,7 @@ class RomAdoptionService:
         # The FULL manifest decides verifiability: an entry refused for escaping
         # the ROM directory was still a digest the server published, so dropping
         # it from that question could turn a mismatch into "cannot confirm".
-        status = verification_status(manifest, differences)
+        status = verification_status(manifest, observed, differences)
         return {
             "status": status,
             "message": _VERIFY_MESSAGES[status],
@@ -406,16 +406,21 @@ class RomAdoptionService:
         located is read from exactly that place and one it did not locate falls
         back to a search by filename.
 
-        A digest is computed only when the server has one to compare against and
-        the sizes already agree — a size mismatch is proof enough, and re-reading
-        a gigabyte to restate it would cost the user 20 seconds (measured:
-        77 MiB/s on a Steam Deck SD card).
+        A digest is computed whenever the server has one to compare against and
+        the sizes do not already **disagree** — a size mismatch is proof enough,
+        and re-reading a gigabyte to restate it would cost the user 20 seconds
+        (measured: 77 MiB/s on a Steam Deck SD card). Note "do not disagree", not
+        "agree": an entry whose ``file_size_bytes`` the payload omitted has no
+        size to compare, which is a reason to fall back on its digest, never a
+        reason to skip both and call the file confirmed.
         """
         located = self._locate(manifest, target)
         hashable = {
             entry.lookup_key
             for entry in manifest
-            if entry.verifiable and entry.lookup_key in located and located[entry.lookup_key][1] == entry.size_bytes
+            if entry.verifiable
+            and entry.lookup_key in located
+            and not (entry.size_bytes and located[entry.lookup_key][1] != entry.size_bytes)
         }
         total_bytes = sum(located[key][1] for key in hashable)
         report = self._make_verify_progress(rom_id, total_bytes)
