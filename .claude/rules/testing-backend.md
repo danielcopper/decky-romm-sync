@@ -61,9 +61,22 @@ Two [romm-gavel](https://github.com/danielcopper/romm-gavel) vector families gua
 `tests/adapters/test_gavel_native_table_vectors.py`). Both decisions run in the compiled core
 (`adapters/gavel_native.py`) and nowhere else, so each family runs against that core through `GavelNativeAdapter` — the
 production path — and there is no second implementation to hold to the same contract. The vectors are vendored verbatim
-under `tests/domain/gavel_vectors/` at a pinned upstream **release tag** (no submodule, no network in CI), so a contract
-change lands as a reviewable diff. **Never edit a vector to make the core pass** — updating means deliberately
+under `tests/adapters/gavel_vectors/` at a pinned upstream **release tag** (no submodule, no network in CI), so a
+contract change lands as a reviewable diff. **Never edit a vector to make the core pass** — updating means deliberately
 re-copying the JSON and bumping the tag in that folder's `README.md`, in lockstep with the vendored `.so`.
+
+**What these vectors test here is our marshalling, not gavel's decisions.** Upstream tells a consumer of the compiled
+core not to run them — the core satisfies them by construction and upstream CI proves it on every change, so running
+them again tests upstream. That reading is right about the decisions and wrong about the path they travel: a vector
+replayed here goes through `GavelNativeAdapter` first, which packs a RomM payload into C structs, turns an ISO timestamp
+into an epoch plus a known-flag, keeps "no size recorded" apart from "zero bytes", and resolves the answer back to the
+caller's own save dict. That layer is ours, and it is where a bug of ours would sit. The vectors are worth their keep
+because they hand us a large set of input/expected pairs we did not have to invent — and a decision we invent ourselves
+only ever confirms our own reading of the contract.
+
+They earn it in practice, not just in principle: deliberately breaking the marshalling (reading a 0-byte size as "no
+size", swapping the two recorded hashes, taking `is_current` from key presence rather than value, dropping the
+adopt-baseline flag) turns this tier red, and for one of those breakages it is the only tier that notices.
 
 ## emu-atlas conformance vectors — vendored contract tier
 

@@ -34,7 +34,7 @@ from domain.sync_action import Conflict, Download, Skip, Upload
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-_LADDER_VECTORS_DIR = Path(__file__).parent.parent / "domain" / "gavel_vectors" / "ladder"
+_LADDER_VECTORS_DIR = Path(__file__).parent / "gavel_vectors" / "ladder"
 
 
 @pytest.fixture(scope="module")

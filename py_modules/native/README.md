@@ -40,7 +40,7 @@ per-`(rom, filename, slot)` sync action (`gavel_compute_sync_action`) and the up
 4. Re-run the save-sync conformance tests (`tests/adapters/test_gavel_native.py`,
    `tests/adapters/test_gavel_native_table_vectors.py`) — the shipped binary must still match the vendored gavel
    vectors. A gavel major bump means at least one expected outcome changed, so re-copy the vectors
-   (`tests/domain/gavel_vectors/`) in the same change.
+   (`tests/adapters/gavel_vectors/`) in the same change.
 
 The checksum is re-verified by CI (`.github/workflows/ci.yml`) and the release smoke test asserts the `.so` is present
 in the zip, so both a swapped binary and a dropped artifact fail the pipeline.
