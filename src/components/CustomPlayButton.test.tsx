@@ -87,8 +87,18 @@ vi.mock("../components/StopGameModal", () => ({
 }));
 // Adopt/replace/cancel dialog — spied so the button's routing off a
 // `target_occupied` refusal is observable without rendering the modal.
-vi.mock("../components/AdoptExistingModal", () => ({
+// `comparisonForCandidate` stays real: it is the projection the button hands to
+// the dialog, so a spy would hide a candidate whose numbers never arrived.
+vi.mock("../components/AdoptExistingModal", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../components/AdoptExistingModal")>()),
   showAdoptExistingModal: vi.fn(),
+}));
+// The candidate list and the collision decision — spied for the same reason.
+vi.mock("../components/AdoptCandidateModal", () => ({
+  showAdoptCandidateModal: vi.fn(),
+}));
+vi.mock("../components/AdoptCollisionModal", () => ({
+  showAdoptCollisionModal: vi.fn(),
 }));
 
 import { getCachedGameDetail } from "../utils/cachedGameDetailStore";
@@ -103,6 +113,8 @@ import { showFallbackLaunchModal } from "../components/FallbackLaunchModal";
 import { handleConflicts } from "../components/SyncConflictModal";
 import { showStopGameModal } from "../components/StopGameModal";
 import { showAdoptExistingModal } from "../components/AdoptExistingModal";
+import { showAdoptCandidateModal } from "../components/AdoptCandidateModal";
+import { showAdoptCollisionModal } from "../components/AdoptCollisionModal";
 import { mountPruneLeasePlugin, releaseAllPruneLeases } from "../utils/pruneLease";
 import { resetBoundVanished, setBoundVanished } from "../utils/vanishedBinding";
 import type { SyncConflict, SaveStatus } from "../types";
@@ -3471,7 +3483,9 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
       btn.click();
     });
 
-    expect(vi.mocked(backend.adoptExistingRom)).toHaveBeenCalledWith(42);
+    // Null candidate path and null collision answer: content at the game's own
+    // location, with no rename and so nothing to collide.
+    expect(vi.mocked(backend.adoptExistingRom)).toHaveBeenCalledWith(42, null, null);
     expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledWith(100, 'flatpak run … "/roms/n64/game.z64"');
     // The lease the backend issued for this Steam write is given back, not held
     // to its TTL — the bound branch is the only one that ever receives one.
@@ -3547,5 +3561,221 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
       body: "Couldn't use the existing files — is RomM server running?",
     });
     await utils.findByText("Use Existing Files");
+  });
+});
+
+describe("CustomPlayButton — the same game under another name (#260)", () => {
+  const CANDIDATE = {
+    name: "game (U).z64",
+    path: "/roms/n64/game (U).z64",
+    is_dir: false,
+    size_bytes: 2048,
+    modified_at: 0,
+    evidence: "size" as const,
+    detail: "Exactly the size the server would send",
+  };
+  const OTHER = { ...CANDIDATE, name: "game (E).z64", path: "/roms/n64/game (E).z64" };
+  const FOUND = {
+    success: false as const,
+    reason: "adoption_candidates" as const,
+    message: "'game (U).z64' is already on this device",
+    incoming: { name: "game (USA).z64", size_bytes: 2048 },
+    candidates: [CANDIDATE],
+    truncated: false,
+  };
+  const ADOPTED = {
+    success: true,
+    message: "Using the files already on this device",
+    file_path: "/roms/n64/game (USA).z64",
+    rom_dir: null,
+    app_id: 100,
+    launch_options: 'flatpak run … "/roms/n64/game (USA).z64"',
+  };
+
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(backend.startDownload).mockReset();
+    vi.mocked(backend.adoptExistingRom).mockReset();
+    vi.mocked(showAdoptExistingModal).mockReset();
+    vi.mocked(showAdoptCandidateModal).mockReset();
+    vi.mocked(showAdoptCollisionModal).mockReset();
+    vi.mocked(setLaunchOptionsConfirmed).mockClear();
+    vi.mocked(toaster.toast).mockClear();
+  });
+
+  it("one candidate goes straight to the comparison, with no list to choose from", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue(FOUND);
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("cancel");
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(showAdoptCandidateModal)).not.toHaveBeenCalled();
+    expect(vi.mocked(showAdoptExistingModal)).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ existing: expect.objectContaining({ path: CANDIDATE.path }) }),
+      CANDIDATE.path,
+    );
+    expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
+  });
+
+  it("several candidates open the list, and the picked one is the one compared", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue({ ...FOUND, candidates: [CANDIDATE, OTHER] });
+    vi.mocked(showAdoptCandidateModal).mockResolvedValue({ kind: "candidate", candidate: OTHER });
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("cancel");
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(showAdoptExistingModal)).toHaveBeenCalledWith(42, expect.anything(), OTHER.path);
+  });
+
+  it("cancelling the list starts nothing", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue({ ...FOUND, candidates: [CANDIDATE, OTHER] });
+    vi.mocked(showAdoptCandidateModal).mockResolvedValue({ kind: "cancel" });
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(backend.startDownload)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(backend.adoptExistingRom)).not.toHaveBeenCalled();
+    expect(vi.mocked(showAdoptExistingModal)).not.toHaveBeenCalled();
+  });
+
+  it("'None of These' downloads with the replace flag so the search is not run again", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload)
+      .mockResolvedValueOnce({ ...FOUND, candidates: [CANDIDATE, OTHER] })
+      .mockResolvedValueOnce({ success: true, message: "Download started" });
+    vi.mocked(showAdoptCandidateModal).mockResolvedValue({ kind: "download" });
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(backend.startDownload).mock.calls).toEqual([
+      [42, false],
+      [42, true],
+    ]);
+  });
+
+  it("adopting a candidate sends its path, and writes the launch command afterwards", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue(FOUND);
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("adopt");
+    vi.mocked(backend.adoptExistingRom).mockResolvedValue({ ...ADOPTED, prune_lease_token: "adopt-token" });
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(backend.adoptExistingRom)).toHaveBeenCalledWith(42, CANDIDATE.path, null);
+    expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledWith(100, ADOPTED.launch_options);
+  });
+
+  it("a collision opens the second dialog and re-sends the same candidate with the answer", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue(FOUND);
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("adopt");
+    vi.mocked(backend.adoptExistingRom)
+      .mockResolvedValueOnce({
+        success: false,
+        reason: "rename_collisions",
+        message: "'game (USA).srm' already exists",
+        collisions: [{ name: "game (USA).srm", path: "/saves/n64/game (USA).srm", kind: "save" }],
+      })
+      .mockResolvedValueOnce(ADOPTED);
+    vi.mocked(showAdoptCollisionModal).mockResolvedValue("overwrite");
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(showAdoptCollisionModal)).toHaveBeenCalledWith([
+      { name: "game (USA).srm", path: "/saves/n64/game (USA).srm", kind: "save" },
+    ]);
+    expect(vi.mocked(backend.adoptExistingRom).mock.calls).toEqual([
+      [42, CANDIDATE.path, null],
+      [42, CANDIDATE.path, "overwrite"],
+    ]);
+  });
+
+  it("cancelling the collision dialog leaves the adoption unmade and says nothing alarming", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue(FOUND);
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("adopt");
+    vi.mocked(backend.adoptExistingRom).mockResolvedValue({
+      success: false,
+      reason: "rename_collisions",
+      message: "'game (USA).srm' already exists",
+      collisions: [{ name: "game (USA).srm", path: "/saves/n64/game (USA).srm", kind: "save" }],
+    });
+    vi.mocked(showAdoptCollisionModal).mockResolvedValue("cancel");
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(backend.adoptExistingRom)).toHaveBeenCalledTimes(1);
+    // The refusal is a question, not a failure: toasting it would tell the user
+    // something went wrong when they were simply asked and declined.
+    expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
+    expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
+  });
+
+  it("a failed candidate adoption is surfaced rather than swallowed", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue(FOUND);
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("adopt");
+    vi.mocked(backend.adoptExistingRom).mockResolvedValue({
+      success: false,
+      reason: "rename_failed",
+      message: "Could not rename this game's files",
+    });
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
+      title: "Tender",
+      body: "Could not rename this game's files",
+    });
+  });
+
+  it("a folder with nothing in it that could be this game downloads as before", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload).mockResolvedValue({ success: true, message: "Download started" });
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(showAdoptCandidateModal)).not.toHaveBeenCalled();
+    expect(vi.mocked(showAdoptExistingModal)).not.toHaveBeenCalled();
   });
 });

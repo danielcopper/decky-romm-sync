@@ -54,8 +54,67 @@ something is in the way:
 | Trigger                                                                               | Answer                           |
 | ------------------------------------------------------------------------------------- | -------------------------------- |
 | A target path is occupied (multi-file has two: the extract dir and its collapse name) | Ask                              |
-| A file or directory elsewhere in the platform directory matches the server's sizes    | Ask, and offer it as a candidate |
+| An entry elsewhere in the platform directory carries this game's name, tags stripped  | Ask, and offer it as a candidate |
 | Neither                                                                               | Download                         |
+
+**The candidate search is keyed on the name, not on the size.** A size is what _ranks_ a candidate, not what finds one:
+keying the search on it would miss the whole common case — a different rip of the same game, which is exactly what a
+differently-tagged filename usually denotes — while matching any unrelated file that happens to be the same length. The
+name is also the only key a **directory** has, because the search may not descend to total one (a single multi-file
+install held 53 864 files) and a directory therefore has no size to compare.
+
+**What "the same name" means is a normalization, and stripping the version tags is the point of it.** Bracketed groups
+go with their contents, everything non-alphanumeric collapses to one space, and the result is lowercased:
+`Mario Golf - Advance Tour (Rev 1) (USA).zip` and `Mario Golf - Advance Tour (U).zip` both reduce to
+`mario golf advance tour`. We are looking for the _game_; whether it is the same dump is what the digest answers, on the
+button. Measured on a real 9299-ROM library, 37 % of entries share a normalized name with a sibling — but every one of
+those collisions is _within_ a sibling group, and the search runs over the **platform folder**, not the library. Across
+every populated platform folder on a real device: 1 to 5 entries each, **zero** normalized-name collisions. So zero or
+one candidate is the expected result; several open a short list ranked by evidence, each row stating what it rests on,
+and a capped list says so — a silent truncation reads as "that is all there is".
+
+**The search stays on the platform folder's top level, and admits an entry by a positive test.** Not descending is the
+same 53 864-file constraint that keeps `describe_path` off the search's path, and a user's own subfolders are their
+filing rather than ours. What survives is what ES-DE's live per-system `<extension>` list accepts, so `systeminfo.txt`,
+`.directory` and every other frontend's bookkeeping fall out without a blacklist anyone has to maintain. An accept-list
+that could not answer skips the test rather than turning the feature off — the name match plus the user's confirmation
+is what the offer rests on, and this is the same default-safe reading every other consumer of that list applies. A
+directory is never extension-tested (it usually carries none) and the candidate's shape must match what the server
+serves, so a shape the dialog would refuse as unusable is never offered in the first place.
+
+**Adopting a candidate renames it to the canonical name and carries its saves and savestates with it.** This is a
+lifecycle argument, not tidiness. `compute_local_save_target` derives a save's filename from the **local** ROM's
+basename — deliberately, because that is the string RetroArch uses to look up SRAM — so a game adopted under the user's
+own name saves under that name. Leaving it there does not avoid a problem, it defers one: uninstall drops the ROM and
+its row but never the saves (ADR-0007), so adopt `(U).zip` → play → save `(U).srm` → uninstall → later download
+`(USA).zip` leaves RetroArch looking for `(USA).srm`, at a moment where nothing explains why. With the rename, an
+adopted install is what this ADR says it is — indistinguishable from a downloaded one.
+
+**The savefile and savestate directories are read independently.** RetroArch sorts them with separate keys, and on a
+stock RetroDECK install the two disagree: `sort_savefiles_by_content_enable=true` beside
+`sort_savestates_by_content_enable=false`. Deriving one from the other would send every savestate rename to a directory
+nothing has ever written to. One rule covers both shapes, because the resolver already takes its root and both sort
+flags as parameters: a single-file ROM keeps its save directory and changes its filenames, while a content-sorted
+multi-file ROM keeps its filenames and changes its save _directory_ — the directory is named after the ROM folder being
+renamed, and the launch file inside it never moves.
+
+**A name already taken stops everything before anything moves.** Every source → target pair is computed and **all**
+targets are checked, and only then does the first file move: renaming as you go and asking at the first collision leaves
+half the set moved when the question appears. The dialog lists everything that collides and takes one decision for the
+whole set — overwrite, keep (stating that the old-named files are now orphaned rather than implying the move was clean),
+or cancel. The ROM's own target is not part of that question: something that arrived there is the occupied-target case
+the first dialog owns, so it is refused outright rather than offered as something to skip or overwrite. An Overwrite
+clears its targets **before** the move rather than replacing as each file lands, which keeps the one destructive phase
+the user answered for apart from the phase that must not be destructive.
+
+**A rename is atomic per file, so the failure is moved somewhere harmless rather than prevented.** Where the filesystem
+allows it: `os.link` every pair first, removing nothing, so a failure while staging is undone by dropping the links and
+the state is exactly as it started; only once every link exists are the originals unlinked, and a failure there leaves
+two names for one inode — no data lost, and a re-run finishes it. Hardlinks need one filesystem and cannot name a
+directory at all, so a directory ROM, or a device with saves on internal storage and ROMs on an SD card (`EXDEV`), falls
+back to rename-with-rollback. That path can leave a genuinely partial state, and it is reported by name — which files
+moved, which did not — never as success and never as a plain failure, the way the prune machinery reports a partial
+removal.
 
 **Cheap evidence decides whether to ask; content verification is always a button, never a wait imposed before the
 dialog.** Sizes for a file; the top-level name set plus sizes for a directory, matched against `is_top_level`, with
@@ -123,8 +182,17 @@ would also be invisible to every mechanism the plugin has: `_collect_rom_items` 
 than by walking the tree, so an unrecorded copy is left behind at the old home when the RetroDECK path changes, and
 nothing would ever reclaim it. At ROM sizes that is silent, unbounded consumption of the storage the user has least of.
 
-**One case is out of reach by design.** A genuinely different dump under a different name, of different size, is not
-found — and adopting it would be wrong, because it is not the content the row would claim.
+**One case is out of reach by design.** A copy whose name differs by more than its version tags is not found —
+`Mario
+Golf` is not offered for `Mario Golf - Advance Tour` — and it should not be, because it is a different game.
+Closing that gap means fuzzy matching, and a fuzzy match that is wrong writes a row carrying deletion authority over
+content the server cannot hand back.
+
+**The plugin renames files the user placed, which is a second thing it does to content it did not create.** It is the
+direct consequence of one class of install row: a row whose filename disagrees with the server's is an install that
+behaves differently from every other one, and the difference surfaces later, as an orphaned save, at a moment nothing
+explains. The rename is stated before it happens, in the same dialog that carries the comparison, and every collision it
+would cause is a second question rather than a silent overwrite.
 
 **Adoption supersedes the sibling group's other install, for the same reason downloading does.** One downloaded version
 per shortcut binding is a stated rule, and an adopted row is a row like any other — leaving adoption out would make it
@@ -164,6 +232,25 @@ Deciding on cheap evidence and putting verification on a button needs no thresho
 **Quarantine the replaced file** into a `.romm-backup`-style store, as save-sync does. Rejected. Saves are kilobytes
 with a ten-copy retention; ROMs are gigabytes with no retention that makes sense, the copy is invisible to migration and
 cleanup alike, and setting it aside overrides a decision the user was just shown enough information to make.
+
+**Adopt a candidate where it lies and record the user's filename.** Rejected — it is the option that looks like it
+respects the user's filing and actually defers the cost. The row would be correct on the day it is written and wrong the
+first time the game is uninstalled and re-downloaded, with the saves under a name nothing looks for and no dialog
+anywhere near the moment it goes wrong.
+
+**Fuzzy-match beyond the tag normalization** — edit distance, token subset scoring. Rejected: the row an adoption writes
+carries deletion authority, and the search's own output is what the user is asked to confirm. A near-match presented as
+a candidate is a suggestion the plugin cannot support, and the failure it enables is destroying a file the server cannot
+replace. If the normalized names differ, it is not a candidate.
+
+**Ask per collision instead of once for the set.** Rejected on ordering rather than on taste: the first question can
+only be asked after the first rename, so a user who then cancels is left with a half-moved set and no dialog describing
+it. Computing the whole plan first costs one extra `stat` per pair and makes cancel mean nothing happened.
+
+**Copy-then-delete instead of link-then-unlink.** Rejected for a ROM-sized file: it needs the space twice over on the
+storage a handheld has least of, and it is slower by the whole size of the game. The hardlink stages the same "both
+names exist" safety at no cost, and the case where it genuinely cannot — a directory, or two filesystems — is the one
+case that falls back to a rename, where the rollback is cheap for the same reason.
 
 **Leave multi-file out**, as #260 scoped it, on the grounds that completeness cannot be inferred from the filesystem.
 Rejected because the premise no longer holds: RomM's per-file manifest states exactly which files must be present and

@@ -48,6 +48,20 @@ class TestPathResolution:
         adapter = _make_adapter(tmp_path)
         assert adapter.saves_path() == os.path.join(str(tmp_path), "retrodeck", "saves")
 
+    def test_states_path_from_config(self, tmp_path):
+        # ``states_path`` is the key a real ``retrodeck.json`` carries beside
+        # ``saves_path``; savestates live under their own root, not under saves.
+        adapter = _make_adapter(tmp_path, {"paths": {"states_path": "/custom/states"}})
+        assert adapter.states_path() == "/custom/states"
+
+    def test_states_path_fallback(self, tmp_path):
+        adapter = _make_adapter(tmp_path)
+        assert adapter.states_path() == os.path.join(str(tmp_path), "retrodeck", "states")
+
+    def test_states_path_is_not_derived_from_saves_path(self, tmp_path):
+        adapter = _make_adapter(tmp_path, {"paths": {"saves_path": "/custom/saves"}})
+        assert adapter.states_path() == os.path.join(str(tmp_path), "retrodeck", "states")
+
     def test_retrodeck_home_from_config(self, tmp_path):
         adapter = _make_adapter(tmp_path, {"paths": {"rd_home_path": "/custom/home"}})
         assert adapter.retrodeck_home() == "/custom/home"

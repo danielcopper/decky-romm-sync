@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, act, waitFor } from "@testing-library/react";
-import { AdoptExistingModal } from "./AdoptExistingModal";
+import { AdoptExistingModal, comparisonForCandidate } from "./AdoptExistingModal";
 import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
 import { verifyExistingContent } from "../api/backend";
 import type { TargetOccupiedResult, VerifyContentResult, VerifyProgressEvent } from "../types";
@@ -44,6 +44,7 @@ function renderModal(props: Partial<Parameters<typeof AdoptExistingModal>[0]> = 
     <AdoptExistingModal
       romId={ROM_ID}
       occupied={props.occupied ?? occupied()}
+      candidatePath={props.candidatePath}
       closeModal={props.closeModal ?? closeModal}
       onChoice={props.onChoice ?? onChoice}
     />,
@@ -145,7 +146,8 @@ describe("AdoptExistingModal — the content check", () => {
     fireEvent.click(buttonByText(container, "Check Against Server"));
 
     await waitFor(() => expect(container.textContent).toContain("These files match the ones on the server"));
-    expect(vi.mocked(verifyExistingContent)).toHaveBeenCalledWith(ROM_ID);
+    // A null candidate path checks the game's own location.
+    expect(vi.mocked(verifyExistingContent)).toHaveBeenCalledWith(ROM_ID, null);
   });
 
   it("names what differed on a mismatch", async () => {
@@ -260,5 +262,93 @@ describe("AdoptExistingModal — the content check", () => {
     expect(deckyEventListenerCount("verify_progress")).toBe(1);
     unmount();
     expect(deckyEventListenerCount("verify_progress")).toBe(0);
+  });
+});
+
+describe("AdoptExistingModal — a candidate found under another name", () => {
+  const CANDIDATE_PATH = "/roms/snes/Game (U).sfc";
+
+  function renderCandidate() {
+    return renderModal({
+      occupied: occupied({
+        existing: { ...occupied().existing, name: "Game (U).sfc", path: CANDIDATE_PATH },
+        incoming: { name: "Game (USA).sfc", size_bytes: 2048 },
+        sizes_match: true,
+      }),
+      candidatePath: CANDIDATE_PATH,
+    });
+  }
+
+  it("does not claim the file is where the download would land", () => {
+    const { container } = renderCandidate();
+    expect(container.textContent).not.toContain("already where this game would be downloaded");
+    expect(container.textContent).toContain("carries this game's name");
+  });
+
+  it("states the rename and that saves travel with it", () => {
+    const { container } = renderCandidate();
+    expect(container.textContent).toContain("renames it to Game (USA).sfc");
+    expect(container.textContent).toContain("saves and savestates");
+  });
+
+  it("checks the candidate's own path, not the game's empty location", async () => {
+    vi.mocked(verifyExistingContent).mockResolvedValue({ status: "match", message: "ok", differences: [] });
+    const { container } = renderCandidate();
+
+    fireEvent.click(buttonByText(container, "Check Against Server"));
+
+    await waitFor(() => expect(container.textContent).toContain("ok"));
+    expect(vi.mocked(verifyExistingContent)).toHaveBeenCalledWith(ROM_ID, CANDIDATE_PATH);
+  });
+
+  it("says nothing about a rename for content at the game's own location", () => {
+    const { container } = renderModal();
+    expect(container.textContent).not.toContain("renames it to");
+  });
+});
+
+describe("comparisonForCandidate", () => {
+  const base = {
+    name: "Game (U).sfc",
+    path: "/roms/snes/Game (U).sfc",
+    is_dir: false,
+    size_bytes: 2048,
+    modified_at: 1_700_000_000,
+    evidence: "size" as const,
+    detail: "Exactly the size the server would send",
+  };
+
+  it("carries the candidate's own numbers into the comparison", () => {
+    const comparison = comparisonForCandidate(base, { name: "Game (USA).sfc", size_bytes: 2048 });
+    expect(comparison.existing).toEqual({
+      name: "Game (U).sfc",
+      path: "/roms/snes/Game (U).sfc",
+      is_dir: false,
+      size_bytes: 2048,
+      modified_at: 1_700_000_000,
+    });
+    expect(comparison.sizes_match).toBe(true);
+  });
+
+  it("reports a size difference rather than hiding it", () => {
+    const comparison = comparisonForCandidate(base, { name: "Game (USA).sfc", size_bytes: 4096 });
+    expect(comparison.sizes_match).toBe(false);
+  });
+
+  it("cannot compare a folder, because the search never sized one", () => {
+    const comparison = comparisonForCandidate(
+      { ...base, is_dir: true, size_bytes: 0 },
+      { name: "Game (USA)", size_bytes: 4096 },
+    );
+    expect(comparison.sizes_match).toBeNull();
+  });
+
+  it("cannot compare when the server stated no size", () => {
+    const comparison = comparisonForCandidate(base, { name: "Game (USA).sfc", size_bytes: 0 });
+    expect(comparison.sizes_match).toBeNull();
+  });
+
+  it("always offers the candidate, because the search only ever returns a usable shape", () => {
+    expect(comparisonForCandidate(base, { name: "Game (USA).sfc", size_bytes: 2048 }).adoptable).toBe(true);
   });
 });

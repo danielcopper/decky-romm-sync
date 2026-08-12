@@ -510,6 +510,61 @@ class TestDescribePath:
         assert described["size_bytes"] >= 10
 
 
+class TestListTopLevelEntries:
+    def test_a_missing_directory_lists_nothing(self, adapter, tmp_path):
+        assert adapter.list_top_level_entries(str(tmp_path / "nope")) == ()
+
+    def test_an_empty_directory_lists_nothing(self, adapter, tmp_path):
+        empty = tmp_path / "gba"
+        empty.mkdir()
+        assert adapter.list_top_level_entries(str(empty)) == ()
+
+    def test_a_file_carries_its_size_and_mtime(self, adapter, tmp_path):
+        rom = tmp_path / "Game (U).gba"
+        rom.write_bytes(b"0123456789")
+        (entry,) = adapter.list_top_level_entries(str(tmp_path))
+        assert entry["name"] == "Game (U).gba"
+        assert entry["path"] == str(rom)
+        assert entry["is_dir"] is False
+        assert entry["size_bytes"] == 10
+        assert entry["modified_at"] == pytest.approx(rom.stat().st_mtime)
+
+    def test_a_directory_is_reported_without_its_recursive_total(self, adapter, tmp_path):
+        # The whole reason the search is affordable: a single multi-file install
+        # can hold tens of thousands of files, and this read must never walk one.
+        game = tmp_path / "Game (U)"
+        (game / "sub").mkdir(parents=True)
+        (game / "disc1.bin").write_bytes(b"a" * 100)
+        (game / "sub" / "disc2.bin").write_bytes(b"b" * 55)
+        (entry,) = adapter.list_top_level_entries(str(tmp_path))
+        assert entry["is_dir"] is True
+        assert entry["size_bytes"] == 0
+
+    def test_nested_entries_are_not_listed(self, adapter, tmp_path):
+        (tmp_path / "Game (U)").mkdir()
+        (tmp_path / "Game (U)" / "disc.bin").write_bytes(b"x")
+        (tmp_path / "loose.gba").write_bytes(b"y")
+        assert sorted(entry["name"] for entry in adapter.list_top_level_entries(str(tmp_path))) == [
+            "Game (U)",
+            "loose.gba",
+        ]
+
+    def test_a_dangling_symlink_is_skipped_rather_than_offered(self, adapter, tmp_path):
+        (tmp_path / "real.gba").write_bytes(b"x")
+        (tmp_path / "dangling.gba").symlink_to(tmp_path / "gone.gba")
+        assert [entry["name"] for entry in adapter.list_top_level_entries(str(tmp_path))] == ["real.gba"]
+
+    def test_a_symlinked_directory_reads_as_a_directory(self, adapter, tmp_path):
+        target = tmp_path / "elsewhere"
+        (target / "disc.bin").parent.mkdir(parents=True)
+        (target / "disc.bin").write_bytes(b"x")
+        platform = tmp_path / "psx"
+        platform.mkdir()
+        (platform / "Game (U)").symlink_to(target)
+        (entry,) = adapter.list_top_level_entries(str(platform))
+        assert entry["is_dir"] is True
+
+
 class TestChecksum:
     def test_md5_matches_hashlib(self, adapter, tmp_path):
         import hashlib
@@ -694,6 +749,7 @@ class TestProtocolMethodCount:
         method_names = {
             "exists",
             "describe_path",
+            "list_top_level_entries",
             "checksum",
             "list_archive_members",
             "checksum_archive_member",

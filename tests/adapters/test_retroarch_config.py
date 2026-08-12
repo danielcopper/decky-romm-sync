@@ -170,3 +170,82 @@ class TestOsErrorHandling:
         assert isinstance(layout, InSaveDir)
         assert layout.sort_by_core is True
         assert any("Failed to read" in rec.message for rec in caplog.records)
+
+
+# The three savestate keys are read separately from the three savefile keys,
+# because RetroArch sorts the two independently. The cfg text in this class is
+# the shape a stock RetroDECK install writes — measured on device — where the
+# savefiles are content-sorted and the savestates are not sorted at all.
+_REAL_DEVICE_CFG = (
+    'savefile_directory = "/retrodeck/saves"\n'
+    'savefiles_in_content_dir = "false"\n'
+    'savestate_directory = "/retrodeck/states"\n'
+    'savestates_in_content_dir = "false"\n'
+    'sort_savefiles_by_content_enable = "true"\n'
+    'sort_savefiles_enable = "false"\n'
+    'sort_savestates_by_content_enable = "false"\n'
+    'sort_savestates_enable = "false"\n'
+)
+
+
+class TestSavestateLayout:
+    def test_defaults_when_no_cfg(self, tmp_path):
+        """No cfg file — RetroDECK ships savestates unsorted, unlike savefiles."""
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_savestate_layout() == InSaveDir(sort_by_content=False, sort_by_core=False)
+
+    def test_the_real_device_shape_reads_differently_for_each(self, tmp_path):
+        # The defect this pins: deriving the savestate layout from the savefile
+        # one would send the rename to states/<content-dir>/ on every stock
+        # install, where nothing has ever been written.
+        _write_cfg(tmp_path, _REAL_DEVICE_CFG)
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_save_layout() == InSaveDir(sort_by_content=True, sort_by_core=False)
+        assert adapter.get_savestate_layout() == InSaveDir(sort_by_content=False, sort_by_core=False)
+
+    def test_reads_sort_by_content_true(self, tmp_path):
+        _write_cfg(tmp_path, 'sort_savestates_by_content_enable = "true"\n')
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_savestate_layout() == InSaveDir(sort_by_content=True, sort_by_core=False)
+
+    def test_reads_sort_by_core_true(self, tmp_path):
+        _write_cfg(tmp_path, 'sort_savestates_enable = "true"\n')
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_savestate_layout() == InSaveDir(sort_by_content=False, sort_by_core=True)
+
+    def test_the_by_content_key_is_not_read_as_the_by_core_key(self, tmp_path):
+        # ``sort_savestates_by_content_enable`` starts with ``sort_savestates_``;
+        # a prefix match would set sort_by_core from it.
+        _write_cfg(tmp_path, 'sort_savestates_by_content_enable = "true"\n')
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_savestate_layout() == InSaveDir(sort_by_content=True, sort_by_core=False)
+
+    def test_savestates_in_content_dir_is_its_own_answer(self, tmp_path):
+        _write_cfg(tmp_path, 'savestates_in_content_dir = "true"\nsort_savestates_by_content_enable = "true"\n')
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_savestate_layout() == ContentDir()
+
+    def test_the_savefile_key_does_not_move_the_savestates_into_the_content_dir(self, tmp_path):
+        _write_cfg(tmp_path, 'savefiles_in_content_dir = "true"\n')
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_save_layout() == ContentDir()
+        assert adapter.get_savestate_layout() == InSaveDir(sort_by_content=False, sort_by_core=False)
+
+    def test_a_line_without_a_value_is_skipped_rather_than_raising(self, tmp_path):
+        _write_cfg(tmp_path, 'sort_savestates_enable\nsort_savestates_by_content_enable = "true"\n')
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_savestate_layout() == InSaveDir(sort_by_content=True, sort_by_core=False)
+
+    def test_a_readable_cfg_stating_nothing_wins_over_the_next_candidate(self, tmp_path):
+        # RetroArch running on its own defaults has written none of these keys.
+        # Falling through would answer from a config this machine does not use.
+        first = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retroarch"
+        first.mkdir(parents=True, exist_ok=True)
+        (first / "retroarch.cfg").write_text('video_fullscreen = "true"\n')
+        second = tmp_path / ".var" / "app" / "org.libretro.RetroArch" / "config" / "retroarch"
+        second.mkdir(parents=True, exist_ok=True)
+        (second / "retroarch.cfg").write_text('sort_savestates_by_content_enable = "true"\n')
+
+        adapter = _make_adapter(tmp_path)
+
+        assert adapter.get_savestate_layout() == InSaveDir(sort_by_content=False, sort_by_core=False)

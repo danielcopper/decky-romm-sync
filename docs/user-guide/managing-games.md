@@ -259,12 +259,45 @@ Once you use the existing files, they are a normal install in every respect — 
 exactly as it would a downloaded copy. That is the reason for the dialog: the decision is made once, up front, with the
 comparison in front of you.
 
-Two cases the dialog cannot help with:
+One case the dialog cannot help with: the folder or file in the way is the wrong shape for the game — a folder where the
+server serves a single file, or the reverse. The dialog says so and only offers replace or cancel.
 
-- The folder or file in the way is the wrong shape for the game — a folder where the server serves a single file, or the
-  reverse. The dialog says so and only offers replace or cancel.
-- The same game sitting elsewhere under a **different name**. The plugin looks only at the exact location it would
-  download to, so a differently-named copy is not found.
+### When the same game is on your device under a different name
+
+Your copy is rarely named the way your server names it. `Mario Golf - Advance Tour (U).zip` and
+`Mario Golf - Advance Tour (USA).zip` are the same game, and a download would land beside your file rather than on it —
+leaving you with two copies of one game.
+
+So when you press **Download** and nothing is at the exact location, the plugin has a look around the platform folder
+first. It reads that folder's top level only — never inside your subfolders, and never inside a game folder — keeps
+whatever your emulator accepts as a ROM for that system, skips anything it already has an install record for, and
+compares names with the version tags removed. `Mario Golf - Advance Tour (Rev 1) (USA).zip` and
+`Mario Golf - Advance Tour (U).zip` both reduce to the same game.
+
+Usually that finds nothing, and the download starts as always. When it finds exactly one file, you get the same
+comparison dialog as above. When it finds several, you get a short list first — strongest match at the top, each row
+saying what it is based on: a checksum read out of a zip's index, an exact size match, or the name alone. If there were
+more than the list shows, it says so.
+
+Choosing a file and pressing **Use These Files** does one thing more than before: it **renames your file to the name
+your server uses**, and moves your saves and savestates for that game along with it. That is not tidiness. Uninstalling
+a game deletes the ROM but never the saves — so a game left under your own name would, after an uninstall and a later
+download, be looking for saves under a name nothing ever wrote. Renaming now keeps everything joined up.
+
+If a name it needs is already taken — you have played both versions and both left saves — a second dialog opens **before
+anything has been moved**, lists everything that collides, and asks once for the whole set:
+
+- **Replace Them** — the existing files at those names are deleted and yours take their place.
+- **Keep Them** — the existing files stay and your old-named ones stay where they are. Nothing is lost, but those old
+  files are now orphaned: nothing will read them.
+- **Cancel** — nothing happens at all.
+
+If a rename cannot be completed — saves on internal storage and ROMs on an SD card is the case that makes it awkward —
+the plugin tells you exactly which files moved and which did not, by name, rather than claiming success or a plain
+failure.
+
+One case is still out of reach by design: a copy of the game whose name is genuinely different, not just differently
+tagged. `Mario Golf` will not be found for `Mario Golf - Advance Tour`, and it should not be — it is a different game.
 
 ### Pausing and Resuming a Download
 
