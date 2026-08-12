@@ -465,19 +465,6 @@ class TestWriteTextAtomic:
         assert dest.read_text(encoding="utf-8") == "Final Fantasy VII — Disc 1.cue\n"
 
 
-class TestIsDir:
-    def test_true_for_a_directory(self, adapter, tmp_path):
-        assert adapter.is_dir(str(tmp_path)) is True
-
-    def test_false_for_a_file(self, adapter, tmp_path):
-        f = tmp_path / "a.rom"
-        f.write_bytes(b"x")
-        assert adapter.is_dir(str(f)) is False
-
-    def test_false_for_a_missing_path(self, adapter, tmp_path):
-        assert adapter.is_dir(str(tmp_path / "nope")) is False
-
-
 class TestDescribePath:
     def test_none_for_a_missing_path(self, adapter, tmp_path):
         assert adapter.describe_path(str(tmp_path / "nope")) is None
@@ -570,7 +557,6 @@ class TestProtocolMethodCount:
     def test_protocol_methods_covered(self):
         method_names = {
             "exists",
-            "is_dir",
             "describe_path",
             "checksum",
             "remove_file",

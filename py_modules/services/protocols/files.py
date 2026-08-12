@@ -125,10 +125,6 @@ class DownloadFileStore(Protocol):
         """Return True when *path* refers to an existing file or directory."""
         ...
 
-    def is_dir(self, path: str) -> bool:
-        """Return True when *path* exists and is a directory."""
-        ...
-
     def describe_path(self, path: str) -> ExistingContent | None:
         """Describe whatever occupies *path*, or ``None`` when nothing does.
 
@@ -136,7 +132,8 @@ class DownloadFileStore(Protocol):
         writing: it answers what is in the way, how big it is and when it was
         last touched, so the collision can be shown rather than overwritten. A
         directory reports the recursive total of its contents, comparable with
-        the server's ``fs_size_bytes`` for a multi-file ROM.
+        the server's ``fs_size_bytes`` for a multi-file ROM — which makes this
+        an ``os.walk`` of the whole tree, so callers offload it.
         """
         ...
 

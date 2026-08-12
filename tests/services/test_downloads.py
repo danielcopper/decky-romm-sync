@@ -247,10 +247,16 @@ def plugin():
 
 @pytest.fixture(autouse=True)
 async def _set_event_loop(plugin):
-    """Ensure plugin.loop matches the running event loop for async tests."""
+    """Ensure plugin.loop matches the running event loop for async tests.
+
+    The adoption service is in the list because the download's occupancy gate
+    awaits it, and it offloads onto *its own* loop — a stale one raises "attached
+    to a different loop" from inside the gate rather than at the seam.
+    """
     plugin.loop = asyncio.get_event_loop()
     plugin._download_service._loop = asyncio.get_event_loop()
     plugin._rom_removal_service._loop = asyncio.get_event_loop()
+    plugin._rom_adoption_service._loop = asyncio.get_event_loop()
 
 
 class TestStartDownload:
@@ -739,6 +745,50 @@ class TestOccupiedTargetPreFlight:
         assert result["success"] is False
         assert result["reason"] == "replace_failed"
         assert plugin._download_service.active_download_rom_ids() == set()
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_leaves_an_installed_sibling_untouched(self, plugin, tmp_path):
+        # The #1298 supersede deletes ANOTHER version's files, so it must not run
+        # until the gate has passed. Otherwise the user who opens the dialog and
+        # presses Cancel is left with one version uninstalled and nothing in its
+        # place. Real files, real remover, real install rows.
+        from unittest.mock import AsyncMock
+
+        roms = tmp_path / "retrodeck" / "roms"
+        paths = FakeRetroDeckPaths(roms=str(roms), bios=str(tmp_path / "retrodeck" / "bios"))
+        plugin._download_service._retrodeck_paths = paths
+        plugin._rom_adoption_service._retrodeck_paths = paths
+        plugin._rom_removal_service._retrodeck_paths = paths
+
+        (roms / "n64").mkdir(parents=True)
+        sibling_file = roms / "n64" / "game_2.z64"
+        sibling_file.write_bytes(b"the other version")
+        # What the user put where rom 1 would download (``_SINGLE``'s fs_name).
+        (roms / "n64" / "game1.z64").write_bytes(b"user's own copy")
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=False)
+        with plugin._uow:
+            plugin._uow.rom_installs.save(
+                RomInstall.mark_installed(
+                    rom_id=2,
+                    file_path=str(sibling_file),
+                    rom_dir=None,
+                    platform_slug="n64",
+                    system="n64",
+                    installed_at="2026-01-01T00:00:00+00:00",
+                )
+            )
+
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._loop.run_in_executor = AsyncMock(return_value=self._SINGLE)
+        plugin._download_service._loop.create_task = MagicMock(side_effect=lambda coro: (coro.close(), MagicMock())[1])
+
+        result = await plugin.start_download(1)
+
+        assert result["reason"] == "target_occupied"
+        assert sibling_file.read_bytes() == b"the other version"
+        assert plugin._uow.rom_installs.get(2) is not None
 
 
 class TestRemoveRom:
@@ -5553,6 +5603,41 @@ class TestPauseResume:
 _SUPERSEDE_GROUP = "igdb:100:99"
 
 
+def _stage_download_prologue(plugin, rom_id: int = 1) -> list[Any]:
+    """Let the real ``_begin_download`` run its pre-flights without transferring.
+
+    The #1298 supersede lives inside ``_begin_download``, behind the occupancy
+    gate (ADR-0028), so a case that mocks ``_begin_download`` out is no longer
+    testing the supersede at all. This stages the surroundings instead: the
+    ROM-detail fetch is answered from memory and the transfer task is swallowed.
+    The returned list collects the coroutines ``create_task`` was handed, which
+    is how "did a download actually start?" is observed.
+    """
+    from unittest.mock import AsyncMock
+
+    started: list[Any] = []
+
+    def _close_coro_task(coro):
+        coro.close()
+        started.append(coro)
+        return MagicMock()
+
+    plugin._download_service._loop = MagicMock()
+    plugin._download_service._loop.run_in_executor = AsyncMock(
+        return_value={
+            "id": rom_id,
+            "name": f"Game {rom_id}",
+            "fs_name": f"game_{rom_id}.z64",
+            "fs_size_bytes": 1024,
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+        }
+    )
+    plugin._download_service._loop.create_task = _close_coro_task
+    plugin._download_service._download_file_store.disk_free = lambda _path: 500 * 1024 * 1024
+    return started
+
+
 class TestSiblingSupersedeSelection:
     """`_conflicting_sibling_install_ids` — which downloaded siblings a download supersedes."""
 
@@ -5656,15 +5741,13 @@ class TestSiblingSupersedeRemoval:
         _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
         remover = AsyncMock(return_value={"success": True, "message": "ROM removed"})
         plugin._download_service._rom_remover = lambda: remover
-        plugin._download_service._begin_download = AsyncMock(
-            return_value={"success": True, "message": "Download started"}
-        )
+        started = _stage_download_prologue(plugin)
 
         result = await plugin.start_download(1)
 
         assert result == {"success": True, "message": "Download started"}
         remover.assert_awaited_once_with(2)
-        plugin._download_service._begin_download.assert_awaited_once()
+        assert len(started) == 1
 
     @pytest.mark.asyncio
     async def test_start_download_aborts_without_starting_when_removal_fails(self, plugin):
@@ -5674,20 +5757,18 @@ class TestSiblingSupersedeRemoval:
         _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
         failing = AsyncMock(return_value={"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"})
         plugin._download_service._rom_remover = lambda: failing
-        plugin._download_service._begin_download = AsyncMock()
+        started = _stage_download_prologue(plugin)
 
         result = await plugin.start_download(1)
 
         assert result == {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"}
-        plugin._download_service._begin_download.assert_not_awaited()
+        assert started == []
 
     @pytest.mark.asyncio
     async def test_start_download_second_call_rejected_while_first_mid_supersede(self, plugin):
         # B1: the in-progress slot is claimed BEFORE the supersede await, so a
         # second start_download racing in while the first is suspended inside the
         # removal await is rejected with the existing already-downloading shape.
-        from unittest.mock import AsyncMock
-
         _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
         _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
 
@@ -5700,9 +5781,7 @@ class TestSiblingSupersedeRemoval:
             return {"success": True, "message": "ROM removed"}
 
         plugin._download_service._rom_remover = lambda: _blocking_remove
-        plugin._download_service._begin_download = AsyncMock(
-            return_value={"success": True, "message": "Download started"}
-        )
+        _stage_download_prologue(plugin)
 
         first = asyncio.create_task(plugin.start_download(1))
         await entered.wait()  # first call is now suspended inside the removal await
@@ -5736,7 +5815,7 @@ class TestSiblingSupersedeRemoval:
         _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
         failing = AsyncMock(return_value={"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"})
         plugin._download_service._rom_remover = lambda: failing
-        plugin._download_service._begin_download = AsyncMock()
+        _stage_download_prologue(plugin)
 
         result = await plugin.start_download(1)
         assert result["reason"] == ErrorCode.UNKNOWN.value
@@ -5840,14 +5919,12 @@ class TestResumeSupersede:
         plugin._download_service._download_queue[1] = {"rom_id": 1, "status": "paused", "resumable": True}
         remover = AsyncMock(return_value={"success": True, "message": "removed"})
         plugin._download_service._rom_remover = lambda: remover
-        plugin._download_service._begin_download = AsyncMock(
-            return_value={"success": True, "message": "Download started"}
-        )
+        started = _stage_download_prologue(plugin)
 
         result = await plugin.resume_download(1)
         assert result["success"] is True
         remover.assert_awaited_once_with(2)
-        plugin._download_service._begin_download.assert_awaited_once_with(1, resume=True)
+        assert len(started) == 1
 
     @pytest.mark.asyncio
     async def test_resume_bound_target_is_not_superseded(self, plugin):
@@ -5874,11 +5951,11 @@ class TestResumeSupersede:
         plugin._download_service._download_queue[1] = {"rom_id": 1, "status": "paused"}
         failing = AsyncMock(return_value={"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"})
         plugin._download_service._rom_remover = lambda: failing
-        plugin._download_service._begin_download = AsyncMock()
+        started = _stage_download_prologue(plugin)
 
         result = await plugin.resume_download(1)
         assert result == {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"}
-        plugin._download_service._begin_download.assert_not_awaited()
+        assert started == []
         assert 1 not in plugin._download_service._download_in_progress
 
     @pytest.mark.asyncio

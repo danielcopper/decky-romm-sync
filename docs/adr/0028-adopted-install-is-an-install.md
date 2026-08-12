@@ -83,6 +83,15 @@ nothing would ever reclaim it. At ROM sizes that is silent, unbounded consumptio
 **One case is out of reach by design.** A genuinely different dump under a different name, of different size, is not
 found — and adopting it would be wrong, because it is not the content the row would claim.
 
+**Adoption becomes a sixth recorded-state writer site for `applied_launch_options`.** One class of install row means one
+class of Steam shortcut behind it: an adopted ROM's shortcut is written the moment the dialog closes, and the value the
+frontend wrote is recorded exactly as the download path records its own. Leaving it `NULL` would have been precisely the
+difference this decision rules out — the same install, distinguishable afterwards by how it was produced, and the next
+sync re-touching one shortcut but not the other. It adds no new writer: it is
+`RomInstallRecorder.do_record_applied_launch_options`, the download path's own method, reached from a second flow at the
+same point — after the install commits, before the frontend's write lands. The register in `CLAUDE.md` counts the flows,
+which is why it reads six.
+
 ## Alternatives considered
 
 **Record provenance and refuse to delete what the plugin did not download.** Rejected. It reads as the cautious choice

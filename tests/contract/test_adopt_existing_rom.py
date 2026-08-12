@@ -34,6 +34,23 @@ def _place_single_file(harness, *, data: bytes = b"user's own dump") -> Path:
     return path
 
 
+def _seed_unbound_rom(harness) -> None:
+    """Seed the ROM with no Steam shortcut bound (``seed_rom`` always binds one)."""
+    from domain.rom import Rom
+
+    with harness.uow_factory() as uow:
+        uow.roms.save(
+            Rom.synced(
+                rom_id=_ROM_ID,
+                platform_slug="gba",
+                name=f"rom-{_ROM_ID}",
+                fs_name=f"rom-{_ROM_ID}",
+                shortcut_app_id=None,
+                synced_at="2026-01-01T00:00:00",
+            )
+        )
+
+
 def _stage_detail(harness, **overrides) -> dict[str, Any]:
     detail: dict[str, Any] = {
         "id": _ROM_ID,
@@ -109,6 +126,34 @@ async def test_adopt_leaves_the_bytes_untouched(harness):
     await harness.plugin.adopt_existing_rom(_ROM_ID)
 
     assert path.read_bytes() == b"user's own dump"
+
+
+async def test_a_bound_adopt_carries_a_prune_lease_for_the_frontend_s_steam_write(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage_detail(harness)
+    _place_single_file(harness)
+
+    result = await harness.plugin.adopt_existing_rom(_ROM_ID)
+
+    assert result["app_id"] == _ROM_ID  # seed_rom binds shortcut_app_id to rom_id
+    assert isinstance(result["prune_lease_token"], str) and result["prune_lease_token"]
+
+
+async def test_an_unbound_adopt_is_issued_no_prune_lease(harness):
+    # The lease covers the frontend's write of the launch command onto the
+    # shortcut. An unbound ROM has no shortcut, so the frontend has nothing to
+    # do and nothing to release — a token here would be held for its full TTL,
+    # blocking prune. Acquisition is guarded, exactly as the download-complete
+    # emit guards it.
+    _seed_unbound_rom(harness)
+    _stage_detail(harness)
+    _place_single_file(harness)
+
+    result = await harness.plugin.adopt_existing_rom(_ROM_ID)
+
+    assert result["success"] is True
+    assert result["app_id"] is None
+    assert "prune_lease_token" not in result
 
 
 async def test_adopt_refuses_when_nothing_is_there(harness):

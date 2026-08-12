@@ -238,37 +238,20 @@ class DownloadService:
         *replace_existing* is the user's answer to that refusal: the download
         proceeds and whatever is in the way is cleared first. It rides on this
         callable rather than a second one so every download — first attempt or
-        replace — passes the same prologue: the ``already_downloading`` guard,
-        the sibling supersede, the path-safety coercion and the disk pre-flight.
+        replace — passes the same prologue: the ``already_downloading`` guard, the
+        path-safety coercion, the occupancy gate, the supersede, the disk pre-flight.
         """
         rom_id = int(rom_id)
         if rom_id in self._download_in_progress:
             return {"success": False, "reason": "already_downloading", "message": "Already downloading"}
-        # Claim the in-progress slot BEFORE the supersede await so a second
-        # start_download for this same rom during that await is rejected by the
-        # guard above instead of racing past it (B1). ``_begin_download`` re-adds
-        # idempotently; every early exit here (removal abort, exception) releases
-        # the claim, and on success the download task's ``finally`` owns it.
-        self._download_in_progress.add(rom_id)
-        # At most one downloaded version per shortcut binding (#1298): strip a
-        # sibling install bound to this shortcut (or unbound) before this one
-        # lands — a grandfathered sibling with its own shortcut is exempt. A
-        # removal failure aborts the download so the invariant stays honest.
-        try:
-            cleanup_failure = await self._remove_conflicting_sibling_installs(rom_id)
-        except Exception:
-            self._download_in_progress.discard(rom_id)
-            raise
-        if cleanup_failure is not None:
-            self._download_in_progress.discard(rom_id)
-            return cleanup_failure
         return await self._begin_download(rom_id, resume=False, replace_existing=bool(replace_existing))
 
     async def _remove_conflicting_sibling_installs(self, rom_id: int) -> dict[str, Any] | None:
         """Strip any other downloaded version of ``rom_id``'s sibling group (#1298 T7).
 
-        Shared by ``start_download`` and ``resume_download``. The group's members
-        are snapshotted in one short read UoW (closed before the removal seam runs
+        Called from ``_begin_download`` once the occupancy gate has passed: a
+        refused download must not already have deleted another version. The group's
+        members are snapshotted in one short read UoW (closed before the removal seam runs
         — the removal opens its own UoW, which must not nest; ADR-0006). The
         membership read is a single indexed lookup done directly (like
         ``get_installed_rom``); each superseded install is then removed through the
@@ -340,12 +323,13 @@ class DownloadService:
     async def _begin_download(self, rom_id, *, resume: bool, replace_existing: bool = False):
         """Shared core of ``start_download`` and ``resume_download``.
 
-        Fetches ROM detail, resolves the platform path, runs the occupancy and
-        disk pre-flights, then registers the queue entry, task, byte reservation,
-        and control token. On ``resume=True`` the disk pre-flight discounts the
-        bytes already on the existing ``.tmp`` (only the remainder is still
-        needed) and ``_do_download`` is started with ``resume=True`` so the
-        transfer appends rather than restarts.
+        Fetches ROM detail, resolves the platform path, then runs the three
+        pre-flights **in this order**: the occupancy gate, the #1298 sibling
+        supersede, the disk-space check. Only then are the queue entry, task,
+        byte reservation and control token registered. On ``resume=True`` the
+        disk pre-flight discounts the bytes already on the existing ``.tmp``
+        (only the remainder is still needed) and ``_do_download`` is started with
+        ``resume=True`` so the transfer appends rather than restarts.
 
         The ``already_downloading`` guard stays with ``start_download``;
         ``resume_download`` validates the paused entry before calling here.
@@ -362,12 +346,13 @@ class DownloadService:
         platform_fs_slug = rom_detail.get("platform_fs_slug")
         system = self._resolve_system(platform_slug, platform_fs_slug)
 
-        # Path building, directory creation, and the disk pre-flight can raise
-        # (SD card unmounted → OSError; ``roms_path()`` returning None → TypeError
-        # in the join). Any raise here must release the in-progress flag so the
-        # ROM isn't stuck "Already downloading" until a plugin reload (#1048).
-        # The explicit early-return guards inside still ``return`` (not raise)
-        # and discard the flag themselves; a ``return`` does not trip the except.
+        # Path building, the occupancy gate, directory creation and the disk
+        # pre-flight can all raise (SD card unmounted → OSError; ``roms_path()``
+        # returning None → TypeError in the join). Any raise across the three
+        # blocks below must release the in-progress flag so the ROM isn't stuck
+        # "Already downloading" until a plugin reload (#1048). The explicit
+        # early-return guards inside still ``return`` (not raise) and discard the
+        # flag themselves; a ``return`` does not trip the except.
         try:
             roms_path = self._retrodeck_paths.roms_path()
             try:
@@ -415,11 +400,38 @@ class DownloadService:
             checked_path = target_path
             if is_multi_file_download(rom_detail):
                 checked_path = os.path.join(roms_dir, self._resolve_safe_extract_dir_name(rom_detail))
-            occupied = self._target_gate(rom_detail, checked_path, replace=replace_existing)
+            occupied = await self._target_gate(rom_detail, checked_path, replace=replace_existing)
             if occupied is not None:
                 self._download_in_progress.discard(rom_id)
                 return occupied
+        except Exception as e:
+            self._download_in_progress.discard(rom_id)
+            self._logger.error(f"Failed to prepare download for ROM {rom_id}: {e}")
+            return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "Failed to start download"}
 
+        # At most one downloaded version per shortcut binding (#1298): strip a
+        # sibling install bound to this shortcut (or unbound) before this one
+        # lands — a grandfathered sibling with its own shortcut is exempt. A
+        # removal failure aborts the download so the invariant stays honest.
+        #
+        # Ordering is load-bearing at both ends. AFTER the gate, because the
+        # supersede deletes another version's files: refusing afterwards would
+        # leave a user who then presses Cancel with one version uninstalled and
+        # nothing in its place. BEFORE the disk pre-flight, because the removal
+        # frees the space the replacement needs — checking first would reject a
+        # same-size swap on a nearly full card. The in-progress claim is already
+        # held (B1), so a second start_download during this await is rejected by
+        # ``start_download``'s guard rather than racing past it.
+        try:
+            cleanup_failure = await self._remove_conflicting_sibling_installs(rom_id)
+        except Exception:
+            self._download_in_progress.discard(rom_id)
+            raise
+        if cleanup_failure is not None:
+            self._download_in_progress.discard(rom_id)
+            return cleanup_failure
+
+        try:
             # Check disk space: multi-file ROMs need space for ZIP + extracted contents
             self._download_file_store.make_dirs(roms_dir)
             free_space = self._download_file_store.disk_free(roms_dir)
@@ -1298,12 +1310,16 @@ class DownloadService:
         binding to a sibling while this download was paused (#1298 S1): if another
         member now owns the shortcut, this target is stale — the resume is refused
         (``superseded``) and its queue entry dropped rather than re-downloading a
-        version the picker has already moved away from. Otherwise the same sibling
-        supersede that guards ``start_download`` runs first (abort on removal
-        failure), then the download re-begins with ``resume=True`` so the transfer
-        appends onto the existing bytes (when the server honoured the original
-        ``Range`` probe) instead of restarting. The in-progress claim is taken
-        before the supersede await and released on every early exit (B1).
+        version the picker has already moved away from. Otherwise the download
+        re-begins with ``resume=True`` so the transfer appends onto the existing
+        bytes (when the server honoured the original ``Range`` probe) instead of
+        restarting.
+
+        The sibling supersede runs here too, inside ``_begin_download`` and behind
+        the same occupancy gate. A resume's target is a partial ``.tmp`` the plugin
+        wrote, so the gate normally passes — but if something has appeared there
+        while it sat paused, the same rule holds: refuse before another version's
+        files are deleted, not after.
         """
         rom_id = int(rom_id)
         entry = self._download_queue.get(rom_id)
@@ -1312,15 +1328,6 @@ class DownloadService:
         if self._resume_target_superseded(rom_id):
             self.evict(rom_id)
             return {"success": False, "reason": "superseded", "message": "Another version is now active"}
-        self._download_in_progress.add(rom_id)
-        try:
-            cleanup_failure = await self._remove_conflicting_sibling_installs(rom_id)
-        except Exception:
-            self._download_in_progress.discard(rom_id)
-            raise
-        if cleanup_failure is not None:
-            self._download_in_progress.discard(rom_id)
-            return cleanup_failure
         return await self._begin_download(rom_id, resume=True)
 
     def _resume_target_superseded(self, rom_id: int) -> bool:

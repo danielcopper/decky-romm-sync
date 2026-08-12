@@ -629,7 +629,12 @@ class Plugin:
     async def adopt_existing_rom(self, rom_id):
         """Record content already on disk as this ROM's install, without downloading."""
         result = await self._rom_adoption_service.adopt_existing_rom(rom_id)
-        if result.get("success"):
+        # Only a bound ROM gets a lease: the lease covers the frontend's write of
+        # the launch command onto the shortcut, and an unbound ROM has no
+        # shortcut to write to, so the frontend would hold the token to its full
+        # TTL with nothing to release it. Same guard the download-complete emit
+        # applies (``_emit_with_prune_continuation``).
+        if result.get("success") and result.get("app_id") is not None:
             result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "adopt_existing_rom")
         return result
 

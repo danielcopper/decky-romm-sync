@@ -14,9 +14,10 @@
 -- post-upgrade sync re-applies exactly as today, records the value, and only
 -- subsequent syncs skip — no data is invented from the migration.
 --
--- Only the five recorded-state writer sites ever write it (sync ack-commit,
--- download-complete, uninstall, RetroDECK-home migration re-resolve, version
--- switch), each via the pin-only ``set_applied_launch_options`` write path; the
+-- Only the six recorded-state writer sites ever write it (sync ack-commit,
+-- download-complete, adopt-complete, uninstall, RetroDECK-home migration
+-- re-resolve, version switch), each via the pin-only
+-- ``set_applied_launch_options`` write path; the
 -- sync UPSERT in ``SqliteRomRepository.save()`` deliberately excludes it, like
 -- the emulator_override / selected_disc pins, so an unrelated re-save never
 -- wipes it. Anchored on ``roms`` (the Rom aggregate table) so it survives

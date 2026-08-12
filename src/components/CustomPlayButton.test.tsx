@@ -3296,6 +3296,7 @@ describe("CustomPlayButton â content already on disk (#260)", () => {
       rom_dir: null,
       app_id: 100,
       launch_options: 'flatpak run … "/roms/n64/game.z64"',
+      prune_lease_token: "adopt-token",
     });
     const utils = render(<CustomPlayButton appId={100} />);
     const btn = await utils.findByText("Download");
@@ -3306,10 +3307,17 @@ describe("CustomPlayButton â content already on disk (#260)", () => {
 
     expect(vi.mocked(backend.adoptExistingRom)).toHaveBeenCalledWith(42);
     expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledWith(100, 'flatpak run … "/roms/n64/game.z64"');
+    // The lease the backend issued for this Steam write is given back, not held
+    // to its TTL — the bound branch is the only one that ever receives one.
+    expect(vi.mocked(backend.releasePruneConflictLease)).toHaveBeenCalledWith("adopt-token");
     await utils.findByText("Play");
   });
 
-  it("an unbound adopted ROM writes no launch options", async () => {
+  it("an unbound adopted ROM writes no launch options and holds no lease", async () => {
+    // The backend guards acquisition — an unbound adopt is issued no token, so
+    // there is nothing here to release. The token in this mock is the shape the
+    // frontend must stay inert to if one ever arrives anyway: no Steam write,
+    // and no lease taken out that nothing would give back.
     mockCachedDetail({ rom_id: 42, installed: false });
     vi.mocked(backend.startDownload).mockResolvedValue(OCCUPIED);
     vi.mocked(showAdoptExistingModal).mockResolvedValue("adopt");
@@ -3320,6 +3328,7 @@ describe("CustomPlayButton â content already on disk (#260)", () => {
       rom_dir: null,
       app_id: null,
       launch_options: "",
+      prune_lease_token: "stray-token",
     });
     const utils = render(<CustomPlayButton appId={100} />);
     const btn = await utils.findByText("Download");

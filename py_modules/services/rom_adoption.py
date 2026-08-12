@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from domain.rom_adoption import (
@@ -120,7 +121,7 @@ class RomAdoptionService:
 
     # ── Download pre-flight (DownloadTargetGateFn) ──────────────────
 
-    def check_download_target(
+    async def check_download_target(
         self, rom_detail: dict[str, Any], checked_path: str, *, replace: bool
     ) -> dict[str, Any] | None:
         """Decide whether a download may write to *checked_path*.
@@ -130,7 +131,20 @@ class RomAdoptionService:
         what was there. Anything else is a canonical failure the caller returns
         untouched — the ``target_occupied`` refusal carrying both sides of the
         comparison, or a removal that could not be completed.
+
+        Neither leg of the decision is bounded work — describing an occupied
+        directory walks it whole (a multi-file install can hold tens of thousands
+        of files) and clearing one deletes it whole — so the whole check runs off
+        the loop. The offload lives here rather than at the call site: the caller
+        asks a question and should not have to know what answering it costs.
         """
+        worker = partial(self._check_download_target_io, rom_detail, checked_path, replace=replace)
+        return await self._loop.run_in_executor(None, worker)
+
+    def _check_download_target_io(
+        self, rom_detail: dict[str, Any], checked_path: str, *, replace: bool
+    ) -> dict[str, Any] | None:
+        """Synchronous body of the download-target gate. Runs on an executor thread."""
         existing = self._download_file_store.describe_path(checked_path)
         if existing is None:
             return None

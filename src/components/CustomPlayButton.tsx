@@ -994,8 +994,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       const result = await startDownload(romId, replaceExisting);
       if (isTargetOccupied(result)) {
         // Nothing was written and no transfer started — the backend refused so
-        // the user can choose (#260). The button goes back to idle either way;
-        // an adopt or a replace re-enters through its own path.
+        // the user can choose (#260). Back to idle before the dialog opens,
+        // because Cancel returns to this button with nothing else to re-enable
+        // it; adopt and replace each re-claim the flag on their own path.
         setTargetOccupied(true);
         setActionPending(false);
         await resolveOccupiedTarget(romId, result);
@@ -1012,8 +1013,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   };
 
   // Run the adopt/replace/cancel dialog and carry out the chosen exit. Replace
-  // re-enters `handleDownload`, which is why the caller has already cleared
-  // `actionPending`: the second call must not be swallowed by its own guard.
+  // re-enters `handleDownload`; its guard reads the `actionPending` captured by
+  // the render still executing here — false — not the live value, so the second
+  // call is admitted regardless of what the caller set on the way in.
   const resolveOccupiedTarget = async (rid: number, occupied: TargetOccupiedResult) => {
     const choice = await showAdoptExistingModal(rid, occupied);
     if (choice === "replace") {

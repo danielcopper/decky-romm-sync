@@ -41,10 +41,6 @@ class DownloadFileAdapter:
         """Return True when *path* refers to an existing file or directory."""
         return os.path.exists(path)
 
-    def is_dir(self, path: str) -> bool:
-        """Return True when *path* exists and is a directory."""
-        return os.path.isdir(path)
-
     def describe_path(self, path: str) -> ExistingContent | None:
         """Describe whatever occupies *path*, or ``None`` when nothing does.
 

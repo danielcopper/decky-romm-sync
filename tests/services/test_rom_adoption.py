@@ -182,14 +182,18 @@ async def h():
 
 
 class TestCheckDownloadTarget:
-    def test_a_free_path_lets_the_download_proceed(self, h):
-        assert h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=False) is None
+    async def test_a_free_path_lets_the_download_proceed(self, h):
+        assert (
+            await h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=False) is None
+        )
 
-    def test_an_occupied_path_refuses_with_both_sides(self, h):
+    async def test_an_occupied_path_refuses_with_both_sides(self, h):
         h.store.files["/roms/snes/Game.sfc"] = b"x" * 25
         h.store.mtimes["/roms/snes/Game.sfc"] = 1_700_000_000.0
 
-        result = h.service.check_download_target(_single_file_detail(size=10), "/roms/snes/Game.sfc", replace=False)
+        result = await h.service.check_download_target(
+            _single_file_detail(size=10), "/roms/snes/Game.sfc", replace=False
+        )
 
         assert result is not None
         assert result["success"] is False
@@ -200,136 +204,138 @@ class TestCheckDownloadTarget:
         assert result["incoming"] == {"name": "Game.sfc", "size_bytes": 10}
         assert result["sizes_match"] is False
 
-    def test_a_refusal_leaves_the_content_untouched(self, h):
+    async def test_a_refusal_leaves_the_content_untouched(self, h):
         h.store.files["/roms/snes/Game.sfc"] = b"mine"
 
-        h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=False)
+        await h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=False)
 
         assert h.store.files["/roms/snes/Game.sfc"] == b"mine"
 
-    def test_a_directory_in_a_single_file_ROM_s_way_is_not_adoptable(self, h):
+    async def test_a_directory_in_a_single_file_ROM_s_way_is_not_adoptable(self, h):
         h.store.files["/roms/snes/Game.sfc/inner.bin"] = b"x"
 
-        result = h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=False)
+        result = await h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=False)
 
         assert result is not None
         assert result["existing"]["is_dir"] is True
         assert result["adoptable"] is False
 
-    def test_a_directory_in_a_multi_file_ROM_s_way_is_adoptable(self, h):
+    async def test_a_directory_in_a_multi_file_ROM_s_way_is_adoptable(self, h):
         h.store.files["/roms/psx/Game/a.bin"] = b"x"
 
-        result = h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=False)
+        result = await h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=False)
 
         assert result is not None
         assert result["adoptable"] is True
 
-    def test_a_file_in_a_multi_file_ROM_s_way_is_not_adoptable(self, h):
+    async def test_a_file_in_a_multi_file_ROM_s_way_is_not_adoptable(self, h):
         h.store.files["/roms/psx/Game"] = b"x"
 
-        result = h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=False)
+        result = await h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=False)
 
         assert result is not None
         assert result["adoptable"] is False
 
-    def test_a_rom_s_own_recorded_install_is_not_asked_about(self, h):
+    async def test_a_rom_s_own_recorded_install_is_not_asked_about(self, h):
         # A re-download finds its own files in the way. The install record is the
         # plugin's claim on them, so it replaces them as it always has.
         h.seed_rom()
         h.seed_install(file_path="/roms/snes/Game.sfc")
         h.store.files["/roms/snes/Game.sfc"] = b"ours"
 
-        assert h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=False) is None
+        assert (
+            await h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=False) is None
+        )
 
-    def test_a_multi_file_rom_s_own_directory_is_not_asked_about(self, h):
+    async def test_a_multi_file_rom_s_own_directory_is_not_asked_about(self, h):
         h.seed_rom()
         h.seed_install(file_path="/roms/psx/Game/Game.cue", rom_dir="/roms/psx/Game")
         h.store.files["/roms/psx/Game/Game.cue"] = b"ours"
 
-        assert h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=False) is None
+        assert await h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=False) is None
 
-    def test_another_rom_s_install_at_this_path_is_still_asked_about(self, h):
+    async def test_another_rom_s_install_at_this_path_is_still_asked_about(self, h):
         # The record has to belong to THIS rom. A row for a different rom_id is
         # not this download's claim on the bytes.
         h.seed_rom()
         h.seed_install(rom_id=_ROM_ID + 1, file_path="/roms/snes/Game.sfc")
         h.store.files["/roms/snes/Game.sfc"] = b"someone else's"
 
-        result = h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=False)
+        result = await h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=False)
 
         assert result is not None
         assert result["reason"] == "target_occupied"
 
 
 class TestReplace:
-    def test_replace_removes_the_existing_directory_whole(self, h):
+    async def test_replace_removes_the_existing_directory_whole(self, h):
         # The merge is the bug: extraction into an existing dir leaves a hybrid
         # that a later uninstall deletes whole, taking the user's other files.
         h.store.files["/roms/psx/Game/a.bin"] = b"x"
         h.store.files["/roms/psx/Game/unrelated.txt"] = b"y"
 
-        assert h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=True) is None
+        assert await h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=True) is None
 
         assert "/roms/psx/Game/a.bin" not in h.store.files
         assert "/roms/psx/Game/unrelated.txt" not in h.store.files
 
-    def test_replace_leaves_a_single_file_for_the_atomic_rename(self, h):
+    async def test_replace_leaves_a_single_file_for_the_atomic_rename(self, h):
         # os.replace swaps the new bytes in; deleting first would leave the user
         # with neither copy if the transfer then failed.
         h.store.files["/roms/snes/Game.sfc"] = b"old"
 
-        assert h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=True) is None
+        assert await h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=True) is None
 
         assert h.store.files["/roms/snes/Game.sfc"] == b"old"
 
-    def test_replace_removes_a_file_blocking_a_multi_file_directory(self, h):
+    async def test_replace_removes_a_file_blocking_a_multi_file_directory(self, h):
         h.store.files["/roms/psx/Game"] = b"blocker"
 
-        assert h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=True) is None
+        assert await h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=True) is None
 
         assert "/roms/psx/Game" not in h.store.files
 
-    def test_replace_refuses_outside_the_roms_tree(self, h):
+    async def test_replace_refuses_outside_the_roms_tree(self, h):
         h.store.files["/elsewhere/Game.sfc"] = b"precious"
 
-        result = h.service.check_download_target(_single_file_detail(), "/elsewhere/Game.sfc", replace=True)
+        result = await h.service.check_download_target(_single_file_detail(), "/elsewhere/Game.sfc", replace=True)
 
         assert result is not None
         assert result["reason"] == "unsafe_replace_target"
         assert h.store.files["/elsewhere/Game.sfc"] == b"precious"
 
-    def test_replace_refuses_a_bare_platform_directory(self, h):
+    async def test_replace_refuses_a_bare_platform_directory(self, h):
         # is_safe_rom_path demands two segments below the base, so the shared
         # platform folder can never be the thing a replace removes.
         h.store.files["/roms/psx/Game/a.bin"] = b"x"
 
-        result = h.service.check_download_target(_multi_file_detail(), "/roms/psx", replace=True)
+        result = await h.service.check_download_target(_multi_file_detail(), "/roms/psx", replace=True)
 
         assert result is not None
         assert result["reason"] == "unsafe_replace_target"
         assert h.store.files["/roms/psx/Game/a.bin"] == b"x"
 
-    def test_replace_refuses_when_the_roms_path_is_unknown(self, h):
+    async def test_replace_refuses_when_the_roms_path_is_unknown(self, h):
         h.paths.roms = ""
         h.store.files["/roms/psx/Game/a.bin"] = b"x"
 
-        result = h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=True)
+        result = await h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=True)
 
         assert result is not None
         assert result["reason"] == "unsafe_replace_target"
 
-    def test_a_failed_removal_aborts_the_download(self, h):
+    async def test_a_failed_removal_aborts_the_download(self, h):
         h.store.files["/roms/psx/Game/a.bin"] = b"x"
         h.store.remove_tree_failures.add("/roms/psx/Game")
 
-        result = h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=True)
+        result = await h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=True)
 
         assert result is not None
         assert result["reason"] == "replace_failed"
         assert result["success"] is False
 
-    def test_replace_on_a_free_path_is_a_no_op(self, h):
-        assert h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=True) is None
+    async def test_replace_on_a_free_path_is_a_no_op(self, h):
+        assert await h.service.check_download_target(_multi_file_detail(), "/roms/psx/Game", replace=True) is None
 
 
 # ── adopt ────────────────────────────────────────────────────────────────

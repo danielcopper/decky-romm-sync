@@ -76,9 +76,15 @@ class DownloadTargetGateFn(Protocol):
     the ``target_occupied`` refusal carrying both sides of the comparison, or
     the failure of a removal that the replace could not complete. Nothing is
     written and no transfer starts on a non-``None`` answer.
+
+    Awaitable: describing an occupied directory walks it whole and clearing one
+    deletes it whole, so the implementation runs that work off the event loop.
+    The caller just awaits an answer.
     """
 
-    def __call__(self, rom_detail: dict[str, Any], checked_path: str, *, replace: bool) -> dict[str, Any] | None: ...
+    async def __call__(
+        self, rom_detail: dict[str, Any], checked_path: str, *, replace: bool
+    ) -> dict[str, Any] | None: ...
 
 
 class RetryStrategy(Protocol):
