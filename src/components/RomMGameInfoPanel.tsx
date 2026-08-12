@@ -524,12 +524,12 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       }
       const romId = romIdRef.current;
       if (!romId) return;
-      const { write } = bindCurrentRom(romId);
-      const result = await getSaveStatus(romId).catch(() => null);
+      const binding = bindCurrentRom(romId);
+      const result = await getSaveStatus(binding.romId).catch(() => null);
       if (result && isCallableFailure(result)) return;
       const updatedStatus: SaveStatus | null = result;
       const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
-      write((prev) => ({
+      binding.write((prev) => ({
         ...prev,
         saveSyncEnabled: true,
         saveStatus: updatedStatus,
@@ -542,7 +542,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       const romId = romIdRef.current;
       if (!romId) return;
       const binding = bindCurrentRom(romId);
-      const result = detail.save_status ?? (await getSaveStatus(romId).catch(() => null));
+      const result = detail.save_status ?? (await getSaveStatus(binding.romId).catch(() => null));
       if (result && isCallableFailure(result)) return;
       const updatedStatus: SaveStatus | null = result;
       const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
@@ -580,9 +580,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // to avoid a stale `state` closure. The active core reflects the per-game
       // DB override (epic #945). BIOS status is re-read from the (now core-free)
       // cache.
-      const { write } = bindCurrentRom(rid);
+      const binding = bindCurrentRom(rid);
       const [coreInfo, cached] = await Promise.all([
-        getPlatformCoreInfo(rid).catch((): CoreInfo | null => null),
+        getPlatformCoreInfo(binding.romId).catch((): CoreInfo | null => null),
         getCachedGameDetail(appId),
       ]);
       if (cancelled || !cached.found) return;
@@ -590,7 +590,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // core switch invalidated the cached detail, but a cold firmware cache
       // makes the re-read a non-answer rather than a "needs none" (#1693).
       const biosFields = biosFieldsFromCache(cached);
-      write((prev) => ({ ...prev, ...biosFields, coreInfo: coreInfo ?? prev.coreInfo }));
+      binding.write((prev) => ({ ...prev, ...biosFields, coreInfo: coreInfo ?? prev.coreInfo }));
     };
 
     const handleVersionSwitched = async (detail: Extract<RommDataChangedDetail, { type: "version_switched" }>) => {
@@ -672,9 +672,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       if (detail.rom_id !== romIdRef.current) return;
       const romId = romIdRef.current;
       if (!romId) return;
-      const { write } = bindCurrentRom(romId);
-      const meta = await getRomMetadata(romId).catch((): RomMetadata | null => null);
-      write((prev) => ({ ...prev, metadata: meta }));
+      const binding = bindCurrentRom(romId);
+      const meta = await getRomMetadata(binding.romId).catch((): RomMetadata | null => null);
+      binding.write((prev) => ({ ...prev, metadata: meta }));
     };
 
     const handleCoverRefreshed = async (detail: Extract<RommDataChangedDetail, { type: "cover_refreshed" }>) => {
