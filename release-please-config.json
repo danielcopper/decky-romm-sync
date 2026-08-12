@@ -3,7 +3,7 @@
   "release-type": "node",
   "packages": {
     ".": {
-      "package-name": "decky-romm-sync",
+      "package-name": "tender",
       "initial-version": "0.1.0",
       "changelog-path": "CHANGELOG.md",
       "bump-minor-pre-major": true,

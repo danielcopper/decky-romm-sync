@@ -142,7 +142,7 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           BUILT_ZIP=$(ls /tmp/output/*.zip | head -1)
-          DEST="/tmp/output/decky-romm-sync.zip"
+          DEST="/tmp/output/tender.zip"
           if [ "$BUILT_ZIP" != "$DEST" ]; then
             cp "$BUILT_ZIP" "$DEST"
           fi

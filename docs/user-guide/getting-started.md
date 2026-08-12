@@ -35,17 +35,20 @@ Before installing the plugin, you need:
 4. Open the **Developer** tab and select **Install Plugin From URL**
 5. Enter the direct URL to the release zip
 
-   The URL for the latest release follows this pattern:
+   This one always points at the newest release, so it needs no version number:
 
    ```text
-   https://github.com/danielcopper/romm-tender/releases/download/decky-romm-sync-v{VERSION}/decky-romm-sync.zip
+   https://github.com/danielcopper/romm-tender/releases/latest/download/tender.zip
    ```
 
-   For example, for v0.9.3:
+   To pin a specific version instead, name its tag:
 
    ```text
-   https://github.com/danielcopper/romm-tender/releases/download/decky-romm-sync-v0.9.3/decky-romm-sync.zip
+   https://github.com/danielcopper/romm-tender/releases/download/tender-v{VERSION}/tender.zip
    ```
+
+   Releases published before the rename use the older `decky-romm-sync-v{VERSION}/decky-romm-sync.zip` form; their links
+   keep working unchanged.
 
 6. Decky downloads and installs the plugin automatically — no restart needed
 
@@ -58,7 +61,7 @@ Any direct URL to the zip file works (GitHub releases, a self-hosted mirror, etc
 
 ### Manual installation (alternative)
 
-1. Download `decky-romm-sync.zip` from the [releases page](https://github.com/danielcopper/romm-tender/releases)
+1. Download `tender.zip` from the [releases page](https://github.com/danielcopper/romm-tender/releases)
 2. Extract the zip to `~/homebrew/plugins/` on your device (via SSH, file manager, or USB)
 3. Restart Decky Loader — either reboot, or run `sudo systemctl restart plugin_loader` via SSH
 4. The plugin appears in your QAM under the Decky tab

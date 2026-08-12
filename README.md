@@ -100,10 +100,9 @@ search for **Tender**, and install. No Developer Mode required.
 This is the current method while v1.0 is in progress. It requires **Developer Mode** in Decky Loader (Decky settings →
 gear icon → toggle **Developer Mode**).
 
-1. Download the latest `decky-romm-sync.zip` from the
-   [releases page](https://github.com/danielcopper/romm-tender/releases)
+1. Download the latest `tender.zip` from the [releases page](https://github.com/danielcopper/romm-tender/releases)
 2. In Decky settings → **Developer** tab → **Install Plugin from ZIP** (or **from URL** with the
-   [latest release link](https://github.com/danielcopper/romm-tender/releases/latest/download/decky-romm-sync.zip))
+   [latest release link](https://github.com/danielcopper/romm-tender/releases/latest/download/tender.zip))
 
 </details>
 
