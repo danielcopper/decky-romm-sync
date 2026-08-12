@@ -131,8 +131,8 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({ romId, occupie
           <div style={{ marginBottom: "12px" }}>
             <div style={{ fontSize: "13px", color: VERIFY_COLORS[verdict.status] }}>{verdict.message}</div>
             {verdict.differences.map((d) => (
-              <div key={d.name} style={LABEL_STYLE}>
-                {d.name}: expected {d.expected}, found {d.actual}
+              <div key={d.name} style={{ ...LABEL_STYLE, marginTop: "4px" }}>
+                {d.name}: {d.detail}
               </div>
             ))}
           </div>

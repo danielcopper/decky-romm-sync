@@ -29,8 +29,10 @@ user's own — a different rip, a translation patch, a romhack — which is prec
 What makes adoption decidable is that RomM already carries the evidence. `RomFileSchema` exposes `file_size_bytes`,
 `crc_hash`, `md5_hash`, `sha1_hash` and `is_top_level` per file, and `RomArchiveMember` carries `name`, `size` and the
 three digests per member **non-optionally**, so the server knows the content inside its own archives. Per-member hashes
-have been stored since RomM 4.9.0, which is the minimum this plugin accepts, so they are there on every server it will
-talk to. Hashes are computed by default and opt out through `filesystem.skip_hash_calculation`.
+have been stored since RomM 4.9.0, but the column is filled by a **scan**, not by the upgrade: a live 5.1.0 instance
+sends `archive_members: null` for every archived ROM in a library it has not rescanned since, which is why the
+file-level digest and not the member list is what the plugin depends on. Hashes are computed by default and opt out
+through `filesystem.skip_hash_calculation`.
 
 Cost was measured rather than assumed. On a Steam Deck SD card the read rate is 77 MiB/s, so a 1.53 GiB image hashes in
 19.8 s — I/O-bound, identical for CRC32, MD5 and SHA-1. Across a real library the median ROM is 2 MiB, roughly 70 % sit
@@ -62,14 +64,28 @@ server's manifest does not list. Where the content is archived the digests come 
 server without hashes turns the candidate search **off** rather than lowering its bar.
 
 **A content check compares content identity, never container identity.** RomM hashes what is _inside_ an archive: its
-scanner streams every member's decompressed bytes, in ASCII name order, into one accumulator, so an archived ROM's
-file-level digest is a composite over the content while `file_size_bytes` is the container's size on disk. The two
-describe different things, which is why the size agrees and the digest cannot — measured on device, a zipped GBA ROM the
-plugin itself downloaded reported a mismatch on the same bytes RomM sent. So an entry the server states
-`archive_members` for is held to its members and its own digest is not compared, and its own size is not either: two
-archives of the same ROM differ in it whenever they were packed differently, and the members carry the stronger
-evidence. Members on disk the server did not list are allowed, because RomM's scanner drops excluded names and
-extensions from `archive_members` — even its own archive holds more than it listed.
+current scanner streams every member's decompressed bytes, in ASCII name order, into one accumulator, and the one before
+4.9.0 took the archive's largest member. Either way the file-level digest describes the content while `file_size_bytes`
+is the container's size on disk. The two describe different things, which is why the size agrees and the digest cannot —
+measured on device, a zipped GBA ROM the plugin itself downloaded reported a mismatch on the same bytes RomM sent.
+
+**The file-level digest is the carrier; `archive_members` is an optional extra.** Measured against a live RomM 5.1.0
+instance, `archive_members` is null for every archived ROM: the column arrived in 4.9.0 and stays null until the library
+is rescanned, while `files[0].crc` already equals the member's CRC32 in the ZIP's own central directory. So the
+comparison is keyed on what is on disk — anything whose **name** says archive is opened, and RomM's `ARCHIVE_READERS`
+extension set is what "says archive" means, because that set is exactly where its digest describes contents. Neither the
+container's digest nor its size is compared: two archives of the same ROM differ in both whenever they were packed
+differently.
+
+**What can be claimed depends on what is inside.** One member: its digest _is_ the archive's content identity under
+every rule RomM has used — the composite over one member and the largest of one member are the same bytes — so this is
+decidable, and it is the common case for a zipped single-ROM library. Several members with `archive_members` stated:
+each is held to its own entry, and members on disk the server did not list are allowed, because its scanner drops
+excluded names and extensions. Several members **without** them: `unverifiable`. The exclusion set is reproducible — a
+fixed pair of module constants, eight extensions and seven names, not the user-configurable list — but reproducing it
+would not settle which rule produced the number, and the evidence says these rows come from the pre-4.9.0 rule, where
+agreement covers the largest member and says nothing about the other thirty-nine in an arcade set. `match` states that
+_these files_ match; a rule that cannot support that sentence must not be allowed to print it.
 
 **Cheap evidence disqualifies; the digest RomM published is what qualifies.** A member's uncompressed size and CRC32
 come from the central directory at no cost, and either disagreeing is proof enough to report without decompressing
@@ -79,11 +95,13 @@ MD5 RomM published beside it, over the member's decompressed bytes. That is the 
 already applies, extended inside the container rather than weakened to fit it.
 
 **What cannot be enumerated is reported as unconfirmed, never as a mismatch.** A container this plugin cannot open — a
-format the standard library does not read, or one damaged since it was listed — leaves the entry unchecked, which is
-`unverifiable`. The one exception is a single-member archive whose member's uncompressed size the file on disk matches
-exactly: that is the user who unpacked what the server keeps packed, and the loose bytes are that member's. A
-multi-member composite has no counterpart in one file at all. Accusing content of differing on bytes that were never
-read would be the strong claim, and it has not been earned.
+`.7z`, a `.rar`, one damaged since it was listed — leaves the entry unchecked, which is `unverifiable`. The one
+exception is a single-member archive whose member's uncompressed size the file on disk matches exactly: that is the user
+who unpacked what the server keeps packed, and the loose bytes are that member's. Accusing content of differing on bytes
+that were never read would be the strong claim, and it has not been earned. `unverifiable` therefore carries three
+distinct messages — the server published no checksums, the plugin could not read what they speak for, or the number
+covers a whole archive it cannot attribute — because a user told "your server publishes no checksums" about a server
+that does will go looking for a problem that is not there.
 
 **The dialog has three exits.** Adopt records the existing content as the install. Download replaces it, behind a second
 confirmation naming the deletion. Cancel does nothing. For multi-file, Download removes the existing directory and

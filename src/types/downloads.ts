@@ -102,11 +102,17 @@ export interface AdoptResult {
  * Outcome of `verify_existing_content`. A status union rather than a boolean:
  * "the server publishes no checksums" is its own answer, never a match and
  * never a mismatch.
+ *
+ * Each difference names one file and carries the whole sentence about it, so it
+ * renders as one line. The backend owns that wording: two 32-character digests
+ * said no more than "these differ" and wrapped the line into an unreadable
+ * block, while a size difference states both numbers because those are numbers
+ * a person can act on.
  */
 export interface VerifyContentResult {
   status: "match" | "mismatch" | "unverifiable" | "missing" | "error";
   message: string;
-  differences: Array<{ name: string; expected: string; actual: string }>;
+  differences: Array<{ name: string; detail: string }>;
 }
 
 /** Byte progress of a user-requested content verification. */

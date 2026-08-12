@@ -27,8 +27,10 @@ from domain.rom_adoption import (
     ServerFile,
     compare_manifest,
     digests_to_read,
+    is_archive_name,
     occupied_target_refusal,
     server_manifest,
+    unconfirmed_reason,
     verification_status,
 )
 from domain.rom_files import (
@@ -69,10 +71,14 @@ _VERIFY_MESSAGES = {
     "unverifiable": "This RomM server publishes no checksums, so it cannot confirm these files",
 }
 
-# The second way a check can end without a verdict: the server did publish
-# digests and the plugin could not read what they speak for — an archive format
-# it cannot open, or a member it cannot decompress.
-_UNREADABLE_MESSAGE = "Some of this game's files could not be read, so they cannot be confirmed"
+# The other two ways a check can end without a verdict, both reached only once
+# the server HAS published digests: bytes the plugin could not read, and a
+# number it cannot attribute to anything inside the archive it covers.
+_UNCONFIRMED_MESSAGES = {
+    "unread": "Some of this game's files could not be read, so they cannot be confirmed",
+    "whole_archive": "The server publishes one checksum for this whole archive, which cannot be matched "
+    "against the files inside it",
+}
 
 
 @dataclass(frozen=True)
@@ -428,14 +434,18 @@ class RomAdoptionService:
         # the ROM directory was still a digest the server published, so dropping
         # it from that question could turn a mismatch into "cannot confirm".
         status = verification_status(manifest, observed, differences)
-        # Past the no-checksums guard above, so "unverifiable" here can only mean
-        # the plugin failed to read something the server did put a digest on —
-        # telling the user their server publishes none would be plainly wrong.
-        message = _UNREADABLE_MESSAGE if status == "unverifiable" else _VERIFY_MESSAGES[status]
+        # Past the no-checksums guard above, so "unverifiable" here never means
+        # the server published none — telling the user that would send them
+        # looking for a problem their server does not have.
+        message = (
+            _UNCONFIRMED_MESSAGES[unconfirmed_reason(manifest, observed)]
+            if status == "unverifiable"
+            else _VERIFY_MESSAGES[status]
+        )
         return {
             "status": status,
             "message": message,
-            "differences": [{"name": d.name, "expected": d.expected, "actual": d.actual} for d in differences],
+            "differences": [{"name": d.name, "detail": d.detail} for d in differences],
         }
 
     def _partition_escaping(
@@ -458,13 +468,7 @@ class RomAdoptionService:
                 safe_join(target.path, entry.rel_path)
             except PathTraversalError:
                 self._logger.error(f"Manifest entry escapes the ROM directory: {entry.rel_path!r}")
-                escaping.append(
-                    FileDifference(
-                        name=entry.lookup_key,
-                        expected="a path inside this game's folder",
-                        actual="a path outside it",
-                    )
-                )
+                escaping.append(FileDifference(name=entry.lookup_key, detail="sits outside this game's folder"))
                 continue
             checkable.append(entry)
         return (tuple(checkable), tuple(escaping))
@@ -474,11 +478,10 @@ class RomAdoptionService:
 
         The result is keyed by each entry's ``lookup_key``, so an entry the server
         located is read from exactly that place and one it did not locate falls
-        back to a search by filename. An entry the server stated members for is
-        looked inside first: a ZIP's central directory names every member and
-        states its uncompressed size and CRC32 without decompressing a byte,
-        which is both cheaper than reading the file and the only thing RomM's
-        per-member digests can be compared against.
+        back to a search by filename. Anything whose name says archive is looked
+        inside first: a ZIP's central directory names every member and states its
+        uncompressed size and CRC32 without decompressing a byte, and the content
+        in there is what RomM's digest for such a file describes.
 
         Which bytes are worth reading is :func:`digests_to_read`'s decision; the
         whole plan is built before the first read so the progress the user sees
@@ -486,43 +489,48 @@ class RomAdoptionService:
         """
         located = self._locate(manifest, target)
         entries = [entry for entry in manifest if entry.lookup_key in located]
-        members = {entry.lookup_key: self._inspect_archive(entry, located[entry.lookup_key][0]) for entry in entries}
-        plan = {
-            entry.lookup_key: digests_to_read(entry, located[entry.lookup_key][1], members[entry.lookup_key])
-            for entry in entries
-        }
+        seen = {entry.lookup_key: self._inspect(located[entry.lookup_key]) for entry in entries}
+        plan = {entry.lookup_key: digests_to_read(entry, seen[entry.lookup_key]) for entry in entries}
         report = self._make_verify_progress(
             rom_id, sum(request.size_bytes for requests in plan.values() for request in requests)
         )
         observed: dict[str, LocalFile] = {}
         for entry in entries:
             key = entry.lookup_key
-            path, size = located[key]
-            digests = {request.member: self._read_digest(path, request, report) for request in plan[key]}
-            found = members[key]
-            observed[key] = LocalFile(
-                size_bytes=size,
+            found = seen[key]
+            digests = {request.member: self._read_digest(located[key][0], request, report) for request in plan[key]}
+            observed[key] = replace(
+                found,
                 digest=digests.get("", ""),
                 members=None
-                if found is None
-                else tuple(replace(member, digest=digests.get(member.name, "")) for member in found),
+                if found.members is None
+                else tuple(replace(member, digest=digests.get(member.name, "")) for member in found.members),
             )
         return observed
 
-    def _inspect_archive(self, entry: ServerFile, path: str) -> tuple[LocalMember, ...] | None:
-        """List what sits inside *path*, or ``None`` when there is nothing to look inside for.
+    def _inspect(self, location: tuple[str, int]) -> LocalFile:
+        """Describe what sits at *location* before anything is hashed.
 
-        Only an entry the server stated members for is opened: for every other
-        file the archive's own bytes are what RomM hashed, so looking inside
-        would answer a question nobody asked.
+        An archive is opened here and nowhere else, and the name is what decides:
+        it is the server's own, and RomM hashed a file with such a name by its
+        contents. Listing costs one read of the central directory; when that
+        fails the file stays an unopened container, which the comparison reports
+        as something it cannot confirm rather than something that differs.
         """
-        if not entry.archived:
-            return None
+        path, size = location
+        if not is_archive_name(os.path.basename(path)):
+            return LocalFile(size_bytes=size, digest="")
         found = self._download_file_store.list_archive_members(path)
-        if found is None:
-            return None
-        return tuple(
-            LocalMember(name=member["name"], size_bytes=member["size_bytes"], crc32=member["crc32"]) for member in found
+        return LocalFile(
+            size_bytes=size,
+            digest="",
+            members=None
+            if found is None
+            else tuple(
+                LocalMember(name=member["name"], size_bytes=member["size_bytes"], crc32=member["crc32"])
+                for member in found
+            ),
+            is_archive=True,
         )
 
     def _read_digest(self, path: str, request: DigestRequest, report: Callable[[int], None]) -> str:

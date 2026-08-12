@@ -244,7 +244,10 @@ async def test_verify_names_what_differed(harness):
     result = await harness.plugin.verify_existing_content(_ROM_ID)
 
     assert result["status"] == "mismatch"
-    assert result["differences"] == [{"name": "rom-41", "expected": f"md5 {'0' * 32}", "actual": f"md5 {_md5(data)}"}]
+    # One line per difference, and no digests in it: two 32-character hex
+    # strings said no more than "these differ" and wrapped into a block.
+    assert result["differences"] == [{"name": "rom-41", "detail": "contents differ from the server's copy"}]
+    assert _md5(data) not in result["differences"][0]["detail"]
 
 
 async def test_verify_reports_a_checksumless_server_as_its_own_outcome(harness):
@@ -282,46 +285,49 @@ def _place_archive(harness, members: dict[str, bytes], *, name: str = "rom-41.zi
     return path
 
 
-def _stage_archived_detail(harness, archive: Path, members: dict[str, bytes]) -> None:
+def _stage_archived_detail(harness, archive: Path, members: dict[str, bytes], *, state_members: bool = False) -> None:
     """The payload RomM sends for a ROM it stores as an archive.
 
-    The file-level digest is the composite its scanner accumulates over every
-    member's decompressed bytes in ASCII name order, while ``file_size_bytes``
-    is the container's size on disk. Holding the archive's own bytes to that
-    digest is what reported a mismatch on a byte-perfect copy of what the server
-    sent, so this fixture states the shape a real server sends and nothing
-    tidier.
+    ``file_size_bytes`` is the container's size on disk while the digests beside
+    it describe the **content**: the scanner accumulates over every member's
+    decompressed bytes in ASCII name order. Holding the archive's own bytes to
+    that digest is what reported a mismatch on a byte-perfect copy of what the
+    server sent.
+
+    ``archive_members`` is off by default because a live RomM 5.1.0 instance
+    sends none — the column arrived in 4.9.0 and stays null until the library is
+    rescanned — so the file-level digest is the carrier and the extra shape is
+    opt-in.
     """
     composite = hashlib.md5(usedforsecurity=False)
+    composite_crc = 0
     for member in sorted(members):
         composite.update(members[member])
-    _stage_detail(
-        harness,
-        fs_name=archive.name,
-        fs_size_bytes=archive.stat().st_size,
-        files=[
+        composite_crc = zlib.crc32(members[member], composite_crc)
+    entry: dict[str, Any] = {
+        "file_name": archive.name,
+        "file_size_bytes": archive.stat().st_size,
+        "md5_hash": composite.hexdigest(),
+        "crc_hash": f"{composite_crc & 0xFFFFFFFF:08x}",
+    }
+    if state_members:
+        entry["archive_members"] = [
             {
-                "file_name": archive.name,
-                "file_size_bytes": archive.stat().st_size,
-                "md5_hash": composite.hexdigest(),
-                "archive_members": [
-                    {
-                        "name": member,
-                        "size": len(data),
-                        "crc_hash": f"{zlib.crc32(data) & 0xFFFFFFFF:08x}",
-                        "md5_hash": _md5(data),
-                        "sha1_hash": hashlib.sha1(data, usedforsecurity=False).hexdigest(),
-                    }
-                    for member, data in sorted(members.items())
-                ],
+                "name": member,
+                "size": len(data),
+                "crc_hash": f"{zlib.crc32(data) & 0xFFFFFFFF:08x}",
+                "md5_hash": _md5(data),
+                "sha1_hash": hashlib.sha1(data, usedforsecurity=False).hexdigest(),
             }
-        ],
-    )
+            for member, data in sorted(members.items())
+        ]
+    _stage_detail(harness, fs_name=archive.name, fs_size_bytes=archive.stat().st_size, files=[entry])
 
 
 async def test_verify_matches_a_zipped_rom_the_plugin_itself_downloaded(harness):
     # Measured on device: the same bytes RomM served, re-offered to the gate,
-    # reported a mismatch because the digest describes the ROM inside the zip.
+    # reported a mismatch because the digest describes the ROM inside the zip
+    # and the check hashed the zip.
     seed_rom(harness, _ROM_ID, platform_slug="gba")
     members = {"rom-41.gba": b"cartridge bytes" * 64}
     archive = _place_archive(harness, members)
@@ -332,26 +338,55 @@ async def test_verify_matches_a_zipped_rom_the_plugin_itself_downloaded(harness)
     assert result == {"status": "match", "message": result["message"], "differences": []}
 
 
-async def test_verify_names_the_member_that_differs_inside_an_archive(harness):
+async def test_verify_reports_a_changed_byte_inside_an_archive(harness):
     seed_rom(harness, _ROM_ID, platform_slug="gba")
-    archive = _place_archive(harness, {"rom-41.gba": b"a different dump" * 64})
+    # Same length, different bytes: the digest is what has to catch this.
+    archive = _place_archive(harness, {"rom-41.gba": b"cartridge bytez" * 64})
     _stage_archived_detail(harness, archive, {"rom-41.gba": b"cartridge bytes" * 64})
 
     result = await harness.plugin.verify_existing_content(_ROM_ID)
 
     assert result["status"] == "mismatch"
-    assert [difference["name"] for difference in result["differences"]] == ["rom-41.zip/rom-41.gba"]
+    assert result["differences"] == [{"name": "rom-41.zip", "detail": "contents differ from the server's copy"}]
+
+
+async def test_verify_cannot_confirm_an_archive_described_only_as_a_whole(harness):
+    # An arcade set: many members, one server digest, and nothing saying whether
+    # it covers all of them or just the largest.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    members = {"disc1.bin": b"one" * 32, "disc2.bin": b"two" * 32}
+    archive = _place_archive(harness, members)
+    _stage_archived_detail(harness, archive, members)
+
+    result = await harness.plugin.verify_existing_content(_ROM_ID)
+
+    assert result["status"] == "unverifiable"
+    assert result["differences"] == []
+
+
+async def test_verify_names_the_member_that_differs_when_the_server_lists_them(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    # Same length, different bytes: the digest is what has to catch this.
+    archive = _place_archive(harness, {"rom-41.gba": b"cartridge bytez" * 64})
+    _stage_archived_detail(harness, archive, {"rom-41.gba": b"cartridge bytes" * 64}, state_members=True)
+
+    result = await harness.plugin.verify_existing_content(_ROM_ID)
+
+    assert result["status"] == "mismatch"
+    assert result["differences"] == [
+        {"name": "rom-41.zip/rom-41.gba", "detail": "contents differ from the server's copy"}
+    ]
 
 
 async def test_verify_reports_a_multi_member_archive_that_lost_a_member(harness):
     seed_rom(harness, _ROM_ID, platform_slug="gba")
     archive = _place_archive(harness, {"disc1.bin": b"one" * 32})
-    _stage_archived_detail(harness, archive, {"disc1.bin": b"one" * 32, "disc2.bin": b"two" * 32})
+    _stage_archived_detail(harness, archive, {"disc1.bin": b"one" * 32, "disc2.bin": b"two" * 32}, state_members=True)
 
     result = await harness.plugin.verify_existing_content(_ROM_ID)
 
     assert result["status"] == "mismatch"
-    assert result["differences"] == [{"name": "rom-41.zip/disc2.bin", "expected": "present", "actual": "missing"}]
+    assert result["differences"] == [{"name": "rom-41.zip/disc2.bin", "detail": "missing from the archive"}]
 
 
 def _stage_directory_rom(harness, *, data: bytes, on_disk_subdir: str) -> None:
@@ -400,4 +435,4 @@ async def test_verify_reports_a_file_in_the_wrong_subdirectory_as_missing(harnes
     result = await harness.plugin.verify_existing_content(_ROM_ID)
 
     assert result["status"] == "mismatch"
-    assert result["differences"] == [{"name": "inner/data.bin", "expected": "present", "actual": "missing"}]
+    assert result["differences"] == [{"name": "inner/data.bin", "detail": "missing"}]

@@ -152,13 +152,33 @@ describe("AdoptExistingModal — the content check", () => {
     vi.mocked(verifyExistingContent).mockResolvedValue({
       status: "mismatch",
       message: "These files differ from the ones on the server",
-      differences: [{ name: "Game.sfc", expected: "md5 aaaa", actual: "md5 bbbb" }],
+      differences: [{ name: "Game.sfc", detail: "contents differ from the server's copy" }],
     });
     const { container } = renderModal();
 
     fireEvent.click(buttonByText(container, "Check Against Server"));
 
-    await waitFor(() => expect(container.textContent).toContain("Game.sfc: expected md5 aaaa, found md5 bbbb"));
+    await waitFor(() => expect(container.textContent).toContain("Game.sfc: contents differ from the server's copy"));
+  });
+
+  it("gives every difference its own line", async () => {
+    vi.mocked(verifyExistingContent).mockResolvedValue({
+      status: "mismatch",
+      message: "These files differ from the ones on the server",
+      differences: [
+        { name: "disc1.bin", detail: "expected 4096 bytes, found 1024" },
+        { name: "disc2.bin", detail: "missing" },
+      ],
+    });
+    const { container } = renderModal();
+
+    fireEvent.click(buttonByText(container, "Check Against Server"));
+
+    await waitFor(() => expect(container.textContent).toContain("disc2.bin: missing"));
+    // Run together they read as one block; each finding is its own element.
+    const lines = [...container.querySelectorAll("div")].map((node) => node.textContent);
+    expect(lines).toContain("disc1.bin: expected 4096 bytes, found 1024");
+    expect(lines).toContain("disc2.bin: missing");
   });
 
   it("renders 'the server cannot confirm this' as its own outcome", async () => {
