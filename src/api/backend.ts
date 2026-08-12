@@ -858,7 +858,7 @@ export const getSaveSyncSettings = callable<[], SaveSyncSettings>("get_save_sync
 export const updateSaveSyncSettings = callable<[SaveSyncSettings], { success: boolean }>("update_save_sync_settings");
 export const getSaveSlots = callable<
   [number],
-  { success: boolean; slots: SaveSlotSummary[]; active_slot: string; reason?: string; message?: string }
+  { success: boolean; slots: SaveSlotSummary[]; active_slot: string | null; reason?: string; message?: string }
 >("get_save_slots");
 export const getSlotSaves = callable<[number, string], SlotSavesResponse>("get_slot_saves");
 export const switchSlot = callable<[number, string], SwitchSlotResponse>("switch_slot");

@@ -36,9 +36,15 @@ export function resolveSaveSetupOutcome(info: SaveSetupInfo): SaveSetupOutcome {
   if (info.recommended_action === "auto_confirm_default") {
     return { kind: "auto_confirm", slot: info.default_slot };
   }
-  // Mirrors CustomPlayButton's pre-extraction branches: local-only or
-  // empty-everywhere can still auto-confirm; only "server has saves" forces
-  // the wizard.
+  // Reached with nothing local AND nothing on the server — the one state the
+  // backend routes to the wizard (`recommended_action` is `auto_confirm_default`
+  // only when local saves exist) and the launch path settles itself. The
+  // divergence is deliberate: pressing Play means "play", so an empty slate
+  // takes the default slot instead of a dialog, while opening the SAVES tab
+  // means "configure", so `applyWizardInitialSetupResult` below offers the same
+  // slate as a choice. Nothing is at stake on either route — both sides are
+  // empty and the slot stays changeable — so consistency here would only buy a
+  // launch-time prompt for a decision that costs nothing to defer.
   if (info.server_slots.length === 0) {
     return { kind: "auto_confirm", slot: info.default_slot };
   }
