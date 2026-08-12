@@ -45,6 +45,9 @@ import type {
   CopySaveToSlotStatus,
   ListDevicesResponse,
   TargetOccupiedResult,
+  CandidatesFoundResult,
+  RenameCollisionsResult,
+  CollisionChoice,
   AdoptResult,
   VerifyContentResult,
 } from "../types";
@@ -76,6 +79,23 @@ export function isCallableFailure(value: object): value is CallableFailure {
  */
 export function isTargetOccupied(value: object): value is TargetOccupiedResult {
   return "reason" in value && (value as { reason?: unknown }).reason === "target_occupied";
+}
+
+/**
+ * Narrow a `start_download` reply to the refusal that carries the short list of
+ * files on this device that could be this game under another name (#260). Keyed
+ * on the `reason` slug for the same reason `isTargetOccupied` is.
+ */
+export function isCandidatesFound(value: object): value is CandidatesFoundResult {
+  return "reason" in value && (value as { reason?: unknown }).reason === "adoption_candidates";
+}
+
+/**
+ * Narrow an `adopt_existing_rom` reply to the refusal that lists every name the
+ * rename needs and cannot have. Nothing was moved when this comes back.
+ */
+export function isRenameCollisions(value: object): value is RenameCollisionsResult {
+  return "reason" in value && (value as { reason?: unknown }).reason === "rename_collisions";
 }
 
 /**
@@ -188,11 +208,27 @@ export const getSyncStats = callable<[], SyncStats>("get_sync_stats");
  * that names the deletion, because the backend then clears whatever is in the
  * way before fetching (ADR-0028).
  */
-export const startDownload = callable<[number, boolean], BackendResult | TargetOccupiedResult>("start_download");
-/** Record content already on disk as this ROM's install — nothing is fetched. */
-export const adoptExistingRom = callable<[number], AdoptResult>("adopt_existing_rom");
-/** Hash what is on disk and compare it against RomM's checksums. User-triggered only. */
-export const verifyExistingContent = callable<[number], VerifyContentResult>("verify_existing_content");
+export const startDownload = callable<[number, boolean], BackendResult | TargetOccupiedResult | CandidatesFoundResult>(
+  "start_download",
+);
+/**
+ * Record content already on disk as this ROM's install — nothing is fetched.
+ *
+ * `candidatePath` names an entry elsewhere in the platform folder when the user
+ * picked one the search offered; it is renamed to the canonical name, saves and
+ * savestates with it. `null` adopts what is at the game's own location.
+ * `collisionChoice` answers the second dialog and stays `null` until that dialog
+ * has been shown — the backend refuses rather than guessing.
+ */
+export const adoptExistingRom = callable<[number, string | null, CollisionChoice | null], AdoptResult>(
+  "adopt_existing_rom",
+);
+/**
+ * Hash what is on disk and compare it against RomM's checksums. User-triggered
+ * only. `candidatePath` picks the entry to check; `null` checks the game's own
+ * location.
+ */
+export const verifyExistingContent = callable<[number, string | null], VerifyContentResult>("verify_existing_content");
 export const cancelDownload = callable<[number], BackendResult>("cancel_download");
 export const pauseDownload = callable<[number], BackendResult>("pause_download");
 /**

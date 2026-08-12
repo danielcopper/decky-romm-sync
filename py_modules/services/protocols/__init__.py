@@ -62,6 +62,7 @@ from services.protocols.cross_service import (
 )
 from services.protocols.determinism import Clock, Sleeper, UuidGen
 from services.protocols.files import (
+    AdoptionMoveStore,
     CoverArtFileStore,
     DirectoryFileListerFn,
     DownloadFileStore,
@@ -96,6 +97,7 @@ from services.protocols.paths import (
     RetroArchConfigReader,
     RetroArchCoreInfoReader,
     RetroArchSaveLayoutProvider,
+    RetroArchSavestateLayoutProvider,
     RetroDeckPaths,
     SystemM3uSupportFn,
     SystemResolver,
@@ -141,6 +143,7 @@ __all__ = [
     "AchievementsReader",
     "ActiveCoreReader",
     "ActiveDownloadRomIdsFn",
+    "AdoptionMoveStore",
     "ArtworkManager",
     "ArtworkRemover",
     "BiosChecker",
@@ -192,6 +195,7 @@ __all__ = [
     "RetroArchConfigReader",
     "RetroArchCoreInfoReader",
     "RetroArchSaveLayoutProvider",
+    "RetroArchSavestateLayoutProvider",
     "RetroDeckPaths",
     "RetryStrategy",
     "RomFileStore",

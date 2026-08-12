@@ -18,6 +18,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from adapters.adoption_move import AdoptionMoveAdapter
 from adapters.asyncio_sleeper import AsyncioSleeper
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.debug_logger import SettingsAwareDebugLogger
@@ -63,6 +64,7 @@ if TYPE_CHECKING:
     from typing import Any
 
     from services.protocols import (
+        AdoptionMoveStore,
         Clock,
         ComputeSyncActionFn,
         CoreInfoProvider,
@@ -86,6 +88,7 @@ if TYPE_CHECKING:
         RendererRssFn,
         ResolveUploadConflictFn,
         RetroArchSaveLayoutProvider,
+        RetroArchSavestateLayoutProvider,
         RetroDeckPaths,
         RomFileStore,
         RommApi,
@@ -117,6 +120,7 @@ class AdapterBundle:
     cover_art_file_store: CoverArtFileStore
     sgdb_artwork_cache: SgdbArtworkCache
     download_file_store: DownloadFileStore
+    adoption_move: AdoptionMoveStore
     firmware_file_store: FirmwareFileStore
     migration_file_store: MigrationFileStore
     rom_file_store: RomFileStore
@@ -162,6 +166,7 @@ class CallbackBundle:
 
     retrodeck_paths: RetroDeckPaths
     get_save_layout: RetroArchSaveLayoutProvider
+    get_savestate_layout: RetroArchSavestateLayoutProvider
     get_core_name: CoreNameProviderFn
     platform_core_reader: PlatformCoreReader
     m3u_support: SystemM3uSupportFn
@@ -335,6 +340,7 @@ def bootstrap(
     cover_art_file_store = CoverArtFileStoreAdapter()
     sgdb_artwork_cache = SgdbArtworkCacheAdapter(runtime_dir=runtime_dir)
     download_file_store = DownloadFileAdapter()
+    adoption_move = AdoptionMoveAdapter()
     firmware_file_store = FirmwareFileAdapter()
     migration_file_store = MigrationFileAdapter()
     rom_file_store = RomFileAdapter()
@@ -363,6 +369,7 @@ def bootstrap(
         cover_art_file_store=cover_art_file_store,
         sgdb_artwork_cache=sgdb_artwork_cache,
         download_file_store=download_file_store,
+        adoption_move=adoption_move,
         firmware_file_store=firmware_file_store,
         migration_file_store=migration_file_store,
         rom_file_store=rom_file_store,
@@ -384,6 +391,7 @@ def bootstrap(
     callbacks = CallbackBundle(
         retrodeck_paths=retrodeck_paths,
         get_save_layout=retroarch_config.get_save_layout,
+        get_savestate_layout=retroarch_config.get_savestate_layout,
         get_core_name=retroarch_core_info.get_corename,
         platform_core_reader=platform_core_reader,
         m3u_support=core_resolver.system_supports_m3u,

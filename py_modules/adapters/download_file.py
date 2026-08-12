@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import IO
 
-    from models.adoption import ArchiveMemberInfo, ExistingContent
+    from models.adoption import ArchiveMemberInfo, ExistingContent, TopLevelEntry
 
 _EXTRACT_CHUNK = 1024 * 1024
 _HASH_CHUNK = 1024 * 1024
@@ -62,6 +62,43 @@ class DownloadFileAdapter:
             "path": path,
             "is_dir": is_dir,
             "size_bytes": self._tree_size(path) if is_dir else stat.st_size,
+            "modified_at": stat.st_mtime,
+        }
+
+    def list_top_level_entries(self, directory: str) -> tuple[TopLevelEntry, ...]:
+        """Describe what sits directly inside *directory*, without descending.
+
+        One ``scandir`` and one ``stat`` per entry. A directory reports size 0
+        rather than its recursive total: totalling one multi-file install means
+        walking tens of thousands of files, which is not a price the candidate
+        search may charge a Download click. Entries that cannot be stat'd — a
+        dangling symlink, a race with a delete — are skipped, because an entry
+        nothing can be said about is not one to offer.
+        """
+        found: list[TopLevelEntry] = []
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    described = self._describe_entry(entry)
+                    if described is not None:
+                        found.append(described)
+        except OSError:
+            return ()
+        return tuple(found)
+
+    @staticmethod
+    def _describe_entry(entry: os.DirEntry[str]) -> TopLevelEntry | None:
+        """Reduce one ``scandir`` entry to the search's shape, or ``None`` if it cannot be read."""
+        try:
+            is_dir = entry.is_dir()
+            stat = entry.stat()
+        except OSError:
+            return None
+        return {
+            "name": entry.name,
+            "path": entry.path,
+            "is_dir": is_dir,
+            "size_bytes": 0 if is_dir else stat.st_size,
             "modified_at": stat.st_mtime,
         }
 

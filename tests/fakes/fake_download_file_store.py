@@ -15,7 +15,7 @@ from lib.path_safety import safe_path_component
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from models.adoption import ArchiveMemberInfo, ExistingContent
+    from models.adoption import ArchiveMemberInfo, ExistingContent, TopLevelEntry
 
 
 class FakeDownloadFileStore:
@@ -82,6 +82,33 @@ class FakeDownloadFileStore:
             "size_bytes": size,
             "modified_at": self.mtimes.get(path, 0.0),
         }
+
+    def list_top_level_entries(self, directory: str) -> tuple[TopLevelEntry, ...]:
+        """Describe what sits directly inside *directory*, without descending.
+
+        Derived from the stored paths rather than scripted, so a fixture cannot
+        claim a listing its virtual filesystem does not have. A directory reports
+        size 0, exactly as the real adapter does.
+        """
+        prefix = directory.rstrip("/") + "/"
+        names: dict[str, bool] = {}
+        for path in list(self.files) + list(self.dirs):
+            if not path.startswith(prefix):
+                continue
+            head, _sep, tail = path[len(prefix) :].partition("/")
+            if not head:
+                continue
+            names[head] = names.get(head, False) or bool(tail) or (prefix + head) in self.dirs
+        return tuple(
+            {
+                "name": name,
+                "path": prefix + name,
+                "is_dir": is_dir,
+                "size_bytes": 0 if is_dir else len(self.files.get(prefix + name, b"")),
+                "modified_at": self.mtimes.get(prefix + name, 0.0),
+            }
+            for name, is_dir in sorted(names.items())
+        )
 
     def checksum(self, path: str, algorithm: str, progress_callback: Callable[[int], None] | None = None) -> str:
         """Hash the stored bytes, reporting the whole file as one progress chunk."""

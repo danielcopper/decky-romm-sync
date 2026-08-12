@@ -626,9 +626,16 @@ class Plugin:
 
     @migration_blocked
     @prune_active_blocked
-    async def adopt_existing_rom(self, rom_id):
-        """Record content already on disk as this ROM's install, without downloading."""
-        result = await self._rom_adoption_service.adopt_existing_rom(rom_id)
+    async def adopt_existing_rom(self, rom_id, candidate_path=None, collision_choice=None):
+        """Record content already on disk as this ROM's install, without downloading.
+
+        ``candidate_path`` names an entry elsewhere in the platform directory when
+        the user picked one the search offered — it is renamed into place, saves
+        and savestates with it. ``collision_choice`` answers the second dialog
+        (``"overwrite"`` / ``"keep"``) and is null until that dialog has been
+        shown.
+        """
+        result = await self._rom_adoption_service.adopt_existing_rom(rom_id, candidate_path, collision_choice)
         # Only a bound ROM gets a lease: the lease covers the frontend's write of
         # the launch command onto the shortcut, and an unbound ROM has no
         # shortcut to write to, so the frontend would hold the token to its full
@@ -638,9 +645,13 @@ class Plugin:
             result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "adopt_existing_rom")
         return result
 
-    async def verify_existing_content(self, rom_id):
-        """Compare the content at this ROM's target path against RomM's checksums."""
-        return await self._rom_adoption_service.verify_existing_content(rom_id)
+    async def verify_existing_content(self, rom_id, candidate_path=None):
+        """Compare content already on disk against RomM's checksums for this ROM.
+
+        ``candidate_path`` picks the entry to check when the user is deciding
+        about one the search offered; null checks this ROM's own target path.
+        """
+        return await self._rom_adoption_service.verify_existing_content(rom_id, candidate_path)
 
     async def cancel_download(self, rom_id):
         return self._download_service.cancel_download(rom_id)

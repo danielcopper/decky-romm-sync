@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
+from fakes.fake_adoption_move import FakeAdoptionMoveStore
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_download_file_store import FakeDownloadFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
@@ -27,10 +28,13 @@ from fakes.system_time import FakeClock
 
 from domain.rom import Rom
 from domain.rom_install import RomInstall
+from domain.save_layout import InSaveDir, SaveLayout
 from services.rom_adoption import RomAdoptionService, RomAdoptionServiceConfig
 from services.rom_install_recorder import RomInstallRecorder, RomInstallRecorderConfig
 
 _ROMS = "/roms"
+_SAVES = "/saves"
+_STATES = "/states"
 _ROM_ID = 42
 
 
@@ -164,7 +168,16 @@ class Harness:
                 disc_resolver=FakeDiscResolver(),
             ),
         )
-        self.paths = FakeRetroDeckPaths(roms=_ROMS)
+        self.paths = FakeRetroDeckPaths(roms=_ROMS, saves=_SAVES, states=_STATES)
+        self.move = FakeAdoptionMoveStore()
+        # The layouts a real RetroDECK install reports: savefiles content-sorted,
+        # savestates not sorted at all. Tests that care flip them individually.
+        self.save_layout: SaveLayout = InSaveDir(sort_by_content=True, sort_by_core=False)
+        self.savestate_layout: SaveLayout = InSaveDir(sort_by_content=False, sort_by_core=False)
+        # Per-core save sorting is off by default, so neither of these is read
+        # until a test turns ``sort_by_core`` on.
+        self.active_core = FakeActiveCoreResolver(default=(None, None))
+        self.core_name: str | None = None
         # Records every rom_id the supersede was asked about, and answers with
         # whatever a test has staged. Default: nothing to supersede.
         self.superseded: list[int] = []
@@ -173,10 +186,16 @@ class Harness:
             config=RomAdoptionServiceConfig(
                 romm_api=self.romm_api,
                 download_file_store=self.store,
+                adoption_move=self.move,
                 resolve_system=lambda platform_slug, platform_fs_slug=None: platform_fs_slug or platform_slug,
                 retrodeck_paths=self.paths,
                 install_recorder=self.recorder,
                 m3u_support=lambda system_name: self.m3u_supported,
+                system_extensions=lambda system_name: self.system_extensions.get(system_name, frozenset()),
+                save_layout=lambda: self.save_layout,
+                savestate_layout=lambda: self.savestate_layout,
+                active_core=self.active_core,
+                get_core_name=lambda core_so: self.core_name,
                 sibling_supersede=lambda: self._supersede,
                 uow_factory=FakeUnitOfWorkFactory(self.uow),
                 loop=loop,

@@ -98,6 +98,9 @@ class RetroDeckPathsAdapter:
     def saves_path(self) -> str:
         return self._get_path("saves_path", "saves")
 
+    def states_path(self) -> str:
+        return self._get_path("states_path", "states")
+
     def retrodeck_home(self) -> str:
         return self._get_path("rd_home_path", "")
 

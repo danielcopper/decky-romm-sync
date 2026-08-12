@@ -20,11 +20,13 @@ from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
+from adapters.adoption_move import AdoptionMoveAdapter
 from adapters.download_file import DownloadFileAdapter
 from adapters.rom_files import RomFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom import Rom
 from domain.rom_install import RomInstall
+from domain.save_layout import InSaveDir
 from domain.version_metadata import VersionMetadata
 from lib.list_result import ErrorCode
 from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolverConfig
@@ -198,7 +200,13 @@ def plugin():
             resolve_system=p._resolve_system,
             retrodeck_paths=retrodeck_paths,
             install_recorder=p._install_recorder,
+            adoption_move=AdoptionMoveAdapter(),
             m3u_support=lambda system_name: p._m3u_supported,
+            system_extensions=lambda system_name: p._system_extensions.get(system_name, frozenset()),
+            save_layout=lambda: InSaveDir(sort_by_content=True, sort_by_core=False),
+            savestate_layout=lambda: InSaveDir(sort_by_content=False, sort_by_core=False),
+            active_core=p._active_core,
+            get_core_name=lambda core_so: None,
             # Late-bound like production: DownloadService is constructed below.
             sibling_supersede=lambda: p._download_service.supersede_sibling_installs,
             uow_factory=FakeUnitOfWorkFactory(p._uow),

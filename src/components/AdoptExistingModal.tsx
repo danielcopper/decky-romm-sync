@@ -1,13 +1,21 @@
 /**
  * The dialog a download opens instead of writing over content the plugin did not
- * put there (#260, ADR-0028). It states both sides of the collision, offers the
- * content check on a button — never as a wait before the dialog appears — and
- * has three exits: adopt what is there, replace it, or do nothing.
+ * put there, and the one it opens for a file already on the device under a
+ * different name (#260, ADR-0028). It states both sides of the comparison,
+ * offers the content check on a button — never as a wait before the dialog
+ * appears — and has three exits: use what is there, download instead, or do
+ * nothing.
  *
- * Replacing is the only destructive one, so it takes a second confirmation that
- * names the deletion. That confirmation is a step *inside* this modal rather
- * than a nested one: the comparison the user is deciding from stays on screen
- * behind it.
+ * The two cases differ in one sentence and one consequence. A file at the game's
+ * own location is used where it lies; a candidate elsewhere in the folder is
+ * **renamed** into place, saves and savestates with it, so an adopted install
+ * ends up indistinguishable from a downloaded one. Both are stated up front,
+ * because the rename is a change to the user's own filing.
+ *
+ * Downloading is the only destructive exit, so it takes a second confirmation
+ * that names the deletion. That confirmation is a step *inside* this modal
+ * rather than a nested one: the comparison the user is deciding from stays on
+ * screen behind it.
  */
 
 import { FC, useEffect, useState } from "react";
@@ -16,13 +24,20 @@ import { addEventListener, removeEventListener } from "@decky/api";
 import { debugLog, verifyExistingContent } from "../api/backend";
 import { formatBytes } from "../utils/formatters";
 import { detach } from "../utils/detach";
-import type { TargetOccupiedResult, VerifyContentResult, VerifyProgressEvent } from "../types";
+import type { AdoptionCandidate, TargetOccupiedResult, VerifyContentResult, VerifyProgressEvent } from "../types";
 
 export type AdoptChoice = "adopt" | "replace" | "cancel";
 
 interface AdoptExistingModalProps {
   romId: number;
   occupied: TargetOccupiedResult;
+  /**
+   * Set when `occupied` describes a candidate found elsewhere in the platform
+   * folder rather than content at the game's own location. It is the path the
+   * content check runs against, and its presence is what tells the user the
+   * file will be renamed.
+   */
+  candidatePath?: string | undefined;
   closeModal?: () => void;
   onChoice: (choice: AdoptChoice) => void;
 }
@@ -54,7 +69,13 @@ const VERIFY_COLORS: Record<VerifyContentResult["status"], string> = {
   error: "#ff8a80",
 };
 
-export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({ romId, occupied, closeModal, onChoice }) => {
+export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({
+  romId,
+  occupied,
+  candidatePath,
+  closeModal,
+  onChoice,
+}) => {
   const [verifying, setVerifying] = useState(false);
   const [verifyProgress, setVerifyProgress] = useState<number | null>(null);
   const [verdict, setVerdict] = useState<VerifyContentResult | null>(null);
@@ -74,7 +95,7 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({ romId, occupie
     setVerdict(null);
     setVerifyProgress(0);
     try {
-      setVerdict(await verifyExistingContent(romId));
+      setVerdict(await verifyExistingContent(romId, candidatePath ?? null));
     } catch (e) {
       detach(debugLog(`AdoptExistingModal: verify failed: ${e}`));
       setVerdict({ status: "error", message: "Couldn't reach the server to check these files", differences: [] });
@@ -99,8 +120,11 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({ romId, occupie
           This Game Is Already on Your Device
         </div>
         <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.7)", marginBottom: "12px" }}>
-          A {kind} is already where this game would be downloaded. Tender did not put it there, so it will not be
-          touched until you decide.
+          {candidatePath
+            ? `This ${kind} carries this game's name. Tender did not put it there, so it will not be touched until you ` +
+              "decide."
+            : `A ${kind} is already where this game would be downloaded. Tender did not put it there, so it will not ` +
+              "be touched until you decide."}
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "8px" }}>
@@ -119,6 +143,12 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({ romId, occupie
           </div>
         </div>
         <div style={{ fontSize: "13px", color: "#fff", marginBottom: "12px" }}>{sizeVerdict(occupied)}</div>
+        {candidatePath && (
+          <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.7)", marginBottom: "12px" }}>
+            Using it renames it to {occupied.incoming.name}, and moves any saves and savestates named after it with it,
+            so this game works the same as one Tender downloaded.
+          </div>
+        )}
 
         {verifying && (
           <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.7)", marginBottom: "12px" }}>
@@ -180,8 +210,44 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({ romId, occupie
  * caller keeps its "nothing happened" state — the same shape as
  * `showCoreChangeModal`.
  */
-export function showAdoptExistingModal(romId: number, occupied: TargetOccupiedResult): Promise<AdoptChoice> {
+export function showAdoptExistingModal(
+  romId: number,
+  occupied: TargetOccupiedResult,
+  candidatePath?: string,
+): Promise<AdoptChoice> {
   return new Promise<AdoptChoice>((resolve) => {
-    showModal(<AdoptExistingModal romId={romId} occupied={occupied} onChoice={resolve} />);
+    showModal(
+      <AdoptExistingModal romId={romId} occupied={occupied} candidatePath={candidatePath} onChoice={resolve} />,
+    );
   });
+}
+
+/**
+ * Reshape one candidate into the comparison the dialog renders. `adoptable` is
+ * unconditionally true: the search only ever offers an entry whose shape matches
+ * what the server serves, so there is no unusable candidate to disable the
+ * button for.
+ */
+export function comparisonForCandidate(
+  candidate: AdoptionCandidate,
+  incoming: { name: string; size_bytes: number },
+): TargetOccupiedResult {
+  return {
+    success: false,
+    reason: "target_occupied",
+    message: `'${candidate.name}' is already on this device`,
+    existing: {
+      name: candidate.name,
+      path: candidate.path,
+      is_dir: candidate.is_dir,
+      size_bytes: candidate.size_bytes,
+      modified_at: candidate.modified_at,
+    },
+    incoming,
+    // A directory candidate is never sized by the search — it does not descend —
+    // so there are no two numbers to relate, which is the same answer the dialog
+    // gives when the server states no size.
+    sizes_match: candidate.is_dir || !incoming.size_bytes ? null : candidate.size_bytes === incoming.size_bytes,
+    adoptable: true,
+  };
 }

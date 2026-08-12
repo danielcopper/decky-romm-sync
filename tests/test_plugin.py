@@ -1110,6 +1110,7 @@ class TestMainStartupOrdering:
                 cover_art_file_store=MagicMock(),
                 sgdb_artwork_cache=MagicMock(),
                 download_file_store=MagicMock(),
+                adoption_move=MagicMock(),
                 firmware_file_store=MagicMock(),
                 migration_file_store=MagicMock(),
                 rom_file_store=MagicMock(),
@@ -1131,6 +1132,7 @@ class TestMainStartupOrdering:
             callbacks=CallbackBundle(
                 retrodeck_paths=MagicMock(),
                 get_save_layout=MagicMock(),
+                get_savestate_layout=MagicMock(),
                 get_core_name=MagicMock(),
                 platform_core_reader=MagicMock(),
                 m3u_support=MagicMock(),

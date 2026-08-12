@@ -1,15 +1,16 @@
 """RomAdoptionService — ROM content the plugin finds rather than fetches.
 
-Owns the three answers the adopt dialog needs about the path a download would
-write to: whether something is already there, whether what is there is the ROM
-the server holds, and — on the user's word — the ``rom_installs`` row that turns
-it into an install. The row itself is written by the shared
-``RomInstallRecorder``, so an adopted install is derived by exactly the rules a
-downloaded one is (ADR-0028).
+Owns the four answers the adopt dialog needs about the content a download would
+otherwise write: whether something is already at the path, whether the same game
+is already on disk under a different name, whether what is there is the ROM the
+server holds, and — on the user's word — the ``rom_installs`` row that turns it
+into an install, carrying the content to the canonical name on the way. The row
+itself is written by the shared ``RomInstallRecorder``, so an adopted install is
+derived by exactly the rules a downloaded one is (ADR-0028).
 
-The service never deletes on its own initiative. The one destructive path is the
-replace leg of the download gate, which runs only because the user chose it over
-adopting, and only inside the RetroDECK ROMs tree.
+The service never deletes on its own initiative. Its two destructive paths are
+the replace leg of the download gate and the overwrite leg of the rename, each
+run only because the user chose it over the alternative it was shown beside.
 """
 
 from __future__ import annotations
@@ -19,6 +20,17 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from domain.adoption_rename import (
+    OVERWRITE,
+    SAVE,
+    SAVESTATE,
+    CompanionDir,
+    RenamePair,
+    collision_refusal,
+    pairs_for_choice,
+    rename_pairs,
+    split_collisions,
+)
 from domain.rom_adoption import (
     DigestRequest,
     FileDifference,
@@ -33,6 +45,13 @@ from domain.rom_adoption import (
     unconfirmed_reason,
     verification_status,
 )
+from domain.rom_candidates import (
+    LocalEntry,
+    candidates_refusal,
+    matching_entries,
+    normalize_rom_name,
+    rank_candidates,
+)
 from domain.rom_files import (
     detect_launch_file,
     is_multi_file_download,
@@ -40,6 +59,8 @@ from domain.rom_files import (
     resolve_local_file_name,
     synthetic_rom_name,
 )
+from domain.save_layout import InSaveDir
+from domain.save_path import resolve_save_dir
 from lib.errors import error_response
 from lib.path_safety import PathTraversalError, coerce_safe_component, is_safe_rom_path, safe_join
 
@@ -48,16 +69,23 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
 
+    from domain.save_layout import SaveLayout
     from services.protocols import (
+        ActiveCoreReader,
+        AdoptionMoveStore,
         Clock,
+        CoreNameProviderFn,
         DownloadFileStore,
         EventEmitter,
+        RetroArchSaveLayoutProvider,
+        RetroArchSavestateLayoutProvider,
         RetroDeckPaths,
         RomInstallRecorder,
         RommRomReader,
         SiblingSupersedeProvider,
         SystemM3uSupportFn,
         SystemResolver,
+        SystemSupportedExtensionsFn,
         UnitOfWorkFactory,
     )
 
@@ -79,6 +107,27 @@ _UNCONFIRMED_MESSAGES = {
     "whole_archive": "The server publishes one checksum for this whole archive, which cannot be matched "
     "against the files inside it",
 }
+
+
+def _whole_file_crc32(rom_detail: dict[str, Any]) -> str:
+    """RomM's CRC32 for this ROM's one file, or ``""`` when it does not have exactly one.
+
+    A ROM the server holds as several files publishes no single number that could
+    describe one entry on disk, so the candidate search ranks those on size or
+    name instead of on a checksum it would have to invent.
+    """
+    manifest = server_manifest(rom_detail)
+    return manifest[0].crc32 if len(manifest) == 1 else ""
+
+
+def _travels_with(rom_source: str, directory: str) -> bool:
+    """Whether *directory* moves with *rom_source* rather than standing beside it.
+
+    True for a directory inside the content being renamed — a multi-file ROM
+    whose emulator writes saves next to the game. Its files arrive at the new
+    name as part of the ROM's own move, so pairing them up would move them twice.
+    """
+    return directory == rom_source or directory.startswith(rom_source + os.sep)
 
 
 @dataclass(frozen=True)
@@ -103,15 +152,25 @@ class RomAdoptionServiceConfig:
     ``install_recorder`` is the shared install writer — the reason an adopted row
     cannot drift from a downloaded one. ``m3u_support`` gates whether a bundled
     ``.m3u`` may be chosen as an adopted directory's launch file, exactly as it
-    does for an extracted one.
+    does for an extracted one. ``system_extensions`` is the live ES-DE accept-list
+    the candidate search filters a platform directory through. ``save_layout`` and
+    ``savestate_layout`` are read separately because RetroArch sorts the two
+    independently, and ``active_core`` / ``get_core_name`` answer the per-core
+    subdirectory only when a layout says there is one.
     """
 
     romm_api: RommRomReader
     download_file_store: DownloadFileStore
+    adoption_move: AdoptionMoveStore
     resolve_system: SystemResolver
     retrodeck_paths: RetroDeckPaths
     install_recorder: RomInstallRecorder
     m3u_support: SystemM3uSupportFn
+    system_extensions: SystemSupportedExtensionsFn
+    save_layout: RetroArchSaveLayoutProvider
+    savestate_layout: RetroArchSavestateLayoutProvider
+    active_core: ActiveCoreReader
+    get_core_name: CoreNameProviderFn
     # Deferred: the supersede lives on DownloadService, which is built after
     # this service (it consumes the occupancy gate below).
     sibling_supersede: SiblingSupersedeProvider
@@ -123,15 +182,21 @@ class RomAdoptionServiceConfig:
 
 
 class RomAdoptionService:
-    """Collision detection, content verification, and adoption of on-disk ROMs."""
+    """Collision detection, candidate search, content verification, and adoption of on-disk ROMs."""
 
     def __init__(self, *, config: RomAdoptionServiceConfig) -> None:
         self._romm_api = config.romm_api
         self._download_file_store = config.download_file_store
+        self._adoption_move = config.adoption_move
         self._resolve_system = config.resolve_system
         self._retrodeck_paths = config.retrodeck_paths
         self._install_recorder = config.install_recorder
         self._m3u_support = config.m3u_support
+        self._system_extensions = config.system_extensions
+        self._save_layout = config.save_layout
+        self._savestate_layout = config.savestate_layout
+        self._active_core = config.active_core
+        self._get_core_name = config.get_core_name
         self._sibling_supersede = config.sibling_supersede
         self._uow_factory = config.uow_factory
         self._loop = config.loop
@@ -146,17 +211,19 @@ class RomAdoptionService:
     ) -> dict[str, Any] | None:
         """Decide whether a download may write to *checked_path*.
 
-        ``None`` means proceed: the path was free, it already belongs to this
-        ROM's own install, or it was cleared because the user chose to replace
-        what was there. Anything else is a canonical failure the caller returns
-        untouched — the ``target_occupied`` refusal carrying both sides of the
-        comparison, or a removal that could not be completed.
+        ``None`` means proceed: the path was free and nothing else on disk looks
+        like this game, it already belongs to this ROM's own install, or the user
+        chose to download over whatever the gate found. Anything else is a
+        canonical failure the caller returns untouched — the ``target_occupied``
+        refusal carrying both sides of the comparison, the ``adoption_candidates``
+        refusal carrying the short list, or a removal that could not be completed.
 
-        Neither leg of the decision is bounded work — describing an occupied
-        directory walks it whole (a multi-file install can hold tens of thousands
-        of files) and clearing one deletes it whole — so the whole check runs off
-        the loop. The offload lives here rather than at the call site: the caller
-        asks a question and should not have to know what answering it costs.
+        None of the legs is bounded work — describing an occupied directory walks
+        it whole (a multi-file install can hold tens of thousands of files),
+        clearing one deletes it whole, and the candidate search lists a directory
+        and reads archive indexes — so the whole check runs off the loop. The
+        offload lives here rather than at the call site: the caller asks a
+        question and should not have to know what answering it costs.
         """
         worker = partial(self._check_download_target_io, rom_detail, checked_path, replace=replace)
         return await self._loop.run_in_executor(None, worker)
@@ -167,7 +234,10 @@ class RomAdoptionService:
         """Synchronous body of the download-target gate. Runs on an executor thread."""
         existing = self._download_file_store.describe_path(checked_path)
         if existing is None:
-            return None
+            # A free path is the only state worth searching from: an occupied one
+            # is already the dialog's subject, and the user who answered
+            # ``replace`` has been shown what is there and chosen the download.
+            return None if replace else self._candidate_refusal(rom_detail, checked_path)
         if self._is_own_install(rom_detail, checked_path):
             return None
         if not replace:
@@ -181,6 +251,86 @@ class RomAdoptionService:
                 adoptable=existing["is_dir"] == is_multi_file_download(rom_detail),
             )
         return self._clear_for_replace(rom_detail, checked_path, is_dir=existing["is_dir"])
+
+    # ── Candidate search ────────────────────────────────────────────
+
+    def _candidate_refusal(self, rom_detail: dict[str, Any], checked_path: str) -> dict[str, Any] | None:
+        """Refuse the download when the same game is already on disk under another name.
+
+        ``None`` when nothing on disk could be this game, which is every ordinary
+        download. The search runs here — at Download-click time — and never on the
+        game-detail read, which stays at its single ``stat`` (ADR-0028).
+        """
+        candidates, truncated = self._search_candidates(rom_detail, checked_path)
+        if not candidates:
+            return None
+        self._logger.info(f"Found {len(candidates)} adoption candidate(s) for rom {rom_detail.get('id')}")
+        return candidates_refusal(
+            candidates,
+            truncated=truncated,
+            incoming_name=os.path.basename(checked_path),
+            incoming_size=rom_detail.get("fs_size_bytes", 0),
+        )
+
+    def _search_candidates(self, rom_detail: dict[str, Any], checked_path: str):
+        """List the platform directory's top level and rank what could be this ROM.
+
+        The name both sides are matched on is ``checked_path``'s basename — the
+        name the download itself derived — so the search can never disagree with
+        the path it is searching around.
+        """
+        platform_dir = os.path.dirname(checked_path)
+        entries = tuple(
+            LocalEntry(
+                name=entry["name"],
+                path=entry["path"],
+                is_dir=entry["is_dir"],
+                size_bytes=entry["size_bytes"],
+                modified_at=entry["modified_at"],
+            )
+            for entry in self._download_file_store.list_top_level_entries(platform_dir)
+        )
+        if not entries:
+            return ((), False)
+        system = self._resolve_system(rom_detail.get("platform_slug", ""), rom_detail.get("platform_fs_slug"))
+        matches = matching_entries(
+            entries,
+            wanted_name=normalize_rom_name(os.path.basename(checked_path)),
+            want_dir=is_multi_file_download(rom_detail),
+            accepted_extensions=self._system_extensions(system),
+            covered_paths=self._installed_paths() | {checked_path},
+        )
+        return rank_candidates(
+            matches,
+            server_size=rom_detail.get("fs_size_bytes", 0),
+            server_crc32=_whole_file_crc32(rom_detail),
+            member_crc32s={match.path: self._member_crc32s(match) for match in matches},
+        )
+
+    def _member_crc32s(self, entry: LocalEntry) -> tuple[str, ...]:
+        """The CRC32 of every member inside *entry*, from the central directory alone.
+
+        Empty for anything that is not an archive by name and for a container this
+        store cannot open — an absence of evidence, which leaves the entry ranked
+        on what else it has.
+        """
+        if entry.is_dir or not is_archive_name(entry.name):
+            return ()
+        members = self._download_file_store.list_archive_members(entry.path)
+        return () if members is None else tuple(member["crc32"] for member in members)
+
+    def _installed_paths(self) -> frozenset[str]:
+        """Every path a ``rom_installs`` row already accounts for.
+
+        A ROM the plugin installed is another game's content and the row is the
+        plugin's claim on it, so the search subtracts it rather than offering one
+        game's files as a candidate for another's.
+        """
+        with self._uow_factory() as uow:
+            installs = list(uow.rom_installs.iter_all())
+        return frozenset(
+            path for install in installs for path in (install.file_path, install.rom_dir) if path is not None
+        )
 
     def _is_own_install(self, rom_detail: dict[str, Any], checked_path: str) -> bool:
         """Whether *checked_path* is already this ROM's recorded install.
@@ -244,22 +394,31 @@ class RomAdoptionService:
 
     # ── Adopt ───────────────────────────────────────────────────────
 
-    async def adopt_existing_rom(self, rom_id) -> dict[str, Any]:
-        """Record the content already at this ROM's target path as its install.
+    async def adopt_existing_rom(self, rom_id, candidate_path=None, collision_choice=None) -> dict[str, Any]:
+        """Record content already on disk as this ROM's install.
 
-        Nothing is downloaded, generated or renamed — adoption records what is
-        there. The path is re-validated immediately before the row is written, so
-        content that vanished between the dialog and the confirmation is a
-        refusal rather than a row pointing at nothing.
+        *candidate_path* is empty for content sitting at the ROM's own target
+        path — the case the occupied-target dialog opens on — and names an entry
+        elsewhere in the platform directory when the user picked one the search
+        offered. A candidate is **renamed into place**, saves and savestates with
+        it, so an adopted install is what ADR-0028 says it is: indistinguishable
+        from a downloaded one. *collision_choice* answers the second dialog, and
+        is empty until that dialog has been shown.
 
-        **Order: validate, supersede, record.** Every reason this adoption could
-        be refused is decided in the first step, because the second one deletes
-        another version's files: superseding first and refusing afterwards would
-        leave the user with a working version destroyed and nothing bound in its
-        place. Recording first is no better — a supersede that then failed would
-        leave the two installed versions the rule exists to prevent, with the
-        adoption already committed. Only a refusal that has already been ruled
-        out is safe to delete in front of.
+        Nothing is downloaded or generated. Every path is re-validated
+        immediately before it is used, so content that vanished between the
+        dialog and the confirmation is a refusal rather than a row pointing at
+        nothing.
+
+        **Order: validate, carry, supersede, record.** Every reason this adoption
+        could be refused is decided in the first step, because the third one
+        deletes another version's files: superseding first and refusing
+        afterwards would leave the user with a working version destroyed and
+        nothing bound in its place. The carry sits before the supersede for the
+        same reason — a rename that fails must not find a sibling already gone.
+        Recording first is no better: a supersede that then failed would leave the
+        two installed versions the rule exists to prevent, with the adoption
+        already committed.
         """
         rom_id = int(rom_id)
         try:
@@ -274,9 +433,21 @@ class RomAdoptionService:
                 "reason": "path_traversal",
                 "message": "Server sent an unsafe platform path — adoption aborted",
             }
-        refusal = await self._loop.run_in_executor(None, self._validate_adoption_io, rom_id, target)
+        source_path = self._resolve_source(target, candidate_path)
+        if source_path is None:
+            return {
+                "success": False,
+                "reason": "invalid_candidate",
+                "message": "That file is not in this game's platform folder — nothing was adopted",
+            }
+        refusal = await self._loop.run_in_executor(None, self._validate_adoption_io, rom_id, target, source_path)
         if refusal is not None:
             return refusal
+        if source_path != target.path:
+            worker = partial(self._carry_to_canonical_io, rom_id, target, source_path, collision_choice)
+            refusal = await self._loop.run_in_executor(None, worker)
+            if refusal is not None:
+                return refusal
         # At most one installed version per shortcut binding (#1298), whichever
         # route produced it. The dialog's promise not to delete covers the
         # content the USER placed, at this ROM's own path; a superseded sibling
@@ -288,15 +459,32 @@ class RomAdoptionService:
             return cleanup_failure
         return await self._loop.run_in_executor(None, self._adopt_io, rom_id, rom_detail, target)
 
-    def _validate_adoption_io(self, rom_id: int, target: _Target) -> dict[str, Any] | None:
-        """Every refusal this adoption can produce, decided before anything is deleted.
+    def _resolve_source(self, target: _Target, candidate_path) -> str | None:
+        """Where the content to adopt sits now: the target path, or a vetted candidate.
+
+        ``None`` refuses a *candidate_path* that is not a direct entry of this
+        ROM's own platform directory. The frontend hands the path back from a list
+        this service produced, but it crosses the wire in between, and the rename
+        that follows both moves and — on an overwrite — deletes.
+        """
+        if not candidate_path:
+            return target.path
+        path = os.path.normpath(str(candidate_path))
+        roms_base = self._retrodeck_paths.roms_path()
+        if os.path.dirname(path) != os.path.dirname(target.path) or not is_safe_rom_path(path, roms_base):
+            self._logger.error(f"Rejected adoption candidate outside this game's platform directory: {path}")
+            return None
+        return path
+
+    def _validate_adoption_io(self, rom_id: int, target: _Target, source_path: str) -> dict[str, Any] | None:
+        """Every refusal this adoption can produce, decided before anything is moved.
 
         ``None`` means the adoption will go through. Runs off the loop: it stats
-        the target and reads the ``roms`` row in one short UoW — the row has to
+        the content and reads the ``roms`` row in one short UoW — the row has to
         exist for the install's foreign key, and asking here turns what would
         otherwise be an exception *after* the supersede into a refusal before it.
         """
-        existing = self._download_file_store.describe_path(target.path)
+        existing = self._download_file_store.describe_path(source_path)
         if existing is None:
             return {
                 "success": False,
@@ -313,6 +501,12 @@ class RomAdoptionService:
                     else "A file is in the way where a folder belongs"
                 ),
             }
+        if source_path != target.path and self._adoption_move.exists(target.path):
+            return {
+                "success": False,
+                "reason": "target_taken",
+                "message": "Something arrived at this game's own location — nothing was moved",
+            }
         with self._uow_factory() as uow:
             known = uow.roms.get(rom_id) is not None
         if not known:
@@ -322,6 +516,214 @@ class RomAdoptionService:
                 "message": "This game is not in the local library — nothing was adopted",
             }
         return None
+
+    # ── Carry a candidate to the canonical name ─────────────────────
+
+    def _carry_to_canonical_io(
+        self, rom_id: int, target: _Target, source_path: str, collision_choice
+    ) -> dict[str, Any] | None:
+        """Move the candidate, and everything RetroArch named after it, into place.
+
+        ``None`` means every file arrived. The whole plan is computed and every
+        target checked **before** the first file moves: renaming as you go and
+        asking at the first collision would leave half the set moved when the
+        question appears.
+
+        The ROM's own target is not part of that question. A name that appeared
+        there since the validation is the occupied-target case the other dialog
+        owns, so it is refused outright rather than offered as something to
+        overwrite or skip.
+        """
+        pairs = self._rename_plan(rom_id, target, source_path)
+        occupied = frozenset(pair.target for pair in pairs if self._adoption_move.exists(pair.target))
+        if target.path in occupied:
+            return {
+                "success": False,
+                "reason": "target_taken",
+                "message": "Something arrived at this game's own location — nothing was moved",
+            }
+        clear, colliding = split_collisions(pairs, occupied)
+        to_move = clear
+        if colliding:
+            choice = str(collision_choice or "")
+            chosen = pairs_for_choice(clear, colliding, choice)
+            if chosen is None:
+                return collision_refusal(colliding)
+            if choice == OVERWRITE:
+                refusal = self._replace_occupied(colliding)
+                if refusal is not None:
+                    return refusal
+            to_move = chosen
+        return self._report_move(self._adoption_move.move_pairs(tuple((pair.source, pair.target) for pair in to_move)))
+
+    def _replace_occupied(self, colliding: tuple[RenamePair, ...]) -> dict[str, Any] | None:
+        """Delete the files an Overwrite answers for, before anything moves.
+
+        Clearing first rather than replacing as each file lands keeps the two
+        halves apart: one destructive phase the user answered for, then a move
+        phase with no collisions left in it. A failure here has moved nothing, so
+        the ROM is exactly where it was — but files the user chose to lose are
+        already gone, and the refusal names them.
+        """
+        removed, error = self._adoption_move.remove_targets(tuple(pair.target for pair in colliding))
+        if not error:
+            return None
+        already = (
+            " These were already replaced: " + ", ".join(os.path.basename(path) for path in removed) + "."
+            if removed
+            else ""
+        )
+        self._logger.error(f"Adoption overwrite failed after removing {len(removed)} file(s): {error}")
+        return {
+            "success": False,
+            "reason": "replace_failed",
+            "message": f"Could not replace the existing files ({error}). Nothing was moved.{already}",
+        }
+
+    def _report_move(self, outcome) -> dict[str, Any] | None:
+        """Turn a move outcome into a refusal, or ``None`` when everything arrived.
+
+        A source left beside a completed target is not a failure: one inode under
+        two names loses nothing and a re-run finishes it. It is logged rather than
+        surfaced, because the user's game is playable and the alternative is a
+        scary dialog about a state that harmed nothing.
+        """
+        if outcome["stranded"]:
+            self._logger.warning(f"Adoption left old copies behind: {outcome['error']}")
+        if not outcome["unmoved"]:
+            return None
+        moved = ", ".join(os.path.basename(path) for path in outcome["moved"])
+        unmoved = ", ".join(os.path.basename(path) for path in outcome["unmoved"])
+        self._logger.error(f"Adoption rename failed: {outcome['error']}")
+        arrived = f" These are at their new names: {moved}." if moved else ""
+        return {
+            "success": False,
+            "reason": "rename_failed",
+            "message": (
+                f"Could not rename this game's files ({outcome['error']}). "
+                f"Still under the old name: {unmoved}.{arrived}"
+            ),
+        }
+
+    def _rename_plan(self, rom_id: int, target: _Target, source_path: str) -> tuple[RenamePair, ...]:
+        """Every source → target pair adopting this candidate consists of.
+
+        The stems come from the **launch file**, not from what is being renamed:
+        for a multi-file ROM the launch file sits inside the directory that moves,
+        so its name does not change while the directory's does — which is exactly
+        the case where the save *directory* moves and the save *filenames* stay.
+        """
+        launch_source, launch_target = self._launch_paths(target, source_path)
+        return rename_pairs(
+            rom_source=source_path,
+            rom_target=target.path,
+            stem_source=os.path.splitext(os.path.basename(launch_source))[0] if launch_source else "",
+            stem_target=os.path.splitext(os.path.basename(launch_target))[0] if launch_target else "",
+            companions=self._companions(rom_id, target, source_path, launch_source, launch_target),
+        )
+
+    def _launch_paths(self, target: _Target, source_path: str) -> tuple[str, str]:
+        """The file RetroArch names the saves after, where it is now and where it will be.
+
+        For a single-file ROM that is the ROM itself. For a directory it is the
+        launch file inside, picked by the download's own rule, and its place under
+        the renamed directory is the same relative path. Two empty strings when a
+        directory holds no file to launch — there is then no stem, and no
+        companion can be attributed to this ROM.
+        """
+        if not target.is_multi:
+            return (source_path, target.path)
+        files = self._download_file_store.scan_files_with_sizes(source_path)
+        detected = detect_launch_file(files, self._m3u_support(target.system))
+        if detected is None:
+            return ("", "")
+        return (detected, os.path.join(target.path, os.path.relpath(detected, source_path)))
+
+    def _companions(
+        self, rom_id: int, target: _Target, source_path: str, launch_source: str, launch_target: str
+    ) -> tuple[CompanionDir, ...]:
+        """The save and savestate directories this rename has to carry files out of.
+
+        The two layouts are read independently because RetroArch sorts them
+        independently — a stock RetroDECK install content-sorts its savefiles and
+        leaves its savestates unsorted, so assuming one from the other addresses
+        the wrong directory. A directory that sits **inside** the content being
+        moved is skipped: it travels with the rename already, and pairing its
+        files up would move them a second time.
+        """
+        if not launch_source:
+            return ()
+        layouts = (
+            (SAVE, self._save_layout(), self._retrodeck_paths.saves_path()),
+            (SAVESTATE, self._savestate_layout(), self._retrodeck_paths.states_path()),
+        )
+        core_name = (
+            self._core_name_for(rom_id)
+            if any(isinstance(layout, InSaveDir) and layout.sort_by_core for _kind, layout, _root in layouts)
+            else None
+        )
+        found: list[CompanionDir] = []
+        for kind, layout, root in layouts:
+            source_dir, target_dir = self._layout_dirs(
+                layout, root, target.system, launch_source, launch_target, core_name
+            )
+            if _travels_with(source_path, source_dir) or _travels_with(source_path, target_dir):
+                continue
+            names = self._adoption_move.list_names(source_dir)
+            if names:
+                found.append(CompanionDir(kind=kind, source_dir=source_dir, target_dir=target_dir, names=names))
+        return tuple(found)
+
+    def _layout_dirs(
+        self,
+        layout: SaveLayout,
+        root: str,
+        system: str,
+        launch_source: str,
+        launch_target: str,
+        core_name: str | None,
+    ) -> tuple[str, str]:
+        """Resolve one layout's directory for the old name and for the new one.
+
+        The same resolver the save sync itself uses, pointed at the root the
+        layout belongs to. A ``ContentDir`` layout has RetroArch writing beside
+        the ROM, which is a directory the resolver does not describe — so it is
+        answered directly, and for a multi-file ROM the caller then drops it
+        because that directory moves with the ROM.
+        """
+        if not isinstance(layout, InSaveDir):
+            return (os.path.dirname(launch_source), os.path.dirname(launch_target))
+        roms_base = self._retrodeck_paths.roms_path()
+
+        def resolved(rom_path: str) -> str:
+            return resolve_save_dir(
+                rom_path,
+                root,
+                system,
+                roms_base=roms_base,
+                sort_by_content=layout.sort_by_content,
+                sort_by_core=layout.sort_by_core,
+                core_name=core_name,
+            )
+
+        return (resolved(launch_source), resolved(launch_target))
+
+    def _core_name_for(self, rom_id: int) -> str | None:
+        """The RetroArch ``corename`` whose subdirectory this ROM's saves sit in, or ``None``.
+
+        Warn-and-fall-back rather than fail-loud, matching what the save sync does
+        with the same question: an unresolvable corename sends both this rename and
+        every later sync to the parent directory, so they stay pointed at the same
+        place instead of disagreeing about where the saves are.
+        """
+        core_so, _label = self._active_core.active_core_for_rom(rom_id)
+        core_name = self._get_core_name(core_so) if core_so else None
+        if core_name is None:
+            self._logger.warning(
+                f"RetroArch sorts this ROM's saves per core, but its corename could not be resolved "
+                f"(core={core_so or 'unresolved'}) — looking in the parent directory instead"
+            )
+        return core_name
 
     def _adopt_io(self, rom_id: int, rom_detail: dict[str, Any], target: _Target) -> dict[str, Any]:
         """Persist the install record for content ``_validate_adoption_io`` accepted.
@@ -389,8 +791,14 @@ class RomAdoptionService:
 
     # ── Verify ──────────────────────────────────────────────────────
 
-    async def verify_existing_content(self, rom_id) -> dict[str, Any]:
-        """Compare the content at this ROM's target path against RomM's manifest.
+    async def verify_existing_content(self, rom_id, candidate_path=None) -> dict[str, Any]:
+        """Compare content already on disk against RomM's manifest for this ROM.
+
+        *candidate_path* is empty for the content at the ROM's own target path and
+        names an entry elsewhere in the platform directory when the user is
+        deciding about one the search offered. Either way the manifest is the
+        same: the question is whether these bytes are that ROM, not where they
+        currently sit.
 
         A discriminated-status union rather than a success flag: ``match``,
         ``mismatch`` (naming what differed), ``unverifiable`` (the server holds
@@ -414,7 +822,15 @@ class RomAdoptionService:
                 "message": "Server sent an unsafe platform path — nothing was checked",
                 "differences": [],
             }
-        return await self._loop.run_in_executor(None, self._verify_io, rom_id, rom_detail, target)
+        source_path = self._resolve_source(target, candidate_path)
+        if source_path is None:
+            return {
+                "status": "error",
+                "message": "That file is not in this game's platform folder — nothing was checked",
+                "differences": [],
+            }
+        checked = replace(target, path=source_path)
+        return await self._loop.run_in_executor(None, self._verify_io, rom_id, rom_detail, checked)
 
     def _verify_io(self, rom_id: int, rom_detail: dict[str, Any], target: _Target) -> dict[str, Any]:
         """Hash what is on disk and compare it against the manifest. Runs off the loop."""

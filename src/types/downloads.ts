@@ -85,6 +85,63 @@ export interface TargetOccupiedResult {
   adoptable: boolean;
 }
 
+/**
+ * One entry in the platform folder that could be this game under a different
+ * name (#260). `evidence` says what the offer rests on and `detail` is the whole
+ * sentence stating it — ranked strongest first by the backend. Nothing here has
+ * read a byte of content: `crc32` comes out of a ZIP's index and `size` out of
+ * `stat`, so the strongest row is a cue to press Check Against Server, not a
+ * verdict.
+ */
+export interface AdoptionCandidate {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size_bytes: number;
+  /** POSIX epoch seconds. */
+  modified_at: number;
+  evidence: "crc32" | "size" | "name";
+  detail: string;
+}
+
+/**
+ * A download that stopped because the same game is already on disk under
+ * another name. Nothing was written and no transfer started. `truncated` is
+ * stated rather than implied — a list silently cut short reads as "that is all
+ * there is".
+ */
+export interface CandidatesFoundResult {
+  success: false;
+  reason: "adoption_candidates";
+  message: string;
+  incoming: { name: string; size_bytes: number };
+  candidates: AdoptionCandidate[];
+  truncated: boolean;
+}
+
+/** One name an adoption's rename needs that something else already holds. */
+export interface RenameCollision {
+  name: string;
+  path: string;
+  kind: "rom" | "save" | "savestate";
+}
+
+/**
+ * An adoption that stopped before touching a single file because names it needs
+ * are taken. Every collision is listed, because the dialog takes **one** decision
+ * for the whole set: asking at the first one would mean asking with half the set
+ * already moved.
+ */
+export interface RenameCollisionsResult {
+  success: false;
+  reason: "rename_collisions";
+  message: string;
+  collisions: RenameCollision[];
+}
+
+/** The user's one answer to the whole colliding set. */
+export type CollisionChoice = "overwrite" | "keep";
+
 /** Outcome of `adopt_existing_rom` — shaped like a completed download's bake. */
 export interface AdoptResult {
   success: boolean;
@@ -96,6 +153,8 @@ export interface AdoptResult {
   app_id?: number | null;
   launch_options?: string;
   prune_lease_token?: string;
+  /** Present only on a `rename_collisions` refusal. */
+  collisions?: RenameCollision[];
 }
 
 /**

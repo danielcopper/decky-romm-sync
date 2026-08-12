@@ -18,6 +18,7 @@ class FakeRetroDeckPaths:
         self,
         *,
         saves: str = "",
+        states: str = "",
         roms: str = "",
         bios: str = "",
         home: str = "",
@@ -25,6 +26,7 @@ class FakeRetroDeckPaths:
         health: RetroDeckConfigHealth = RetroDeckConfigHealth.OK,
     ) -> None:
         self.saves = saves
+        self.states = states
         self.roms = roms
         self.bios = bios
         self.home = home
@@ -33,6 +35,9 @@ class FakeRetroDeckPaths:
 
     def saves_path(self) -> str:
         return self.saves
+
+    def states_path(self) -> str:
+        return self.states
 
     def roms_path(self) -> str:
         return self.roms

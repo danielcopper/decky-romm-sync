@@ -21,6 +21,8 @@ import {
   startDownload,
   adoptExistingRom,
   isTargetOccupied,
+  isCandidatesFound,
+  isRenameCollisions,
   cancelDownload,
   pauseDownload,
   resumeDownload,
@@ -46,7 +48,9 @@ import { scrollToTop } from "../utils/scrollHelpers";
 import { getEventTarget } from "../utils/events";
 import { applyLaunchGateSetupOutcome, resolveSaveSetupOutcome } from "../utils/saveSetup";
 import { handleButtonDownloadFailure } from "../utils/downloadFailure";
-import { showAdoptExistingModal } from "./AdoptExistingModal";
+import { comparisonForCandidate, showAdoptExistingModal } from "./AdoptExistingModal";
+import { showAdoptCandidateModal } from "./AdoptCandidateModal";
+import { showAdoptCollisionModal } from "./AdoptCollisionModal";
 import { showCoreChangeModal } from "./CoreChangeModal";
 import { handleConflicts } from "./SyncConflictModal";
 import { showOfflineDriftModal } from "./OfflineDriftModal";
@@ -63,6 +67,8 @@ import type {
   DownloadCompleteEvent,
   DownloadFailedEvent,
   TargetOccupiedResult,
+  CandidatesFoundResult,
+  CollisionChoice,
   UninstallProgressEvent,
 } from "../types";
 import { SAVEFILES_IN_CONTENT_DIR_REASON } from "../types";
@@ -1027,6 +1033,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         await resolveOccupiedTarget(romId, result);
         return;
       }
+      if (isCandidatesFound(result)) {
+        // Same refusal contract, different subject: the target path was free and
+        // the game is on disk under another name. The button does NOT go into
+        // its "already here" state — nothing occupies the location it reads.
+        setActionPending(false);
+        await resolveCandidates(romId, result);
+        return;
+      }
       if (!result.success) {
         showToast(result.message || "Download failed");
         setActionPending(false);
@@ -1052,15 +1066,48 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
   };
 
+  // Offer what the search found. One candidate needs no list — there is nothing
+  // to choose between — so it goes straight to the comparison. "Download
+  // Instead" re-enters `handleDownload` with `replace`, which is what tells the
+  // backend to skip the search rather than refuse a second time.
+  const resolveCandidates = async (rid: number, found: CandidatesFoundResult) => {
+    let candidate = found.candidates[0];
+    if (candidate === undefined) return;
+    if (found.candidates.length > 1) {
+      const picked = await showAdoptCandidateModal(found);
+      if (picked.kind === "cancel") return;
+      if (picked.kind === "download") {
+        await handleDownload(true);
+        return;
+      }
+      candidate = picked.candidate;
+    }
+    const choice = await showAdoptExistingModal(rid, comparisonForCandidate(candidate, found.incoming), candidate.path);
+    if (choice === "replace") {
+      await handleDownload(true);
+      return;
+    }
+    if (choice === "adopt") {
+      await handleAdopt(rid, candidate.path);
+    }
+  };
+
   // Record what is on disk as the install, then write the launch command onto
   // the shortcut exactly as the download-complete listener does — an adopted
   // install is an install (ADR-0028), so it must be as launchable as a
   // downloaded one the moment the dialog closes.
-  const handleAdopt = async (rid: number) => {
+  const handleAdopt = async (rid: number, candidatePath?: string, collisionChoice: CollisionChoice | null = null) => {
     setActionPending(true);
     const admission = capturePruneLeaseAdmission(leaseOwner);
     try {
-      const result = await adoptExistingRom(rid);
+      const result = await adoptExistingRom(rid, candidatePath ?? null, collisionChoice);
+      if (isRenameCollisions(result)) {
+        // Nothing has moved. The one answer covers the whole set, and a dismissed
+        // dialog leaves the game exactly as it was.
+        const answer = await showAdoptCollisionModal(result.collisions);
+        if (answer !== "cancel") await handleAdopt(rid, candidatePath, answer);
+        return;
+      }
       if (!result.success) {
         showToast(result.message || "Couldn't use the existing files");
         return;
