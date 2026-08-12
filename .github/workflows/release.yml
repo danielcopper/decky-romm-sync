@@ -141,11 +141,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
+          # The asset takes its name from the file uploaded, and the Decky CLI
+          # names its output after the package. Renaming therefore means copying
+          # — into RUNNER_TEMP, because /tmp/output belongs to the container that
+          # produced the zip and is not writable here.
           BUILT_ZIP=$(ls /tmp/output/*.zip | head -1)
-          DEST="/tmp/output/tender.zip"
-          if [ "$BUILT_ZIP" != "$DEST" ]; then
-            cp "$BUILT_ZIP" "$DEST"
-          fi
+          DEST="$RUNNER_TEMP/tender.zip"
+          cp "$BUILT_ZIP" "$DEST"
           gh release upload "$TAG" \
             "$DEST" \
             --clobber
