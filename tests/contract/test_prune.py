@@ -268,6 +268,7 @@ async def test_action_report_rejects_stale_token_with_canonical_shape(harness):
         ("sign_out", ()),
         ("save_server_url", ("https://server.example", None)),
         ("start_download", (41,)),
+        ("adopt_existing_rom", (41,)),
         ("migrate_retrodeck_files", (None,)),
         ("sync_rom_saves", (41,)),
         ("switch_version", (0x80000001, 41, False)),

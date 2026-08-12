@@ -212,11 +212,13 @@ leaves your existing install intact. If the cancel happens to land just as the d
 
 Downloaded ROMs are stored in your RetroDECK roms directory (e.g. `~/retrodeck/roms/gba/`).
 
-**Only one version of a game is downloaded at a time.** If you tap **Download** on a version while another version of
+**Only one version of a game is kept on disk at a time.** If you tap **Download** on a version while another version of
 the same game (its [sibling group](#versions)) is already on disk, the plugin removes the old install first and then
-downloads the new one — no prompt. This keeps a multi-version game to a single copy on disk. Your **save files are never
-touched** by this cleanup, so switching back and re-downloading the earlier version rejoins its saves. Games that still
-carry a separate shortcut per version from an older release are left untouched.
+downloads the new one — no prompt. **Use Existing Files** ([below](#when-the-game-is-already-on-your-device)) removes
+the old install the same way, just before it records the files you placed yourself. This keeps a multi-version game to a
+single copy on disk. Your **save files are never touched** by this cleanup, so switching back and re-downloading the
+earlier version rejoins its saves. Games that still carry a separate shortcut per version from an older release are left
+untouched.
 
 ### When the game is already on your device
 
@@ -229,7 +231,9 @@ and says plainly whether the two are the same size. From there you have three ch
 
 - **Use These Files** — the plugin records what is already there as the installed copy. Nothing is downloaded, nothing
   is renamed, and no playlist is generated: your files are taken exactly as they are. The game becomes playable
-  immediately.
+  immediately. One thing is removed, and only one: if another version of the same game was already on disk, that
+  version's files and its install record go — the same one-version-at-a-time cleanup a download does, without a prompt.
+  Your saves are not part of it, and that version can be downloaded again whenever you want it back.
 - **Check Against Server** — compares the files on your device against the checksums RomM published for that game. This
   reads every file, so a large game takes a few seconds to a minute; it only ever runs when you press the button. There
   are three possible answers: the files match, they differ (and the dialog names which file and what differed), or the
