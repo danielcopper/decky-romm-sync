@@ -206,8 +206,9 @@ Format: **invariant** — tier — enforced by.
   `scripts/check_romm_min_version.py` (ADRs excluded: frozen history)
 - **Server-supplied path components pass `safe_join` (`lib/path_safety.py`)** — test + prompt-only — traversal tests per
   path builder; new call sites are prompt-only
-- **No sentinel objects on the wire — explicit JSON-representable tagged values only** — prompt-only — mechanizable once
-  tagged values have replaced the sentinels
+- **No sentinel objects on the wire — explicit JSON-representable tagged values only** — prompt-only — no sentinel
+  survives on the wire today (`NO_MIGRATION` retired with #1004, legacy `slot:null` confirmation with #1276), so the
+  rule now guards reintroduction; nothing mechanical detects a new one
 - **Every destructive op has backup-or-confirm; never delete data that exists nowhere else** — prompt-only — save-file
   removals route through the `.romm-backup` funnel (`MatrixExecutor.quarantine_local_file`; the removed-game cleanup's
   claimed variant is `PruneSaveSupport.quarantine_prune_saves`); every other delete path carries the rule unmechanized.
