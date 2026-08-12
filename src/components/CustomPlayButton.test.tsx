@@ -3358,7 +3358,7 @@ describe("CustomPlayButton â content already on disk (#260)", () => {
     });
 
     expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "The files are no longer there — nothing was adopted",
     });
     await utils.findByText("Already on Device");
@@ -3377,7 +3377,7 @@ describe("CustomPlayButton â content already on disk (#260)", () => {
     });
 
     expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
-      title: "RomM Sync",
+      title: "Tender",
       body: "Couldn't use the existing files — is RomM server running?",
     });
     await utils.findByText("Already on Device");

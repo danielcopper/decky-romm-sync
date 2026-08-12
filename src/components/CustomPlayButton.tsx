@@ -1037,7 +1037,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     try {
       const result = await adoptExistingRom(rid);
       if (!result.success) {
-        toaster.toast({ title: "RomM Sync", body: result.message || "Couldn't use the existing files" });
+        showToast(result.message || "Couldn't use the existing files");
         return;
       }
       const adoptedAppId = result.app_id;
@@ -1057,10 +1057,10 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       setTargetOccupied(false);
       setState("play");
       globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "rom_adopted", rom_id: rid } }));
-      toaster.toast({ title: "RomM Sync", body: `${romName || "ROM"} is ready to play` });
+      showToast(`${romName || "ROM"} is ready to play`);
     } catch (e) {
       detach(debugLog(`CustomPlayButton: adopt failed: ${e}`));
-      toaster.toast({ title: "RomM Sync", body: "Couldn't use the existing files — is RomM server running?" });
+      showToast("Couldn't use the existing files — is RomM server running?");
     } finally {
       setActionPending(false);
     }

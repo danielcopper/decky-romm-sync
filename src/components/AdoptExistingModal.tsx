@@ -99,7 +99,7 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({ romId, occupie
           This Game Is Already on Your Device
         </div>
         <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.7)", marginBottom: "12px" }}>
-          A {kind} is already where this game would be downloaded. RomM Sync did not put it there, so it will not be
+          A {kind} is already where this game would be downloaded. Tender did not put it there, so it will not be
           touched until you decide.
         </div>
 
