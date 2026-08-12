@@ -33,18 +33,29 @@ def enable_save_sync(harness: ContractHarness, *, device_id: str = "device-1") -
         uow.kv_config.set("device_id", device_id)
 
 
+#: ``seed_rom``'s default: bind the row to its own ``rom_id``. Not a real appId
+#: — Steam's non-Steam shortcut ids live in ``[0x80000000, 0xFFFFFFFF]`` — so it
+#: can never collide with an id a caller means literally.
+BIND_TO_ROM_ID = 0
+
+
 def seed_rom(
     harness: ContractHarness,
     rom_id: int,
     *,
     platform_slug: str = "gba",
-    shortcut_app_id: int = 0,
+    shortcut_app_id: int | None = BIND_TO_ROM_ID,
 ) -> None:
     """Seed a ``Rom`` registry row (the FK anchor for per-ROM child writes).
 
-    ``shortcut_app_id`` defaults to ``rom_id`` so the row counts as a bound
-    shortcut in registry/stat reads; pass ``0`` to seed a ROM with no Steam
-    shortcut bound (it then does not count toward bound-shortcut reads).
+    ``shortcut_app_id`` defaults to :data:`BIND_TO_ROM_ID`, binding the row to
+    its own ``rom_id`` so it counts as a bound shortcut in registry/stat reads.
+    Pass an explicit id to bind it elsewhere, or ``None`` for an **unbound** ROM.
+
+    Unbound is ``NULL``, never ``0``: the ``003`` partial unique index is
+    ``WHERE shortcut_app_id IS NOT NULL`` and ADR-0007 reads NULL as the unbound
+    state, so a literal ``0`` would still be a binding — one that no bound-row
+    read would skip.
     """
     with harness.uow_factory() as uow:
         uow.roms.save(
@@ -53,7 +64,7 @@ def seed_rom(
                 platform_slug=platform_slug,
                 name=f"rom-{rom_id}",
                 fs_name=f"rom-{rom_id}",
-                shortcut_app_id=shortcut_app_id or rom_id,
+                shortcut_app_id=rom_id if shortcut_app_id == BIND_TO_ROM_ID else shortcut_app_id,
                 synced_at="2026-01-01T00:00:00",
             )
         )

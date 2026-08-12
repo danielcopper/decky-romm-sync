@@ -34,23 +34,6 @@ def _place_single_file(harness, *, data: bytes = b"user's own dump") -> Path:
     return path
 
 
-def _seed_unbound_rom(harness) -> None:
-    """Seed the ROM with no Steam shortcut bound (``seed_rom`` always binds one)."""
-    from domain.rom import Rom
-
-    with harness.uow_factory() as uow:
-        uow.roms.save(
-            Rom.synced(
-                rom_id=_ROM_ID,
-                platform_slug="gba",
-                name=f"rom-{_ROM_ID}",
-                fs_name=f"rom-{_ROM_ID}",
-                shortcut_app_id=None,
-                synced_at="2026-01-01T00:00:00",
-            )
-        )
-
-
 def _stage_detail(harness, **overrides) -> dict[str, Any]:
     detail: dict[str, Any] = {
         "id": _ROM_ID,
@@ -145,7 +128,7 @@ async def test_an_unbound_adopt_is_issued_no_prune_lease(harness):
     # do and nothing to release — a token here would be held for its full TTL,
     # blocking prune. Acquisition is guarded, exactly as the download-complete
     # emit guards it.
-    _seed_unbound_rom(harness)
+    seed_rom(harness, _ROM_ID, platform_slug="gba", shortcut_app_id=None)
     _stage_detail(harness)
     _place_single_file(harness)
 
