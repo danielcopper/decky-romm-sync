@@ -117,7 +117,7 @@ published spec from silently drifting apart:
   `tests/adapters/test_gavel_native_table_vectors.py`.
 
 Both families read the core through `GavelNativeAdapter`, the seam production decides on. The vectors are vendored
-verbatim under `tests/domain/gavel_vectors/`, one subdirectory per family mirroring upstream `vectors/` (`ladder/` — a
+verbatim under `tests/adapters/gavel_vectors/`, one subdirectory per family mirroring upstream `vectors/` (`ladder/` — a
 curated named-case set plus the exhaustive equivalence classes; `decision-table/` — curated named cases) — there is no
 submodule and no network in CI, so every contract change lands as a reviewable diff. Run them like any other test:
 
@@ -126,7 +126,7 @@ python -m pytest tests/adapters/test_gavel_native_table_vectors.py tests/adapter
 ```
 
 Updating the vectors means deliberately re-copying the JSON from the matching upstream `vectors/<family>/` directory and
-bumping the release tag in `tests/domain/gavel_vectors/README.md` — in lockstep with the `.so`, which is pinned to the
+bumping the release tag in `tests/adapters/gavel_vectors/README.md` — in lockstep with the `.so`, which is pinned to the
 same release; never edit a vector to match the core.
 
 ### emu-atlas conformance vectors

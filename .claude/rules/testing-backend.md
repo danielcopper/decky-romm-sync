@@ -61,8 +61,8 @@ Two [romm-gavel](https://github.com/danielcopper/romm-gavel) vector families gua
 `tests/adapters/test_gavel_native_table_vectors.py`). Both decisions run in the compiled core
 (`adapters/gavel_native.py`) and nowhere else, so each family runs against that core through `GavelNativeAdapter` — the
 production path — and there is no second implementation to hold to the same contract. The vectors are vendored verbatim
-under `tests/domain/gavel_vectors/` at a pinned upstream **release tag** (no submodule, no network in CI), so a contract
-change lands as a reviewable diff. **Never edit a vector to make the core pass** — updating means deliberately
+under `tests/adapters/gavel_vectors/` at a pinned upstream **release tag** (no submodule, no network in CI), so a
+contract change lands as a reviewable diff. **Never edit a vector to make the core pass** — updating means deliberately
 re-copying the JSON and bumping the tag in that folder's `README.md`, in lockstep with the vendored `.so`.
 
 ## emu-atlas conformance vectors — vendored contract tier
