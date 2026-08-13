@@ -539,6 +539,27 @@ class SaveSortChangeFn(Protocol):
     def __call__(self) -> SaveLayout: ...
 
 
+class SaveQuarantineFn(Protocol):
+    """The sanctioned save-file backup funnel, consumed by AdoptionRenamer.
+
+    The composition root satisfies this with ``SaveService.quarantine_local_file``
+    over ``MatrixExecutor``'s — the single source of truth for the backup
+    discipline, so a save is never destroyed without a recoverable copy (#965).
+    An adoption's Overwrite answers for save and savestate files the user chose
+    to lose, and those go through here rather than through a delete of their own:
+    a second implementation of the discipline is how the first one stops being
+    the discipline.
+
+    ``saves_dir`` is the directory the file sits in and ``filename`` its name;
+    the backup lands in ``<saves_dir>/.romm-backup/``. Returns ``True`` when a
+    file was moved, ``False`` when there was nothing there. Raises when the
+    backup directory is unsafe or the move fails — the caller reports that rather
+    than proceeding.
+    """
+
+    def __call__(self, saves_dir: str, filename: str) -> bool: ...
+
+
 class SaveSortingProvider(Protocol):
     """Current savefile subdirectory sorting, consumed by RomAdoptionService.
 

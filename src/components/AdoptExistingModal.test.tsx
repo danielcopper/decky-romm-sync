@@ -328,6 +328,60 @@ describe("AdoptExistingModal — a candidate found under another name", () => {
     expect(onChoice).toHaveBeenCalledWith("replace");
   });
 
+  it("never prints 0 B for a folder the search deliberately did not measure", () => {
+    const { container } = renderModal({
+      occupied: occupied({
+        existing: { ...occupied().existing, name: "Game (U)", path: "/roms/psx/Game (U)", is_dir: true, size_bytes: 0 },
+        sizes_match: null,
+      }),
+      candidatePath: "/roms/psx/Game (U)",
+    });
+
+    expect(container.textContent).not.toContain("0 B");
+    expect(container.textContent).toContain("not measured");
+  });
+
+  it("does not blame the server for a comparison we chose not to make", () => {
+    const { container } = renderModal({
+      occupied: occupied({
+        existing: { ...occupied().existing, name: "Game (U)", path: "/roms/psx/Game (U)", is_dir: true, size_bytes: 0 },
+        incoming: { name: "Game (USA)", size_bytes: 4096 },
+        sizes_match: null,
+      }),
+      candidatePath: "/roms/psx/Game (U)",
+    });
+
+    // The server did state a size — it is rendered on the other side of the
+    // comparison — so saying it did not would be false.
+    expect(container.textContent).toContain("4.0 KB");
+    expect(container.textContent).not.toContain("The server did not state a size");
+    expect(container.textContent).toContain("Folders are not measured");
+  });
+
+  it("the deletion confirmation does not claim a folder is 0 B either", () => {
+    const { container } = renderModal({
+      occupied: occupied({
+        existing: { ...occupied().existing, name: "Game (U)", path: "/roms/psx/Game (U)", is_dir: true, size_bytes: 0 },
+        sizes_match: null,
+      }),
+      candidatePath: "/roms/psx/Game (U)",
+    });
+
+    fireEvent.click(buttonByText(container, "Download Instead"));
+
+    expect(container.textContent).toContain("Downloading deletes the folder that is here now");
+    expect(container.textContent).not.toContain("0 B");
+  });
+
+  it("still blames the server when the server really did state no size", () => {
+    const { container } = renderModal({
+      occupied: occupied({ sizes_match: null, incoming: { name: "Game (USA).sfc", size_bytes: 0 } }),
+      candidatePath: CANDIDATE_PATH,
+    });
+
+    expect(container.textContent).toContain("The server did not state a size");
+  });
+
   it("Go Back leaves the candidate's confirmation without choosing", () => {
     const { container, onChoice } = renderCandidate();
 

@@ -14,7 +14,6 @@ can genuinely produce.
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -26,20 +25,17 @@ if TYPE_CHECKING:
 class FakeAdoptionMoveStore:
     """In-memory ``AdoptionMoveStore`` sharing one virtual filesystem with the download store.
 
-    ``moves`` and ``removed`` record what was asked for. ``outcome`` stages the
+    ``moves`` records what was asked for. ``outcome`` stages the
     result of the next :meth:`move_pairs` so a service test can drive the
     partial-failure branches — and the filesystem is then left in the state that
     outcome *describes*: a moved pair arrives, a stranded one arrives and keeps
     its old name too, an unmoved one does not budge. Reporting a partial failure
     over an untouched tree would be a state the adapter cannot produce.
-    ``remove_failures`` names paths whose removal raises the Overwrite refusal.
     """
 
     def __init__(self, store: FakeDownloadFileStore) -> None:
         self._store = store
         self.moves: list[tuple[str, str]] = []
-        self.removed: list[str] = []
-        self.remove_failures: set[str] = set()
         self.outcome: MoveOutcome | None = None
 
     def list_names(self, directory: str) -> tuple[str, ...]:
@@ -54,16 +50,6 @@ class FakeAdoptionMoveStore:
 
     def exists(self, path: str) -> bool:
         return self._store.exists(path)
-
-    def remove_targets(self, paths: tuple[str, ...]) -> tuple[list[str], str]:
-        removed: list[str] = []
-        for path in paths:
-            if path in self.remove_failures:
-                return (removed, f"could not replace {os.path.basename(path)}: staged failure")
-            self._store.files.pop(path, None)
-            self.removed.append(path)
-            removed.append(path)
-        return (removed, "")
 
     def move_pairs(self, pairs: tuple[tuple[str, str], ...]) -> MoveOutcome:
         self.moves.extend(pairs)

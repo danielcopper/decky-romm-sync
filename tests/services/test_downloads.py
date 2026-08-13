@@ -201,6 +201,7 @@ def plugin():
             retrodeck_paths=retrodeck_paths,
             install_recorder=p._install_recorder,
             adoption_move=AdoptionMoveAdapter(),
+            quarantine_save=lambda saves_dir, filename: False,
             m3u_support=lambda system_name: p._m3u_supported,
             system_extensions=lambda system_name: p._system_extensions.get(system_name, frozenset()),
             save_layout=lambda: InSaveDir(sort_by_content=True, sort_by_core=False),

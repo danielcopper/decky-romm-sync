@@ -331,44 +331,6 @@ class TestMovePairsCrossDevice:
         assert save.read_bytes() == b"save bytes"
 
 
-class TestRemoveTargets:
-    def test_every_named_file_goes(self, adapter: AdoptionMoveAdapter, tmp_path: Path) -> None:
-        first = _write(tmp_path / "a.srm")
-        second = _write(tmp_path / "b.state")
-
-        removed, error = adapter.remove_targets((str(first), str(second)))
-
-        assert error == ""
-        assert removed == [str(first), str(second)]
-        assert not first.exists()
-        assert not second.exists()
-
-    def test_removal_stops_at_the_first_failure_and_names_what_went(
-        self, adapter: AdoptionMoveAdapter, tmp_path: Path
-    ) -> None:
-        first = _write(tmp_path / "a.srm")
-        missing = tmp_path / "gone.srm"
-        third = _write(tmp_path / "c.srm")
-
-        removed, error = adapter.remove_targets((str(first), str(missing), str(third)))
-
-        assert removed == [str(first)]
-        assert error
-        assert third.exists()
-
-    def test_a_directory_is_never_replaced(self, adapter: AdoptionMoveAdapter, tmp_path: Path) -> None:
-        # An Overwrite answers for save files. A folder at a save's name is not
-        # something this leg was shown to the user for.
-        folder = tmp_path / "a.srm"
-        folder.mkdir()
-
-        removed, error = adapter.remove_targets((str(folder),))
-
-        assert removed == []
-        assert error
-        assert folder.is_dir()
-
-
 def _raising_link(code: int):
     """An ``os.link`` that always fails with *code*."""
 

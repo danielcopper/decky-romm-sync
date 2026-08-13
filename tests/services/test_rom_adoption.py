@@ -23,6 +23,7 @@ from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_download_file_store import FakeDownloadFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_romm_api import FakeRommApi
+from fakes.fake_save_quarantine import FakeSaveQuarantine
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock
 
@@ -170,6 +171,7 @@ class Harness:
         )
         self.paths = FakeRetroDeckPaths(roms=_ROMS, saves=_SAVES, states=_STATES)
         self.move = FakeAdoptionMoveStore(self.store)
+        self.quarantine = FakeSaveQuarantine(self.store)
         # The layouts a real RetroDECK install reports: savefiles content-sorted,
         # savestates not sorted at all. Tests that care flip them individually.
         #
@@ -193,6 +195,7 @@ class Harness:
                 romm_api=self.romm_api,
                 download_file_store=self.store,
                 adoption_move=self.move,
+                quarantine_save=self.quarantine,
                 resolve_system=lambda platform_slug, platform_fs_slug=None: platform_fs_slug or platform_slug,
                 retrodeck_paths=self.paths,
                 install_recorder=self.recorder,
@@ -1525,6 +1528,32 @@ class TestDiscardCandidate:
         assert result["reason"] == "replace_failed"
         assert h.store.files[_OLD] == b"user's own dump"
 
+    async def test_a_failed_removal_says_the_saves_have_already_moved(self, h):
+        # Carry-then-remove means the second step can fail over a first step that
+        # succeeded. The file the user keeps can no longer find its saves, so a
+        # bare "download aborted" would be the abort reporting itself as clean.
+        self._stage(h)
+        h.store.files["/saves/snes/Game (U).srm"] = b"battery"
+        h.store.remove_failures = {_OLD}
+
+        result = await h.service.check_download_target(_single_file_detail(), _NEW, replace=True, candidate_path=_OLD)
+
+        assert result is not None
+        assert result["reason"] == "replace_failed"
+        assert "Game.srm" in result["message"]
+        assert h.store.files[_OLD] == b"user's own dump"
+        assert h.store.files["/saves/snes/Game.srm"] == b"battery"
+
+    async def test_a_failed_removal_with_no_saves_says_nothing_about_them(self, h):
+        self._stage(h)
+        h.store.remove_failures = {_OLD}
+
+        result = await h.service.check_download_target(_single_file_detail(), _NEW, replace=True, candidate_path=_OLD)
+
+        assert result is not None
+        assert result["reason"] == "replace_failed"
+        assert "already renamed" not in result["message"]
+
     async def test_a_taken_save_name_raises_the_same_collision_question(self, h):
         self._stage(h)
         h.store.files["/saves/snes/Game (U).srm"] = b"mine"
@@ -1954,7 +1983,7 @@ class TestAdoptCandidateCollisions:
         assert result["success"] is False
         assert result["reason"] == "rename_collisions"
         assert h.move.moves == []
-        assert h.move.removed == []
+        assert h.quarantine.quarantined == []
 
     async def test_every_collision_is_listed_not_just_the_first(self, h):
         self._stage(h)
@@ -1973,7 +2002,11 @@ class TestAdoptCandidateCollisions:
         result = await h.service.adopt_existing_rom(_ROM_ID, _OLD, "overwrite")
 
         assert result["success"] is True
-        assert h.move.removed == ["/saves/snes/Game.srm", "/states/Game.state"]
+        # Replaced, not destroyed: both go through the sanctioned .romm-backup
+        # funnel, so a save the user chose to lose is still recoverable.
+        assert h.quarantine.quarantined == ["/saves/snes/Game.srm", "/states/Game.state"]
+        assert h.store.files["/saves/snes/.romm-backup/Game.srm"] == b"the other version's"
+        assert h.store.files["/states/.romm-backup/Game.state"] == b"the other version's"
         assert sorted(h.move.moves) == sorted(
             [
                 (_OLD, _NEW),
@@ -1988,7 +2021,7 @@ class TestAdoptCandidateCollisions:
         result = await h.service.adopt_existing_rom(_ROM_ID, _OLD, "keep")
 
         assert result["success"] is True
-        assert h.move.removed == []
+        assert h.quarantine.quarantined == []
         assert h.move.moves == [(_OLD, _NEW)]
         assert h.store.files["/saves/snes/Game (U).srm"] == b"mine"
         assert h.store.files["/states/Game (U).state"] == b"mine"
@@ -1996,15 +2029,18 @@ class TestAdoptCandidateCollisions:
 
     async def test_a_replace_that_fails_moves_nothing_and_names_what_went(self, h):
         self._stage(h)
-        h.move.remove_failures = {"/states/Game.state"}
+        h.quarantine.failures = {"/states/Game.state"}
 
         result = await h.service.adopt_existing_rom(_ROM_ID, _OLD, "overwrite")
 
         assert result["success"] is False
         assert result["reason"] == "replace_failed"
+        assert "Game.state" in result["message"]
+        # The one that did go is named, so the user is not told nothing happened.
         assert "Game.srm" in result["message"]
         assert h.move.moves == []
         assert h.store.files[_OLD] == b"rom"
+        assert h.store.files["/saves/snes/.romm-backup/Game.srm"] == b"the other version's"
 
     async def test_an_unrecognised_answer_is_refused_rather_than_guessed(self, h):
         self._stage(h)

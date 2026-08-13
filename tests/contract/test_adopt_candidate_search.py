@@ -1,7 +1,8 @@
 """Contract tests for adopting a ROM already on disk under a different name (#260).
 
 Driven frontend-shaped per ``src/api/backend.ts``:
-``startDownload = callable<[number, boolean], BackendResult | TargetOccupiedResult | CandidatesFoundResult>``
+``startDownload = callable<[number, boolean, string | null, CollisionChoice | null],
+BackendResult | TargetOccupiedResult | CandidatesFoundResult | RenameCollisionsResult>``
 and ``adoptExistingRom = callable<[number, string | null, CollisionChoice | null], AdoptResult>``.
 
 The real ``Plugin`` over a real filesystem is what this tier is for: the search
@@ -276,6 +277,40 @@ async def test_overwrite_replaces_the_taken_name_and_completes_the_adoption(harn
     assert not mine.exists()
     assert not candidate.exists()
     assert (_platform_dir(harness) / _CANONICAL).read_bytes() == b"my own dump"
+
+
+async def test_overwrite_backs_the_replaced_save_up_rather_than_destroying_it(harness):
+    # Through the real MatrixExecutor funnel: a save the user chose to lose is
+    # still recoverable from .romm-backup. ADR-0028 declined to quarantine a ROM
+    # because ROMs are gigabytes and re-fetchable; a save is neither, and a
+    # savestate is synced nowhere at all.
+    candidate, _mine, theirs = _stage_collision(harness)
+
+    result = await harness.plugin.adopt_existing_rom(_ROM_ID, str(candidate), "overwrite")
+
+    assert result["success"] is True
+    backups = sorted((_saves_dir(harness) / ".romm-backup").iterdir())
+    assert [path.read_bytes() for path in backups] == [b"the other version's progress"]
+    assert theirs.read_bytes() == b"my progress"
+
+
+async def test_a_replaced_savestate_is_backed_up_beside_the_states_root(harness):
+    # Savestates have never been through this funnel. It takes the directory it
+    # is given, so the backup lands in <states>/.romm-backup/ — the same
+    # discipline, one tree over.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    candidate = _place_candidate(harness)
+    (_states_dir(harness) / "rom-41 (U).state").write_bytes(b"my snapshot")
+    theirs = _states_dir(harness) / "rom-41 (USA).state"
+    theirs.write_bytes(b"the other version's snapshot")
+
+    result = await harness.plugin.adopt_existing_rom(_ROM_ID, str(candidate), "overwrite")
+
+    assert result["success"] is True
+    backups = sorted((_states_dir(harness) / ".romm-backup").iterdir())
+    assert [path.read_bytes() for path in backups] == [b"the other version's snapshot"]
+    assert theirs.read_bytes() == b"my snapshot"
 
 
 async def test_keep_leaves_both_saves_and_still_adopts_the_rom(harness):

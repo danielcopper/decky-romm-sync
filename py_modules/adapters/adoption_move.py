@@ -5,6 +5,10 @@ it. A set of five renames is five syscalls and no kernel renames them as one, so
 this adapter's whole job is to put the failure somewhere harmless and to report
 precisely where it landed when it could not.
 
+It deliberately owns no deletion. An adoption's Overwrite destroys save files,
+and those go through the sanctioned ``.romm-backup`` funnel — a second way to
+destroy a save here is how the first one stops being the discipline (#965).
+
 Spans three RetroDECK trees — ``roms``, ``saves`` and ``states`` — which is why
 it is its own seam rather than a method on the ROM or the save file store.
 """
@@ -53,25 +57,6 @@ class AdoptionMoveAdapter:
         and a move onto it would fail — so for collision purposes it is taken.
         """
         return os.path.lexists(path)
-
-    def remove_targets(self, paths: tuple[str, ...]) -> tuple[list[str], str]:
-        """Delete each of *paths*, stopping at the first failure.
-
-        The destructive half of an Overwrite, run before anything moves so the
-        move phase starts on ground with no collisions left in it. Returns
-        ``(removed, error)``; a non-empty *error* leaves the caller holding a
-        partially cleared set it must report rather than proceed from.
-        """
-        removed: list[str] = []
-        for path in paths:
-            try:
-                if os.path.isdir(path) and not os.path.islink(path):
-                    return (removed, f"{os.path.basename(path)} is a folder — refusing to replace it")
-                os.remove(path)
-            except OSError as e:
-                return (removed, f"could not replace {os.path.basename(path)}: {e}")
-            removed.append(path)
-        return (removed, "")
 
     def move_pairs(self, pairs: tuple[tuple[str, str], ...]) -> MoveOutcome:
         """Carry every ``(source, target)`` pair, keeping a failure recoverable.

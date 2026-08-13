@@ -294,6 +294,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             romm_api=cfg.adapters.romm_api,
             download_file_store=cfg.adapters.download_file_store,
             adoption_move=cfg.adapters.adoption_move,
+            quarantine_save=save_sync_service.quarantine_local_file,
             resolve_system=cfg.adapters.http_adapter.resolve_system,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             install_recorder=rom_install_recorder,

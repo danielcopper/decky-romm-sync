@@ -51,8 +51,26 @@ function formatTimestamp(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleString();
 }
 
-/** One sentence on how the two sizes relate — never two bare numbers to subtract. */
-function sizeVerdict(occupied: TargetOccupiedResult): string {
+/**
+ * How the existing side's size is stated. A candidate folder was deliberately
+ * never measured — the search stays on the platform folder's top level, because
+ * descending into one multi-file game can mean tens of thousands of files — so
+ * it has no size to show, and "0 B" about something that may be gigabytes is the
+ * one thing this must not print.
+ */
+function existingSize(occupied: TargetOccupiedResult, candidate: boolean): string {
+  if (candidate && occupied.existing.is_dir) return "Folder — not measured";
+  return formatBytes(occupied.existing.size_bytes);
+}
+
+/**
+ * One sentence on how the two sizes relate — never two bare numbers to subtract,
+ * and never our own choice not to measure reported as the server's silence.
+ */
+function sizeVerdict(occupied: TargetOccupiedResult, candidate: boolean): string {
+  if (candidate && occupied.existing.is_dir) {
+    return "Folders are not measured before you open this, so the two sizes are not compared.";
+  }
   if (occupied.sizes_match === null) return "The server did not state a size, so the two cannot be compared.";
   if (occupied.sizes_match) return "Both are the same size.";
   const delta = occupied.existing.size_bytes - occupied.incoming.size_bytes;
@@ -131,7 +149,7 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({
           <div>
             <div style={LABEL_STYLE}>On this device</div>
             <div style={VALUE_STYLE}>{occupied.existing.name}</div>
-            <div style={VALUE_STYLE}>{formatBytes(occupied.existing.size_bytes)}</div>
+            <div style={VALUE_STYLE}>{existingSize(occupied, Boolean(candidatePath))}</div>
             {modified && <div style={LABEL_STYLE}>Last changed {modified}</div>}
           </div>
           <div>
@@ -142,7 +160,9 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({
             </div>
           </div>
         </div>
-        <div style={{ fontSize: "13px", color: "#fff", marginBottom: "12px" }}>{sizeVerdict(occupied)}</div>
+        <div style={{ fontSize: "13px", color: "#fff", marginBottom: "12px" }}>
+          {sizeVerdict(occupied, Boolean(candidatePath))}
+        </div>
         {candidatePath && (
           <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.7)", marginBottom: "12px" }}>
             Using it renames it to {occupied.incoming.name}, and moves any saves and savestates named after it with it,
@@ -172,7 +192,7 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             <div style={{ fontSize: "13px", color: "#ff8a80" }}>
               Downloading deletes the {kind} that is here now — {occupied.existing.name}, {""}
-              {formatBytes(occupied.existing.size_bytes)}. If it is your own dump, patch or romhack, it is gone.
+              {existingSize(occupied, Boolean(candidatePath))}. If it is your own dump, patch or romhack, it is gone.
               Continue?
             </div>
             <DialogButton onClick={() => choose("replace")}>Delete and Download</DialogButton>
@@ -245,8 +265,10 @@ export function comparisonForCandidate(
     },
     incoming,
     // A directory candidate is never sized by the search — it does not descend —
-    // so there are no two numbers to relate, which is the same answer the dialog
-    // gives when the server states no size.
+    // so there are no two numbers to relate. Same `null` as "the server stated no
+    // size", but NOT the same sentence: `existingSize` / `sizeVerdict` tell the
+    // two apart on `is_dir`, because attributing our own choice not to measure to
+    // the server would be a claim about their setup that is simply untrue.
     sizes_match: candidate.is_dir || !incoming.size_bytes ? null : candidate.size_bytes === incoming.size_bytes,
     adoptable: true,
   };

@@ -219,7 +219,12 @@ Format: **invariant** — tier — enforced by.
   dialog's **replace** exit is the second such case, and it does **not** rest on that justification: the premise is that
   the content is the user's own — a different rip, a patch, a romhack — which is exactly what the server cannot hand
   back. What carries it instead is that the user is shown both sides, offered a content check, and chooses between two
-  named outcomes behind a second confirmation ([ADR-0028](docs/adr/0028-adopted-install-is-an-install.md))
+  named outcomes behind a second confirmation ([ADR-0028](docs/adr/0028-adopted-install-is-an-install.md)). That
+  reasoning covers the **ROM** only: an adoption's Overwrite also replaces save and savestate files, and those take the
+  **backup** leg through the same `MatrixExecutor.quarantine_local_file` — every argument ADR-0028 gives for not
+  quarantining a ROM (gigabytes, no sensible retention, re-fetchable from RomM) inverts for a save, and a savestate is
+  synced nowhere at all. It is the first caller to hand that funnel a directory outside the saves root: it takes the
+  directory it is given, so a savestate's backup lands in `<states>/.romm-backup/`
 - **Every read-mutate-write of a `RomSaveSyncState` runs under `SyncEngine.rom_lock(rom_id)`** — prompt-only — sync
   paths, `get_save_status`, and the four slot mutations hold the lock; mechanize via a `rom_save_sync_states.save`
   call-site audit

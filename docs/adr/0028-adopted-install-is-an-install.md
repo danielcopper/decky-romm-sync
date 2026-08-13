@@ -140,6 +140,24 @@ the first dialog owns, so it is refused outright rather than offered as somethin
 clears its targets **before** the move rather than replacing as each file lands, which keeps the one destructive phase
 the user answered for apart from the phase that must not be destructive.
 
+**A replaced save is backed up, not deleted — and this is the one place that argument goes the other way.** The
+register's rule is backup-**or**-confirm, and this path does confirm by name, so a plain delete was inside the rule. But
+every reason given above for _not_ quarantining a ROM is a reason **for** quarantining here: a ROM is gigabytes with no
+retention that makes sense and is re-fetchable from RomM, while a save is kilobytes with a ten-copy retention already
+built — and a **savestate is synced nowhere at all**, so a replaced `.state` exists in no other copy anywhere. So an
+Overwrite routes through `MatrixExecutor.quarantine_local_file`, the same funnel the sync's own download-overwrite and
+slot-switch paths use. Deliberately not a second implementation of it: a new way to destroy a save, beside the one that
+documents itself as the single source of that discipline, is how the first one stops being the discipline (#965).
+
+Every colliding target is a save or a savestate by construction — the ROM's own target is refused before the plan is
+consulted, and the download exit drops the ROM pair — so the rename machinery needs no delete of its own, and has none.
+
+This is the funnel's first caller outside the saves root. It takes whatever directory it is given and writes
+`<dir>/.romm-backup/`, so a savestate's backup lands under the states root. Two limits of its naming follow the savefile
+it was written for, and are stated rather than bent: the backup name is `<stem>_<ts><ext>` from a single `splitext`, so
+`Game.state.auto` is preserved as `Game.state_<ts>.auto`; and the ten-copy retention counts per that stem, which for
+savestates means per slot suffix rather than per game.
+
 **A rename is atomic per file, so the failure is moved somewhere harmless rather than prevented.** Where the filesystem
 allows it: `os.link` every pair first, removing nothing, so a failure while staging is undone by dropping the links and
 the state is exactly as it started; only once every link exists are the originals unlinked, and a failure there leaves

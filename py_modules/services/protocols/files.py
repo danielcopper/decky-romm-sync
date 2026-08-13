@@ -319,15 +319,6 @@ class AdoptionMoveStore(Protocol):
         """Return True when *path* is taken, a dangling symlink included."""
         ...
 
-    def remove_targets(self, paths: tuple[str, ...]) -> tuple[list[str], str]:
-        """Delete each of *paths*, stopping at the first failure.
-
-        The destructive half of an Overwrite, run before anything moves. Returns
-        ``(removed, error)``; a non-empty *error* leaves a partially cleared set
-        the caller must report rather than proceed from.
-        """
-        ...
-
     def move_pairs(self, pairs: tuple[tuple[str, str], ...]) -> MoveOutcome:
         """Carry every ``(source, target)`` pair, keeping a failure recoverable.
 

@@ -295,7 +295,9 @@ If a name it needs is already taken — you have played both versions and both l
 anything has been moved**, lists everything that collides, and asks once for the whole set. This is the same dialog on
 either exit, because it is the same question:
 
-- **Replace Them** — the existing files at those names are deleted and yours take their place.
+- **Replace Them** — yours take those names. The files that were there are **not** destroyed: each is moved into a
+  `.romm-backup` folder beside it — the same safety net every other save the plugin replaces goes through — so you can
+  get one back by hand if you picked wrong. The ten most recent backups of each file are kept.
 - **Keep Them** — the existing files stay and your old-named ones stay where they are. Nothing is lost, but those old
   files are now orphaned: nothing will read them.
 - **Cancel** — nothing happens at all.

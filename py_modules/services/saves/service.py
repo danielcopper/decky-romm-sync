@@ -261,6 +261,16 @@ class SaveService:
         """
         return self._rom_info.find_save_files(int(rom_id))
 
+    def quarantine_local_file(self, saves_dir: str, filename: str) -> bool:
+        """Move a local save aside into ``.romm-backup`` before something destroys it.
+
+        Delegates to the shared ``MatrixExecutor.quarantine_local_file`` — the
+        single source of truth for the backup discipline — so a consumer that has
+        to destroy a save reaches the same funnel the sync's own overwrite and
+        slot-switch paths do (#965). Satisfies the ``SaveQuarantineFn`` seam.
+        """
+        return self._sync_engine.quarantine_local_file(saves_dir, filename)
+
     def current_save_sorting(self) -> InSaveDir:
         """Return the subdirectory sorting savefile paths are resolved with right now.
 

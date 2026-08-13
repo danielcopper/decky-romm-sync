@@ -45,6 +45,7 @@ if TYPE_CHECKING:
         RetroArchSaveLayoutProvider,
         RetroArchSavestateLayoutProvider,
         RetroDeckPaths,
+        SaveQuarantineFn,
         SaveSortingProvider,
         SystemM3uSupportFn,
     )
@@ -72,9 +73,12 @@ class AdoptionRenamerConfig:
     answer the per-core subdirectory only when a layout says there is one, and
     ``download_file_store`` is here for one read: the launch file inside a
     directory candidate, which is what its saves are named after.
+    ``quarantine_save`` is the sanctioned save-backup funnel — an Overwrite
+    destroys save files, and this component does not own a way to do that.
     """
 
     adoption_move: AdoptionMoveStore
+    quarantine_save: SaveQuarantineFn
     download_file_store: DownloadFileStore
     retrodeck_paths: RetroDeckPaths
     m3u_support: SystemM3uSupportFn
@@ -91,6 +95,7 @@ class AdoptionRenamer:
 
     def __init__(self, *, config: AdoptionRenamerConfig) -> None:
         self._adoption_move = config.adoption_move
+        self._quarantine_save = config.quarantine_save
         self._download_file_store = config.download_file_store
         self._retrodeck_paths = config.retrodeck_paths
         self._m3u_support = config.m3u_support
@@ -115,16 +120,22 @@ class AdoptionRenamer:
         asking at the first collision would leave half the set moved when the
         question appears.
         """
-        return self.move_planned(self.rename_plan(rom_id, target, source_path), collision_choice)
+        refusal, _carried = self.move_planned(self.rename_plan(rom_id, target, source_path), collision_choice)
+        return refusal
 
-    def move_planned(self, pairs: tuple[RenamePair, ...], collision_choice) -> dict[str, Any] | None:
+    def move_planned(
+        self, pairs: tuple[RenamePair, ...], collision_choice
+    ) -> tuple[dict[str, Any] | None, tuple[RenamePair, ...]]:
         """Ask about every taken name, then carry the pairs the answer allows.
 
         Shared by both exits of the adopt dialog, so a name already taken raises
         the same question either way, with the same answer applied to the same
         whole set, and neither exit can acquire its own collision rule.
 
-        ``None`` means every file the answer allows to move arrived.
+        Returns ``(refusal, carried)``. A ``None`` refusal means every file the
+        answer allowed to move arrived; *carried* is which those were, so a caller
+        whose **next** step can fail is able to say what this one already did
+        rather than reporting a clean abort over files that have moved.
         """
         occupied = frozenset(pair.target for pair in pairs if self._adoption_move.exists(pair.target))
         clear, colliding = split_collisions(pairs, occupied)
@@ -133,13 +144,16 @@ class AdoptionRenamer:
             choice = str(collision_choice or "")
             chosen = pairs_for_choice(clear, colliding, choice)
             if chosen is None:
-                return collision_refusal(colliding)
+                return (collision_refusal(colliding), ())
             if choice == OVERWRITE:
                 refusal = self._replace_occupied(colliding)
                 if refusal is not None:
-                    return refusal
+                    return (refusal, ())
             to_move = chosen
-        return self._report_move(self._adoption_move.move_pairs(tuple((pair.source, pair.target) for pair in to_move)))
+        outcome = self._adoption_move.move_pairs(tuple((pair.source, pair.target) for pair in to_move))
+        refusal = self._report_move(outcome)
+        moved = frozenset(outcome["moved"])
+        return (refusal, tuple(pair for pair in to_move if pair.target in moved))
 
     def discarded_save_pairs(self, rom_id: int, target: Target, source_path: str) -> tuple[RenamePair, ...]:
         """The save and savestate pairs a discarded candidate leaves behind, ROM excluded.
@@ -181,27 +195,46 @@ class AdoptionRenamer:
         )
 
     def _replace_occupied(self, colliding: tuple[RenamePair, ...]) -> dict[str, Any] | None:
-        """Delete the files an Overwrite answers for, before anything moves.
+        """Move the files an Overwrite answers for into ``.romm-backup``, before anything else moves.
 
         Clearing first rather than replacing as each file lands keeps the two
         halves apart: one destructive phase the user answered for, then a move
-        phase with no collisions left in it. A failure here has moved nothing, so
-        the ROM is exactly where it was — but files the user chose to lose are
-        already gone, and the refusal names them.
+        phase with no collisions left in it. A failure here has moved nothing
+        else, so the ROM is exactly where it was — and the refusal names the
+        files already set aside.
+
+        Every colliding target is a save or a savestate: the ROM's own target is
+        refused before the plan is consulted, and the discard path drops the ROM
+        pair. So they all go through the save-backup funnel rather than an unlink
+        of this component's own. ADR-0028 declined to quarantine a **ROM** on the
+        grounds that ROMs are gigabytes with no sensible retention and are
+        re-fetchable from RomM; both halves of that argument invert here. A
+        savestate in particular is synced nowhere at all, so a replaced one exists
+        in no other copy.
         """
-        removed, error = self._adoption_move.remove_targets(tuple(pair.target for pair in colliding))
-        if not error:
-            return None
+        quarantined: list[str] = []
+        for pair in colliding:
+            try:
+                self._quarantine_save(os.path.dirname(pair.target), os.path.basename(pair.target))
+            except (OSError, ValueError) as e:
+                return self._replace_refusal(quarantined, os.path.basename(pair.target), e)
+            quarantined.append(pair.target)
+        return None
+
+    def _replace_refusal(self, quarantined: list[str], failed: str, error: Exception) -> dict[str, Any]:
+        """Report an Overwrite that could not finish, naming what was already set aside."""
         already = (
-            " These were already replaced: " + ", ".join(os.path.basename(path) for path in removed) + "."
-            if removed
+            " These were already moved to .romm-backup: "
+            + ", ".join(os.path.basename(path) for path in quarantined)
+            + "."
+            if quarantined
             else ""
         )
-        self._logger.error(f"Adoption overwrite failed after removing {len(removed)} file(s): {error}")
+        self._logger.error(f"Adoption overwrite failed after backing up {len(quarantined)} file(s): {error}")
         return {
             "success": False,
             "reason": "replace_failed",
-            "message": f"Could not replace the existing files ({error}). Nothing was moved.{already}",
+            "message": f"Could not replace {failed} ({error}). Nothing was moved.{already}",
         }
 
     def _report_move(self, outcome) -> dict[str, Any] | None:

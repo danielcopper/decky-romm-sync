@@ -61,6 +61,7 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
 
+    from domain.adoption_rename import RenamePair
     from services.protocols import (
         ActiveCoreReader,
         AdoptionMoveStore,
@@ -73,6 +74,7 @@ if TYPE_CHECKING:
         RetroDeckPaths,
         RomInstallRecorder,
         RommRomReader,
+        SaveQuarantineFn,
         SaveSortingProvider,
         SiblingSupersedeProvider,
         SystemM3uSupportFn,
@@ -121,6 +123,21 @@ def _target_taken_refusal() -> dict[str, Any]:
     }
 
 
+def _add_carried_note(refusal: dict[str, Any], carried: tuple[RenamePair, ...]) -> dict[str, Any]:
+    """Add what the carry already moved to a refusal raised by the step after it.
+
+    Without it the abort reads as clean while the game the user keeps can no
+    longer find its saves — they are at the canonical name and it is not.
+    """
+    if not carried:
+        return refusal
+    names = ", ".join(os.path.basename(pair.target) for pair in carried)
+    return {
+        **refusal,
+        "message": f"{refusal['message']} This game's saves were already renamed and are now at: {names}.",
+    }
+
+
 def _unsafe_replace_refusal() -> dict[str, Any]:
     """The refusal a replace returns for a path outside the RetroDECK ROMs tree."""
     return {
@@ -147,6 +164,7 @@ class RomAdoptionServiceConfig:
     romm_api: RommRomReader
     download_file_store: DownloadFileStore
     adoption_move: AdoptionMoveStore
+    quarantine_save: SaveQuarantineFn
     resolve_system: SystemResolver
     retrodeck_paths: RetroDeckPaths
     install_recorder: RomInstallRecorder
@@ -181,6 +199,7 @@ class RomAdoptionService:
         self._renamer = AdoptionRenamer(
             config=AdoptionRenamerConfig(
                 adoption_move=config.adoption_move,
+                quarantine_save=config.quarantine_save,
                 download_file_store=config.download_file_store,
                 retrodeck_paths=config.retrodeck_paths,
                 m3u_support=config.m3u_support,
@@ -449,6 +468,12 @@ class RomAdoptionService:
         and, on the link-then-unlink path, nothing moved either. Removing first
         would mean a failed carry leaves the saves orphaned under a name whose ROM
         is already gone — the exact outcome the rename exists to prevent.
+
+        A removal that fails **after** the carry is the one abort that is not
+        clean: the file the user keeps can no longer find its saves, which now sit
+        under the canonical name. It is named rather than moved back — a retry of
+        the same download finds the saves already in place and re-plans to
+        nothing, where an undo would have to be undone again.
         """
         if not candidate_path:
             return None
@@ -470,12 +495,13 @@ class RomAdoptionService:
         if existing is None:
             return None
         rom_id = int(rom_detail.get("id") or 0)
-        refusal = self._renamer.move_planned(
+        refusal, carried = self._renamer.move_planned(
             self._renamer.discarded_save_pairs(rom_id, target, source_path), collision_choice
         )
         if refusal is not None:
             return refusal
-        return self._remove_under_roms(source_path, is_dir=existing["is_dir"])
+        removal = self._remove_under_roms(source_path, is_dir=existing["is_dir"])
+        return removal if removal is None else _add_carried_note(removal, carried)
 
     # ── Adopt ───────────────────────────────────────────────────────
 
