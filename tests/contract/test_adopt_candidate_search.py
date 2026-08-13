@@ -291,6 +291,74 @@ async def test_keep_leaves_both_saves_and_still_adopts_the_rom(harness):
     assert (_platform_dir(harness) / _CANONICAL).read_bytes() == b"my own dump"
 
 
+# ── downloading over a candidate ─────────────────────────────────────────
+
+
+async def test_downloading_over_a_candidate_removes_it_and_carries_its_saves(harness):
+    # The dialog's second confirmation says the file is deleted, so it is — and
+    # its saves go with it, or the fresh download would look for them under a
+    # name nothing wrote.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    candidate = _place_candidate(harness)
+    save = _saves_dir(harness) / "rom-41 (U).srm"
+    save.write_bytes(b"battery")
+    state = _states_dir(harness) / "rom-41 (U).state"
+    state.write_bytes(b"snapshot")
+
+    result = await harness.plugin.start_download(_ROM_ID, True, str(candidate), None)
+
+    assert result["success"] is True
+    assert not candidate.exists()
+    assert (_saves_dir(harness) / "rom-41 (USA).srm").read_bytes() == b"battery"
+    assert (_states_dir(harness) / "rom-41 (USA).state").read_bytes() == b"snapshot"
+
+
+async def test_none_of_these_downloads_without_deleting_anything(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    candidate = _place_candidate(harness)
+
+    result = await harness.plugin.start_download(_ROM_ID, True, None, None)
+
+    assert result["success"] is True
+    assert candidate.read_bytes() == b"my own dump"
+
+
+async def test_a_taken_save_name_stops_the_download_before_anything_is_removed(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    candidate = _place_candidate(harness)
+    mine = _saves_dir(harness) / "rom-41 (U).srm"
+    mine.write_bytes(b"my progress")
+    theirs = _saves_dir(harness) / "rom-41 (USA).srm"
+    theirs.write_bytes(b"the other version's progress")
+
+    result = await harness.plugin.start_download(_ROM_ID, True, str(candidate), None)
+
+    assert result["success"] is False
+    assert result["reason"] == "rename_collisions"
+    assert result["collisions"] == [{"name": theirs.name, "path": str(theirs), "kind": "save"}]
+    assert candidate.read_bytes() == b"my own dump"
+    assert mine.read_bytes() == b"my progress"
+    assert theirs.read_bytes() == b"the other version's progress"
+
+
+async def test_the_collision_answer_completes_the_download(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    candidate = _place_candidate(harness)
+    (_saves_dir(harness) / "rom-41 (U).srm").write_bytes(b"my progress")
+    theirs = _saves_dir(harness) / "rom-41 (USA).srm"
+    theirs.write_bytes(b"the other version's progress")
+
+    result = await harness.plugin.start_download(_ROM_ID, True, str(candidate), "overwrite")
+
+    assert result["success"] is True
+    assert theirs.read_bytes() == b"my progress"
+    assert not candidate.exists()
+
+
 # ── verification against a candidate ─────────────────────────────────────
 
 

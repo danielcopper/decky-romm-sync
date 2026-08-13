@@ -617,8 +617,16 @@ class Plugin:
 
     @migration_blocked
     @prune_active_blocked
-    async def start_download(self, rom_id, replace_existing=False):
-        result = await self._download_service.start_download(rom_id, replace_existing)
+    async def start_download(self, rom_id, replace_existing=False, candidate_path=None, collision_choice=None):
+        """Start a download, refusing when this game is already on the device.
+
+        ``candidate_path`` names the file the adopt dialog was showing when the
+        user chose Download over it: with ``replace_existing`` it is removed and
+        its saves carried to the canonical name, which is what that dialog's
+        second confirmation promises. ``collision_choice`` answers the save
+        collision that carry can raise.
+        """
+        result = await self._download_service.start_download(rom_id, replace_existing, candidate_path, collision_choice)
         task = self._download_service.task_for_rom(int(rom_id)) if result.get("success") else None
         if task is not None:
             await retain_prune_conflict(self, task, "start_download")

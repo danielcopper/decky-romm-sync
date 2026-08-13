@@ -3443,8 +3443,8 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
     });
 
     expect(vi.mocked(backend.startDownload).mock.calls).toEqual([
-      [42, false],
-      [42, true],
+      [42, false, null, null],
+      [42, true, null, null],
     ]);
   });
 
@@ -3668,8 +3668,8 @@ describe("CustomPlayButton — the same game under another name (#260)", () => {
     });
 
     expect(vi.mocked(backend.startDownload).mock.calls).toEqual([
-      [42, false],
-      [42, true],
+      [42, false, null, null],
+      [42, true, null, null],
     ]);
   });
 
@@ -3763,6 +3763,94 @@ describe("CustomPlayButton — the same game under another name (#260)", () => {
       title: "Tender",
       body: "Could not rename this game's files",
     });
+  });
+
+  it("Download Instead on a chosen candidate names it, so the backend deletes what was promised", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload)
+      .mockResolvedValueOnce(FOUND)
+      .mockResolvedValueOnce({ success: true, message: "Download started" });
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("replace");
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(backend.startDownload).mock.calls).toEqual([
+      [42, false, null, null],
+      [42, true, CANDIDATE.path, null],
+    ]);
+  });
+
+  it("'None of These' names no candidate, so nothing is deleted on the user's behalf", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload)
+      .mockResolvedValueOnce({ ...FOUND, candidates: [CANDIDATE, OTHER] })
+      .mockResolvedValueOnce({ success: true, message: "Download started" });
+    vi.mocked(showAdoptCandidateModal).mockResolvedValue({ kind: "download" });
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(backend.startDownload).mock.calls[1]).toEqual([42, true, null, null]);
+  });
+
+  it("a save collision on the download path opens the same dialog and re-sends the answer", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const collisions = [{ name: "game (USA).srm", path: "/saves/n64/game (USA).srm", kind: "save" as const }];
+    vi.mocked(backend.startDownload)
+      .mockResolvedValueOnce(FOUND)
+      .mockResolvedValueOnce({
+        success: false,
+        reason: "rename_collisions",
+        message: "'game (USA).srm' already exists",
+        collisions,
+      })
+      .mockResolvedValueOnce({ success: true, message: "Download started" });
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("replace");
+    vi.mocked(showAdoptCollisionModal).mockResolvedValue("keep");
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(showAdoptCollisionModal)).toHaveBeenCalledWith(collisions);
+    expect(vi.mocked(backend.startDownload).mock.calls).toEqual([
+      [42, false, null, null],
+      [42, true, CANDIDATE.path, null],
+      [42, true, CANDIDATE.path, "keep"],
+    ]);
+  });
+
+  it("cancelling that collision dialog starts no download and says nothing alarming", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.startDownload)
+      .mockResolvedValueOnce(FOUND)
+      .mockResolvedValueOnce({
+        success: false,
+        reason: "rename_collisions",
+        message: "'game (USA).srm' already exists",
+        collisions: [{ name: "game (USA).srm", path: "/saves/n64/game (USA).srm", kind: "save" as const }],
+      });
+    vi.mocked(showAdoptExistingModal).mockResolvedValue("replace");
+    vi.mocked(showAdoptCollisionModal).mockResolvedValue("cancel");
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Download");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(backend.startDownload)).toHaveBeenCalledTimes(2);
+    // The refusal is a question the user declined, not a failure.
+    expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
   });
 
   it("a folder with nothing in it that could be this game downloads as before", async () => {

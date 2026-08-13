@@ -99,21 +99,40 @@ class SiblingSupersedeProvider(Protocol):
 
 
 class DownloadTargetGateFn(Protocol):
-    """Decide whether a download may write to the path it has computed.
+    """Decide whether a download may write the content it has computed a path for.
 
-    Returns ``None`` when the path is free — or was cleared because the user
-    chose to replace what was there — and a canonical failure dict otherwise:
-    the ``target_occupied`` refusal carrying both sides of the comparison, or
-    the failure of a removal that the replace could not complete. Nothing is
-    written and no transfer starts on a non-``None`` answer.
+    Returns ``None`` when nothing is in the way — the path is free and no file
+    elsewhere in the platform folder looks like this game, or the user chose to
+    replace what they were shown and it has been cleared — and a canonical
+    failure dict otherwise: the ``target_occupied`` refusal carrying both sides
+    of the comparison, the ``adoption_candidates`` refusal carrying the short
+    list, the ``rename_collisions`` refusal from carrying a discarded
+    candidate's saves, or the failure of a removal the replace could not
+    complete. Nothing is written and no transfer starts on a non-``None`` answer.
 
-    Awaitable: describing an occupied directory walks it whole and clearing one
-    deletes it whole, so the implementation runs that work off the event loop.
+    *candidate_path* names the entry the user was shown when it sat elsewhere in
+    the folder under another name; with *replace* it is removed and its saves
+    carried to the canonical name, which is what the dialog's second
+    confirmation promises. *collision_choice* answers the collision that carry
+    can raise. *resume* suppresses the candidate search: a resume continues a
+    decision already taken, and the file the user declined must not refuse the
+    transfer they started.
+
+    Awaitable: describing an occupied directory walks it whole, clearing one
+    deletes it whole, and the candidate search lists a directory and reads
+    archive indexes, so the implementation runs that work off the event loop.
     The caller just awaits an answer.
     """
 
     async def __call__(
-        self, rom_detail: dict[str, Any], checked_path: str, *, replace: bool
+        self,
+        rom_detail: dict[str, Any],
+        checked_path: str,
+        *,
+        replace: bool,
+        resume: bool = False,
+        candidate_path: str | None = None,
+        collision_choice: str | None = None,
     ) -> dict[str, Any] | None: ...
 
 

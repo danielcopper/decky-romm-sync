@@ -1018,11 +1018,24 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
   };
 
-  const handleDownload = async (replaceExisting = false) => {
+  const handleDownload = async (
+    replaceExisting = false,
+    discardPath?: string,
+    collisionChoice: CollisionChoice | null = null,
+  ) => {
     if (!romId || actionPending) return;
     setActionPending(true);
     try {
-      const result = await startDownload(romId, replaceExisting);
+      const result = await startDownload(romId, replaceExisting, discardPath ?? null, collisionChoice);
+      if (isRenameCollisions(result)) {
+        // Carrying the discarded candidate's saves would land on names that are
+        // taken. Nothing has been removed or moved; the one answer covers the
+        // whole set, exactly as it does on the adopt exit.
+        setActionPending(false);
+        const answer = await showAdoptCollisionModal(result.collisions);
+        if (answer !== "cancel") await handleDownload(replaceExisting, discardPath, answer);
+        return;
+      }
       if (isTargetOccupied(result)) {
         // Nothing was written and no transfer started — the backend refused so
         // the user can choose (#260). Back to idle before the dialog opens,
@@ -1067,9 +1080,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   };
 
   // Offer what the search found. One candidate needs no list — there is nothing
-  // to choose between — so it goes straight to the comparison. "Download
-  // Instead" re-enters `handleDownload` with `replace`, which is what tells the
+  // to choose between — so it goes straight to the comparison. Both download
+  // exits re-enter `handleDownload` with `replace`, which is what tells the
   // backend to skip the search rather than refuse a second time.
+  //
+  // They differ in what they hand back. Choosing a candidate and then Download
+  // Instead names it, because the confirmation the user just answered says that
+  // file is deleted. "None of These" names nothing: the user declined every
+  // candidate rather than picking one, so none of them may be removed.
   const resolveCandidates = async (rid: number, found: CandidatesFoundResult) => {
     let candidate = found.candidates[0];
     if (candidate === undefined) return;
@@ -1084,7 +1102,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
     const choice = await showAdoptExistingModal(rid, comparisonForCandidate(candidate, found.incoming), candidate.path);
     if (choice === "replace") {
-      await handleDownload(true);
+      await handleDownload(true, candidate.path);
       return;
     }
     if (choice === "adopt") {

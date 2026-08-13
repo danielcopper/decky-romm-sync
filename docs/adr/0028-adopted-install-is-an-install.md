@@ -113,6 +113,24 @@ has no recorded counterpart — the change-detection markers are written only fo
 content-dir saves sit outside the tree the plugin syncs at all. The **savestate** layout has none either: those markers
 track savefile sorting only, so a pending savefile migration says nothing about where savestates are.
 
+**Download Instead removes what the user was shown, wherever it sat.** The second confirmation names a deletion, so
+there is one rule for both subjects of that dialog: content at the target path and a candidate beside it under another
+name are removed alike, under the same containment guard, with a failed removal aborting the download rather than
+proceeding. The alternative — deleting only the target-path case — leaves a dialog that says "if it is your own dump,
+patch or romhack, it is gone" and then downloads a second copy alongside the file it named.
+
+A discarded candidate's **saves travel too**, to the canonical name, through the machinery the adopt exit uses. That is
+not a second decision: saves follow the game, settled above, and the download exit strands them under the old basename
+otherwise — the same orphaning the rename exists to prevent, arriving through the other door. A name already taken
+raises the same collision question, answered before anything moves, because it is the same question. The carry runs
+**before** the removal: a carry that fails aborts with nothing deleted, where removing first would leave the saves
+orphaned under a name whose ROM is already gone.
+
+One case carries nothing, and it is a limit rather than an oversight. A **multi-file** ROM's saves are named after the
+launch file _inside_ its directory, and the launch file the download will produce is in an archive that has not been
+fetched yet — so the name they would have to take is genuinely unknown at this point. Moving them to the candidate's own
+launch name would strand them under a name nothing reads, which is worse than leaving them untouched and findable.
+
 **A name already taken stops everything before anything moves.** Every source → target pair is computed and **all**
 targets are checked, and only then does the first file move: renaming as you go and asking at the first collision leaves
 half the set moved when the question appears. The dialog lists everything that collides and takes one decision for the
@@ -131,11 +149,14 @@ back to rename-with-rollback. That path can leave a genuinely partial state, and
 moved, which did not — never as success and never as a plain failure, the way the prune machinery reports a partial
 removal.
 
-**Cheap evidence decides whether to ask; content verification is always a button, never a wait imposed before the
-dialog.** Sizes for a file; the top-level name set plus sizes for a directory, matched against `is_top_level`, with
-extra files allowed — the plugin's own directories carry a generated `.m3u` and a healed `PS3_DISC.SFB` that the
-server's manifest does not list. Where the content is archived the digests come from the central directory at no cost. A
-server without hashes turns the candidate search **off** rather than lowering its bar.
+**Cheap evidence decides what to say about a candidate; content verification is always a button, never a wait imposed
+before the dialog.** Whether to ask at all is settled by the name (above) and by a `stat` of the target path. What the
+dialog then _states_ about each candidate is only what a read already paid for: a `stat`'s size, and — where the content
+is archived — the uncompressed size and CRC32 the ZIP's central directory hands over at no cost. A server that published
+no hashes simply leaves the strongest row unavailable; it does not turn the search off, because the name match and the
+user's confirmation are what the offer rests on either way. The directory case is verified against the server's full
+manifest, matched against `is_top_level`, with extra files allowed — the plugin's own directories carry a generated
+`.m3u` and a healed `PS3_DISC.SFB` that the server's manifest does not list.
 
 **A content check compares content identity, never container identity.** RomM hashes what is _inside_ an archive: its
 current scanner streams every member's decompressed bytes, in ASCII name order, into one accumulator, and the one before

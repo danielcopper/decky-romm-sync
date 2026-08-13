@@ -305,6 +305,38 @@ describe("AdoptExistingModal — a candidate found under another name", () => {
     const { container } = renderModal();
     expect(container.textContent).not.toContain("renames it to");
   });
+
+  it("names the candidate — not the server's file — in the deletion confirmation", () => {
+    // The sentence promises this exact file is deleted, and the backend now
+    // keeps that promise. It has to name the file the user is looking at.
+    const { container } = renderCandidate();
+
+    fireEvent.click(buttonByText(container, "Download Instead"));
+
+    expect(container.textContent).toContain("Downloading deletes the file that is here now");
+    expect(container.textContent).toContain("Game (U).sfc");
+    expect(container.textContent).toContain("If it is your own dump, patch or romhack, it is gone");
+  });
+
+  it("Delete and Download resolves replace for a candidate too", () => {
+    const { container, onChoice, closeModal } = renderCandidate();
+
+    fireEvent.click(buttonByText(container, "Download Instead"));
+    fireEvent.click(buttonByText(container, "Delete and Download"));
+
+    expect(closeModal).toHaveBeenCalledTimes(1);
+    expect(onChoice).toHaveBeenCalledWith("replace");
+  });
+
+  it("Go Back leaves the candidate's confirmation without choosing", () => {
+    const { container, onChoice } = renderCandidate();
+
+    fireEvent.click(buttonByText(container, "Download Instead"));
+    fireEvent.click(buttonByText(container, "Go Back"));
+
+    expect(onChoice).not.toHaveBeenCalled();
+    expect(buttonByText(container, "Use These Files")).toBeTruthy();
+  });
 });
 
 describe("comparisonForCandidate", () => {

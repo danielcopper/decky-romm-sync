@@ -11,6 +11,9 @@ derived by exactly the rules a downloaded one is (ADR-0028).
 The service never deletes on its own initiative. Its two destructive paths are
 the replace leg of the download gate and the overwrite leg of the rename, each
 run only because the user chose it over the alternative it was shown beside.
+
+What a rename *consists of* — the plan, the collision question, how far a move
+got — belongs to ``AdoptionRenamer``, which both exits of the dialog share.
 """
 
 from __future__ import annotations
@@ -20,17 +23,6 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-from domain.adoption_rename import (
-    OVERWRITE,
-    SAVE,
-    SAVESTATE,
-    CompanionDir,
-    RenamePair,
-    collision_refusal,
-    pairs_for_choice,
-    rename_pairs,
-    split_collisions,
-)
 from domain.rom_adoption import (
     DigestRequest,
     FileDifference,
@@ -59,17 +51,16 @@ from domain.rom_files import (
     resolve_local_file_name,
     synthetic_rom_name,
 )
-from domain.save_layout import ContentDir, InSaveDir
-from domain.save_path import resolve_save_dir
 from lib.errors import error_response
 from lib.path_safety import PathTraversalError, coerce_safe_component, is_safe_rom_path, safe_join
+from services.rom_adoption._target import Target as _Target
+from services.rom_adoption.renamer import AdoptionRenamer, AdoptionRenamerConfig
 
 if TYPE_CHECKING:
     import asyncio
     import logging
     from collections.abc import Callable
 
-    from domain.save_layout import SaveLayout
     from services.protocols import (
         ActiveCoreReader,
         AdoptionMoveStore,
@@ -121,29 +112,22 @@ def _whole_file_crc32(rom_detail: dict[str, Any]) -> str:
     return manifest[0].crc32 if len(manifest) == 1 else ""
 
 
-def _travels_with(rom_source: str, directory: str) -> bool:
-    """Whether *directory* moves with *rom_source* rather than standing beside it.
+def _target_taken_refusal() -> dict[str, Any]:
+    """The refusal an adoption returns when the ROM's own canonical path is occupied."""
+    return {
+        "success": False,
+        "reason": "target_taken",
+        "message": "Something arrived at this game's own location — nothing was moved",
+    }
 
-    True for a directory inside the content being renamed — a multi-file ROM
-    whose emulator writes saves next to the game. Its files arrive at the new
-    name as part of the ROM's own move, so pairing them up would move them twice.
-    """
-    return directory == rom_source or directory.startswith(rom_source + os.sep)
 
-
-@dataclass(frozen=True)
-class _Target:
-    """The path a ROM's content occupies, and what the plugin expects to find there.
-
-    ``manifest_name`` is the name the server's manifest uses for the single-file
-    case, which need not equal the on-disk name the download derives from
-    ``fs_name``; for a directory it is the directory's own name and unused.
-    """
-
-    path: str
-    system: str
-    is_multi: bool
-    manifest_name: str
+def _unsafe_replace_refusal() -> dict[str, Any]:
+    """The refusal a replace returns for a path outside the RetroDECK ROMs tree."""
+    return {
+        "success": False,
+        "reason": "unsafe_replace_target",
+        "message": "Refusing to remove content outside the ROM directory",
+    }
 
 
 @dataclass(frozen=True)
@@ -154,11 +138,10 @@ class RomAdoptionServiceConfig:
     cannot drift from a downloaded one. ``m3u_support`` gates whether a bundled
     ``.m3u`` may be chosen as an adopted directory's launch file, exactly as it
     does for an extracted one. ``system_extensions`` is the live ES-DE accept-list
-    the candidate search filters a platform directory through. The three layout
-    seams are separate because they answer three different questions from two
-    different sources — see :meth:`RomAdoptionService._savefile_layout`.
-    ``active_core`` / ``get_core_name`` answer the per-core subdirectory only when
-    a layout says there is one.
+    the candidate search filters a platform directory through. The layout and
+    core seams below are the renamer's — they are taken here and handed straight
+    on, so the service has one constructor rather than two the composition root
+    has to keep in step.
     """
 
     romm_api: RommRomReader
@@ -190,17 +173,25 @@ class RomAdoptionService:
     def __init__(self, *, config: RomAdoptionServiceConfig) -> None:
         self._romm_api = config.romm_api
         self._download_file_store = config.download_file_store
-        self._adoption_move = config.adoption_move
         self._resolve_system = config.resolve_system
         self._retrodeck_paths = config.retrodeck_paths
         self._install_recorder = config.install_recorder
         self._m3u_support = config.m3u_support
         self._system_extensions = config.system_extensions
-        self._save_layout = config.save_layout
-        self._save_sorting = config.save_sorting
-        self._savestate_layout = config.savestate_layout
-        self._active_core = config.active_core
-        self._get_core_name = config.get_core_name
+        self._renamer = AdoptionRenamer(
+            config=AdoptionRenamerConfig(
+                adoption_move=config.adoption_move,
+                download_file_store=config.download_file_store,
+                retrodeck_paths=config.retrodeck_paths,
+                m3u_support=config.m3u_support,
+                save_layout=config.save_layout,
+                save_sorting=config.save_sorting,
+                savestate_layout=config.savestate_layout,
+                active_core=config.active_core,
+                get_core_name=config.get_core_name,
+                logger=config.logger,
+            )
+        )
         self._sibling_supersede = config.sibling_supersede
         self._uow_factory = config.uow_factory
         self._loop = config.loop
@@ -211,16 +202,25 @@ class RomAdoptionService:
     # ── Download pre-flight (DownloadTargetGateFn) ──────────────────
 
     async def check_download_target(
-        self, rom_detail: dict[str, Any], checked_path: str, *, replace: bool
+        self,
+        rom_detail: dict[str, Any],
+        checked_path: str,
+        *,
+        replace: bool,
+        resume: bool = False,
+        candidate_path=None,
+        collision_choice=None,
     ) -> dict[str, Any] | None:
-        """Decide whether a download may write to *checked_path*.
+        """Decide whether a download may write the content it computed *checked_path* for.
 
-        ``None`` means proceed: the path was free and nothing else on disk looks
-        like this game, it already belongs to this ROM's own install, or the user
-        chose to download over whatever the gate found. Anything else is a
+        ``None`` means proceed: nothing is in the way, what is there already
+        belongs to this ROM's own install, or the user chose to download over
+        whatever the gate showed them and it has been cleared. Anything else is a
         canonical failure the caller returns untouched — the ``target_occupied``
         refusal carrying both sides of the comparison, the ``adoption_candidates``
-        refusal carrying the short list, or a removal that could not be completed.
+        refusal carrying the short list, the ``rename_collisions`` refusal raised
+        by carrying a discarded candidate's saves, or a removal that could not be
+        completed.
 
         None of the legs is bounded work — describing an occupied directory walks
         it whole (a multi-file install can hold tens of thousands of files),
@@ -229,19 +229,45 @@ class RomAdoptionService:
         offload lives here rather than at the call site: the caller asks a
         question and should not have to know what answering it costs.
         """
-        worker = partial(self._check_download_target_io, rom_detail, checked_path, replace=replace)
+        worker = partial(
+            self._check_download_target_io,
+            rom_detail,
+            checked_path,
+            replace=replace,
+            resume=resume,
+            candidate_path=candidate_path,
+            collision_choice=collision_choice,
+        )
         return await self._loop.run_in_executor(None, worker)
 
     def _check_download_target_io(
-        self, rom_detail: dict[str, Any], checked_path: str, *, replace: bool
+        self,
+        rom_detail: dict[str, Any],
+        checked_path: str,
+        *,
+        replace: bool,
+        resume: bool = False,
+        candidate_path=None,
+        collision_choice=None,
     ) -> dict[str, Any] | None:
         """Synchronous body of the download-target gate. Runs on an executor thread."""
         existing = self._download_file_store.describe_path(checked_path)
         if existing is None:
-            # A free path is the only state worth searching from: an occupied one
-            # is already the dialog's subject, and the user who answered
-            # ``replace`` has been shown what is there and chosen the download.
-            return None if replace else self._candidate_refusal(rom_detail, checked_path)
+            if replace:
+                return self._discard_candidate(rom_detail, candidate_path, collision_choice)
+            # A resume continues a decision already taken: "is this game already
+            # here" was answered when the download was admitted, and pausing does
+            # not change the answer — the candidate is still on disk and is
+            # precisely what the user declined, so searching again would refuse
+            # the transfer they started with no exit but Cancel.
+            #
+            # This is NOT the reason ``_replace_existing`` is dropped for a
+            # multi-file replace. There the answer is *spent*: the directory has
+            # already been removed, so anything at that path now is content the
+            # user has never seen and the gate must ask about it. Here nothing was
+            # consumed. Two different reasons, and neither generalises to the
+            # other.
+            return None if resume else self._candidate_refusal(rom_detail, checked_path)
         if self._is_own_install(rom_detail, checked_path):
             return None
         if not replace:
@@ -367,34 +393,89 @@ class RomAdoptionService:
         bytes in atomically and a delete-then-fetch would leave the user with
         neither copy if the transfer failed.
 
-        Refuses rather than deleting when the path is not safely inside the
-        RetroDECK ROMs tree, and reports a failed removal instead of letting the
-        download proceed onto ground it could not clear.
+        That last carve-out is specific to content sitting **at the target path**,
+        which is why :meth:`_discard_candidate` removes its subject through
+        :meth:`_remove_under_roms` directly: a candidate under a different name is
+        never the thing ``os.replace`` swaps, so leaving it would leave it.
+        """
+        if not is_dir and not is_multi_file_download(rom_detail):
+            roms_base = self._retrodeck_paths.roms_path()
+            return None if roms_base and is_safe_rom_path(checked_path, roms_base) else _unsafe_replace_refusal()
+        return self._remove_under_roms(checked_path, is_dir=is_dir)
+
+    def _remove_under_roms(self, path: str, *, is_dir: bool) -> dict[str, Any] | None:
+        """Delete *path*, refusing anything that is not safely inside the ROMs tree.
+
+        The one place this service deletes ROM content, shared by both legs of a
+        replace so neither can acquire its own containment rule. Reports a failed
+        removal instead of letting the download proceed onto ground it could not
+        clear.
         """
         roms_base = self._retrodeck_paths.roms_path()
-        if not roms_base or not is_safe_rom_path(checked_path, roms_base):
-            self._logger.error(f"Refusing to replace content outside the ROMs directory: {checked_path}")
-            return {
-                "success": False,
-                "reason": "unsafe_replace_target",
-                "message": "Refusing to remove content outside the ROM directory",
-            }
-        if not is_dir and not is_multi_file_download(rom_detail):
-            return None
+        if not roms_base or not is_safe_rom_path(path, roms_base):
+            self._logger.error(f"Refusing to replace content outside the ROMs directory: {path}")
+            return _unsafe_replace_refusal()
         try:
             if is_dir:
-                self._download_file_store.remove_tree(checked_path)
+                self._download_file_store.remove_tree(path)
             else:
-                self._download_file_store.remove_file(checked_path)
+                self._download_file_store.remove_file(path)
         except OSError as e:
-            self._logger.error(f"Failed to remove existing content at {checked_path}: {e}")
+            self._logger.error(f"Failed to remove existing content at {path}: {e}")
             return {
                 "success": False,
                 "reason": "replace_failed",
                 "message": "Could not remove the existing files — download aborted",
             }
-        self._logger.info(f"Replacing existing content at {checked_path}")
+        self._logger.info(f"Replacing existing content at {path}")
         return None
+
+    # ── Downloading over a candidate ────────────────────────────────
+
+    def _discard_candidate(self, rom_detail: dict[str, Any], candidate_path, collision_choice) -> dict[str, Any] | None:
+        """Remove the candidate the user chose to download over, and carry its saves.
+
+        The dialog's second confirmation names this deletion, so it happens: the
+        file the user was shown goes, and the server's copy takes its place. One
+        rule for both exits of that dialog — content at the target path and
+        content beside it under another name are removed alike.
+
+        ``None`` — proceed with the download — when no particular file was the
+        subject: a target-path replace (:meth:`_clear_for_replace` owns that one)
+        or "None of These", where the user declined every candidate rather than
+        choosing one, and nothing may be deleted on their behalf.
+
+        **Carry, then remove.** A carry that fails aborts with nothing deleted
+        and, on the link-then-unlink path, nothing moved either. Removing first
+        would mean a failed carry leaves the saves orphaned under a name whose ROM
+        is already gone — the exact outcome the rename exists to prevent.
+        """
+        if not candidate_path:
+            return None
+        target = self._resolve_target(rom_detail)
+        if target is None:
+            return {
+                "success": False,
+                "reason": "path_traversal",
+                "message": "Server sent an unsafe platform path — download aborted",
+            }
+        source_path = self._resolve_source(target, candidate_path)
+        if source_path is None:
+            return {
+                "success": False,
+                "reason": "invalid_candidate",
+                "message": "That file is not in this game's platform folder — nothing was removed",
+            }
+        existing = self._download_file_store.describe_path(source_path)
+        if existing is None:
+            return None
+        rom_id = int(rom_detail.get("id") or 0)
+        refusal = self._renamer.move_planned(
+            self._renamer.discarded_save_pairs(rom_id, target, source_path), collision_choice
+        )
+        if refusal is not None:
+            return refusal
+        return self._remove_under_roms(source_path, is_dir=existing["is_dir"])
 
     # ── Adopt ───────────────────────────────────────────────────────
 
@@ -448,7 +529,7 @@ class RomAdoptionService:
         if refusal is not None:
             return refusal
         if source_path != target.path:
-            worker = partial(self._carry_to_canonical_io, rom_id, target, source_path, collision_choice)
+            worker = partial(self._carry_io, rom_id, target, source_path, collision_choice)
             refusal = await self._loop.run_in_executor(None, worker)
             if refusal is not None:
                 return refusal
@@ -505,12 +586,8 @@ class RomAdoptionService:
                     else "A file is in the way where a folder belongs"
                 ),
             }
-        if source_path != target.path and self._adoption_move.exists(target.path):
-            return {
-                "success": False,
-                "reason": "target_taken",
-                "message": "Something arrived at this game's own location — nothing was moved",
-            }
+        if source_path != target.path and self._renamer.target_taken(target):
+            return _target_taken_refusal()
         with self._uow_factory() as uow:
             known = uow.roms.get(rom_id) is not None
         if not known:
@@ -521,239 +598,17 @@ class RomAdoptionService:
             }
         return None
 
-    # ── Carry a candidate to the canonical name ─────────────────────
+    def _carry_io(self, rom_id: int, target: _Target, source_path: str, collision_choice) -> dict[str, Any] | None:
+        """Rename the candidate into place. Runs off the loop.
 
-    def _carry_to_canonical_io(
-        self, rom_id: int, target: _Target, source_path: str, collision_choice
-    ) -> dict[str, Any] | None:
-        """Move the candidate, and everything RetroArch named after it, into place.
-
-        ``None`` means every file arrived. The whole plan is computed and every
-        target checked **before** the first file moves: renaming as you go and
-        asking at the first collision would leave half the set moved when the
-        question appears.
-
-        The ROM's own target is not part of that question. A name that appeared
-        there since the validation is the occupied-target case the other dialog
-        owns, so it is refused outright rather than offered as something to
-        overwrite or skip.
+        The ROM's own target is re-checked here rather than left to the plan: a
+        name that appeared there since the validation is the occupied-target case
+        the *other* dialog owns, so it is refused outright rather than offered as
+        one more thing to overwrite or skip.
         """
-        pairs = self._rename_plan(rom_id, target, source_path)
-        occupied = frozenset(pair.target for pair in pairs if self._adoption_move.exists(pair.target))
-        if target.path in occupied:
-            return {
-                "success": False,
-                "reason": "target_taken",
-                "message": "Something arrived at this game's own location — nothing was moved",
-            }
-        clear, colliding = split_collisions(pairs, occupied)
-        to_move = clear
-        if colliding:
-            choice = str(collision_choice or "")
-            chosen = pairs_for_choice(clear, colliding, choice)
-            if chosen is None:
-                return collision_refusal(colliding)
-            if choice == OVERWRITE:
-                refusal = self._replace_occupied(colliding)
-                if refusal is not None:
-                    return refusal
-            to_move = chosen
-        return self._report_move(self._adoption_move.move_pairs(tuple((pair.source, pair.target) for pair in to_move)))
-
-    def _replace_occupied(self, colliding: tuple[RenamePair, ...]) -> dict[str, Any] | None:
-        """Delete the files an Overwrite answers for, before anything moves.
-
-        Clearing first rather than replacing as each file lands keeps the two
-        halves apart: one destructive phase the user answered for, then a move
-        phase with no collisions left in it. A failure here has moved nothing, so
-        the ROM is exactly where it was — but files the user chose to lose are
-        already gone, and the refusal names them.
-        """
-        removed, error = self._adoption_move.remove_targets(tuple(pair.target for pair in colliding))
-        if not error:
-            return None
-        already = (
-            " These were already replaced: " + ", ".join(os.path.basename(path) for path in removed) + "."
-            if removed
-            else ""
-        )
-        self._logger.error(f"Adoption overwrite failed after removing {len(removed)} file(s): {error}")
-        return {
-            "success": False,
-            "reason": "replace_failed",
-            "message": f"Could not replace the existing files ({error}). Nothing was moved.{already}",
-        }
-
-    def _report_move(self, outcome) -> dict[str, Any] | None:
-        """Turn a move outcome into a refusal, or ``None`` when everything arrived.
-
-        A source left beside a completed target is not a failure: one inode under
-        two names loses nothing and a re-run finishes it. It is logged rather than
-        surfaced, because the user's game is playable and the alternative is a
-        scary dialog about a state that harmed nothing.
-        """
-        if outcome["stranded"]:
-            self._logger.warning(f"Adoption left old copies behind: {outcome['error']}")
-        if not outcome["unmoved"]:
-            return None
-        moved = ", ".join(os.path.basename(path) for path in outcome["moved"])
-        unmoved = ", ".join(os.path.basename(path) for path in outcome["unmoved"])
-        self._logger.error(f"Adoption rename failed: {outcome['error']}")
-        arrived = f" These are at their new names: {moved}." if moved else ""
-        return {
-            "success": False,
-            "reason": "rename_failed",
-            "message": (
-                f"Could not rename this game's files ({outcome['error']}). "
-                f"Still under the old name: {unmoved}.{arrived}"
-            ),
-        }
-
-    def _rename_plan(self, rom_id: int, target: _Target, source_path: str) -> tuple[RenamePair, ...]:
-        """Every source → target pair adopting this candidate consists of.
-
-        The stems come from the **launch file**, not from what is being renamed:
-        for a multi-file ROM the launch file sits inside the directory that moves,
-        so its name does not change while the directory's does — which is exactly
-        the case where the save *directory* moves and the save *filenames* stay.
-        """
-        launch_source, launch_target = self._launch_paths(target, source_path)
-        return rename_pairs(
-            rom_source=source_path,
-            rom_target=target.path,
-            stem_source=os.path.splitext(os.path.basename(launch_source))[0] if launch_source else "",
-            stem_target=os.path.splitext(os.path.basename(launch_target))[0] if launch_target else "",
-            companions=self._companions(rom_id, target, source_path, launch_source, launch_target),
-        )
-
-    def _launch_paths(self, target: _Target, source_path: str) -> tuple[str, str]:
-        """The file RetroArch names the saves after, where it is now and where it will be.
-
-        For a single-file ROM that is the ROM itself. For a directory it is the
-        launch file inside, picked by the download's own rule, and its place under
-        the renamed directory is the same relative path. Two empty strings when a
-        directory holds no file to launch — there is then no stem, and no
-        companion can be attributed to this ROM.
-        """
-        if not target.is_multi:
-            return (source_path, target.path)
-        files = self._download_file_store.scan_files_with_sizes(source_path)
-        detected = detect_launch_file(files, self._m3u_support(target.system))
-        if detected is None:
-            return ("", "")
-        return (detected, os.path.join(target.path, os.path.relpath(detected, source_path)))
-
-    def _companions(
-        self, rom_id: int, target: _Target, source_path: str, launch_source: str, launch_target: str
-    ) -> tuple[CompanionDir, ...]:
-        """The save and savestate directories this rename has to carry files out of.
-
-        The two are read independently because RetroArch sorts them
-        independently — a stock RetroDECK install content-sorts its savefiles and
-        leaves its savestates unsorted, so assuming one from the other addresses
-        the wrong directory. A directory that sits **inside** the content being
-        moved is skipped: it travels with the rename already, and pairing its
-        files up would move them a second time.
-        """
-        if not launch_source:
-            return ()
-        # The two sides read from different sources, and the asymmetry is not an
-        # oversight. Savefiles are addressed the way the save sync addresses them
-        # (see :meth:`_savefile_layout`); savestates come from the live config
-        # because nothing records them — MigrationService's markers track savefile
-        # sorting only, so there is no "previous" savestate layout to honour and a
-        # pending savefile migration says nothing about where savestates sit.
-        layouts = (
-            (SAVE, self._savefile_layout(), self._retrodeck_paths.saves_path()),
-            (SAVESTATE, self._savestate_layout(), self._retrodeck_paths.states_path()),
-        )
-        core_name = (
-            self._core_name_for(rom_id)
-            if any(isinstance(layout, InSaveDir) and layout.sort_by_core for _kind, layout, _root in layouts)
-            else None
-        )
-        found: list[CompanionDir] = []
-        for kind, layout, root in layouts:
-            source_dir, target_dir = self._layout_dirs(
-                layout, root, target.system, launch_source, launch_target, core_name
-            )
-            if _travels_with(source_path, source_dir) or _travels_with(source_path, target_dir):
-                continue
-            names = self._adoption_move.list_names(source_dir)
-            if names:
-                found.append(CompanionDir(kind=kind, source_dir=source_dir, target_dir=target_dir, names=names))
-        return tuple(found)
-
-    def _savefile_layout(self) -> SaveLayout:
-        """Where this device's savefiles sit right now — the sync's own answer.
-
-        A rename has to know where the existing files **are**, which is not the
-        same question as where RetroArch will write next. The two differ exactly
-        while a save-sort migration is pending: the files are still in the old
-        layout, the sync deliberately keeps looking there (#238), and a rename
-        reading the live config would move them out from under it and leave the
-        pending migration reaching for files that are no longer where it left
-        them. So the sorting comes from ``SaveSortingProvider`` — the same
-        decision the sync resolves its own paths with — and never from the cfg.
-
-        ``savefiles_in_content_dir`` is the one part that must come from the live
-        config: saves written next to the ROM are outside the tree the plugin
-        syncs, so MigrationService records no marker for that state and there is
-        nothing recorded to prefer.
-        """
-        live = self._save_layout()
-        return live if isinstance(live, ContentDir) else self._save_sorting()
-
-    def _layout_dirs(
-        self,
-        layout: SaveLayout,
-        root: str,
-        system: str,
-        launch_source: str,
-        launch_target: str,
-        core_name: str | None,
-    ) -> tuple[str, str]:
-        """Resolve one layout's directory for the old name and for the new one.
-
-        The same resolver the save sync itself uses, pointed at the root the
-        layout belongs to. A ``ContentDir`` layout has RetroArch writing beside
-        the ROM, which is a directory the resolver does not describe — so it is
-        answered directly, and for a multi-file ROM the caller then drops it
-        because that directory moves with the ROM.
-        """
-        if not isinstance(layout, InSaveDir):
-            return (os.path.dirname(launch_source), os.path.dirname(launch_target))
-        roms_base = self._retrodeck_paths.roms_path()
-
-        def resolved(rom_path: str) -> str:
-            return resolve_save_dir(
-                rom_path,
-                root,
-                system,
-                roms_base=roms_base,
-                sort_by_content=layout.sort_by_content,
-                sort_by_core=layout.sort_by_core,
-                core_name=core_name,
-            )
-
-        return (resolved(launch_source), resolved(launch_target))
-
-    def _core_name_for(self, rom_id: int) -> str | None:
-        """The RetroArch ``corename`` whose subdirectory this ROM's saves sit in, or ``None``.
-
-        Warn-and-fall-back rather than fail-loud, matching what the save sync does
-        with the same question: an unresolvable corename sends both this rename and
-        every later sync to the parent directory, so they stay pointed at the same
-        place instead of disagreeing about where the saves are.
-        """
-        core_so, _label = self._active_core.active_core_for_rom(rom_id)
-        core_name = self._get_core_name(core_so) if core_so else None
-        if core_name is None:
-            self._logger.warning(
-                f"RetroArch sorts this ROM's saves per core, but its corename could not be resolved "
-                f"(core={core_so or 'unresolved'}) — looking in the parent directory instead"
-            )
-        return core_name
+        if self._renamer.target_taken(target):
+            return _target_taken_refusal()
+        return self._renamer.carry_to_canonical(rom_id, target, source_path, collision_choice)
 
     def _adopt_io(self, rom_id: int, rom_detail: dict[str, Any], target: _Target) -> dict[str, Any]:
         """Persist the install record for content ``_validate_adoption_io`` accepted.

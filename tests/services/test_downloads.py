@@ -6066,6 +6066,48 @@ class TestResumeSupersede:
         assert 1 not in plugin._download_service._download_in_progress
 
     @pytest.mark.asyncio
+    async def test_resume_tells_the_gate_it_is_a_resume(self, plugin):
+        # A paused multi-file transfer has no extract directory yet, so the gate
+        # sees a free path and would run the candidate search — handing back the
+        # very file the user declined when they admitted this download, with
+        # Cancel (which discards the transferred bytes) as the only exit.
+        # The stand-in gate refuses exactly as that search would.
+        seen: list[bool] = []
+
+        async def gate(rom_detail, checked_path, *, replace, resume=False, candidate_path=None, collision_choice=None):
+            seen.append(resume)
+            if resume:
+                return None
+            return {"success": False, "reason": "adoption_candidates", "message": "already on this device"}
+
+        plugin._download_service._target_gate = gate
+        plugin._download_service._download_queue[1] = {"rom_id": 1, "status": "paused", "resumable": True}
+        started = _stage_download_prologue(plugin)
+
+        result = await plugin.resume_download(1)
+
+        assert result["success"] is True
+        assert seen == [True]
+        assert len(started) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_fresh_download_still_faces_the_candidate_search(self, plugin):
+        # The counterpart: the skip is scoped to a resume, and a first attempt is
+        # still refused by the same gate.
+        async def gate(rom_detail, checked_path, *, replace, resume=False, candidate_path=None, collision_choice=None):
+            if resume:
+                return None
+            return {"success": False, "reason": "adoption_candidates", "message": "already on this device"}
+
+        plugin._download_service._target_gate = gate
+        started = _stage_download_prologue(plugin)
+
+        result = await plugin.start_download(1, False)
+
+        assert result["reason"] == "adoption_candidates"
+        assert started == []
+
+    @pytest.mark.asyncio
     async def test_resume_non_paused_short_circuits_before_supersede(self, plugin):
         # A non-paused entry returns not_paused without touching the supersede seam.
         from unittest.mock import MagicMock

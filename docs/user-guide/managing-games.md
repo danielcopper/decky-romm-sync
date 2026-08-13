@@ -284,8 +284,16 @@ your server uses**, and moves your saves and savestates for that game along with
 a game deletes the ROM but never the saves — so a game left under your own name would, after an uninstall and a later
 download, be looking for saves under a name nothing ever wrote. Renaming now keeps everything joined up.
 
+**Download Instead** on a file you picked from the list deletes that file, exactly as it does for one sitting at the
+game's own location — it asks a second time and names what goes first. Your saves and savestates for it are moved to the
+canonical name rather than left behind, so the freshly downloaded copy finds them. (For a game made of several files
+they stay where they are: the name they would need depends on what is inside the archive, which is not known until it
+has been downloaded.) Choosing **None of These** deletes nothing — you declined every candidate rather than picking one,
+so the download simply lands beside them.
+
 If a name it needs is already taken — you have played both versions and both left saves — a second dialog opens **before
-anything has been moved**, lists everything that collides, and asks once for the whole set:
+anything has been moved**, lists everything that collides, and asks once for the whole set. This is the same dialog on
+either exit, because it is the same question:
 
 - **Replace Them** — the existing files at those names are deleted and yours take their place.
 - **Keep Them** — the existing files stay and your old-named ones stay where they are. Nothing is lost, but those old

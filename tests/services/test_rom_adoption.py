@@ -1425,6 +1425,33 @@ class TestCandidateSearch:
             is None
         )
 
+    async def test_a_resume_is_never_refused_by_the_candidate_the_user_declined(self, h):
+        # A paused multi-file transfer has no extract directory yet, so the gate
+        # sees a free path. Searching again would hand back the very candidate the
+        # user declined when they started the download, and the frontend's only
+        # exit is Cancel — which discards the transferred bytes.
+        h.system_extensions = {"psx": frozenset({".cue"})}
+        h.store.dirs.add("/roms/psx/Game (U)")
+        h.store.files["/roms/psx/Game (U)/disc.cue"] = b"declined"
+
+        result = await h.service.check_download_target(
+            _multi_file_detail(dir_name="Game"), "/roms/psx/Game", replace=False, resume=True
+        )
+
+        assert result is None
+
+    async def test_the_same_candidate_still_refuses_a_fresh_download(self, h):
+        h.system_extensions = {"psx": frozenset({".cue"})}
+        h.store.dirs.add("/roms/psx/Game (U)")
+        h.store.files["/roms/psx/Game (U)/disc.cue"] = b"declined"
+
+        result = await h.service.check_download_target(
+            _multi_file_detail(dir_name="Game"), "/roms/psx/Game", replace=False, resume=False
+        )
+
+        assert result is not None
+        assert result["reason"] == "adoption_candidates"
+
     async def test_an_occupied_target_is_still_the_other_dialog_s_subject(self, h):
         # The search only ever runs on a free target: an occupied one is already
         # a comparison the user is being shown.
@@ -1440,11 +1467,139 @@ class TestCandidateSearch:
         assert result["reason"] == "target_occupied"
 
 
-# ── adopting a candidate ─────────────────────────────────────────────────
+# ── downloading over a candidate ─────────────────────────────────────────
 
 
 _OLD = "/roms/snes/Game (U).sfc"
 _NEW = "/roms/snes/Game.sfc"
+
+
+class TestDiscardCandidate:
+    """The dialog's second confirmation names a deletion, so the deletion happens."""
+
+    @staticmethod
+    def _stage(h) -> None:
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.files[_OLD] = b"user's own dump"
+
+    async def test_downloading_over_a_candidate_removes_it(self, h):
+        self._stage(h)
+
+        result = await h.service.check_download_target(_single_file_detail(), _NEW, replace=True, candidate_path=_OLD)
+
+        assert result is None
+        assert _OLD not in h.store.files
+
+    async def test_its_saves_and_savestates_arrive_under_the_canonical_name(self, h):
+        self._stage(h)
+        h.store.files["/saves/snes/Game (U).srm"] = b"battery"
+        h.store.files["/states/Game (U).state"] = b"snapshot"
+
+        result = await h.service.check_download_target(_single_file_detail(), _NEW, replace=True, candidate_path=_OLD)
+
+        assert result is None
+        assert h.store.files["/saves/snes/Game.srm"] == b"battery"
+        assert h.store.files["/states/Game.state"] == b"snapshot"
+        assert "/saves/snes/Game (U).srm" not in h.store.files
+
+    async def test_none_of_these_removes_nothing(self, h):
+        # The user declined every candidate rather than choosing one, so no
+        # particular file was the subject and none may be deleted for them.
+        self._stage(h)
+        h.store.files["/saves/snes/Game (U).srm"] = b"battery"
+
+        result = await h.service.check_download_target(_single_file_detail(), _NEW, replace=True)
+
+        assert result is None
+        assert h.store.files[_OLD] == b"user's own dump"
+        assert h.store.files["/saves/snes/Game (U).srm"] == b"battery"
+
+    async def test_a_failed_removal_aborts_with_the_candidate_intact(self, h):
+        self._stage(h)
+        h.store.remove_failures = {_OLD}
+
+        result = await h.service.check_download_target(_single_file_detail(), _NEW, replace=True, candidate_path=_OLD)
+
+        assert result is not None
+        assert result["success"] is False
+        assert result["reason"] == "replace_failed"
+        assert h.store.files[_OLD] == b"user's own dump"
+
+    async def test_a_taken_save_name_raises_the_same_collision_question(self, h):
+        self._stage(h)
+        h.store.files["/saves/snes/Game (U).srm"] = b"mine"
+        h.store.files["/saves/snes/Game.srm"] = b"the other version's"
+
+        result = await h.service.check_download_target(_single_file_detail(), _NEW, replace=True, candidate_path=_OLD)
+
+        assert result is not None
+        assert result["reason"] == "rename_collisions"
+        assert [c["path"] for c in result["collisions"]] == ["/saves/snes/Game.srm"]
+        # Nothing moved and nothing removed while the question is open.
+        assert h.store.files[_OLD] == b"user's own dump"
+        assert h.store.files["/saves/snes/Game.srm"] == b"the other version's"
+
+    async def test_the_collision_answer_completes_the_discard(self, h):
+        self._stage(h)
+        h.store.files["/saves/snes/Game (U).srm"] = b"mine"
+        h.store.files["/saves/snes/Game.srm"] = b"the other version's"
+
+        result = await h.service.check_download_target(
+            _single_file_detail(), _NEW, replace=True, candidate_path=_OLD, collision_choice="overwrite"
+        )
+
+        assert result is None
+        assert h.store.files["/saves/snes/Game.srm"] == b"mine"
+        assert _OLD not in h.store.files
+
+    async def test_keep_leaves_the_old_saves_and_still_removes_the_candidate(self, h):
+        self._stage(h)
+        h.store.files["/saves/snes/Game (U).srm"] = b"mine"
+        h.store.files["/saves/snes/Game.srm"] = b"the other version's"
+
+        result = await h.service.check_download_target(
+            _single_file_detail(), _NEW, replace=True, candidate_path=_OLD, collision_choice="keep"
+        )
+
+        assert result is None
+        assert h.store.files["/saves/snes/Game.srm"] == b"the other version's"
+        assert h.store.files["/saves/snes/Game (U).srm"] == b"mine"
+        assert _OLD not in h.store.files
+
+    async def test_a_candidate_outside_the_platform_folder_is_refused(self, h):
+        h.store.files["/roms/gba/Game (U).sfc"] = b"different platform"
+
+        result = await h.service.check_download_target(
+            _single_file_detail(), _NEW, replace=True, candidate_path="/roms/gba/Game (U).sfc"
+        )
+
+        assert result is not None
+        assert result["reason"] == "invalid_candidate"
+        assert h.store.files["/roms/gba/Game (U).sfc"] == b"different platform"
+
+    async def test_a_candidate_that_vanished_lets_the_download_proceed(self, h):
+        result = await h.service.check_download_target(_single_file_detail(), _NEW, replace=True, candidate_path=_OLD)
+
+        assert result is None
+
+    async def test_a_multi_file_candidate_goes_but_its_saves_stay_put(self, h):
+        # The downloaded directory's launch file is inside an archive that has not
+        # been fetched, so the name those saves would need is unknown. Untouched
+        # and findable beats moved to a name nothing reads.
+        h.store.dirs.add("/roms/psx/Game (U)")
+        h.store.files["/roms/psx/Game (U)/disc.cue"] = b"cue"
+        h.store.files["/saves/Game (U)/disc.srm"] = b"battery"
+
+        result = await h.service.check_download_target(
+            _multi_file_detail(dir_name="Game"), "/roms/psx/Game", replace=True, candidate_path="/roms/psx/Game (U)"
+        )
+
+        assert result is None
+        assert "/roms/psx/Game (U)/disc.cue" not in h.store.files
+        assert h.store.files["/saves/Game (U)/disc.srm"] == b"battery"
+
+
+# ── adopting a candidate ─────────────────────────────────────────────────
 
 
 class TestAdoptCandidate:
@@ -1627,7 +1782,7 @@ class TestAdoptCandidate:
         h.seed_rom()
         h.stage_detail(_single_file_detail())
         h.save_sorting = InSaveDir(sort_by_content=True, sort_by_core=True)
-        h.service._active_core = FakeActiveCoreResolver(default=("snes9x_libretro", "Snes9x"))
+        h.active_core.default = ("snes9x_libretro", "Snes9x")
         h.core_name = "Snes9x"
         h.store.files[_OLD] = b"rom"
         h.store.files["/saves/snes/Snes9x/Game (U).srm"] = b"srm"

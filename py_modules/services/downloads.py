@@ -240,19 +240,21 @@ class DownloadService:
         if cleaned:
             self._logger.info(f"Cleaned {cleaned} leftover tmp file(s)")
 
-    async def start_download(self, rom_id, replace_existing=False):
-        """Start a download, refusing when its target path is already occupied.
+    async def start_download(self, rom_id, replace_existing=False, candidate_path=None, collision_choice=None):
+        """Start a download, refusing when this game is already on disk.
 
-        *replace_existing* is the user's answer to that refusal: the download
-        proceeds and whatever is in the way is cleared first. It rides on this
-        callable rather than a second one so every download — first attempt or
-        replace — passes the same prologue: the ``already_downloading`` guard, the
-        path-safety coercion, the occupancy gate, the supersede, the disk pre-flight.
+        *replace_existing*, *candidate_path* and *collision_choice* are the
+        user's answers to that refusal; ``DownloadTargetGateFn`` owns what each
+        means. They ride on this callable rather than a second one so every
+        download — first attempt or replace — passes the same prologue: the
+        ``already_downloading`` guard, the path-safety coercion, the occupancy
+        gate, the supersede, the disk pre-flight.
         """
         rom_id = int(rom_id)
         if rom_id in self._download_in_progress:
             return {"success": False, "reason": "already_downloading", "message": "Already downloading"}
-        return await self._begin_download(rom_id, resume=False, replace_existing=bool(replace_existing))
+        answer = {"candidate_path": candidate_path, "collision_choice": collision_choice}
+        return await self._begin_download(rom_id, resume=False, replace_existing=bool(replace_existing), **answer)
 
     async def supersede_sibling_installs(self, rom_id: int) -> dict[str, Any] | None:
         """Strip any other installed version of ``rom_id``'s sibling group (#1298 T7).
@@ -328,8 +330,10 @@ class DownloadService:
                 superseded.append(member.rom_id)
             return superseded
 
-    async def _begin_download(self, rom_id, *, resume: bool, replace_existing: bool = False):
+    async def _begin_download(self, rom_id, *, resume: bool, replace_existing=False, **answer):
         """Shared core of ``start_download`` and ``resume_download``.
+
+        *answer* passes the adopt dialog's answers through to the gate, unread.
 
         Fetches ROM detail, resolves the platform path, then runs the three
         pre-flights **in this order**: the occupancy gate, the #1298 sibling
@@ -379,14 +383,17 @@ class DownloadService:
             file_size = rom_detail.get("fs_size_bytes", 0)
             target_path = os.path.join(roms_dir, file_name)
 
-            # Refuse before a single byte moves when something is already at the
-            # path this download would claim — the user decides between adopting
-            # it and replacing it (ADR-0028). A multi-file ROM claims its extract
-            # directory, not the archive name.
+            # Refuse before a single byte moves when this game is already on disk
+            # — at the path this download would claim, or beside it under another
+            # name — and let the user decide between adopting it and replacing it
+            # (ADR-0028). A multi-file ROM claims its extract directory, not the
+            # archive name.
             checked_path = target_path
             if is_multi_file_download(rom_detail):
                 checked_path = os.path.join(roms_dir, self._resolve_safe_extract_dir_name(rom_detail))
-            occupied = await self._target_gate(rom_detail, checked_path, replace=replace_existing)
+            occupied = await self._target_gate(
+                rom_detail, checked_path, replace=replace_existing, resume=resume, **answer
+            )
             if occupied is not None:
                 self._download_in_progress.discard(rom_id)
                 return occupied
@@ -1316,7 +1323,9 @@ class DownloadService:
         the user chose to replace, so the entry's stored answer goes back to the
         gate — without it the resume is refused by the very file it is replacing,
         every time. Anything else faces a free path, or a refusal if content
-        appeared there while it sat paused.
+        appeared there while it sat paused — but never the candidate search,
+        which is skipped on a resume so a file the user already declined cannot
+        refuse the transfer they started.
         """
         rom_id = int(rom_id)
         entry = self._download_queue.get(rom_id)

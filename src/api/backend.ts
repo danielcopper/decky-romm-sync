@@ -204,13 +204,22 @@ export const clearSyncCache = callable<[], BackendResult>("clear_sync_cache");
 export const getSyncStats = callable<[], SyncStats>("get_sync_stats");
 /**
  * Start a download. `replaceExisting` is the user's answer to a
- * `target_occupied` refusal: pass `true` only after the second confirmation
- * that names the deletion, because the backend then clears whatever is in the
- * way before fetching (ADR-0028).
+ * `target_occupied` or `adoption_candidates` refusal: pass `true` only after the
+ * second confirmation that names the deletion, because the backend then clears
+ * what the user was shown before fetching (ADR-0028).
+ *
+ * `candidatePath` names that content when it sat elsewhere in the platform
+ * folder under another name — the backend removes it and carries its saves to
+ * the canonical name, which is exactly what the confirmation promises. Pass
+ * `null` for a target-path replace, and for "None of These": there the user
+ * declined every candidate rather than choosing one, so nothing may be deleted
+ * on their behalf. `collisionChoice` answers the save-collision dialog that
+ * carry can raise, and stays `null` until that dialog has been shown.
  */
-export const startDownload = callable<[number, boolean], BackendResult | TargetOccupiedResult | CandidatesFoundResult>(
-  "start_download",
-);
+export const startDownload = callable<
+  [number, boolean, string | null, CollisionChoice | null],
+  BackendResult | TargetOccupiedResult | CandidatesFoundResult | RenameCollisionsResult
+>("start_download");
 /**
  * Record content already on disk as this ROM's install — nothing is fetched.
  *
