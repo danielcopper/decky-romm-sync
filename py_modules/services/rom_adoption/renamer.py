@@ -140,18 +140,19 @@ class AdoptionRenamer:
         occupied = frozenset(pair.target for pair in pairs if self._adoption_move.exists(pair.target))
         clear, colliding = split_collisions(pairs, occupied)
         to_move = clear
+        quarantined: tuple[str, ...] = ()
         if colliding:
             choice = str(collision_choice or "")
             chosen = pairs_for_choice(clear, colliding, choice)
             if chosen is None:
                 return (collision_refusal(colliding), ())
             if choice == OVERWRITE:
-                refusal = self._replace_occupied(colliding)
+                refusal, quarantined = self._replace_occupied(colliding)
                 if refusal is not None:
                     return (refusal, ())
             to_move = chosen
         outcome = self._adoption_move.move_pairs(tuple((pair.source, pair.target) for pair in to_move))
-        refusal = self._report_move(outcome)
+        refusal = self._report_move(outcome, quarantined)
         moved = frozenset(outcome["moved"])
         return (refusal, tuple(pair for pair in to_move if pair.target in moved))
 
@@ -194,14 +195,19 @@ class AdoptionRenamer:
             companions=self._companions(rom_id, target, source_path, launch_source, launch_target),
         )
 
-    def _replace_occupied(self, colliding: tuple[RenamePair, ...]) -> dict[str, Any] | None:
+    def _replace_occupied(self, colliding: tuple[RenamePair, ...]) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
         """Move the files an Overwrite answers for into ``.romm-backup``, before anything else moves.
 
         Clearing first rather than replacing as each file lands keeps the two
         halves apart: one destructive phase the user answered for, then a move
-        phase with no collisions left in it. A failure here has moved nothing
-        else, so the ROM is exactly where it was — and the refusal names the
-        files already set aside.
+        phase with no collisions left in it.
+
+        Returns ``(refusal, quarantined)``. *quarantined* holds only what the
+        funnel actually moved — it reports ``False`` for a target that is not a
+        regular file, and a list built without reading that would name a file
+        still sitting where it was. The caller carries it onward because the step
+        **after** this one can fail too, and a user whose other-version saves are
+        in ``.romm-backup`` has to be told they are there.
 
         Every colliding target is a save or a savestate: the ROM's own target is
         refused before the plan is consulted, and the discard path drops the ROM
@@ -212,14 +218,41 @@ class AdoptionRenamer:
         savestate in particular is synced nowhere at all, so a replaced one exists
         in no other copy.
         """
+        unusable = self._not_a_file(colliding)
+        if unusable is not None:
+            return (unusable, ())
         quarantined: list[str] = []
         for pair in colliding:
             try:
-                self._quarantine_save(os.path.dirname(pair.target), os.path.basename(pair.target))
+                moved = self._quarantine_save(os.path.dirname(pair.target), os.path.basename(pair.target))
             except (OSError, ValueError) as e:
-                return self._replace_refusal(quarantined, os.path.basename(pair.target), e)
-            quarantined.append(pair.target)
-        return None
+                return (self._replace_refusal(quarantined, os.path.basename(pair.target), e), tuple(quarantined))
+            if moved:
+                quarantined.append(pair.target)
+        return (None, tuple(quarantined))
+
+    def _not_a_file(self, colliding: tuple[RenamePair, ...]) -> dict[str, Any] | None:
+        """Refuse, by name and before anything moves, a target the funnel cannot set aside.
+
+        The funnel moves a regular file; a directory or a dangling symlink at a
+        save's name reports ``False`` and leaves the collision in place, so the
+        move would then fail at the link with nothing explaining why. Checking the
+        whole set first keeps the refusal honest about having touched nothing.
+        """
+        blocked = [
+            pair.target
+            for pair in colliding
+            if self._adoption_move.exists(pair.target) and not self._adoption_move.is_file(pair.target)
+        ]
+        if not blocked:
+            return None
+        names = ", ".join(os.path.basename(path) for path in blocked)
+        self._logger.error(f"Refusing to replace non-file collision target(s): {names}")
+        return {
+            "success": False,
+            "reason": "replace_failed",
+            "message": f"Cannot replace {names} — a folder or link is there, not a file. Nothing was moved.",
+        }
 
     def _replace_refusal(self, quarantined: list[str], failed: str, error: Exception) -> dict[str, Any]:
         """Report an Overwrite that could not finish, naming what was already set aside."""
@@ -237,13 +270,18 @@ class AdoptionRenamer:
             "message": f"Could not replace {failed} ({error}). Nothing was moved.{already}",
         }
 
-    def _report_move(self, outcome) -> dict[str, Any] | None:
+    def _report_move(self, outcome, quarantined: tuple[str, ...]) -> dict[str, Any] | None:
         """Turn a move outcome into a refusal, or ``None`` when everything arrived.
 
         A source left beside a completed target is not a failure: one inode under
         two names loses nothing and a re-run finishes it. It is logged rather than
         surfaced, because the user's game is playable and the alternative is a
         scary dialog about a state that harmed nothing.
+
+        *quarantined* is what the Overwrite before this one set aside. It is named
+        in any refusal here, because a clear that succeeded in front of a move
+        that failed leaves the user's other-version saves in ``.romm-backup`` for
+        a replacement that never arrived — and nothing else would say so.
         """
         if outcome["stranded"]:
             self._logger.warning(f"Adoption left old copies behind: {outcome['error']}")
@@ -253,12 +291,19 @@ class AdoptionRenamer:
         unmoved = ", ".join(os.path.basename(path) for path in outcome["unmoved"])
         self._logger.error(f"Adoption rename failed: {outcome['error']}")
         arrived = f" These are at their new names: {moved}." if moved else ""
+        set_aside = (
+            " These were moved to .romm-backup to make room and are still there: "
+            + ", ".join(os.path.basename(path) for path in quarantined)
+            + "."
+            if quarantined
+            else ""
+        )
         return {
             "success": False,
             "reason": "rename_failed",
             "message": (
                 f"Could not rename this game's files ({outcome['error']}). "
-                f"Still under the old name: {unmoved}.{arrived}"
+                f"Still under the old name: {unmoved}.{arrived}{set_aside}"
             ),
         }
 

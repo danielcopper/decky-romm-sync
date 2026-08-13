@@ -313,6 +313,27 @@ async def test_a_replaced_savestate_is_backed_up_beside_the_states_root(harness)
     assert theirs.read_bytes() == b"my snapshot"
 
 
+async def test_a_folder_at_a_save_s_name_is_refused_before_anything_moves(harness):
+    # The backup funnel moves a regular file and reports False for anything else,
+    # so a folder at a save's name would silently no-op the clear and then fail at
+    # the link with nothing explaining why. It is refused by name, up front.
+    candidate, mine, _theirs = _stage_collision(harness)
+    theirs = _saves_dir(harness) / "rom-41 (USA).srm"
+    theirs.unlink()
+    theirs.mkdir()
+    (theirs / "not a save").write_bytes(b"someone's folder")
+
+    result = await harness.plugin.adopt_existing_rom(_ROM_ID, str(candidate), "overwrite")
+
+    assert result["success"] is False
+    assert result["reason"] == "replace_failed"
+    assert "rom-41 (USA).srm" in result["message"]
+    assert candidate.read_bytes() == b"my own dump"
+    assert mine.read_bytes() == b"my progress"
+    assert (theirs / "not a save").read_bytes() == b"someone's folder"
+    assert not (_saves_dir(harness) / ".romm-backup").exists()
+
+
 async def test_keep_leaves_both_saves_and_still_adopts_the_rom(harness):
     candidate, mine, theirs = _stage_collision(harness)
 

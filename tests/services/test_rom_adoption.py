@@ -2050,3 +2050,66 @@ class TestAdoptCandidateCollisions:
         assert result["success"] is False
         assert result["reason"] == "rename_collisions"
         assert h.move.moves == []
+
+    async def test_a_move_that_fails_after_the_clear_says_where_the_replaced_saves_went(self, h):
+        # The clear succeeded, so the other version's saves are in .romm-backup
+        # for a replacement that never arrived. Reporting only the rename failure
+        # would leave them nowhere in the message and nowhere the user would look.
+        self._stage(h)
+        h.move.outcome = {
+            "moved": [],
+            "stranded": [],
+            "unmoved": [_OLD, "/saves/snes/Game (U).srm", "/states/Game (U).state"],
+            "error": "disk on fire",
+        }
+
+        result = await h.service.adopt_existing_rom(_ROM_ID, _OLD, "overwrite")
+
+        assert result["success"] is False
+        assert result["reason"] == "rename_failed"
+        assert ".romm-backup" in result["message"]
+        assert "Game.srm" in result["message"]
+        assert "Game.state" in result["message"]
+        assert h.quarantine.quarantined == ["/saves/snes/Game.srm", "/states/Game.state"]
+
+    async def test_a_move_that_fails_with_nothing_replaced_says_nothing_about_backups(self, h):
+        h.seed_rom()
+        h.stage_detail(_single_file_detail())
+        h.store.files[_OLD] = b"rom"
+        h.move.outcome = {"moved": [], "stranded": [], "unmoved": [_OLD], "error": "disk on fire"}
+
+        result = await h.service.adopt_existing_rom(_ROM_ID, _OLD, None)
+
+        assert result["reason"] == "rename_failed"
+        assert ".romm-backup" not in result["message"]
+
+    async def test_a_target_the_funnel_cannot_move_is_never_named_as_replaced(self, h):
+        # The funnel reports False for anything that is not a regular file. A list
+        # built without reading that would name a file still sitting where it was.
+        self._stage(h)
+        h.store.files.pop("/states/Game.state")
+        h.store.dirs.add("/states/Game.state")
+        h.store.files["/states/Game.state/stray"] = b"a folder at a savestate's name"
+
+        result = await h.service.adopt_existing_rom(_ROM_ID, _OLD, "overwrite")
+
+        assert result["success"] is False
+        assert result["reason"] == "replace_failed"
+        assert "Game.state" in result["message"]
+        # Refused up front: the savefile beside it was never quarantined either.
+        assert h.quarantine.quarantined == []
+        assert h.move.moves == []
+        assert h.store.files["/saves/snes/Game.srm"] == b"the other version's"
+
+    async def test_a_collision_target_that_vanished_is_not_named_as_replaced(self, h):
+        # Present at the plan's exists() probe, gone by the time the funnel looks:
+        # it reports False and moves nothing, so nothing may claim it did. The
+        # collision resolved itself, so the adoption still goes through.
+        self._stage(h)
+        h.quarantine.missing = {"/states/Game.state"}
+
+        result = await h.service.adopt_existing_rom(_ROM_ID, _OLD, "overwrite")
+
+        assert result["success"] is True
+        assert h.quarantine.quarantined == ["/saves/snes/Game.srm"]
+        assert "/states/Game.state" not in h.quarantine.quarantined

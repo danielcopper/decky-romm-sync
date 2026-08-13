@@ -9,9 +9,12 @@
  * source → target pair and checks all of them first, so this asks once for the
  * whole set rather than once per collision with half the set already moved.
  *
- * Keep is the non-destructive exit and says so plainly: nothing is lost, but the
- * old-named files stay where they are and no longer belong to anything. Implying
- * the move was clean would be the one thing this dialog must not do.
+ * **Neither exit destroys anything, and both say so.** Replace moves the files it
+ * displaces into `.romm-backup` — the same funnel every other save the plugin
+ * replaces goes through — so this is the surface that has to tell the user, since
+ * it is the only one they see while choosing. Keep leaves them alone, but leaves
+ * the old-named ones orphaned; implying that move was clean would be the one
+ * thing this dialog must not do.
  */
 
 import { FC } from "react";
@@ -61,8 +64,9 @@ export const AdoptCollisionModal: FC<AdoptCollisionModalProps> = ({ collisions, 
           <DialogButton onClick={() => choose("overwrite")}>Replace Them</DialogButton>
           <DialogButton onClick={() => choose("keep")}>Keep Them</DialogButton>
           <div style={LABEL_STYLE}>
-            Replace deletes the files listed above. Keep leaves them alone and leaves this game&apos;s old-named saves
-            where they are — nothing is lost, but nothing will be reading them either.
+            Replace does not delete the files listed above — each is moved into a .romm-backup folder beside it, so you
+            can put one back by hand if you pick wrong. Keep leaves them alone and leaves this game&apos;s old-named
+            saves where they are — nothing is lost, but nothing will be reading them either.
           </div>
           <DialogButton onClick={() => choose("cancel")} style={{ opacity: 0.5 }}>
             Cancel

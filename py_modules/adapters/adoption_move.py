@@ -58,6 +58,10 @@ class AdoptionMoveAdapter:
         """
         return os.path.lexists(path)
 
+    def is_file(self, path: str) -> bool:
+        """Return True when *path* is a regular file, following symlinks."""
+        return os.path.isfile(path)
+
     def move_pairs(self, pairs: tuple[tuple[str, str], ...]) -> MoveOutcome:
         """Carry every ``(source, target)`` pair, keeping a failure recoverable.
 

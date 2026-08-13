@@ -51,6 +51,9 @@ class FakeAdoptionMoveStore:
     def exists(self, path: str) -> bool:
         return self._store.exists(path)
 
+    def is_file(self, path: str) -> bool:
+        return path in self._store.files
+
     def move_pairs(self, pairs: tuple[tuple[str, str], ...]) -> MoveOutcome:
         self.moves.extend(pairs)
         if self.outcome is None:

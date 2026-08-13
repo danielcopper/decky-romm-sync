@@ -319,6 +319,16 @@ class AdoptionMoveStore(Protocol):
         """Return True when *path* is taken, a dangling symlink included."""
         ...
 
+    def is_file(self, path: str) -> bool:
+        """Return True when *path* is a regular file, following symlinks.
+
+        What the save-backup funnel can act on: it moves a regular file aside and
+        reports ``False`` for anything else. Asking first is what lets a colliding
+        target that is a directory be refused **by name, before anything moves**,
+        rather than no-opping the quarantine and failing later at the link.
+        """
+        ...
+
     def move_pairs(self, pairs: tuple[tuple[str, str], ...]) -> MoveOutcome:
         """Carry every ``(source, target)`` pair, keeping a failure recoverable.
 

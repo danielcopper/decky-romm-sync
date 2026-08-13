@@ -44,9 +44,21 @@ describe("AdoptCollisionModal — what it states", () => {
     expect(container.textContent).toContain("nothing will be reading them either");
   });
 
-  it("says plainly that Replace deletes", () => {
+  it("tells the user where a replaced file goes, at the moment they choose", () => {
+    // This is the only surface shown while deciding, so it is the only place the
+    // recovery net can be learned about — and the whole reason Replace routes
+    // through the backup funnel rather than deleting.
     const { container } = renderModal();
-    expect(container.textContent).toContain("Replace deletes the files listed above");
+    expect(container.textContent).toContain(".romm-backup");
+    expect(container.textContent).toContain("put one back by hand");
+  });
+
+  it("never claims Replace deletes, because it does not", () => {
+    // Guards the contradiction this dialog carried against the user guide: the
+    // guide said nothing is destroyed while the dialog said it is deleted.
+    const { container } = renderModal();
+    expect(container.textContent).toContain("Replace does not delete");
+    expect(container.textContent).not.toContain("Replace deletes");
   });
 });
 
