@@ -1166,6 +1166,13 @@ slot switch — writes content to a path of the form:
 `Mario Golf - Advance Tour (USA).gba`); `<server_save.file_extension>` is the `file_extension` field on the chosen RomM
 save (e.g. `srm`).
 
+An unusable `file_extension` never reaches the filesystem, and the four cases are deliberately not equivalent. An
+**absent** field is the benign default: `srm`, silently. A field that is **present but empty or `null`** also falls back
+to `srm` but is reported to the caller, which logs it — a server that sent one is saying something, and the joined name
+(`<rom_basename>.` / `<rom_basename>.None`) would otherwise be a perfectly valid filename for a save no emulator ever
+writes. A value carrying **path separators** is reduced to its basename and reported as sanitized. A value that leaves
+**no usable component at all** (trailing separator, NUL byte) falls back to `srm` and is reported.
+
 This is the **only** path used for local writes. The server's stored `file_name` (which may carry a timestamp tag like
 `[2026-03-24_15-18-50]` or come from a different client with an unrelated naming convention) and the server's
 `file_name_no_tags` are **not** consulted. RetroArch identifies SRAM purely by `<rom_basename>.<ext>` filename match —

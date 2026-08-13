@@ -140,6 +140,14 @@ def compute_local_save_target(server_save: dict[str, Any], rom_name: str) -> Loc
     path and silently break the sync.
     """
     ext = server_save.get("file_extension", "srm")
+    if not ext:
+        # ``None`` and ``""`` both join into a syntactically valid filename
+        # (``<rom_name>.None`` / ``<rom_name>.``), so the sanitizer below has no
+        # reason to reject them — and RetroArch, which finds SRAM only by
+        # ``<rom_basename>.<ext>`` match, would then look under a name no
+        # emulator writes. An ABSENT key is the benign default and stays silent;
+        # a present-but-unusable value is reported like any other fallback.
+        return LocalSaveTarget(f"{rom_name}.srm", fallback_extension=str(ext))
     target = f"{rom_name}.{ext}"
     try:
         sanitized = sanitize_save_filename(target)

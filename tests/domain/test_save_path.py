@@ -239,17 +239,34 @@ class TestComputeLocalSaveTarget:
         assert result.fallback_extension == "srm\x00evil"
         assert result.sanitized_from is None
 
-    def test_empty_string_extension_keeps_trailing_dot(self) -> None:
-        """An empty ``file_extension`` produces ``<rom_name>.``.
+    def test_empty_string_extension_falls_back(self) -> None:
+        """An empty ``file_extension`` falls back to ``srm`` and is reported.
 
         ``sanitize_save_filename`` accepts ``pokemon.`` as a single safe
-        component (its basename is ``pokemon.``), so no diagnostic flag
-        is set.
+        component, so the unusable value has to be caught before the join
+        rather than by the sanitizer.
         """
         result = compute_local_save_target({"file_extension": ""}, "pokemon")
-        assert result.filename == "pokemon."
-        assert result.fallback_extension is None
+        assert result.filename == "pokemon.srm"
+        assert result.fallback_extension == ""
         assert result.sanitized_from is None
+
+    def test_null_extension_falls_back(self) -> None:
+        """A ``file_extension: null`` falls back to ``srm`` and is reported.
+
+        Without the guard the join yields ``pokemon.None`` — a valid filename
+        for a save RetroArch will never look for.
+        """
+        result = compute_local_save_target({"file_extension": None}, "pokemon")
+        assert result.filename == "pokemon.srm"
+        assert result.fallback_extension == "None"
+        assert result.sanitized_from is None
+
+    def test_absent_extension_is_not_reported_as_a_fallback(self) -> None:
+        """A missing key is the benign default, not an unusable server value."""
+        result = compute_local_save_target({}, "pokemon")
+        assert result.filename == "pokemon.srm"
+        assert result.fallback_extension is None
 
     def test_dotdot_extension_survives_untouched(self) -> None:
         """``..`` as an extension is accepted: ``pokemon...`` is a valid basename.
