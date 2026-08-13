@@ -59,7 +59,7 @@ from domain.rom_files import (
     resolve_local_file_name,
     synthetic_rom_name,
 )
-from domain.save_layout import InSaveDir
+from domain.save_layout import ContentDir, InSaveDir
 from domain.save_path import resolve_save_dir
 from lib.errors import error_response
 from lib.path_safety import PathTraversalError, coerce_safe_component, is_safe_rom_path, safe_join
@@ -82,6 +82,7 @@ if TYPE_CHECKING:
         RetroDeckPaths,
         RomInstallRecorder,
         RommRomReader,
+        SaveSortingProvider,
         SiblingSupersedeProvider,
         SystemM3uSupportFn,
         SystemResolver,
@@ -153,10 +154,11 @@ class RomAdoptionServiceConfig:
     cannot drift from a downloaded one. ``m3u_support`` gates whether a bundled
     ``.m3u`` may be chosen as an adopted directory's launch file, exactly as it
     does for an extracted one. ``system_extensions`` is the live ES-DE accept-list
-    the candidate search filters a platform directory through. ``save_layout`` and
-    ``savestate_layout`` are read separately because RetroArch sorts the two
-    independently, and ``active_core`` / ``get_core_name`` answer the per-core
-    subdirectory only when a layout says there is one.
+    the candidate search filters a platform directory through. The three layout
+    seams are separate because they answer three different questions from two
+    different sources — see :meth:`RomAdoptionService._savefile_layout`.
+    ``active_core`` / ``get_core_name`` answer the per-core subdirectory only when
+    a layout says there is one.
     """
 
     romm_api: RommRomReader
@@ -168,6 +170,7 @@ class RomAdoptionServiceConfig:
     m3u_support: SystemM3uSupportFn
     system_extensions: SystemSupportedExtensionsFn
     save_layout: RetroArchSaveLayoutProvider
+    save_sorting: SaveSortingProvider
     savestate_layout: RetroArchSavestateLayoutProvider
     active_core: ActiveCoreReader
     get_core_name: CoreNameProviderFn
@@ -194,6 +197,7 @@ class RomAdoptionService:
         self._m3u_support = config.m3u_support
         self._system_extensions = config.system_extensions
         self._save_layout = config.save_layout
+        self._save_sorting = config.save_sorting
         self._savestate_layout = config.savestate_layout
         self._active_core = config.active_core
         self._get_core_name = config.get_core_name
@@ -644,7 +648,7 @@ class RomAdoptionService:
     ) -> tuple[CompanionDir, ...]:
         """The save and savestate directories this rename has to carry files out of.
 
-        The two layouts are read independently because RetroArch sorts them
+        The two are read independently because RetroArch sorts them
         independently — a stock RetroDECK install content-sorts its savefiles and
         leaves its savestates unsorted, so assuming one from the other addresses
         the wrong directory. A directory that sits **inside** the content being
@@ -653,8 +657,14 @@ class RomAdoptionService:
         """
         if not launch_source:
             return ()
+        # The two sides read from different sources, and the asymmetry is not an
+        # oversight. Savefiles are addressed the way the save sync addresses them
+        # (see :meth:`_savefile_layout`); savestates come from the live config
+        # because nothing records them — MigrationService's markers track savefile
+        # sorting only, so there is no "previous" savestate layout to honour and a
+        # pending savefile migration says nothing about where savestates sit.
         layouts = (
-            (SAVE, self._save_layout(), self._retrodeck_paths.saves_path()),
+            (SAVE, self._savefile_layout(), self._retrodeck_paths.saves_path()),
             (SAVESTATE, self._savestate_layout(), self._retrodeck_paths.states_path()),
         )
         core_name = (
@@ -673,6 +683,26 @@ class RomAdoptionService:
             if names:
                 found.append(CompanionDir(kind=kind, source_dir=source_dir, target_dir=target_dir, names=names))
         return tuple(found)
+
+    def _savefile_layout(self) -> SaveLayout:
+        """Where this device's savefiles sit right now — the sync's own answer.
+
+        A rename has to know where the existing files **are**, which is not the
+        same question as where RetroArch will write next. The two differ exactly
+        while a save-sort migration is pending: the files are still in the old
+        layout, the sync deliberately keeps looking there (#238), and a rename
+        reading the live config would move them out from under it and leave the
+        pending migration reaching for files that are no longer where it left
+        them. So the sorting comes from ``SaveSortingProvider`` — the same
+        decision the sync resolves its own paths with — and never from the cfg.
+
+        ``savefiles_in_content_dir`` is the one part that must come from the live
+        config: saves written next to the ROM are outside the tree the plugin
+        syncs, so MigrationService records no marker for that state and there is
+        nothing recorded to prefer.
+        """
+        live = self._save_layout()
+        return live if isinstance(live, ContentDir) else self._save_sorting()
 
     def _layout_dirs(
         self,

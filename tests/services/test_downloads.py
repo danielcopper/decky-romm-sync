@@ -204,6 +204,7 @@ def plugin():
             m3u_support=lambda system_name: p._m3u_supported,
             system_extensions=lambda system_name: p._system_extensions.get(system_name, frozenset()),
             save_layout=lambda: InSaveDir(sort_by_content=True, sort_by_core=False),
+            save_sorting=lambda: InSaveDir(sort_by_content=True, sort_by_core=False),
             savestate_layout=lambda: InSaveDir(sort_by_content=False, sort_by_core=False),
             active_core=p._active_core,
             get_core_name=lambda core_so: None,

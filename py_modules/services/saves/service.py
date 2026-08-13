@@ -36,6 +36,7 @@ from services.saves.versions import VersionsService, VersionsServiceConfig
 if TYPE_CHECKING:
     from models.sync import ClientSaveState
 
+    from domain.save_layout import InSaveDir
     from services.protocols import UnitOfWorkFactory
 
 
@@ -259,6 +260,16 @@ class SaveService:
         the ``LaunchGateDriftReader`` seam.
         """
         return self._rom_info.find_save_files(int(rom_id))
+
+    def current_save_sorting(self) -> InSaveDir:
+        """Return the subdirectory sorting savefile paths are resolved with right now.
+
+        Delegates to the shared ``RomInfoService.current_save_sorting`` — the
+        same decision the sync's own path resolution runs on — so a consumer that
+        has to address a save on disk can never disagree with where the sync
+        looks for it. Satisfies the ``SaveSortingProvider`` seam.
+        """
+        return self._rom_info.current_save_sorting()
 
     def last_sync_hashes(self, rom_id: int) -> dict[str, str | None]:
         """Return the per-file ``last_sync_hash`` baselines for a ROM.

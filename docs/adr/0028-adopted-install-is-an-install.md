@@ -98,6 +98,21 @@ flags as parameters: a single-file ROM keeps its save directory and changes its 
 multi-file ROM keeps its filenames and changes its save _directory_ — the directory is named after the ROM folder being
 renamed, and the launch file inside it never moves.
 
+**Savefile sorting is read from the save sync's own answer, not from the live config.** A rename has to know where the
+existing files _are_; the live `retroarch.cfg` says where RetroArch will write _next_. Those differ in exactly one
+situation — a pending save-sort migration, where the files are still in the old layout and `RomInfoService` deliberately
+keeps resolving against it (#238) — and that is the situation that matters: a rename reading the live config would move
+the saves into the new layout, leaving the sync looking in the old one and the pending migration reaching for files that
+are no longer where it left them. Nothing gates this out, because `@migration_blocked` covers the RetroDECK **home**
+move only. So the sorting crosses a seam (`SaveSortingProvider` over `RomInfoService.current_save_sorting`) rather than
+being read a second time: two implementations of "which layout is current" is precisely the drift that would reintroduce
+it.
+
+Two things stay on the live config, and the asymmetry is deliberate rather than an oversight. `savefiles_in_content_dir`
+has no recorded counterpart — the change-detection markers are written only for the `InSaveDir` case, because
+content-dir saves sit outside the tree the plugin syncs at all. The **savestate** layout has none either: those markers
+track savefile sorting only, so a pending savefile migration says nothing about where savestates are.
+
 **A name already taken stops everything before anything moves.** Every source → target pair is computed and **all**
 targets are checked, and only then does the first file move: renaming as you go and asking at the first collision leaves
 half the set moved when the question appears. The dialog lists everything that collides and takes one decision for the

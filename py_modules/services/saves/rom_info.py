@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.save_extensions import get_save_extensions
+from domain.save_layout import InSaveDir
 from domain.save_path import resolve_save_dir
 
 # kv_config keys for the cross-run save-sort markers MigrationService writes
@@ -89,21 +90,11 @@ class RomInfoService:
             return None
         rom_name = os.path.splitext(os.path.basename(file_path))[0]
 
-        # Use domain save path resolution.
-        # Read sort settings from state (populated by MigrationService at startup).
-        # When a save-sort migration is pending, prefer the *previous* layout:
-        # RetroArch caches its runtime save-path at game-load time, so the
-        # session that just ended still wrote to the old directory. Reading
-        # the current settings here would point sync at the wrong location
-        # and risk downloading stale server content to the new layout (#238).
         saves_base = self._retrodeck_paths.saves_path()
         roms_base = self._retrodeck_paths.roms_path()
-        sort_state = self.pending_sort_settings() or self._read_current_sort_settings()
-        if sort_state:
-            sort_by_content = sort_state.get("sort_by_content", True)
-            sort_by_core = sort_state.get("sort_by_core", False)
-        else:
-            sort_by_content, sort_by_core = True, False  # RetroDECK defaults
+        sorting = self.current_save_sorting()
+        sort_by_content = sorting.sort_by_content
+        sort_by_core = sorting.sort_by_core
 
         # When sort-by-core is active, RetroArch writes per-core subdirs named
         # by the .info ``corename`` field. Resolve it via the dedicated parser.
@@ -147,6 +138,32 @@ class RomInfoService:
             "platform_slug": platform_slug,
             "file_path": file_path,
         }
+
+    def current_save_sorting(self) -> InSaveDir:
+        """The subdirectory sorting savefile paths are resolved with right now.
+
+        The single answer to "which savefile layout is current", so every caller
+        that has to address a save on disk addresses the same directory. It comes
+        from the markers MigrationService records, never from the live
+        ``retroarch.cfg``: while a save-sort migration is pending the *previous*
+        layout wins, because RetroArch caches its runtime save-path at game-load
+        time and the session that just ended still wrote to the old directory.
+        Reading the live config here would point every caller at a directory the
+        files have not reached yet (#238).
+
+        Falls back to the RetroDECK defaults when nothing has been observed yet.
+        Answers only the **sorting**: whether savefiles live under the saves root
+        at all is ``savefiles_in_content_dir``, which is a live-config fact with
+        no recorded counterpart — MigrationService never writes these markers for
+        a ``ContentDir`` machine.
+        """
+        recorded = self.pending_sort_settings() or self._read_current_sort_settings()
+        if not recorded:
+            return InSaveDir(sort_by_content=True, sort_by_core=False)
+        return InSaveDir(
+            sort_by_content=recorded.get("sort_by_content", True),
+            sort_by_core=recorded.get("sort_by_core", False),
+        )
 
     def resolve_retroarch_corename(self, rom_id: int) -> tuple[str | None, str | None]:
         """Resolve the RetroArch ``corename`` for a ROM by ``rom_id``.

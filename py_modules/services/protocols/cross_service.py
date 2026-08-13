@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
     from domain.disc_selection import Disc
     from domain.rom_install import RomInstall
-    from domain.save_layout import SaveLayout
+    from domain.save_layout import InSaveDir, SaveLayout
     from domain.shortcut_data import EmulatorInvocation
 
 
@@ -518,6 +518,27 @@ class SaveSortChangeFn(Protocol):
     """
 
     def __call__(self) -> SaveLayout: ...
+
+
+class SaveSortingProvider(Protocol):
+    """Current savefile subdirectory sorting, consumed by RomAdoptionService.
+
+    The composition root satisfies this with ``SaveService.current_save_sorting``.
+    Adoption renames a ROM to the server's name and has to carry that ROM's saves
+    with it, so it must address the directory the sync itself addresses — which
+    is the one MigrationService recorded, honouring a pending save-sort
+    migration, and **not** the live ``retroarch.cfg``. The two differ exactly
+    while a migration is pending, and that is the case where a rename reading the
+    live config would move the files out from under the sync.
+
+    Distinct from :class:`RetroArchSaveLayoutProvider`, which reads the live
+    config: that one answers whether saves are written next to the ROM at all
+    (``savefiles_in_content_dir``), a state MigrationService records no marker
+    for. A UoW-opening seam — the caller resolves it outside any open Unit of
+    Work.
+    """
+
+    def __call__(self) -> InSaveDir: ...
 
 
 class MigrationPendingFn(Protocol):

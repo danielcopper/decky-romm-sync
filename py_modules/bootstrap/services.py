@@ -300,6 +300,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             m3u_support=cfg.callbacks.m3u_support,
             system_extensions=cfg.callbacks.system_extensions,
             save_layout=cfg.callbacks.get_save_layout,
+            save_sorting=save_sync_service.current_save_sorting,
             savestate_layout=cfg.callbacks.get_savestate_layout,
             active_core=active_core_resolver,
             get_core_name=cfg.callbacks.get_core_name,

@@ -939,10 +939,22 @@ download over the real user progress.
 
 **Three structural guards:**
 
-1. **Rule 1 — Read previous layout during pending migration.** `RomInfoService.get_rom_save_info`
+1. **Rule 1 — Read previous layout during pending migration.** `RomInfoService.current_save_sorting`
    (`services/saves/rom_info.py`) reads `save_sort_settings_previous` (the layout RetroArch was writing to during the
    session) in preference to `save_sort_settings` (the new layout). This ensures save-sync always looks where RetroArch
    actually wrote.
+
+   It is the **single** answer to "which savefile layout is current", and every consumer that has to address a save on
+   disk goes through it: `get_rom_save_info` for the sync's own resolution, and — across the service boundary via
+   `SaveService.current_save_sorting` (the `SaveSortingProvider` seam) — `RomAdoptionService`, which renames an adopted
+   ROM and has to carry that ROM's saves to the directory the sync will look in. A second read of the live
+   `retroarch.cfg` there would diverge from this one in exactly the pending-migration window, moving the files out from
+   under both the sync and the migration that is about to go looking for them. The seam exists so that divergence is not
+   expressible.
+
+   The seam answers **sorting only**. Whether savefiles live under the saves root at all is `savefiles_in_content_dir`,
+   which stays a live-config read: `detect_save_sort_change` writes no marker for a `ContentDir` machine (those saves
+   sit outside the tree the plugin syncs), so there is no recorded previous state to prefer.
 
 2. **Rule 2 — Upload-only mode during pending migration.** `SyncEngine.do_sync_rom_saves` skips `server_only` matches
    (no downloads) when a save-sort migration is pending. This prevents stale server content from being written to disk
