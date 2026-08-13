@@ -15,6 +15,24 @@ it. Open the Decky plugin log to find the underlying error, then reload Tender f
 fails after a reload, restart Steam (or the Steam Deck); if the error persists, include the log output when you report
 it.
 
+Reaching that verdict takes up to about a minute and a half, because the check keeps retrying to ride out a backend that
+is merely slow to start rather than calling it dead too early. It runs to its conclusion whether or not the panel is
+open, so you do not have to sit and watch it — close the QAM and reopen it later, and the row shows the answer. While a
+check is running, the row keeps showing the previous result rather than resetting to **Checking…**.
+
+### Sign-in reports "The plugin backend never answered"
+
+**Symptom**: The **Sign in to RomM** dialog sits on **Signing in…** for a minute and then shows "The plugin backend
+never answered. Reload Decky or restart Steam, then try again."
+
+**Fix**: The dialog reached the plugin's backend process and got no reply at all, which normally means the backend is no
+longer running — the panel itself keeps working because its code is already loaded in Steam. Reload Tender from the
+Decky plugin list, or restart Steam, then sign in again. A pairing code is single-use and expires after 60 seconds, so
+generate a fresh one for the retry.
+
+This message is specific to the plugin backend being unreachable. A RomM server that is merely down or misconfigured
+answers with its own message instead — "Server unreachable", "Sign-in rejected", or the RomM version notice.
+
 ## Games Won't Launch
 
 ### BIOS files missing

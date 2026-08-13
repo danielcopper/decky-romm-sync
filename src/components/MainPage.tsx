@@ -14,7 +14,6 @@ import {
 } from "@decky/ui";
 import { FaCheckCircle, FaTimesCircle, FaExclamationTriangle } from "react-icons/fa";
 import {
-  testConnection,
   cancelSync,
   getSyncStats,
   getSettings,
@@ -55,7 +54,8 @@ import {
   setSaveSortMigrationStatus,
 } from "../utils/saveSortMigrationStore";
 import { reconcileStaleShortcuts, requestSyncCancel, isCancelRequested, resetSyncCancel } from "../utils/syncManager";
-import { setVersionError } from "../utils/connectionState";
+import { useConnectionProbe } from "../utils/connectionProbe";
+import type { BackendFailed, ConnectionFailure } from "../utils/connectionProbe";
 import { retroDeckBanner, type RetroDeckBanner } from "../utils/retrodeckHealth";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { WarningCard } from "./WarningCard";
@@ -73,39 +73,14 @@ import type {
   SessionBudgetStatus,
   DownloadItem,
   MigrationStatus,
-  RommErrorCode,
 } from "../types";
 import { detach } from "../utils/detach";
-import { withTimeout } from "../utils/withTimeout";
 import { wrapText } from "../utils/textStyles";
 
 type Page = "settings" | "library" | "data" | "downloads" | "system";
 
 interface MainPageProps {
   onNavigate: (page: Page) => void;
-}
-
-// The connection probe races each `test_connection()` attempt against a deadline
-// (the callable never times out on its own and hangs forever when the backend
-// isn't up yet) and retries across the slow-cold-boot window. A call that
-// resolves — success OR "not connected" — is authoritative and ends the probe;
-// only an exhausted retry budget means the plugin backend never came up
-// (bootstrap aborted), which the connection row surfaces explicitly instead of
-// an eternal "Checking…" spinner (#1045). The schedule mirrors the metadata init
-// loop's tuned window in index.tsx (#1203).
-const CONNECTION_RETRY_DELAYS = [2000, 5000, 10000, 15000, 20000];
-const CONNECTION_CALLABLE_TIMEOUT = 5000;
-
-/** Backend never answered after the retry budget — distinct from `false` ("not connected"). */
-type BackendFailed = "backend_failed";
-
-/** A resolved-but-failed `test_connection()` probe. `reason`/`message` classify
- *  why so the connection row shows a specific label instead of a bare "Not
- *  connected"; both are absent when the probe never resolved (an unreachable
- *  server that hung past every deadline), which reads as the generic label. */
-interface ConnectionFailure {
-  reason: RommErrorCode | undefined;
-  message: string;
 }
 
 /** The connection-row label for a failed probe, mapped from the backend's
@@ -459,11 +434,12 @@ function terminalStatusTone(stage: SyncProgress["stage"]): StatusTone {
 export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [stats, setStats] = useState<SyncStats | null>(null);
   const [budgetStatus, setBudgetStatus] = useState<SessionBudgetStatus | null>(null);
-  const [connected, setConnected] = useState<boolean | null | BackendFailed>(null);
-  // Classifies a resolved-but-failed probe so the connection row can show a
-  // specific label (auth rejected / server unreachable / no URL / not signed
-  // in). Null for every non-failed state and for a probe that never resolved.
-  const [connectionFailure, setConnectionFailure] = useState<ConnectionFailure | null>(null);
+  // `failure` classifies a resolved-but-failed probe so the connection row can
+  // show a specific label (auth rejected / server unreachable / no URL / not
+  // signed in). Null for every non-failed state and for a probe that never
+  // resolved. The probe itself lives outside this component so a QAM close does
+  // not abandon a run that has not reached a verdict yet.
+  const { connected, failure: connectionFailure } = useConnectionProbe();
   const versionError = useVersionError();
   const [syncing, setSyncing] = useState(false);
   // Disarmed "Cancelling…" state during the backend's RUNNING→CANCELLING→IDLE
@@ -506,12 +482,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   };
 
   useEffect(() => {
-    // Guards for the async connection probe below: `cancelled` stops the retry
-    // loop from touching state after unmount; the timer ref lets cleanup clear a
-    // pending backoff delay.
-    let cancelled = false;
-    let connectionRetryTimer: ReturnType<typeof setTimeout> | null = null;
-
     refreshMigrationState()
       .then(({ retrodeck, save_sort }) => {
         setMigrationStatus(retrodeck);
@@ -527,53 +497,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     getSessionBudgetStatus()
       .then(setBudgetStatus)
       .catch((e) => logError(`Failed to load session budget status: ${e}`));
-
-    // Probe the backend for the connection row. Each attempt has a deadline
-    // because the callable hangs (rather than rejects) while the backend is
-    // still starting, and the retries ride out a slow cold boot. A resolved call
-    // ends the probe — "not connected" (success:false) is an authoritative
-    // answer, not a failure. Only an exhausted retry budget means the backend
-    // never came up (bootstrap aborted); surface that explicitly (#1045).
-    const probeConnection = async (isCancelled: () => boolean) => {
-      for (let attempt = 0; !isCancelled(); attempt++) {
-        try {
-          const r = await withTimeout(testConnection(), CONNECTION_CALLABLE_TIMEOUT);
-          if (isCancelled()) return;
-          setConnected(r.success);
-          setConnectionFailure(r.success ? null : { reason: r.reason, message: r.message });
-          setVersionError(r.reason === "version_error" ? r.message : null);
-          return;
-        } catch {
-          if (isCancelled()) return;
-          if (attempt >= CONNECTION_RETRY_DELAYS.length) {
-            // Retry budget exhausted. test_connection() also waits out the
-            // server round-trip — a hanging RomM server keeps the backend's
-            // retrying heartbeat busy for up to ~90s, far past our per-attempt
-            // deadline — so an exhausted budget alone can't tell a dead backend
-            // from an unreachable server. Ping get_settings (a pure in-memory
-            // read that resolves iff the backend RPC bridge is alive) to decide:
-            // alive ⇒ the server is merely unreachable ("Not connected");
-            // dead ⇒ the backend never came up ("Backend error").
-            try {
-              await withTimeout(getSettings(), CONNECTION_CALLABLE_TIMEOUT);
-              if (isCancelled()) return;
-              setConnected(false);
-            } catch (pingErr) {
-              if (isCancelled()) return;
-              setConnected("backend_failed");
-              // logError is itself a callable and would hang against a dead
-              // backend — log to the console instead.
-              console.error("[RomM] backend RPC bridge unreachable (get_settings ping failed):", pingErr);
-            }
-            return;
-          }
-          await new Promise<void>((resolve) => {
-            connectionRetryTimer = setTimeout(resolve, CONNECTION_RETRY_DELAYS[attempt]);
-          });
-        }
-      }
-    };
-    detach(probeConnection(() => cancelled));
 
     getSettings()
       .then((s) => {
@@ -724,8 +647,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     const unsubPlaytimeScope = onPlaytimeScopeChange(() => setPlaytimeScope(getPlaytimeScopeState()));
     const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortMigration(getSaveSortMigrationState()));
     return () => {
-      cancelled = true;
-      if (connectionRetryTimer) clearTimeout(connectionRetryTimer);
       unsubProgress();
       unsubMigration();
       unsubSettingsReset();

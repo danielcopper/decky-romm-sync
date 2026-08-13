@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { withTimeout } from "./withTimeout";
+import { withTimeout, TimeoutError } from "./withTimeout";
 
 describe("withTimeout", () => {
   afterEach(() => {
@@ -22,6 +22,18 @@ describe("withTimeout", () => {
     const assertion = expect(withTimeout(pending, 5000)).rejects.toThrow("callable timed out after 5000ms");
     await vi.advanceTimersByTimeAsync(5000);
     await assertion;
+  });
+
+  it("rejects with a TimeoutError on the deadline, and passes a raced rejection through untouched", async () => {
+    vi.useFakeTimers();
+    const pending = new Promise<string>(() => {
+      /* never settles */
+    });
+    const deadline = expect(withTimeout(pending, 5000)).rejects.toBeInstanceOf(TimeoutError);
+    await vi.advanceTimersByTimeAsync(5000);
+    await deadline;
+    // The promise's own failure must stay distinguishable from the deadline's.
+    await expect(withTimeout(Promise.reject(new Error("boom")), 5000)).rejects.not.toBeInstanceOf(TimeoutError);
   });
 
   it("clears the deadline timer once the promise settles — no leaked timer", async () => {

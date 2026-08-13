@@ -139,7 +139,7 @@ it("bounds a lost release acknowledgement and logs the failed release", async ()
   await release;
 
   expect(logError).toHaveBeenCalledWith(
-    "Core selection: failed to release prune lease: Error: callable timed out after 5000ms",
+    "Core selection: failed to release prune lease: TimeoutError: callable timed out after 5000ms",
   );
 });
 

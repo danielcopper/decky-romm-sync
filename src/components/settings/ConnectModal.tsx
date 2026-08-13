@@ -10,10 +10,10 @@
  * (an OTP-style input grouped 4 – 4 around a hyphen, auto-advancing as you type)
  * — typability matters more than obscuring a value that expires almost
  * immediately. Sign in is gated until the selected mode's fields are complete,
- * and the sign-in attempt runs to completion inside the modal: on success the
- * parent's matching handler resolved truthy and the modal closes; on failure the
- * modal stays open and shows the returned message so the user can correct and
- * retry. The parent's handlers — `connect_with_credentials` (exchanges the
+ * and the sign-in attempt runs inside the modal until it answers or the deadline
+ * elapses: on success the parent's matching handler resolved truthy and the modal
+ * closes; on failure the modal stays open and shows the returned message so the
+ * user can correct and retry. The parent's handlers — `connect_with_credentials` (exchanges the
  * credentials for a scoped token and discards the password), `connect_with_token`
  * (validates and stores the pasted token), or `connect_with_pairing_code`
  * (exchanges the code for a token) — own token minting/validation, status, and
@@ -23,6 +23,7 @@
 
 import { FC, Fragment, useState, useRef, ChangeEvent, KeyboardEvent } from "react";
 import { TextField, DropdownItem, Focusable } from "@decky/ui";
+import { withTimeout, TimeoutError } from "../../utils/withTimeout";
 import { ValidatingModalShell } from "./ValidatingModalShell";
 
 type SignInMode = "credentials" | "token" | "pairing";
@@ -48,6 +49,23 @@ const CODE_GROUP = 4;
 const CODE_INDICES = Array.from({ length: CODE_LENGTH }, (_unused, i) => i);
 
 const GENERIC_SIGN_IN_ERROR = "Sign-in failed. Check your connection and try again.";
+
+// Decky's callable() never times out on its own, so a plugin backend that is
+// down (or whose RPC bridge died) leaves the sign-in promise pending forever and
+// the modal stuck on "Signing in…" with no way out but Cancel. The deadline is
+// the only thing that turns that into a message.
+//
+// The deadline is set above the backend's own per-request windows rather than at
+// a snappy UI value. A sign-in is a heartbeat (RommHttpClient.with_retry: 3
+// attempts x 30s) + the credential step (30s, never retried) + /api/users/me
+// (3 x 30s), and each of those failures returns a specific message this one
+// cannot match ("Server unreachable", "Sign-in rejected", the version gate). A
+// deadline under the single 30s request window would pre-empt all of them —
+// and, because losing the race abandons the call instead of cancelling it,
+// would report failure for a sign-in that then succeeds and persists its token,
+// with the single-use pairing code already burned.
+const SIGN_IN_TIMEOUT_MS = 60_000;
+const SIGN_IN_TIMEOUT_ERROR = "The plugin backend never answered. Reload Decky or restart Steam, then try again.";
 
 const helperTextStyle = { fontSize: "12px", marginBottom: "12px", color: "rgba(255,255,255,0.6)" } as const;
 const codeLabelStyle = {
@@ -175,29 +193,29 @@ export const ConnectModal: FC<ConnectModalProps> = ({ closeModal, onConnect, onC
   };
   const canSubmit = computeCanSubmit();
 
-  // Run the selected mode's sign-in to completion. Success closes the modal;
-  // failure keeps it open and shows the returned message so the user can retry.
+  const attemptSignIn = (): Promise<SignInResult> => {
+    if (mode === "token") return onConnectToken(token);
+    // Backend normalizes, so the bare eight characters in order are enough.
+    if (mode === "pairing") return onConnectPairing(code.join(""));
+    return onConnect(username, password);
+  };
+
+  // Run the selected mode's sign-in. Success closes the modal; failure — the
+  // backend's own verdict, a rejection, or the deadline — keeps it open and
+  // shows a message so the user can retry.
   const submit = async () => {
     if (!canSubmit || submitting) return;
     setSubmitting(true);
     setError(null);
     try {
-      let result: SignInResult;
-      if (mode === "token") {
-        result = await onConnectToken(token);
-      } else if (mode === "pairing") {
-        // Backend normalizes, so the bare eight characters in order are enough.
-        result = await onConnectPairing(code.join(""));
-      } else {
-        result = await onConnect(username, password);
-      }
+      const result = await withTimeout(attemptSignIn(), SIGN_IN_TIMEOUT_MS);
       if (result.success) {
         closeModal?.();
       } else {
         setError(result.message);
       }
-    } catch {
-      setError(GENERIC_SIGN_IN_ERROR);
+    } catch (e) {
+      setError(e instanceof TimeoutError ? SIGN_IN_TIMEOUT_ERROR : GENERIC_SIGN_IN_ERROR);
     } finally {
       setSubmitting(false);
     }

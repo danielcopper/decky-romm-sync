@@ -581,6 +581,70 @@ describe("ConnectModal", () => {
       expect(getByTestId("signin-error").textContent).toBe("Sign-in failed. Check your connection and try again.");
     });
 
+    // Decky's callable() stays pending forever against a downed backend, so the
+    // never-settling handler here is the real shape of that failure, not a
+    // contrived one.
+    it("shows a backend-never-answered error and re-enables Sign in when the call never settles", async () => {
+      vi.useFakeTimers();
+      try {
+        const closeModal = vi.fn();
+        const onConnectToken = vi.fn().mockReturnValue(new Promise(() => {}));
+        const { getByTestId, getByText } = render(
+          <ConnectModal
+            closeModal={closeModal}
+            onConnect={ok()}
+            onConnectToken={onConnectToken}
+            onConnectPairing={ok()}
+          />,
+        );
+        fireEvent.click(getByTestId("mode-token"));
+        fireEvent.change(getByTestId("field-API Token"), { target: { value: "rmm_pasted" } });
+        fireEvent.click(signInButton(getByText));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(60_000);
+        });
+        expect(closeModal).not.toHaveBeenCalled();
+        expect(getByTestId("signin-error").textContent).toBe(
+          "The plugin backend never answered. Reload Decky or restart Steam, then try again.",
+        );
+        // Back out of the in-flight state so the deadline is an exit, not a
+        // second dead end.
+        expect(signInButton(getByText)).toBeTruthy();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("still closes on a slow sign-in that answers before the deadline", async () => {
+      vi.useFakeTimers();
+      try {
+        const closeModal = vi.fn();
+        const onConnectToken = vi.fn().mockReturnValue(
+          new Promise((resolve) => {
+            setTimeout(() => resolve({ success: true, message: "Connected!" }), 45_000);
+          }),
+        );
+        const { getByTestId, getByText, queryByTestId } = render(
+          <ConnectModal
+            closeModal={closeModal}
+            onConnect={ok()}
+            onConnectToken={onConnectToken}
+            onConnectPairing={ok()}
+          />,
+        );
+        fireEvent.click(getByTestId("mode-token"));
+        fireEvent.change(getByTestId("field-API Token"), { target: { value: "rmm_pasted" } });
+        fireEvent.click(signInButton(getByText));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(45_000);
+        });
+        expect(closeModal).toHaveBeenCalled();
+        expect(queryByTestId("signin-error")).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("clears a stale error when the user edits a field", async () => {
       const onConnectToken = fail("Pairing code is invalid or has expired.");
       const { getByTestId, getByText, queryByTestId } = render(

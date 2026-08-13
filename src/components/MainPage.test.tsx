@@ -53,6 +53,7 @@ import { beginEtaRun, resetEta, liveEtaSeconds } from "../utils/syncEta";
 import * as syncEta from "../utils/syncEta";
 import { NEW_ITEM_SEC, UPDATED_ITEM_SEC, COVER_DOWNLOAD_SEC, FETCH_ALLOWANCE_SEC } from "../utils/syncEstimate";
 import { setDownloads } from "../utils/downloadStore";
+import { resetConnectionProbeForTests } from "../utils/connectionProbe";
 import { showModal } from "@decky/ui";
 import * as syncManager from "../utils/syncManager";
 import * as connectionState from "../utils/connectionState";
@@ -263,6 +264,9 @@ describe("MainPage", () => {
     // Clear the module-level live-ETA estimator so a prior test's run never bleeds
     // into the next (its state persists across renders like the other stores).
     resetEta();
+    // The connection probe outlives the panel by design (#1730), so its verdict
+    // survives unmount and would carry a prior test's answer into the next.
+    resetConnectionProbeForTests();
     setSyncProgress({
       running: false,
       stage: "",
