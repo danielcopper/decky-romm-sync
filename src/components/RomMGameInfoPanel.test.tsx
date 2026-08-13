@@ -32,7 +32,15 @@ import {
   setServerRetryProgress,
   getServerRetryProgress,
 } from "../utils/connectionState";
-import type { MigrationStatus, SaveSortMigrationStatus, RomMetadata, DownloadCompleteEvent, CoreInfo } from "../types";
+import type {
+  MigrationStatus,
+  SaveSortMigrationStatus,
+  RomMetadata,
+  DownloadCompleteEvent,
+  CoreInfo,
+  InstalledRom,
+  SaveStatus,
+} from "../types";
 
 // Type-only imports — vi.mock(...) below replaces the runtime impl, but
 // pinning captured-props shapes to the real component keeps assertions in
@@ -3690,6 +3698,367 @@ describe("RomMGameInfoPanel", () => {
         await switchVersion();
 
         expect(container.textContent).toContain("Snes9x");
+      });
+    });
+
+    // #1713 — a version switch re-binds the shortcut to a new rom_id without
+    // changing the appId, so the `[appId]` effect never re-runs and its
+    // `cancelled` flag never fires. Every read still in flight for the previous
+    // version therefore answers into a panel that has moved on; only the rom the
+    // read was issued for can tell the two apart.
+    describe("background writes bound to the rom they were read for (#1713)", () => {
+      /** Hold the read issued for `heldRomId` open while answering every other
+       *  rom_id at once, so the previous version's answer can be made to land
+       *  AFTER the switched-to version's. */
+      function holdReadFor<T>(heldRomId: number, answerForOthers: T) {
+        let release!: (value: T) => void;
+        const held = new Promise<T>((resolve) => {
+          release = resolve;
+        });
+        return {
+          impl: (romId: number) => (romId === heldRomId ? held : Promise.resolve(answerForOthers)),
+          release: (value: T) => release(value),
+        };
+      }
+
+      const detailFor = (romId: number, overrides: Partial<CachedGameDetail> = {}): CachedGameDetail => ({
+        found: true,
+        rom_id: romId,
+        rom_name: romId === 1 ? "Game (USA)" : "Game (Japan)",
+        platform_slug: "snes",
+        metadata: makeMetadata(),
+        stale_fields: [],
+        ...overrides,
+      });
+
+      const switchToRom2 = async (overrides: Partial<CachedGameDetail> = {}) => {
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(2, overrides));
+        await act(async () => {
+          globalThis.dispatchEvent(
+            new CustomEvent("romm_data_changed", {
+              detail: { type: "version_switched", app_id: testAppId, rom_id: 2 },
+            }),
+          );
+        });
+        await flushAsync();
+      };
+
+      const openTab = async (tab: string) => {
+        await act(async () => {
+          globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab } }));
+        });
+        await flushAsync();
+      };
+      const openBiosTab = () => openTab("bios");
+      const openSavesTab = () => openTab("saves");
+
+      /** A BIOS requirement on both versions, so the BIOS tab (and with it the
+       *  "Active Core" row the core-info reads land in) stays visible across the
+       *  switch. */
+      const biosNeed: Partial<CachedGameDetail> = {
+        bios_status: { platform_slug: "snes", server_count: 3, local_count: 1, all_downloaded: false },
+        bios_level: "partial",
+      };
+
+      const coreInfoNamed = (label: string): CoreInfo => ({
+        active_core: `${label}_libretro.so`,
+        active_core_label: label,
+        platform_core_label: null,
+        has_game_override: false,
+        emulator_data_available: true,
+        emulators: [],
+      });
+
+      const emptySaveStatus = (romId: number): SaveStatus => ({
+        rom_id: romId,
+        files: [],
+        playtime: {
+          total_seconds: 0,
+          session_count: 0,
+          last_session_start: null,
+          last_session_duration_sec: null,
+          last_played: null,
+        },
+        device_id: "d",
+        last_sync_check_at: null,
+      });
+
+      it("keeps the switched-to version's cover when the previous version's fetch lands last", async () => {
+        // The user-visible one: regional versions carry different box art, and
+        // the switch handler spreads the previous state without clearing the
+        // cover. A rom-1 answer folded in here stands under rom 2's name until
+        // the panel remounts.
+        const cover = holdReadFor(1, { base64: "JAPANCOVER" });
+        vi.mocked(backend.getArtworkBase64).mockImplementation(cover.impl);
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+
+        await switchToRom2();
+        expect(container.innerHTML).toContain("base64,JAPANCOVER");
+
+        await act(async () => {
+          cover.release({ base64: "USACOVER" });
+        });
+        await flushAsync();
+
+        expect(container.innerHTML).toContain("base64,JAPANCOVER");
+        expect(container.innerHTML).not.toContain("USACOVER");
+      });
+
+      it("does not fold the previous version's ROM file into the switched-to version", async () => {
+        const installedRom = holdReadFor<InstalledRom | null>(1, {
+          rom_id: 2,
+          file_name: "Game (Japan).sfc",
+          file_path: "/roms/snes/Game (Japan).sfc",
+          system: "snes",
+          platform_slug: "snes",
+          installed_at: "2026-01-01",
+          launchable: true,
+        });
+        vi.mocked(backend.getInstalledRom).mockImplementation(installedRom.impl);
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, { installed: true }));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+
+        await switchToRom2({ installed: true });
+
+        await act(async () => {
+          installedRom.release({
+            rom_id: 1,
+            file_name: "Game (USA).sfc",
+            file_path: "/roms/snes/Game (USA).sfc",
+            system: "snes",
+            platform_slug: "snes",
+            installed_at: "2026-01-01",
+            launchable: true,
+          });
+        });
+        await flushAsync();
+
+        expect(container.textContent).not.toContain("Game (USA).sfc");
+      });
+
+      it("does not fold the previous version's metadata into the switched-to version", async () => {
+        const metadata = holdReadFor(1, makeMetadata({ summary: "JAPAN SUMMARY" }));
+        vi.mocked(backend.getRomMetadata).mockImplementation(metadata.impl);
+        // A missing metadata field is what makes loadData issue the read at all.
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+          detailFor(1, { metadata: null, stale_fields: ["metadata"] }),
+        );
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+
+        await switchToRom2({ metadata: null, stale_fields: [] });
+
+        await act(async () => {
+          metadata.release(makeMetadata({ summary: "USA SUMMARY" }));
+        });
+        await flushAsync();
+
+        expect(container.textContent).not.toContain("USA SUMMARY");
+      });
+
+      it("does not fold the previous version's core info into the switched-to version", async () => {
+        const coreInfo = holdReadFor(1, coreInfoNamed("bsnes"));
+        vi.mocked(backend.getPlatformCoreInfo).mockImplementation(coreInfo.impl);
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, biosNeed));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+
+        await switchToRom2(biosNeed);
+        await openBiosTab();
+        expect(container.textContent).toContain("bsnes");
+
+        await act(async () => {
+          coreInfo.release(coreInfoNamed("Snes9x"));
+        });
+        await flushAsync();
+
+        expect(container.textContent).toContain("bsnes");
+        expect(container.textContent).not.toContain("Snes9x");
+      });
+
+      it("does not fold the previous version's slot configuration into the switched-to version", async () => {
+        // slotConfirmed is the SlotSetupWizard-vs-SavesTab gate: a stale
+        // "configured" answer replaces the new version's unconfigured wizard
+        // with a saves tab it has no slots for.
+        const tracking = holdReadFor<{ configured: boolean; active_slot: string | null }>(1, {
+          configured: false,
+          active_slot: null,
+        });
+        vi.mocked(backend.isSaveTrackingConfigured).mockImplementation(tracking.impl);
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, { save_sync_enabled: true }));
+        const { queryByTestId } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+
+        await switchToRom2({ save_sync_enabled: true });
+        await openSavesTab();
+        expect(queryByTestId("slot-setup-wizard")).not.toBeNull();
+
+        await act(async () => {
+          tracking.release({ configured: true, active_slot: "main" });
+        });
+        await flushAsync();
+
+        expect(queryByTestId("slot-setup-wizard")).not.toBeNull();
+        expect(queryByTestId("saves-tab")).toBeNull();
+      });
+
+      it("does not fold the previous version's slot list into the switched-to version", async () => {
+        // The slot list is folded THROUGH applyRefreshSlotResult, so what has to
+        // be bound is the setter the panel hands it. Run the real helper here —
+        // the mocked one writes nothing, and an unbound setter would then look
+        // exactly like a bound one.
+        const realSlotState = await vi.importActual<typeof slotState>("../utils/slotState");
+        vi.mocked(slotState.applyRefreshSlotResult).mockImplementation(realSlotState.applyRefreshSlotResult);
+        const slots = holdReadFor(1, { success: true, slots: [], active_slot: "japan" });
+        vi.mocked(backend.getSaveSlots).mockImplementation(slots.impl);
+        vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "main" });
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, { save_sync_enabled: true }));
+        render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+
+        await switchToRom2({ save_sync_enabled: true });
+        await openSavesTab();
+        expect(capturedSavesTab[capturedSavesTab.length - 1]?.activeSlot).toBe("japan");
+
+        await act(async () => {
+          slots.release({ success: true, slots: [], active_slot: "usa" });
+        });
+        await flushAsync();
+
+        expect(capturedSavesTab[capturedSavesTab.length - 1]?.activeSlot).toBe("japan");
+        expect(capturedSavesTab.some((props) => props.activeSlot === "usa")).toBe(false);
+      });
+
+      it("does not fold a save-sync-settings read issued for the previous version", async () => {
+        const saveStatus = holdReadFor<backend.SaveStatusResult>(1, emptySaveStatus(2));
+        vi.mocked(backend.getSaveStatus).mockImplementation(saveStatus.impl);
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, { save_sync_enabled: false }));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+
+        // Save sync is switched on globally while rom 1 is showing — the handler
+        // reads rom 1's status to decide what the SAVES tab shows.
+        await act(async () => {
+          globalThis.dispatchEvent(
+            new CustomEvent("romm_data_changed", {
+              detail: { type: "save_sync_settings", save_sync_enabled: true },
+            }),
+          );
+        });
+        await switchToRom2({ save_sync_enabled: false });
+
+        await act(async () => {
+          saveStatus.release(emptySaveStatus(1));
+        });
+        await flushAsync();
+
+        // The switched-to version has save sync off, so its tab bar carries no
+        // SAVES tab — the refused write is what keeps it that way.
+        expect(container.textContent).not.toContain("SAVES");
+      });
+
+      it("does not fold a save-sync read issued for the previous version", async () => {
+        const saveStatus = holdReadFor<backend.SaveStatusResult>(1, emptySaveStatus(2));
+        vi.mocked(backend.getSaveStatus).mockImplementation(saveStatus.impl);
+        vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "main" });
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, { save_sync_enabled: true }));
+        render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        await openSavesTab();
+
+        await act(async () => {
+          globalThis.dispatchEvent(
+            new CustomEvent("romm_data_changed", {
+              detail: { type: "save_sync", rom_id: 1 },
+            }),
+          );
+        });
+        await switchToRom2({
+          save_sync_enabled: true,
+          save_status: { files: [{ filename: "NEW_VERSION.srm", status: "skip" }], conflicts: [] },
+        });
+
+        await act(async () => {
+          saveStatus.release({
+            ...emptySaveStatus(1),
+            files: [
+              {
+                filename: "OLD_VERSION.srm",
+                status: "skip",
+                local_path: null,
+                local_hash: null,
+                local_mtime: null,
+                local_size: null,
+                server_save_id: null,
+                server_file_name: null,
+                server_emulator: null,
+                server_updated_at: null,
+                server_size: null,
+                last_sync_at: null,
+              },
+            ],
+          });
+        });
+        await flushAsync();
+
+        expect(capturedSavesTab[capturedSavesTab.length - 1]?.saveStatus?.files[0]?.filename).toBe("NEW_VERSION.srm");
+        expect(capturedSavesTab.some((props) => props.saveStatus?.files[0]?.filename === "OLD_VERSION.srm")).toBe(
+          false,
+        );
+      });
+
+      it("does not fold a core-change read issued for the previous version", async () => {
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, biosNeed));
+        vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(coreInfoNamed("Snes9x"));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        await openBiosTab();
+        expect(container.textContent).toContain("Snes9x");
+
+        // A core change for rom 1 re-reads its core info and its BIOS answer.
+        const coreInfo = holdReadFor(1, coreInfoNamed("bsnes"));
+        vi.mocked(backend.getPlatformCoreInfo).mockImplementation(coreInfo.impl);
+        await act(async () => {
+          globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "core_changed" } }));
+        });
+        await switchToRom2(biosNeed);
+        expect(container.textContent).toContain("bsnes");
+
+        await act(async () => {
+          coreInfo.release(coreInfoNamed("Mesen"));
+        });
+        await flushAsync();
+
+        expect(container.textContent).toContain("bsnes");
+        expect(container.textContent).not.toContain("Mesen");
+      });
+
+      it("does not fold a metadata read issued for the previous version", async () => {
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+          detailFor(1, { metadata: makeMetadata({ summary: "MOUNTED SUMMARY" }) }),
+        );
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+
+        const metadata = holdReadFor(1, makeMetadata({ summary: "JAPAN SUMMARY" }));
+        vi.mocked(backend.getRomMetadata).mockImplementation(metadata.impl);
+        await act(async () => {
+          globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "metadata", rom_id: 1 } }));
+        });
+        // The switch carries no metadata of its own, so the mounted summary is
+        // what a refused stale write leaves standing.
+        await switchToRom2({ metadata: makeMetadata({ summary: "MOUNTED SUMMARY" }) });
+
+        await act(async () => {
+          metadata.release(makeMetadata({ summary: "USA SUMMARY" }));
+        });
+        await flushAsync();
+
+        expect(container.textContent).toContain("MOUNTED SUMMARY");
+        expect(container.textContent).not.toContain("USA SUMMARY");
       });
     });
   });

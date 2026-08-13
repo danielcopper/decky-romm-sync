@@ -115,6 +115,44 @@ interface PanelState {
   languages: string[];
 }
 
+/** A ROM identity paired with the only writer allowed to fold an answer read for
+ *  it into panel state.
+ *
+ *  `write` drops the update when the panel that issued the read is gone, and
+ *  when the panel has been re-bound to a different ROM since. Those are two
+ *  separate ends, and neither covers the other: a version switch re-binds the
+ *  shortcut to a new rom_id without changing the appId, so the `[appId]` effect
+ *  never re-runs and its `cancelled` flag never fires for it (#1713).
+ *
+ *  Carrying the ROM alongside its writer is what keeps the two from drifting
+ *  apart — a read issued off `binding.romId` cannot be folded in through a
+ *  writer bound to some other version. */
+interface RomBinding {
+  readonly romId: number;
+  readonly write: React.Dispatch<React.SetStateAction<PanelState>>;
+}
+
+/** Bind reads for `romId` to the panel showing it.
+ *
+ *  The check reads `romIdRef` when the answer LANDS, not when the read was
+ *  issued: the version-switch handler re-points the ref the moment the switch
+ *  resolves, so everything still in flight for the previous version is refused
+ *  from that point on. */
+function bindRom(
+  romId: number,
+  romIdRef: React.MutableRefObject<number | null>,
+  cancelled: () => boolean,
+  setter: React.Dispatch<React.SetStateAction<PanelState>>,
+): RomBinding {
+  return {
+    romId,
+    write: (update) => {
+      if (cancelled() || romIdRef.current !== romId) return;
+      setter(update);
+    },
+  };
+}
+
 /** Format a Unix timestamp (seconds) as a release date string (e.g. "15 Mar 2003") */
 function formatReleaseDate(timestamp: number | null): string | null {
   if (!timestamp || timestamp <= 0) return null;
@@ -124,57 +162,41 @@ function formatReleaseDate(timestamp: number | null): string | null {
 }
 
 /** Refresh slot configuration and available slots — extracted to reduce nesting depth. */
-function refreshSlotState(romId: number, setter: React.Dispatch<React.SetStateAction<PanelState>>): void {
-  isSaveTrackingConfigured(romId)
-    .then((result) => setter((prev) => ({ ...prev, slotConfirmed: result.configured })))
+function refreshSlotState(binding: RomBinding): void {
+  isSaveTrackingConfigured(binding.romId)
+    .then((result) => binding.write((prev) => ({ ...prev, slotConfirmed: result.configured })))
     .catch(() => {});
-  getSaveSlots(romId)
-    .then((slotResult) => applyRefreshSlotResult<PanelState>(slotResult, setter))
+  getSaveSlots(binding.romId)
+    .then((slotResult) => applyRefreshSlotResult<PanelState>(slotResult, binding.write))
     .catch(() => {});
 }
 
 /** Fire-and-forget installed-rom fetch — kept at module scope to avoid nesting. */
-function refreshInstalledRomInBackground(
-  romId: number,
-  cancelled: () => boolean,
-  setter: React.Dispatch<React.SetStateAction<PanelState>>,
-): Promise<void> {
-  return getInstalledRom(romId)
+function refreshInstalledRomInBackground(binding: RomBinding): Promise<void> {
+  return getInstalledRom(binding.romId)
     .then((installed) => {
-      if (!cancelled() && installed) {
-        setter((prev) => ({ ...prev, installedRom: installed }));
+      if (installed) {
+        binding.write((prev) => ({ ...prev, installedRom: installed }));
       }
     })
     .catch(() => {});
 }
 
 /** Fire-and-forget cover-art fetch — kept at module scope to avoid nesting. */
-function refreshCoverArtInBackground(
-  romId: number,
-  cancelled: () => boolean,
-  setter: React.Dispatch<React.SetStateAction<PanelState>>,
-): Promise<void> {
-  return getArtworkBase64(romId)
+function refreshCoverArtInBackground(binding: RomBinding): Promise<void> {
+  return getArtworkBase64(binding.romId)
     .then((result) => {
-      if (!cancelled() && result.base64) {
-        setter((prev) => ({ ...prev, coverBase64: result.base64 }));
+      if (result.base64) {
+        binding.write((prev) => ({ ...prev, coverBase64: result.base64 }));
       }
     })
     .catch(() => {});
 }
 
 /** Fire-and-forget metadata fetch — kept at module scope to avoid nesting. */
-function refreshMetadataInBackground(
-  romId: number,
-  cancelled: () => boolean,
-  setter: React.Dispatch<React.SetStateAction<PanelState>>,
-): Promise<void> {
-  return getRomMetadata(romId)
-    .then((meta) => {
-      if (!cancelled()) {
-        setter((prev) => ({ ...prev, metadata: meta }));
-      }
-    })
+function refreshMetadataInBackground(binding: RomBinding): Promise<void> {
+  return getRomMetadata(binding.romId)
+    .then((meta) => binding.write((prev) => ({ ...prev, metadata: meta })))
     .catch(() => {});
 }
 
@@ -262,26 +284,24 @@ function saveStatusFromCache(
  *  installed-rom details, cover art, and fresh metadata (if stale or missing). */
 function startBackgroundRefreshes(
   cached: Awaited<ReturnType<typeof getCachedGameDetail>>,
-  romId: number,
-  cancelled: () => boolean,
-  setter: React.Dispatch<React.SetStateAction<PanelState>>,
+  binding: RomBinding,
 ): Promise<void[]> {
   const bgPromises: Promise<void>[] = [];
 
   if (cached.installed) {
-    bgPromises.push(refreshInstalledRomInBackground(romId, cancelled, setter));
+    bgPromises.push(refreshInstalledRomInBackground(binding));
   }
 
-  bgPromises.push(refreshCoverArtInBackground(romId, cancelled, setter));
+  bgPromises.push(refreshCoverArtInBackground(binding));
 
   const metaStale = cached.stale_fields?.includes("metadata") ?? true;
   if (!cached.metadata || metaStale) {
-    bgPromises.push(refreshMetadataInBackground(romId, cancelled, setter));
+    bgPromises.push(refreshMetadataInBackground(binding));
   }
 
   // Core info from its own path (#923), decoupled from BIOS status.
-  if (romId) {
-    bgPromises.push(refreshCoreInfoInBackground(romId, cancelled, setter));
+  if (binding.romId) {
+    bgPromises.push(refreshCoreInfoInBackground(binding));
   }
 
   return Promise.all(bgPromises);
@@ -291,17 +311,9 @@ function startBackgroundRefreshes(
  *  `get_platform_core_info` path (#923) and merge into panel state. Keyed on
  *  rom_id so the active core reflects a per-game DB override (epic #945) when
  *  one is pinned. */
-function refreshCoreInfoInBackground(
-  romId: number,
-  cancelled: () => boolean,
-  setter: React.Dispatch<React.SetStateAction<PanelState>>,
-): Promise<void> {
-  return getPlatformCoreInfo(romId)
-    .then((coreInfo) => {
-      if (!cancelled()) {
-        setter((prev) => ({ ...prev, coreInfo }));
-      }
-    })
+function refreshCoreInfoInBackground(binding: RomBinding): Promise<void> {
+  return getPlatformCoreInfo(binding.romId)
+    .then((coreInfo) => binding.write((prev) => ({ ...prev, coreInfo })))
     .catch(() => {});
 }
 
@@ -340,7 +352,9 @@ async function loadData(
     const conflicts: SyncConflict[] = cached.save_status?.conflicts ?? [];
     const raId = cached.ra_id ?? null;
 
-    // Render immediately with cached data (metadata may be null — that's OK)
+    // Render immediately with cached data (metadata may be null — that's OK).
+    // Unbound by construction: this is the write that INSTALLS the identity every
+    // background fold below compares itself against.
     setter({
       loading: false,
       romId,
@@ -371,12 +385,14 @@ async function loadData(
       languages: cached.languages ?? [],
     });
 
+    const binding = bindRom(romId, romIdRef, cancelled, setter);
+
     if (cached.save_sync_enabled) {
-      refreshSlotState(romId, setter);
+      refreshSlotState(binding);
     }
 
     // Phase 2: Background fetch for data not available in cache
-    await startBackgroundRefreshes(cached, romId, cancelled, setter);
+    await startBackgroundRefreshes(cached, binding);
   } catch (e) {
     detach(debugLog(`RomMGameInfoPanel: loadData error: ${e}`));
     if (!cancelled()) setter((prev) => ({ ...prev, loading: false, error: true }));
@@ -467,6 +483,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
 
     detach(loadData(appId, () => cancelled, romIdRef, platformSlugRef, setState));
 
+    /** Bind a read this panel is issuing now for the ROM it currently shows. */
+    const bindCurrentRom = (romId: number): RomBinding => bindRom(romId, romIdRef, () => cancelled, setState);
+
     // Listen for uninstall events to update state (uses ref to avoid stale closure)
     const onUninstall = (e: Event) => {
       const detail = (e as CustomEvent).detail;
@@ -489,7 +508,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
         // doesn't briefly re-serve the stale installed:false.
         invalidateCachedGameDetail(appId);
         setState((prev) => ({ ...prev, installed: true }));
-        detach(refreshInstalledRomInBackground(evt.rom_id, () => cancelled, setState));
+        detach(refreshInstalledRomInBackground(bindCurrentRom(evt.rom_id)));
       },
     );
 
@@ -505,11 +524,12 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       }
       const romId = romIdRef.current;
       if (!romId) return;
-      const result = await getSaveStatus(romId).catch(() => null);
+      const binding = bindCurrentRom(romId);
+      const result = await getSaveStatus(binding.romId).catch(() => null);
       if (result && isCallableFailure(result)) return;
       const updatedStatus: SaveStatus | null = result;
       const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
-      setState((prev) => ({
+      binding.write((prev) => ({
         ...prev,
         saveSyncEnabled: true,
         saveStatus: updatedStatus,
@@ -521,17 +541,18 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       if (detail.rom_id && detail.rom_id !== romIdRef.current) return;
       const romId = romIdRef.current;
       if (!romId) return;
-      const result = detail.save_status ?? (await getSaveStatus(romId).catch(() => null));
+      const binding = bindCurrentRom(romId);
+      const result = detail.save_status ?? (await getSaveStatus(binding.romId).catch(() => null));
       if (result && isCallableFailure(result)) return;
       const updatedStatus: SaveStatus | null = result;
       const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
-      setState((prev) => ({
+      binding.write((prev) => ({
         ...prev,
         saveStatus: updatedStatus,
         conflicts,
       }));
       // Also re-check slot configuration + refresh slot data
-      refreshSlotState(romId, setState);
+      refreshSlotState(binding);
     };
 
     const handleBiosChange = async (detail: Extract<RommDataChangedDetail, { type: "bios" }>) => {
@@ -559,8 +580,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // to avoid a stale `state` closure. The active core reflects the per-game
       // DB override (epic #945). BIOS status is re-read from the (now core-free)
       // cache.
+      const binding = bindCurrentRom(rid);
       const [coreInfo, cached] = await Promise.all([
-        getPlatformCoreInfo(rid).catch((): CoreInfo | null => null),
+        getPlatformCoreInfo(binding.romId).catch((): CoreInfo | null => null),
         getCachedGameDetail(appId),
       ]);
       if (cancelled || !cached.found) return;
@@ -568,7 +590,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // core switch invalidated the cached detail, but a cold firmware cache
       // makes the re-read a non-answer rather than a "needs none" (#1693).
       const biosFields = biosFieldsFromCache(cached);
-      setState((prev) => ({ ...prev, ...biosFields, coreInfo: coreInfo ?? prev.coreInfo }));
+      binding.write((prev) => ({ ...prev, ...biosFields, coreInfo: coreInfo ?? prev.coreInfo }));
     };
 
     const handleVersionSwitched = async (detail: Extract<RommDataChangedDetail, { type: "version_switched" }>) => {
@@ -631,16 +653,17 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // mirroring loadData's save-sync branch — this is the authority that keeps
       // the SlotSetupWizard-vs-SavesTab gate correct across the switch.
       if (cached.save_sync_enabled && newRomId != null) {
-        refreshSlotState(newRomId, setState);
+        refreshSlotState(bindCurrentRom(newRomId));
       }
       if (newRomId) {
+        const binding = bindCurrentRom(newRomId);
         await Promise.all([
-          refreshCoverArtInBackground(newRomId, () => cancelled, setState),
+          refreshCoverArtInBackground(binding),
           // The BIOS tab's "Active Core" row and its per-file core lines come
           // from the dedicated core-info path (#923), keyed on rom_id so a
           // per-game override follows the switch. A failed read keeps the
           // previous reading rather than blanking it.
-          refreshCoreInfoInBackground(newRomId, () => cancelled, setState),
+          refreshCoreInfoInBackground(binding),
         ]);
       }
     };
@@ -649,8 +672,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       if (detail.rom_id !== romIdRef.current) return;
       const romId = romIdRef.current;
       if (!romId) return;
-      const meta = await getRomMetadata(romId).catch((): RomMetadata | null => null);
-      setState((prev) => ({ ...prev, metadata: meta }));
+      const binding = bindCurrentRom(romId);
+      const meta = await getRomMetadata(binding.romId).catch((): RomMetadata | null => null);
+      binding.write((prev) => ({ ...prev, metadata: meta }));
     };
 
     const handleCoverRefreshed = async (detail: Extract<RommDataChangedDetail, { type: "cover_refreshed" }>) => {
@@ -661,7 +685,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // cover_path; getArtworkBase64 will now resolve the freshly-downloaded
       // file. Catch swallowed because the .then handles the success path —
       // the rejection branch surfaces via the empty-cover render.
-      await refreshCoverArtInBackground(romId, () => cancelled, setState);
+      await refreshCoverArtInBackground(bindCurrentRom(romId));
     };
 
     const onDataChanged = (e: Event) => {
