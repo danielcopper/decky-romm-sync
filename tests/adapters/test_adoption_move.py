@@ -63,6 +63,42 @@ class TestExists:
         assert adapter.exists(str(tmp_path / "nothing")) is False
 
 
+class TestIsFile:
+    """What the save-backup funnel can act on — the collision guard's whole basis.
+
+    ``exists`` and ``is_file`` disagree on exactly the entries the guard refuses,
+    so the pair is what makes "taken, but not by something we can set aside"
+    expressible. Symlinks are the half the in-memory fake cannot model, which is
+    why they are pinned here against a real filesystem.
+    """
+
+    def test_a_regular_file_is_one(self, adapter: AdoptionMoveAdapter, tmp_path: Path) -> None:
+        assert adapter.is_file(str(_write(tmp_path / "Game.srm"))) is True
+
+    def test_a_directory_is_not(self, adapter: AdoptionMoveAdapter, tmp_path: Path) -> None:
+        folder = tmp_path / "Game.srm"
+        folder.mkdir()
+        assert adapter.exists(str(folder)) is True
+        assert adapter.is_file(str(folder)) is False
+
+    def test_a_dangling_symlink_is_not(self, adapter: AdoptionMoveAdapter, tmp_path: Path) -> None:
+        link = tmp_path / "Game.srm"
+        link.symlink_to(tmp_path / "gone.srm")
+        assert adapter.exists(str(link)) is True
+        assert adapter.is_file(str(link)) is False
+
+    def test_a_symlink_to_a_regular_file_is_one(self, adapter: AdoptionMoveAdapter, tmp_path: Path) -> None:
+        # Followed, not refused: the funnel can move it, and refusing every link
+        # would turn a working layout into an unusable one.
+        _write(tmp_path / "real.srm")
+        link = tmp_path / "Game.srm"
+        link.symlink_to(tmp_path / "real.srm")
+        assert adapter.is_file(str(link)) is True
+
+    def test_a_free_name_is_not_a_file(self, adapter: AdoptionMoveAdapter, tmp_path: Path) -> None:
+        assert adapter.is_file(str(tmp_path / "nothing")) is False
+
+
 class TestMovePairsHappyPath:
     def test_an_empty_plan_does_nothing_and_says_so(self, adapter: AdoptionMoveAdapter) -> None:
         assert adapter.move_pairs(()) == {"moved": [], "stranded": [], "unmoved": [], "error": ""}

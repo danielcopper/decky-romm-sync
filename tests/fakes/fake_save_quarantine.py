@@ -26,9 +26,10 @@ class FakeSaveQuarantine:
     """Move a save aside inside the same virtual filesystem the stores share.
 
     ``failures`` names paths whose quarantine raises, which is how a test drives
-    the Overwrite refusal. ``missing`` names paths the funnel reports ``False``
-    for without moving anything — what the real one does when the target vanished
-    between the caller's ``exists`` probe and this call. ``quarantined`` records
+    the Overwrite refusal. ``missing`` names paths that vanished between the
+    caller's ``exists`` probe and this call: the funnel finds nothing and reports
+    ``False``, and the file leaves the shared filesystem here rather than
+    lingering in a state the real race could not produce. ``quarantined`` records
     the source paths that actually went, in order.
     """
 
@@ -42,7 +43,10 @@ class FakeSaveQuarantine:
         path = os.path.join(saves_dir, filename)
         if path in self.failures:
             raise OSError(f"staged quarantine failure for {filename}")
-        if path in self.missing or path not in self._store.files:
+        if path in self.missing:
+            self._store.files.pop(path, None)
+            return False
+        if path not in self._store.files:
             return False
         self._store.files[os.path.join(saves_dir, BACKUP_DIR_NAME, filename)] = self._store.files.pop(path)
         self.quarantined.append(path)

@@ -334,6 +334,26 @@ async def test_a_folder_at_a_save_s_name_is_refused_before_anything_moves(harnes
     assert not (_saves_dir(harness) / ".romm-backup").exists()
 
 
+async def test_a_dangling_symlink_at_a_save_s_name_is_refused_too(harness):
+    # The other half of the widened guard. A broken link occupies the name, so the
+    # collision is real, but the funnel can no more set it aside than a folder —
+    # and `os.link` would then fail EEXIST with earlier pairs already backed up.
+    candidate, mine, _theirs = _stage_collision(harness)
+    theirs = _saves_dir(harness) / "rom-41 (USA).srm"
+    theirs.unlink()
+    theirs.symlink_to(_saves_dir(harness) / "gone.srm")
+
+    result = await harness.plugin.adopt_existing_rom(_ROM_ID, str(candidate), "overwrite")
+
+    assert result["success"] is False
+    assert result["reason"] == "replace_failed"
+    assert "rom-41 (USA).srm" in result["message"]
+    assert candidate.read_bytes() == b"my own dump"
+    assert mine.read_bytes() == b"my progress"
+    assert theirs.is_symlink()
+    assert not (_saves_dir(harness) / ".romm-backup").exists()
+
+
 async def test_keep_leaves_both_saves_and_still_adopts_the_rom(harness):
     candidate, mine, theirs = _stage_collision(harness)
 
