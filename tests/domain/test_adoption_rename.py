@@ -85,8 +85,7 @@ class TestRenamePairs:
 
     def test_a_stem_that_is_a_prefix_of_another_game_does_not_claim_it(self) -> None:
         # ``Example Quest`` must not take ``Example Quest - Second Journey``'s
-        # saves; the
-        # separating dot is what makes the prefix test safe.
+        # saves; the separating dot is what makes the prefix test safe.
         pairs = rename_pairs(
             rom_source="/roms/gba/Example Quest (U).gba",
             rom_target="/roms/gba/Example Quest (USA).gba",
