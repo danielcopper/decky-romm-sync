@@ -173,7 +173,7 @@ class Harness:
         self.paths = FakeRetroDeckPaths(roms=_ROMS, saves=_SAVES, states=_STATES)
         self.move = FakeAdoptionMoveStore(self.store)
         self.quarantine = FakeSaveQuarantine(self.store)
-        # The layouts a real RetroDECK install reports: savefiles content-sorted,
+        # The layouts a stock RetroDECK install reports: savefiles content-sorted,
         # savestates not sorted at all. Tests that care flip them individually.
         #
         # ``save_layout`` is the LIVE retroarch.cfg and answers only whether
@@ -1291,8 +1291,8 @@ class TestCandidateSearch:
 
     async def test_a_folder_of_other_games_lets_the_download_proceed(self, h):
         h.system_extensions = {"snes": frozenset({".sfc"})}
-        h.store.files["/roms/snes/Zelda (USA).sfc"] = b"z"
-        h.store.files["/roms/snes/Metroid (USA).sfc"] = b"m"
+        h.store.files["/roms/snes/Other Game (USA).sfc"] = b"z"
+        h.store.files["/roms/snes/Third Game (USA).sfc"] = b"m"
 
         result = await h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=False)
         assert result is None
@@ -1549,8 +1549,8 @@ class TestShapeConflict:
 
     async def test_a_folder_named_after_another_game_is_no_conflict(self, h):
         h.system_extensions = {"snes": frozenset({".sfc"})}
-        h.store.dirs.add("/roms/snes/Zelda (U)")
-        h.store.files["/roms/snes/Zelda (U)/rom.sfc"] = b"z"
+        h.store.dirs.add("/roms/snes/Other Game (U)")
+        h.store.files["/roms/snes/Other Game (U)/rom.sfc"] = b"z"
 
         assert (
             await h.service.check_download_target(
@@ -1626,7 +1626,7 @@ class TestHasAdoptionCandidate:
 
     async def test_a_folder_of_other_games_is_not(self, h):
         h.system_extensions = {"snes": frozenset({".sfc"})}
-        h.store.files["/roms/snes/Zelda (USA).sfc"] = b"z"
+        h.store.files["/roms/snes/Other Game (USA).sfc"] = b"z"
 
         assert h.service.has_adoption_candidate("snes", "Game (USA).sfc") is False
 
@@ -1869,8 +1869,8 @@ class TestAdoptCandidate:
         assert h.move.moves == [(_OLD, _NEW)]
 
     async def test_a_save_and_a_savestate_travel_with_it(self, h):
-        # The real device shape: savefiles content-sorted under saves/<system>,
-        # savestates not sorted at all.
+        # The stock RetroDECK shape: savefiles content-sorted under
+        # saves/<system>, savestates not sorted at all.
         h.seed_rom()
         h.stage_detail(_single_file_detail())
         h.store.files[_OLD] = b"rom"
@@ -1907,11 +1907,11 @@ class TestAdoptCandidate:
         h.stage_detail(_single_file_detail())
         h.store.files[_OLD] = b"rom"
         h.store.files["/saves/snes/Game (U).srm"] = b"srm"
-        h.store.files["/saves/snes/Zelda (U).srm"] = b"not mine"
+        h.store.files["/saves/snes/Other Game (U).srm"] = b"not mine"
 
         await h.service.adopt_existing_rom(_ROM_ID, _OLD, None)
 
-        assert all("Zelda" not in source for source, _target in h.move.moves)
+        assert all("Other Game" not in source for source, _target in h.move.moves)
 
     async def test_a_rom_with_no_saves_at_all_still_moves(self, h):
         h.seed_rom()

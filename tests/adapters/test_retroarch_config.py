@@ -174,9 +174,9 @@ class TestOsErrorHandling:
 
 # The three savestate keys are read separately from the three savefile keys,
 # because RetroArch sorts the two independently. The cfg text in this class is
-# the shape a stock RetroDECK install writes — measured on device — where the
-# savefiles are content-sorted and the savestates are not sorted at all.
-_REAL_DEVICE_CFG = (
+# the shape a stock RetroDECK install writes, where the savefiles are
+# content-sorted and the savestates are not sorted at all.
+_STOCK_RETRODECK_CFG = (
     'savefile_directory = "/retrodeck/saves"\n'
     'savefiles_in_content_dir = "false"\n'
     'savestate_directory = "/retrodeck/states"\n'
@@ -198,7 +198,7 @@ class TestSavestateLayout:
         # The defect this pins: deriving the savestate layout from the savefile
         # one would send the rename to states/<content-dir>/ on every stock
         # install, where nothing has ever been written.
-        _write_cfg(tmp_path, _REAL_DEVICE_CFG)
+        _write_cfg(tmp_path, _STOCK_RETRODECK_CFG)
         adapter = _make_adapter(tmp_path)
         assert adapter.get_save_layout() == InSaveDir(sort_by_content=True, sort_by_core=False)
         assert adapter.get_savestate_layout() == InSaveDir(sort_by_content=False, sort_by_core=False)

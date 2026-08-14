@@ -7,7 +7,7 @@ this page shows what syncs for each system today, and what's planned.
 ## How reliable is this page?
 
 Be aware of what this table is before you plan around it. Most of it is **derived from libretro's documentation and from
-reading core source**, not from watching each core write a save on a real device. A separate project,
+reading core source**, not from watching each core actually write a save. A separate project,
 [emu-atlas](https://github.com/danielcopper/emu-atlas), is auditing the same ground with evidence grades per core; at
 the time of writing it has confirmed **17 of RetroDECK's 159 libretro cores**, and none of the 22 standalone emulators.
 
@@ -37,7 +37,7 @@ Standard per-game cartridge saves sync automatically. That covers the large majo
 Game Boy / Color / Advance, N64, DS), Sega (Master System, Game Gear, Genesis / Mega Drive, Sega CD), PC Engine /
 TurboGrafx, WonderSwan, Atari Lynx, Virtual Boy, and more.
 
-The systems whose default core has been **watched writing a save on a real RetroDECK install** are Game Boy / Color /
+The systems whose default core has been **watched writing a save on a stock RetroDECK install** are Game Boy / Color /
 Advance, N64, Saturn, Neo Geo Pocket (Color) and Pokémon Mini. The rest of the ✅ rows follow the same standard `.srm`
 convention and are expected to behave identically, but haven't been observed one by one.
 

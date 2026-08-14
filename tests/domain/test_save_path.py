@@ -66,7 +66,7 @@ class TestResolveSaveDir:
     def test_sort_by_content_and_sort_by_core_together(self) -> None:
         """Both flags True → saves/{content_dir}/{core}"""
         result = resolve_save_dir(
-            rom_path="snes/Zelda.sfc",
+            rom_path="snes/Example Quest.sfc",
             saves_base=self.SAVES_BASE,
             system="snes",
             sort_by_content=True,
@@ -162,11 +162,11 @@ class TestResolveSaveDir:
 
 class TestSanitizeSaveFilename:
     def test_clean_basename_returned_unchanged(self) -> None:
-        assert sanitize_save_filename("mario.srm") == "mario.srm"
+        assert sanitize_save_filename("example.srm") == "example.srm"
 
     def test_clean_name_with_spaces_and_parens_unchanged(self) -> None:
         """RetroArch-friendly filenames with USA/Europe tags are valid."""
-        name = "Mario Golf - Advance Tour (USA).srm"
+        name = "Example Quest - Second Journey (USA).srm"
         assert sanitize_save_filename(name) == name
 
     def test_traversal_components_stripped_to_basename(self) -> None:

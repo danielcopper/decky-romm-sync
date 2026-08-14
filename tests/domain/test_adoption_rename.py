@@ -22,10 +22,10 @@ from domain.adoption_rename import (
     split_collisions,
 )
 
-_OLD = "/roms/gba/Mario Golf - Advance Tour (U).zip"
-_NEW = "/roms/gba/Mario Golf - Advance Tour (USA).zip"
-_OLD_STEM = "Mario Golf - Advance Tour (U)"
-_NEW_STEM = "Mario Golf - Advance Tour (USA)"
+_OLD = "/roms/gba/Example Quest - Second Journey (U).zip"
+_NEW = "/roms/gba/Example Quest - Second Journey (USA).zip"
+_OLD_STEM = "Example Quest - Second Journey (U)"
+_NEW_STEM = "Example Quest - Second Journey (USA)"
 
 
 def _saves(*names: str, source: str = "/saves/gba", target: str = "/saves/gba") -> CompanionDir:
@@ -62,7 +62,7 @@ class TestRenamePairs:
         )
 
     def test_a_savestate_travels_out_of_its_own_directory(self) -> None:
-        # The real device shape: savefiles content-sorted under ``saves/gba``,
+        # The stock RetroDECK shape: savefiles content-sorted under ``saves/gba``,
         # savestates not sorted at all and sitting directly in ``states``.
         pairs = _plan(_saves(f"{_OLD_STEM}.srm"), _states(f"{_OLD_STEM}.state"))
         assert [(pair.kind, pair.source) for pair in pairs] == [
@@ -79,19 +79,22 @@ class TestRenamePairs:
         ]
 
     def test_another_game_s_save_is_never_claimed(self) -> None:
-        assert _plan(_saves("Mario Golf (U).srm", "Zelda (U).srm")) == (RenamePair(source=_OLD, target=_NEW, kind=ROM),)
+        assert _plan(_saves("Example Quest (U).srm", "Other Game (U).srm")) == (
+            RenamePair(source=_OLD, target=_NEW, kind=ROM),
+        )
 
     def test_a_stem_that_is_a_prefix_of_another_game_does_not_claim_it(self) -> None:
-        # ``Mario Golf`` must not take ``Mario Golf - Advance Tour``'s saves; the
+        # ``Example Quest`` must not take ``Example Quest - Second Journey``'s
+        # saves; the
         # separating dot is what makes the prefix test safe.
         pairs = rename_pairs(
-            rom_source="/roms/gba/Mario Golf (U).gba",
-            rom_target="/roms/gba/Mario Golf (USA).gba",
-            stem_source="Mario Golf (U)",
-            stem_target="Mario Golf (USA)",
-            companions=(_saves(f"{_OLD_STEM}.srm", "Mario Golf (U).srm"),),
+            rom_source="/roms/gba/Example Quest (U).gba",
+            rom_target="/roms/gba/Example Quest (USA).gba",
+            stem_source="Example Quest (U)",
+            stem_target="Example Quest (USA)",
+            companions=(_saves(f"{_OLD_STEM}.srm", "Example Quest (U).srm"),),
         )
-        assert [pair.source for pair in pairs[1:]] == ["/saves/gba/Mario Golf (U).srm"]
+        assert [pair.source for pair in pairs[1:]] == ["/saves/gba/Example Quest (U).srm"]
 
     def test_a_file_named_exactly_the_stem_travels_too(self) -> None:
         pairs = _plan(_saves(_OLD_STEM))

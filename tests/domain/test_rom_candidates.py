@@ -2,7 +2,7 @@
 
 The normalization is the whole filter: everything downstream trusts that two
 names denoting the same game reduce to one string and two names denoting
-different games do not. The cases here are the ones a real library produces —
+different games do not. The cases here are the ones ROM filenames produce —
 region tags, revision tags, dump-status brackets, unicode titles — plus the
 degenerate ones that would silently match everything if they were not refused.
 """
@@ -43,36 +43,36 @@ def _name(name: str, *, is_dir: bool = False, directory: str = "/roms/gba") -> L
 
 class TestNormalizeRomName:
     def test_a_region_tag_is_not_part_of_the_game(self) -> None:
-        assert normalize_rom_name("Mario Golf - Advance Tour (USA).zip") == "mario golf advance tour"
+        assert normalize_rom_name("Example Quest - Second Journey (USA).zip") == "example quest second journey"
 
     def test_two_names_of_the_same_game_reduce_to_one_string(self) -> None:
-        assert normalize_rom_name("Mario Golf - Advance Tour (U).zip") == normalize_rom_name(
-            "Mario Golf - Advance Tour (Rev 1) (USA).gba"
+        assert normalize_rom_name("Example Quest - Second Journey (U).zip") == normalize_rom_name(
+            "Example Quest - Second Journey (Rev 1) (USA).gba"
         )
 
     def test_several_tag_groups_all_go(self) -> None:
-        assert normalize_rom_name("Zelda (USA) (Rev 2) (Virtual Console).zip") == "zelda"
+        assert normalize_rom_name("Example Quest (USA) (Rev 2) (Virtual Console).zip") == "example quest"
 
     def test_square_brackets_are_tags_too(self) -> None:
-        assert normalize_rom_name("Zelda [!][b1].sfc") == "zelda"
+        assert normalize_rom_name("Example Quest [!][b1].sfc") == "example quest"
 
     def test_parens_and_brackets_mix(self) -> None:
-        assert normalize_rom_name("Zelda (USA) [!].sfc") == "zelda"
+        assert normalize_rom_name("Example Quest (USA) [!].sfc") == "example quest"
 
     def test_a_bracket_nested_in_a_paren_closes_with_it(self) -> None:
-        assert normalize_rom_name("Zelda (Rev [1]) Ocarina.sfc") == "zelda ocarina"
+        assert normalize_rom_name("Example Quest (Rev [1]) Second Journey.sfc") == "example quest second journey"
 
     def test_punctuation_collapses_to_single_spaces_and_case_is_dropped(self) -> None:
-        assert normalize_rom_name("SUPER___Mario--World!!.sfc") == "super mario world"
+        assert normalize_rom_name("EXAMPLE___Quest--Second!!.sfc") == "example quest second"
 
     def test_leading_and_trailing_punctuation_is_trimmed(self) -> None:
-        assert normalize_rom_name("  ...Metroid... .sfc") == "metroid"
+        assert normalize_rom_name("  ...Example Quest... .sfc") == "example quest"
 
     def test_a_unicode_title_survives_intact(self) -> None:
-        assert normalize_rom_name("Pokémon Édition Rouge (France).gba") == "pokémon édition rouge"
+        assert normalize_rom_name("Exemple Quête Édition Rouge (France).gba") == "exemple quête édition rouge"
 
     def test_a_non_latin_title_survives_intact(self) -> None:
-        assert normalize_rom_name("ポケモン (Japan).gba") == "ポケモン"
+        assert normalize_rom_name("テストゲーム (Japan).gba") == "テストゲーム"
 
     def test_a_name_that_is_only_tags_normalizes_to_nothing(self) -> None:
         assert normalize_rom_name("(USA).zip") == ""
@@ -81,10 +81,10 @@ class TestNormalizeRomName:
         assert normalize_rom_name("---.zip") == ""
 
     def test_an_unmatched_opener_swallows_the_rest_rather_than_keeping_the_tag(self) -> None:
-        assert normalize_rom_name("Zelda (USA.sfc") == "zelda"
+        assert normalize_rom_name("Example Quest (USA.sfc") == "example quest"
 
     def test_an_unmatched_closer_is_dropped(self) -> None:
-        assert normalize_rom_name("Zelda) Ocarina.sfc") == "zelda ocarina"
+        assert normalize_rom_name("Example Quest) Second Journey.sfc") == "example quest second journey"
 
     def test_only_the_last_extension_comes_off(self) -> None:
         # ``splitext`` is deliberately blunt. Symmetric on both sides of the
@@ -92,13 +92,15 @@ class TestNormalizeRomName:
         assert normalize_rom_name("Game.tar.gz") == "game tar"
 
     def test_a_dotted_version_loses_its_last_component_on_both_sides(self) -> None:
-        assert normalize_rom_name("Sonic 3.0") == "sonic 3"
+        assert normalize_rom_name("Example Quest 3.0") == "example quest 3"
 
     def test_an_es_de_collapsed_directory_name_loses_its_extension(self) -> None:
         # The plugin's own multi-file installs are named ``<game>.m3u/`` so ES-DE
         # collapses them; a hand-made directory carries no extension. Both have
         # to reduce to the same game.
-        assert normalize_rom_name("Final Fantasy VII (USA).m3u") == normalize_rom_name("Final Fantasy VII (U)")
+        assert normalize_rom_name("Example Quest - Second Journey (USA).m3u") == normalize_rom_name(
+            "Example Quest - Second Journey (U)"
+        )
 
 
 class TestMatchingEntries:
@@ -106,7 +108,7 @@ class TestMatchingEntries:
         assert (
             matching_entries(
                 (),
-                wanted_name="mario golf advance tour",
+                wanted_name="example quest second journey",
                 want_dir=False,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset(),
@@ -115,11 +117,11 @@ class TestMatchingEntries:
         )
 
     def test_nothing_matches_a_different_game(self) -> None:
-        entries = (_entry("Zelda (USA).gba"), _entry("Metroid (USA).gba"))
+        entries = (_entry("Other Game (USA).gba"), _entry("Third Game (USA).gba"))
         assert (
             matching_entries(
                 entries,
-                wanted_name="mario golf advance tour",
+                wanted_name="example quest second journey",
                 want_dir=False,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset(),
@@ -128,10 +130,10 @@ class TestMatchingEntries:
         )
 
     def test_the_same_game_under_another_name_matches(self) -> None:
-        wanted = _entry("Mario Golf - Advance Tour (U).zip")
+        wanted = _entry("Example Quest - Second Journey (U).zip")
         found = matching_entries(
-            (wanted, _entry("Zelda (USA).gba")),
-            wanted_name="mario golf advance tour",
+            (wanted, _entry("Other Game (USA).gba")),
+            wanted_name="example quest second journey",
             want_dir=False,
             accepted_extensions=_ACCEPTED,
             covered_paths=frozenset(),
@@ -141,10 +143,10 @@ class TestMatchingEntries:
     def test_the_page_s_leaner_entries_go_through_the_very_same_filter(self) -> None:
         # The two halves of the search agree because one filter answers for both
         # — the page just hands it entries it paid less to read.
-        wanted = _name("Mario Golf - Advance Tour (U).zip")
+        wanted = _name("Example Quest - Second Journey (U).zip")
         found = matching_entries(
-            (wanted, _name("Zelda (USA).gba")),
-            wanted_name="mario golf advance tour",
+            (wanted, _name("Other Game (USA).gba")),
+            wanted_name="example quest second journey",
             want_dir=False,
             accepted_extensions=_ACCEPTED,
             covered_paths=frozenset(),
@@ -152,11 +154,11 @@ class TestMatchingEntries:
         assert found == (wanted,)
 
     def test_an_entry_an_install_row_accounts_for_is_another_game_s_content(self) -> None:
-        covered = _entry("Mario Golf - Advance Tour (U).zip")
+        covered = _entry("Example Quest - Second Journey (U).zip")
         assert (
             matching_entries(
                 (covered,),
-                wanted_name="mario golf advance tour",
+                wanted_name="example quest second journey",
                 want_dir=False,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset({covered.path}),
@@ -167,8 +169,8 @@ class TestMatchingEntries:
     def test_an_extension_the_system_does_not_accept_is_not_a_rom(self) -> None:
         assert (
             matching_entries(
-                (_entry("Mario Golf - Advance Tour (U).txt"),),
-                wanted_name="mario golf advance tour",
+                (_entry("Example Quest - Second Journey (U).txt"),),
+                wanted_name="example quest second journey",
                 want_dir=False,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset(),
@@ -196,20 +198,20 @@ class TestMatchingEntries:
         # An empty set means ES-DE could not be read. Every other consumer of that
         # list treats it as "cannot tell" and takes its permissive branch; the
         # name match plus the user's confirmation is what the offer rests on.
-        wanted = _entry("Mario Golf - Advance Tour (U).xyz")
+        wanted = _entry("Example Quest - Second Journey (U).xyz")
         assert matching_entries(
             (wanted,),
-            wanted_name="mario golf advance tour",
+            wanted_name="example quest second journey",
             want_dir=False,
             accepted_extensions=frozenset(),
             covered_paths=frozenset(),
         ) == (wanted,)
 
     def test_a_directory_is_never_extension_tested(self) -> None:
-        wanted = _entry("Final Fantasy VII (U)", is_dir=True)
+        wanted = _entry("Example Quest - Second Journey (U)", is_dir=True)
         assert matching_entries(
             (wanted,),
-            wanted_name="final fantasy vii",
+            wanted_name="example quest second journey",
             want_dir=True,
             accepted_extensions=_ACCEPTED,
             covered_paths=frozenset(),
@@ -218,8 +220,8 @@ class TestMatchingEntries:
     def test_a_file_is_not_offered_for_a_rom_the_server_serves_as_a_folder(self) -> None:
         assert (
             matching_entries(
-                (_entry("Final Fantasy VII (U).zip"),),
-                wanted_name="final fantasy vii",
+                (_entry("Example Quest - Second Journey (U).zip"),),
+                wanted_name="example quest second journey",
                 want_dir=True,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset(),
@@ -230,8 +232,8 @@ class TestMatchingEntries:
     def test_a_folder_is_not_offered_for_a_rom_the_server_serves_as_one_file(self) -> None:
         assert (
             matching_entries(
-                (_entry("Zelda (U)", is_dir=True),),
-                wanted_name="zelda",
+                (_entry("Other Game (U)", is_dir=True),),
+                wanted_name="other game",
                 want_dir=False,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset(),
@@ -257,7 +259,7 @@ class TestMatchingEntries:
         assert (
             matching_entries(
                 (_entry("(USA).gba"),),
-                wanted_name="zelda",
+                wanted_name="other game",
                 want_dir=False,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset(),
@@ -271,7 +273,7 @@ class TestRankCandidates:
         assert rank_candidates((), server_size=100, server_crc32="deadbeef", member_crc32s={}) == ((), False)
 
     def test_a_single_member_archive_whose_crc_agrees_ranks_on_the_checksum(self) -> None:
-        entry = _entry("Mario (U).zip", size=999)
+        entry = _entry("Example Quest (U).zip", size=999)
         candidates, truncated = rank_candidates(
             (entry,), server_size=100, server_crc32="deadbeef", member_crc32s={entry.path: ("deadbeef",)}
         )
@@ -298,7 +300,7 @@ class TestRankCandidates:
         assert [c.name for c in candidates] == ["Alpha (U).gba", "Beta (U).gba"]
 
     def test_a_crc_that_disagrees_is_no_evidence_at_all(self) -> None:
-        entry = _entry("Mario (U).zip", size=7)
+        entry = _entry("Example Quest (U).zip", size=7)
         candidates, _truncated = rank_candidates(
             (entry,), server_size=100, server_crc32="deadbeef", member_crc32s={entry.path: ("0badf00d",)}
         )
@@ -318,7 +320,7 @@ class TestRankCandidates:
         assert candidates[0].evidence == NAME_MATCH
 
     def test_a_server_without_a_checksum_falls_through_to_size(self) -> None:
-        entry = _entry("Mario (U).zip", size=100)
+        entry = _entry("Example Quest (U).zip", size=100)
         candidates, _truncated = rank_candidates(
             (entry,), server_size=100, server_crc32="", member_crc32s={entry.path: ("deadbeef",)}
         )
@@ -326,7 +328,7 @@ class TestRankCandidates:
 
     def test_a_server_without_a_size_falls_through_to_the_name(self) -> None:
         candidates, _truncated = rank_candidates(
-            (_entry("Mario (U).zip", size=0),), server_size=0, server_crc32="", member_crc32s={}
+            (_entry("Example Quest (U).zip", size=0),), server_size=0, server_crc32="", member_crc32s={}
         )
         assert candidates[0].evidence == NAME_MATCH
 
@@ -334,7 +336,10 @@ class TestRankCandidates:
         # The search does not descend, so a directory's ``size_bytes`` is 0 and an
         # ``fs_size_bytes`` of 0 must not read as two zeroes agreeing.
         candidates, _truncated = rank_candidates(
-            (_entry("Final Fantasy VII (U)", is_dir=True),), server_size=0, server_crc32="", member_crc32s={}
+            (_entry("Example Quest - Second Journey (U)", is_dir=True),),
+            server_size=0,
+            server_crc32="",
+            member_crc32s={},
         )
         assert candidates[0].evidence == NAME_MATCH
 
@@ -354,10 +359,10 @@ class TestRankCandidates:
 class TestCandidatesRefusal:
     def test_the_refusal_carries_the_canonical_failure_shape(self) -> None:
         candidates, truncated = rank_candidates(
-            (_entry("Mario (U).gba", size=100),), server_size=100, server_crc32="", member_crc32s={}
+            (_entry("Example Quest (U).gba", size=100),), server_size=100, server_crc32="", member_crc32s={}
         )
         refusal = candidates_refusal(
-            candidates, truncated=truncated, incoming_name="Mario (USA).gba", incoming_size=100
+            candidates, truncated=truncated, incoming_name="Example Quest (USA).gba", incoming_size=100
         )
         assert refusal["success"] is False
         assert refusal["reason"] == "adoption_candidates"
@@ -368,15 +373,15 @@ class TestCandidatesRefusal:
 
     def test_every_field_the_dialog_renders_crosses_the_wire(self) -> None:
         candidates, truncated = rank_candidates(
-            (_entry("Mario (U).gba", size=100),), server_size=100, server_crc32="", member_crc32s={}
+            (_entry("Example Quest (U).gba", size=100),), server_size=100, server_crc32="", member_crc32s={}
         )
         refusal = candidates_refusal(
-            candidates, truncated=truncated, incoming_name="Mario (USA).gba", incoming_size=100
+            candidates, truncated=truncated, incoming_name="Example Quest (USA).gba", incoming_size=100
         )
         assert refusal["candidates"] == [
             {
-                "name": "Mario (U).gba",
-                "path": "/roms/gba/Mario (U).gba",
+                "name": "Example Quest (U).gba",
+                "path": "/roms/gba/Example Quest (U).gba",
                 "is_dir": False,
                 "size_bytes": 100,
                 "modified_at": 1700000000.0,
@@ -384,7 +389,7 @@ class TestCandidatesRefusal:
                 "detail": candidates[0].detail,
             }
         ]
-        assert refusal["incoming"] == {"name": "Mario (USA).gba", "size_bytes": 100}
+        assert refusal["incoming"] == {"name": "Example Quest (USA).gba", "size_bytes": 100}
         assert refusal["truncated"] is False
 
     def test_a_truncated_list_is_stated_rather_than_implied(self) -> None:
@@ -399,9 +404,9 @@ class TestShapeConflictRefusal:
 
     def test_the_refusal_carries_the_canonical_failure_shape(self) -> None:
         refusal = shape_conflict_refusal(
-            (_name("Mario (U)", is_dir=True),),
+            (_name("Example Quest (U)", is_dir=True),),
             served_dir=False,
-            incoming_name="Mario (USA).gba",
+            incoming_name="Example Quest (USA).gba",
             incoming_size=100,
         )
         assert refusal["success"] is False
@@ -413,44 +418,47 @@ class TestShapeConflictRefusal:
 
     def test_it_names_the_entry_and_both_shapes(self) -> None:
         refusal = shape_conflict_refusal(
-            (_name("Mario (U)", is_dir=True),),
+            (_name("Example Quest (U)", is_dir=True),),
             served_dir=False,
-            incoming_name="Mario (USA).gba",
+            incoming_name="Example Quest (USA).gba",
             incoming_size=100,
         )
         assert refusal["message"] == (
-            "'Mario (U)' has this game's name but is a folder, and the server sends this game as a single file"
+            "'Example Quest (U)' has this game's name but is a folder, and the server sends this game as a single file"
         )
-        assert refusal["existing"] == [{"name": "Mario (U)", "path": "/roms/gba/Mario (U)", "is_dir": True}]
+        assert refusal["existing"] == [
+            {"name": "Example Quest (U)", "path": "/roms/gba/Example Quest (U)", "is_dir": True}
+        ]
         assert refusal["served_is_dir"] is False
-        assert refusal["incoming"] == {"name": "Mario (USA).gba", "size_bytes": 100}
+        assert refusal["incoming"] == {"name": "Example Quest (USA).gba", "size_bytes": 100}
         assert refusal["truncated"] is False
 
     def test_the_other_direction_reads_the_other_way_round(self) -> None:
         refusal = shape_conflict_refusal(
-            (_name("Mario (U).cue"),),
+            (_name("Example Quest (U).cue"),),
             served_dir=True,
-            incoming_name="Mario (USA)",
+            incoming_name="Example Quest (USA)",
             incoming_size=0,
         )
         assert refusal["message"] == (
-            "'Mario (U).cue' has this game's name but is a single file, and the server sends this game as a folder"
+            "'Example Quest (U).cue' has this game's name but is a single file, "
+            "and the server sends this game as a folder"
         )
         assert refusal["served_is_dir"] is True
 
     def test_several_are_counted_rather_than_listed_in_the_sentence(self) -> None:
         refusal = shape_conflict_refusal(
-            (_name("Mario (U)", is_dir=True), _name("Mario (E)", is_dir=True)),
+            (_name("Example Quest (U)", is_dir=True), _name("Example Quest (E)", is_dir=True)),
             served_dir=False,
-            incoming_name="Mario (USA).gba",
+            incoming_name="Example Quest (USA).gba",
             incoming_size=0,
         )
         assert refusal["message"] == (
             "2 entries here have this game's name but are folders, and the server sends this game as a single file"
         )
         assert refusal["existing"] == [
-            {"name": "Mario (U)", "path": "/roms/gba/Mario (U)", "is_dir": True},
-            {"name": "Mario (E)", "path": "/roms/gba/Mario (E)", "is_dir": True},
+            {"name": "Example Quest (U)", "path": "/roms/gba/Example Quest (U)", "is_dir": True},
+            {"name": "Example Quest (E)", "path": "/roms/gba/Example Quest (E)", "is_dir": True},
         ]
 
     def test_a_truncated_list_is_stated_rather_than_implied(self) -> None:

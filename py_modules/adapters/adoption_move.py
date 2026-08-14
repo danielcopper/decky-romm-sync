@@ -23,11 +23,11 @@ if TYPE_CHECKING:
     from models.adoption import MoveOutcome
 
 # Errnos that mean "this filesystem will not give me a second name for these
-# bytes", as opposed to "this particular link failed". ``EXDEV`` is the one a
-# real device produces — ROMs on an SD card, saves on internal storage — while
-# ``EPERM``/``EOPNOTSUPP``/``EMLINK`` cover a filesystem that refuses hardlinks
-# outright. Only these fall through to the rename path; anything else is a
-# failure to report with nothing moved.
+# bytes", as opposed to "this particular link failed". ``EXDEV`` is the ordinary
+# one — a ROM library on removable storage with saves on internal storage is a
+# common layout — while ``EPERM``/``EOPNOTSUPP``/``EMLINK`` cover a filesystem
+# that refuses hardlinks outright. Only these fall through to the rename path;
+# anything else is a failure to report with nothing moved.
 _LINK_UNSUPPORTED = frozenset({errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.EMLINK, errno.EISDIR})
 
 
