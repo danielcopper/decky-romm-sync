@@ -283,11 +283,10 @@ def candidates_refusal(
     }
 
 
-# Both halves of the sentence the shape refusal has to say out loud: what is
-# lying there, and what the server would send. Singular and plural are spelled
-# rather than derived, because "single files" is not "single file" + "s".
+# How the refusal's own sentence names a shape. It has to read as a sentence on
+# its own: the dialog renders its own copy from the payload, but this message is
+# what a toast shows if that dialog never opens.
 _SHAPE_WORD = {True: "folder", False: "single file"}
-_SHAPE_WORD_PLURAL = {True: "folders", False: "single files"}
 
 
 def shape_conflict_refusal(
@@ -320,7 +319,7 @@ def shape_conflict_refusal(
         "message": (
             f"'{shown[0].name}' has this game's name but is a {_SHAPE_WORD[found_dir]}"
             if len(shown) == 1
-            else f"{len(shown)} entries here have this game's name but are {_SHAPE_WORD_PLURAL[found_dir]}"
+            else f"{len(shown)} entries here have this game's name but are {_SHAPE_WORD[found_dir]}s"
         )
         + f", and the server sends this game as a {_SHAPE_WORD[served_dir]}",
         "incoming": {"name": incoming_name, "size_bytes": incoming_size},
