@@ -38,7 +38,7 @@ These cores all produce `.srm` (and optionally `.rtc`). No additional extensions
 
 | Platform         | Cores                                                                          | Notes                                                                                 |
 | ---------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| **GB/GBC**       | gambatte, sameboy, gearboy, tgbdual, fixgb, DoubleCherryGB                     | `.rtc` used by Pokemon Crystal/Gold/Silver etc.                                       |
+| **GB/GBC**       | gambatte, sameboy, gearboy, tgbdual, fixgb, DoubleCherryGB                     | `.rtc` used by the cartridges that carry a real-time clock                            |
 | **GBA**          | mgba, vbam, vba_next, skyemu                                                   | All GBA save types (EEPROM, SRAM, Flash) packed into single `.srm`                    |
 | **NES**          | fceumm, nestopia, mesen                                                        | Battery-backed saves                                                                  |
 | **SNES**         | snes9x (all variants), bsnes (all variants), supafaust, mednafen_snes, mesen-s | Standard SRAM                                                                         |

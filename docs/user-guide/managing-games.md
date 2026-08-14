@@ -292,9 +292,19 @@ comes in, so downloading leaves you with two copies.** You can go ahead and down
 copy beside what is already there under the server's own name, or cancel and sort it out yourself. Neither choice
 renames, moves or deletes anything you have.
 
-This is also why the button can read **Use Existing Files** for something that turns out not to be usable: when the page
-opens, Tender knows the name but not yet which form the server sends. Pressing always gets you an answer — it never
-quietly downloads past a file with this game's name.
+**When it cannot be read at all.** Sometimes an entry carries this game's name and Tender cannot read it — a shortcut
+pointing at a drive that is not plugged in, a folder it is not allowed to open. It says so rather than guessing: it
+cannot tell whether that is your copy, so it will not use it as this game, and downloading leaves you with both. The one
+case it offers to tidy up is a shortcut that points at nothing at all — there is no file behind it, so removing it
+deletes nothing. Anything else it could not read is left exactly where it is.
+
+**And if it finds nothing at all.** If the page told you a copy was here and pressing turns up nothing that matches —
+you moved it, renamed it or deleted it in between — you get told that too, instead of a download starting on its own.
+
+That last one is the promise the button actually makes: **pressing always gets you an answer.** The page and the check
+at press time look at the same folder but know different things about it, so the page can be right that something is
+there and still be wrong about whether it can be used. Whatever the two disagree about, pressing never quietly downloads
+past something carrying this game's name.
 
 Choosing a file and pressing **Use These Files** does one thing more than before: it **renames your file to the name
 your server uses**, and moves your saves and savestates for that game along with it. That is not tidiness. Uninstalling

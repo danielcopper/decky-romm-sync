@@ -93,9 +93,9 @@ lets the user set in its own UI.
 
 > **Amendment (1G1R ranking + canonical naming, same PR as the region-priority slice).** The chain above originally
 > ended at `alphabetical`. In practice the alphabetical leg binds — and, because the shortcut name is minted from the
-> winner and is **sticky forever**, permanently names — the wrong dump: a Japanese release of a game whose title is
-> written in kana sorts ahead of every Latin-script sibling, so the shortcut ends up carrying that title. These
-> amendments, all local-only, no new server scope:
+> winner and is **sticky forever**, permanently names — the wrong dump: a release whose display name is in another
+> script can win the leg, and the shortcut then carries that name for good. These amendments, all local-only, no new
+> server scope:
 >
 > - **1G1R ranking hardening — prerelease demotion + revision (igir / No-Intro convention).** The total order the
 >   fallback legs apply gained two dimensions bracketing the region leg. **Prerelease demotion ranks FIRST, before

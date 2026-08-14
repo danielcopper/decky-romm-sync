@@ -219,46 +219,66 @@ that does will go looking for a problem that is not there.
 confirmation naming the deletion. Cancel does nothing. For multi-file, Download removes the existing directory and
 extracts fresh — the user chose replace, not merge.
 
-**The game detail page runs one `stat` and, when that comes back free, one `readdir`** — both only when no install row
-exists, so the page can say a ROM is already on the device rather than offering an undifferentiated Download, whether it
-sits at the computed target path or beside it under another name. Neither read is a guarantee: an unreadable folder, an
-unresolvable ROMs root and an accept-list that could not answer all report **no** candidate, because a search that could
-not run must never make a game look uninstallable. The `readdir` is a bare directory read — name and directory-flag per
-entry, and no `stat` for the size and mtime, because a name match reads neither — plus string work; the archive-index
-read that _ranks_ candidates costs an order of magnitude more per entry and is the dialog's, not the page's. The whole
-payload is assembled on a worker thread, which is also where the Unit of Work's connection is meant to live (ADR-0004).
-
-The page-open answer labels the button and nothing more: **the search runs again at click time**, because the folder can
-change while the page is open and a stale candidate would be offered against a file that has moved. The two halves share
-one filter (`matching_entries`) but not all of its inputs, and the difference runs one way in each case:
-
-- **Shape.** A `roms` row does not say whether RomM serves this ROM as one file or a folder, so the page accepts both;
-  the click-time search has the payload and filters on it.
-- **The name.** The page matches `roms.fs_name`, the click path the basename of the path the download derived.
-- **The platform directory.** The page can pass only `platform_slug`, the click path also the payload's
-  `platform_fs_slug`, which the resolver consults when the slug misses its map. For such a platform the page probes a
-  directory that does not exist and stays quiet — an under-claim the click-time search corrects.
-
-So the label can overpromise: **Use Existing Files** for something that turns out not to be usable. What the label
-actually promises — that pressing opens a dialog rather than starting a transfer — holds in every case, and the shape
-refusal below is what makes it hold.
-
-**A namesake of the wrong shape is asked about, never downloaded past.** When the click-time search finds nothing of the
-served shape but the folder holds an entry whose normalized name matches in the _other_ shape, the download is refused
-with `shape_conflict` — a third refusal beside the occupied target and the candidate list, because nothing here can be
-adopted and it is therefore not a candidate list. What it offers is the choice the plugin would otherwise make silently:
-fetch the server's copy as a **second copy** beside what is there, or stop. A hard refusal was rejected — a stray file
-would make a game permanently undownloadable — and so was proceeding without a word, which is what a multi-gigabyte
-transfer starting after a button reading Use Existing Files amounts to.
-
-**Storing the served shape on the `roms` row was considered and rejected.** It looks like the fix that removes the
-disagreement at the source, and it does not work: the ROM **list** endpoint the sync pages through carries an empty
-`files` array, so a shape computed at sync time would fall through to `has_multiple_files` — a flag that is wrong by
-construction for the case its own docstring names, one file at the ROM root plus files in subfolders (a Switch title
-with `update/`, a PS3 title with updates), which RomM zips while the flag says single. That would give the page a
-second, disagreeing source of truth for a question `domain/rom_files.py` exists to answer once, and would leave exactly
-that class still lying. Refusing the disagreement at click time covers the nested-single case too, which no stored shape
-could.
+> **Amendment (the search runs on the game page too, and the button keeps its own promise — #260 PR 2).** The decision
+> above settled what happens once a candidate is offered. What follows settles when the offer is made, and what is said
+> when it cannot be. Nothing above changes.
+>
+> **The game detail page runs one `stat` and, when that comes back free, one `readdir`** — both only when no install row
+> exists, so the page can say a ROM is already on the device rather than offering an undifferentiated Download, whether
+> it sits at the computed target path or beside it under another name. Neither read is a guarantee: an unreadable
+> folder, an unresolvable ROMs root, a directory that is not an ES-DE system and an accept-list that could not answer
+> all report **no** candidate, because a search that could not run must never make a game look uninstallable. The
+> `readdir` is a bare directory read — name and directory-flag per entry, and no `stat` for the size and mtime, because
+> a name match reads neither — plus string work; the archive-index read that _ranks_ candidates costs an order of
+> magnitude more per entry and is the dialog's, not the page's. The whole payload is assembled on a worker thread, which
+> is also where the Unit of Work's connection is meant to live (ADR-0004).
+>
+> **The two searches are not held to agreeing, and the promise does not rest on them agreeing.** They answer the same
+> question from different knowledge on purpose: the page holds a `roms` row and must stay network-free and instant,
+> while the click-time search holds the server payload and the path the download derived. Four times that difference
+> produced a real divergence — the shape RomM serves, the platform directory, the name matched, and the directory
+> listing itself. Each was closed as it was found; what does not follow is that the next one has been.
+>
+> So the guarantee is stated differently. It is not "the two agree"; it is **pressing the button always ends in an
+> answer**. That is enforced in one place — the last check in the chain below — and every other refusal exists to
+> replace a generic answer with a specific one, never to prop up an invariant over two searches that cannot be made to
+> know the same things. The label may still overpromise (**Use Existing Files** for something that turns out not to be
+> usable); what it actually promises is that pressing opens a dialog rather than starting a transfer, and that holds.
+>
+> **The chain, most specific answer first.** The search runs again at click time — the folder can change while the page
+> is open — and returns the first of these that applies:
+>
+> 1. `adoption_candidates` — entries of the served shape it could read. The dialog offers them.
+> 2. `unreadable_entry` — a namesake whose `stat` did not answer: a link pointing nowhere, a mount that went away, a
+>    race with a writer. Nothing can be said about the content, so it is neither offered nor rejected on its merits; the
+>    user is told what is known and chooses between downloading a second copy and stopping. It is answered **before** a
+>    wrong-shape namesake because nothing about it has been ruled out — it may be the very copy the user meant — where a
+>    wrong-shape entry was read and found unusable.
+> 3. `shape_conflict` — a readable namesake in the other shape, which nothing can adopt. Same two exits.
+> 4. `candidate_vanished` — the backstop. The page reported a copy and none of the above applies, so the download stops
+>    and says so instead of starting silently. It claims no cause, because none is known; it also covers the ordinary
+>    race where the file was deleted between opening the page and pressing.
+>
+> **Deletion is offered for exactly one unreadable state.** A symlink whose target does not resolve holds no data, so
+> unlinking it destroys nothing and the dialog may offer it — for a single such entry, so the one path the wire carries
+> is unambiguous. Every other unreadable state may be content that exists nowhere else, and the register's rule against
+> deleting what exists nowhere else does not bend for an entry the plugin merely failed to `stat`.
+>
+> **The directory has to be a system.** Before searching, the plugin asks `es_systems.xml` — the source the accept-list
+> already comes from — whether the directory it is about to read is a system at all. An unmapped RomM slug is otherwise
+> taken verbatim as a directory name, and a namesake inside such a directory is content no emulator will ever look at.
+> The same check closes a second hole at no extra cost: an empty accept-list means "could not tell" and skips the
+> extension test, which is right for a real system and removes the filter entirely for a directory that is not one. A
+> source that could not answer is not a denial, and the search proceeds.
+>
+> **Storing the served shape on the `roms` row was considered and rejected.** It looks like the fix that removes the
+> shape disagreement at the source, and it does not work: the ROM **list** endpoint the sync pages through carries an
+> empty `files` array, so a shape computed at sync time would fall through to `has_multiple_files` — a flag that is
+> wrong by construction for the case its own docstring names, one file at the ROM root plus files in subfolders (a
+> Switch title with `update/`, a PS3 title with updates), which RomM zips while the flag says single. That would give
+> the page a second, disagreeing source of truth for a question `domain/rom_files.py` exists to answer once, and would
+> leave exactly that class still lying. Refusing the disagreement at click time covers the nested-single case too, which
+> no stored shape could.
 
 ## Consequences
 
