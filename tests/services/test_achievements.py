@@ -133,6 +133,8 @@ def plugin(clock):
 async def _set_event_loop(plugin):
     """Ensure service loops match the running event loop for async tests."""
     plugin._achievements_service._loop = asyncio.get_event_loop()
+    # ``get_cached_game_detail`` runs its work on an executor worker.
+    plugin.loop = asyncio.get_event_loop()
 
 
 @pytest.fixture

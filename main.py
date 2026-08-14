@@ -305,7 +305,15 @@ class Plugin:
         return self._settings_service.update_whitelist_settings(disabled_defaults, custom_names)
 
     async def get_cached_game_detail(self, app_id):
-        return self._game_detail_service.get_cached_game_detail(app_id)
+        """Return the game page's whole payload, assembled off the loop thread.
+
+        Network-free but not free: a read UoW, a firmware-cache read, and for an
+        uninstalled ROM a ``stat`` and a directory listing on storage that may
+        have to wake up. Every game page opens this, so it goes to a worker —
+        which is also where a `SqliteUnitOfWork` connection is meant to live
+        (ADR-0004).
+        """
+        return await self.loop.run_in_executor(None, self._game_detail_service.get_cached_game_detail, app_id)
 
     @migration_blocked
     @prune_active_blocked
