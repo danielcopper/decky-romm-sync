@@ -167,6 +167,16 @@ export interface CachedGameDetail extends BiosAnswer {
   // is "nothing found or nothing knowable"; the full comparison runs at click
   // time (ADR-0028).
   target_path_occupied?: boolean;
+  /**
+   * Whether the platform folder holds an entry that could be this game under
+   * another name (#260). Read at page open so the button can say so without the
+   * user pressing Download to find out. Distinct from `target_path_occupied`:
+   * that one is content at this ROM's own location, which wins when both are
+   * true. The backend cannot filter it on the single-file-vs-folder shape from a
+   * `roms` row, so the click-time search is the authority — a shape it rejects
+   * falls through to a download, exactly as a vanished target already does.
+   */
+  adoption_candidate_present?: boolean;
 }
 
 // get_cached_game_detail wiring lives in utils/cachedGameDetailStore.ts so the

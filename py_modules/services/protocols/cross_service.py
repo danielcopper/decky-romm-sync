@@ -539,6 +539,26 @@ class SaveSortChangeFn(Protocol):
     def __call__(self) -> SaveLayout: ...
 
 
+class AdoptionCandidateProbeFn(Protocol):
+    """Cheap "is this game already here under another name" answer for the game detail read.
+
+    The composition root satisfies this with
+    ``RomAdoptionService.has_adoption_candidate``, so the page and the
+    Download-click search agree on what counts as a candidate by construction
+    rather than by two filters that happen to match.
+
+    It answers the page's question only — a boolean, enough to label the button
+    — and stops at the name match, skipping the archive reads that rank
+    candidates for the dialog. Takes a ``roms`` row's ``platform_slug`` and
+    ``fs_name`` because that is all this network-free path holds; it therefore
+    cannot filter on the single-file-vs-folder shape, which only the click-time
+    payload knows. Never raises: every failure answers ``False``, because a
+    search that could not run must not make a game look uninstallable.
+    """
+
+    def __call__(self, platform_slug: str, fs_name: str) -> bool: ...
+
+
 class SaveQuarantineFn(Protocol):
     """The sanctioned save-file backup funnel, consumed by AdoptionRenamer.
 

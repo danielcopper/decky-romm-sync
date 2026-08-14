@@ -169,6 +169,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // the cached detail's single `stat`, so the button says so instead of offering
   // an undifferentiated Download; the comparison itself arrives at click time.
   const [targetOccupied, setTargetOccupied] = useState(false);
+  const [candidatePresent, setCandidatePresent] = useState(false);
   // Per-file progress of an in-flight uninstall (multi-file ROMs only).
   const [uninstallProgress, setUninstallProgress] = useState<{ removed: number; total: number } | null>(null);
   // Set synchronously before the uninstall's first await, so a second press
@@ -179,20 +180,26 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /**
-   * Enter the download state, restating whether something occupies this ROM's
-   * location.
+   * Enter the download state, restating what the backend found on disk for this
+   * ROM: content at its own location, and/or a candidate elsewhere in the
+   * platform folder under another name.
    *
-   * The single door into that state, because `targetOccupied` decides the
-   * button's LABEL and the value only ever comes from a `stat` the backend took
-   * — so it cannot be derived here, and it goes stale the moment a transfer
+   * The single door into that state, because between them the two decide the
+   * button's LABEL and both values only ever come from reads the backend took —
+   * so neither can be derived here, and both go stale the moment a transfer
    * ends, a version switch rebinds the shortcut, or an uninstall deletes what
-   * the stat found. Defaulting to `false` makes forgetting it under-claim
+   * was found. Defaulting to `false` makes forgetting either one under-claim
    * ("Download" for content that is there, which the gate then catches at click
    * time) rather than over-claim ("Use Existing Files" for content that is gone).
-   * The two callers that know the answer pass it.
+   * The two callers that know the answers pass them.
+   *
+   * They stay separate rather than folding into one flag because they are
+   * different states: an occupied target is compared where it lies, a candidate
+   * is renamed into place, and only the first survives a re-`stat` of one path.
    */
-  const enterDownloadState = (occupied = false) => {
+  const enterDownloadState = (occupied = false, candidate = false) => {
     setTargetOccupied(occupied);
+    setCandidatePresent(candidate);
     setState("download");
   };
 
@@ -299,7 +306,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           }
         } else {
           detach(debugLog(`CustomPlayButton: -> download`));
-          enterDownloadState(cached.target_path_occupied === true);
+          enterDownloadState(cached.target_path_occupied === true, cached.adoption_candidate_present === true);
           await rehydrateInflightDownload(rid);
         }
       } catch (e) {
@@ -383,11 +390,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       if (romId !== romIdRef.current) return;
       // The one site that cannot go through `enterDownloadState`: the transition
       // is conditional, so as not to override the uninstalling animation when we
-      // triggered the removal ourselves. Clearing the flag is unconditional
-      // either way — the uninstall deleted exactly the content the stat found.
+      // triggered the removal ourselves. Clearing the flags is unconditional
+      // either way — the uninstall deleted exactly the content the stat found,
+      // and the candidate answer was read at page-open against a folder this
+      // removal has just changed.
       setState((prev) => (prev === "uninstalling" ? prev : "download"));
       setActionPending(false);
       setTargetOccupied(false);
+      setCandidatePresent(false);
     };
     globalThis.addEventListener("romm_rom_uninstalled", onUninstall);
 
@@ -417,7 +427,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         // outgoing version's answer says nothing about this one's location.
         setDlProgress(null);
         setActionPending(false);
-        enterDownloadState(cached.target_path_occupied === true);
+        enterDownloadState(cached.target_path_occupied === true, cached.adoption_candidate_present === true);
       }
     };
 
@@ -1145,6 +1155,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         );
       }
       setTargetOccupied(false);
+      setCandidatePresent(false);
       setState("play");
       globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "rom_adopted", rom_id: rid } }));
       showToast(`${romName || "ROM"} is ready to play`);
@@ -1450,12 +1461,15 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       dlLabel = formatProgress(dlProgress.bytesDownloaded, dlProgress.totalBytes);
     } else if (actionPending) {
       dlLabel = "Starting...";
-    } else if (targetOccupied) {
+    } else if (targetOccupied || candidatePresent) {
       // Pressing opens the comparison dialog (#260), so the label names that
       // action rather than a state: nothing is installed here, and a label
       // describing the files would read as "installed and ready". The verb
       // matches the dialog's own adopt button ("Use These Files") so the button
       // promises exactly what the dialog then offers.
+      //
+      // Both states earn the label. The user should not have to press Download
+      // to learn their own copy is sitting in the folder under another name.
       dlLabel = "Use Existing Files";
     } else {
       dlLabel = "Download";

@@ -268,16 +268,21 @@ Your copy is rarely named the way your server names it. `Mario Golf - Advance To
 `Mario Golf - Advance Tour (USA).zip` are the same game, and a download would land beside your file rather than on it —
 leaving you with two copies of one game.
 
-So when you press **Download** and nothing is at the exact location, the plugin has a look around the platform folder
-first. It reads that folder's top level only — never inside your subfolders, and never inside a game folder — keeps
-whatever your emulator accepts as a ROM for that system, skips anything it already has an install record for, and
-compares names with the version tags removed. `Mario Golf - Advance Tour (Rev 1) (USA).zip` and
-`Mario Golf - Advance Tour (U).zip` both reduce to the same game.
+So the plugin has a look around the platform folder — when the game's page opens, and again when you press the button.
+It reads that folder's top level only — never inside your subfolders, and never inside a game folder — keeps whatever
+your emulator accepts as a ROM for that system, skips anything it already has an install record for, and compares names
+with the version tags removed. `Mario Golf - Advance Tour (Rev 1) (USA).zip` and `Mario Golf - Advance Tour (U).zip`
+both reduce to the same game.
 
-Usually that finds nothing, and the download starts as always. When it finds exactly one file, you get the same
-comparison dialog as above. When it finds several, you get a short list first — strongest match at the top, each row
-saying what it is based on: a checksum read out of a zip's index, an exact size match, or the name alone. If there were
-more than the list shows, it says so.
+**You find out before you press anything.** If your copy is there, the button reads **Use Existing Files** rather than
+Download — the same label it shows for a file sitting at the game's own location. You should never have to start the
+download you were trying to avoid just to be told it was unnecessary. The search runs again when you press, because the
+folder can change while the page is open, and the answer you act on should be the current one.
+
+Usually it finds nothing, and the download starts as always. When it finds exactly one file, you get the same comparison
+dialog as above. When it finds several, you get a short list first — strongest match at the top, each row saying what it
+is based on: a checksum read out of a zip's index, an exact size match, or the name alone. If there were more than the
+list shows, it says so.
 
 Choosing a file and pressing **Use These Files** does one thing more than before: it **renames your file to the name
 your server uses**, and moves your saves and savestates for that game along with it. That is not tidiness. Uninstalling

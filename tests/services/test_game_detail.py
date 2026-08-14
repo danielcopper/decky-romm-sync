@@ -201,7 +201,19 @@ def path_probe():
 
 @pytest.fixture
 def game_detail_service(plugin, clock, active_core_resolver, path_probe):
-    """Create a GameDetailService wired to the plugin's shared UoW and pinned clock."""
+    """Create a GameDetailService wired to the plugin's shared UoW and pinned clock.
+
+    The candidate probe answers ``plugin._candidate_present`` (off unless a test
+    stages it, so every case that predates it keeps the page it had) and records
+    each call on ``plugin._candidate_probe_calls`` — which is how "an installed
+    ROM does no folder read" is stated as an absence rather than inferred.
+    """
+    plugin._candidate_probe_calls = []
+
+    def candidate_probe(platform_slug: str, fs_name: str) -> bool:
+        plugin._candidate_probe_calls.append((platform_slug, fs_name))
+        return getattr(plugin, "_candidate_present", False)
+
     return GameDetailService(
         config=GameDetailServiceConfig(
             settings=plugin.settings,
@@ -214,6 +226,7 @@ def game_detail_service(plugin, clock, active_core_resolver, path_probe):
             path_exists=path_probe,
             retrodeck_paths=FakeRetroDeckPaths(roms=_ROMS_BASE),
             resolve_system=lambda platform_slug, platform_fs_slug=None: platform_fs_slug or platform_slug,
+            candidate_probe=candidate_probe,
         ),
     )
 
@@ -510,6 +523,51 @@ class TestTargetPathOccupied:
         path_probe.paths.add(f"{_ROMS_BASE}/snes/game_10.sfc")
         result = game_detail_service.get_cached_game_detail(50000)
         assert result["target_path_occupied"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_candidate_in_the_folder_is_reported(self, plugin, game_detail_service):
+        # The page says so without the user pressing Download to find out (#260).
+        _seed_rom(plugin, 10, app_id=50000, platform_slug="snes", fs_name="game_10.sfc")
+        plugin._candidate_present = True
+
+        result = game_detail_service.get_cached_game_detail(50000)
+
+        assert result["adoption_candidate_present"] is True
+        assert plugin._candidate_probe_calls == [("snes", "game_10.sfc")]
+
+    @pytest.mark.asyncio
+    async def test_no_candidate_leaves_the_page_saying_download(self, plugin, game_detail_service):
+        _seed_rom(plugin, 10, app_id=50000, platform_slug="snes", fs_name="game_10.sfc")
+
+        result = game_detail_service.get_cached_game_detail(50000)
+
+        assert result["adoption_candidate_present"] is False
+
+    @pytest.mark.asyncio
+    async def test_an_occupied_target_wins_and_skips_the_folder_read(self, plugin, game_detail_service, path_probe):
+        # Two different states, and the occupied one is the exact path this ROM
+        # would claim — there is nothing left to search for.
+        _seed_rom(plugin, 10, app_id=50000, platform_slug="snes", fs_name="game_10.sfc")
+        path_probe.paths.add(f"{_ROMS_BASE}/snes/game_10.sfc")
+        plugin._candidate_present = True
+
+        result = game_detail_service.get_cached_game_detail(50000)
+
+        assert result["target_path_occupied"] is True
+        assert result["adoption_candidate_present"] is False
+        assert plugin._candidate_probe_calls == []
+
+    @pytest.mark.asyncio
+    async def test_an_installed_rom_does_no_folder_read(self, plugin, game_detail_service):
+        _seed_rom(plugin, 10, app_id=50000, platform_slug="snes", fs_name="game_10.sfc")
+        _install_rom(plugin, plugin._tmp_path, rom_id=10, system="snes", file_name="game.sfc")
+        plugin._candidate_present = True
+
+        result = game_detail_service.get_cached_game_detail(50000)
+
+        assert result["installed"] is True
+        assert result["adoption_candidate_present"] is False
+        assert plugin._candidate_probe_calls == []
 
     @pytest.mark.asyncio
     async def test_an_installed_rom_is_never_probed(self, plugin, game_detail_service, path_probe):

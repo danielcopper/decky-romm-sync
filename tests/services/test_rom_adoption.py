@@ -1470,6 +1470,81 @@ class TestCandidateSearch:
         assert result["reason"] == "target_occupied"
 
 
+class TestHasAdoptionCandidate:
+    """The game-detail read's half of the search — a boolean, and never a raise."""
+
+    async def test_a_matching_file_is_a_candidate(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.files["/roms/snes/Game (U).sfc"] = b"x"
+
+        assert h.service.has_adoption_candidate("snes", "Game (USA).sfc") is True
+
+    async def test_a_folder_of_other_games_is_not(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.files["/roms/snes/Zelda (USA).sfc"] = b"z"
+
+        assert h.service.has_adoption_candidate("snes", "Game (USA).sfc") is False
+
+    async def test_a_matching_directory_counts_too(self, h):
+        # The page cannot know whether RomM serves this ROM as one file or a
+        # folder, so it does not filter on shape — the click-time search does.
+        h.system_extensions = {"psx": frozenset()}
+        h.store.dirs.add("/roms/psx/Game (U)")
+        h.store.files["/roms/psx/Game (U)/disc.cue"] = b"x"
+
+        assert h.service.has_adoption_candidate("psx", "Game.zip") is True
+
+    async def test_the_rom_s_own_target_is_not_its_own_candidate(self, h):
+        # That is the occupied-target state, which the page answers separately.
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.files["/roms/snes/Game.sfc"] = b"x"
+
+        assert h.service.has_adoption_candidate("snes", "Game.sfc") is False
+
+    async def test_an_install_row_s_content_is_another_game_s(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.files["/roms/snes/Game (U).sfc"] = b"x"
+        h.seed_install(rom_id=99, file_path="/roms/snes/Game (U).sfc")
+
+        assert h.service.has_adoption_candidate("snes", "Game (USA).sfc") is False
+
+    async def test_it_never_reads_an_archive_index(self, h):
+        # Ranking evidence is the dialog's cost, not the page's: the page only has
+        # to say "something is here", never which of several is strongest.
+        h.system_extensions = {"snes": frozenset({".zip"})}
+        h.store.files["/roms/snes/Game (U).zip"] = _zip_bytes({"Game.sfc": b"cartridge"})
+        opened: list[str] = []
+
+        def record(path):
+            opened.append(path)
+            return
+
+        h.store.list_archive_members = record
+
+        assert h.service.has_adoption_candidate("snes", "Game (USA).zip") is True
+        assert opened == []
+
+    async def test_a_missing_roms_path_answers_quietly(self, h):
+        h.paths.roms = ""
+
+        assert h.service.has_adoption_candidate("snes", "Game (USA).sfc") is False
+
+    async def test_a_read_that_raises_answers_quietly(self, h, caplog):
+        # A search that could not run must never make a game look uninstallable.
+        def boom(_directory):
+            raise OSError("SD card ejected")
+
+        h.store.list_top_level_entries = boom
+
+        with caplog.at_level(logging.WARNING):
+            assert h.service.has_adoption_candidate("snes", "Game (USA).sfc") is False
+
+        assert any("candidate probe failed" in record.message for record in caplog.records)
+
+    async def test_an_unsafe_platform_slug_answers_quietly(self, h):
+        assert h.service.has_adoption_candidate("../../etc", "passwd") is False
+
+
 # ── downloading over a candidate ─────────────────────────────────────────
 
 

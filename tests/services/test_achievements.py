@@ -123,6 +123,7 @@ def plugin(clock):
             path_exists=FakePathExistsReader(),
             retrodeck_paths=FakeRetroDeckPaths(),
             resolve_system=lambda platform_slug, platform_fs_slug=None: platform_fs_slug or platform_slug,
+            candidate_probe=lambda platform_slug, fs_name: False,
         ),
     )
     return p

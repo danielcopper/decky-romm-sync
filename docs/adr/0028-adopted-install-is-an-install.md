@@ -220,8 +220,20 @@ that does will go looking for a problem that is not there.
 confirmation naming the deletion. Cancel does nothing. For multi-file, Download removes the existing directory and
 extracts fresh — the user chose replace, not merge.
 
-**The game detail page runs one `stat`** on the computed target path, and only when no install row exists, so a ROM
-already sitting in place is not offered as an undifferentiated Download. The full answer stays at click time.
+**The game detail page runs one `stat` and one `readdir`**, both only when no install row exists, so a ROM already on
+the device is never offered as an undifferentiated Download — whether it sits at the computed target path or beside it
+under another name. Measured on the real device, the `readdir` plus normalization is 0.31 ms over the largest platform
+folder; the 5.98 ms archive-index read that ranks candidates is the dialog's cost and is skipped here, because a page
+that only has to label a button never needs to know which of several candidates is strongest. For scale, this read
+already does a `stat` and a firmware-cache read.
+
+The page-open answer labels the button and nothing more: **the search runs again at click time**, because the folder can
+change while the page is open and a stale candidate would be offered against a file that has moved. The page also cannot
+filter on shape — a `roms` row does not say whether RomM serves this ROM as one file or a folder — so the click-time
+search, which has the payload, is the authority. A shape it rejects falls through to a download, exactly as an occupied
+target already does when the file vanished while the page was open. Every failure on this path is quiet: an unresolvable
+ROMs root, an unreadable folder or an accept-list that could not answer all report no candidate, because a search that
+could not run must never make a game look uninstallable.
 
 ## Consequences
 

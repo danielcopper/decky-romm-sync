@@ -321,6 +321,50 @@ class RomAdoptionService:
             incoming_size=rom_detail.get("fs_size_bytes", 0),
         )
 
+    def has_adoption_candidate(self, platform_slug: str, fs_name: str) -> bool:
+        """Whether this platform folder holds an entry that could be this ROM.
+
+        The game-detail read's half of the search: enough to label the button, not
+        enough to fill the dialog. It stops at the name match, so it is a
+        ``readdir``, one install-row query and pure string work — the archive
+        central-directory reads that rank candidates are skipped entirely,
+        because a page that only has to say "something is here" never needs to
+        know which of several is strongest.
+
+        Deliberately **not** filtered on shape. The page holds a ``roms`` row, and
+        nothing on it says whether RomM serves this ROM as one file or a folder —
+        the click-time search has the payload that does. A shape the click-time
+        search then rejects falls through to a download, which is exactly what an
+        occupied target already does when the file vanished while the page was
+        open.
+
+        Every failure is quiet and answers ``False``: an unresolvable roms path,
+        an unreadable folder, an accept-list the source could not answer. A search
+        that could not run must never make a game look uninstallable.
+        """
+        try:
+            return bool(self._name_matches(platform_slug, fs_name))
+        except Exception as e:
+            self._logger.warning(f"Adoption candidate probe failed for {platform_slug}/{fs_name}: {e}")
+            return False
+
+    def _name_matches(self, platform_slug: str, fs_name: str) -> tuple[LocalEntry, ...]:
+        """Entries in *platform_slug*'s folder whose normalized name is *fs_name*'s, either shape."""
+        roms_path = self._retrodeck_paths.roms_path()
+        if not roms_path or not fs_name or not platform_slug:
+            return ()
+        system = self._resolve_system(platform_slug)
+        platform_dir = safe_join(roms_path, system)
+        entries = self._local_entries(platform_dir)
+        if not entries:
+            return ()
+        shared = {
+            "wanted_name": normalize_rom_name(fs_name),
+            "accepted_extensions": self._system_extensions(system),
+            "covered_paths": self._installed_paths() | {os.path.join(platform_dir, fs_name)},
+        }
+        return matching_entries(entries, want_dir=False, **shared) or matching_entries(entries, want_dir=True, **shared)
+
     def _search_candidates(self, rom_detail: dict[str, Any], checked_path: str):
         """List the platform directory's top level and rank what could be this ROM.
 
@@ -328,17 +372,7 @@ class RomAdoptionService:
         name the download itself derived — so the search can never disagree with
         the path it is searching around.
         """
-        platform_dir = os.path.dirname(checked_path)
-        entries = tuple(
-            LocalEntry(
-                name=entry["name"],
-                path=entry["path"],
-                is_dir=entry["is_dir"],
-                size_bytes=entry["size_bytes"],
-                modified_at=entry["modified_at"],
-            )
-            for entry in self._download_file_store.list_top_level_entries(platform_dir)
-        )
+        entries = self._local_entries(os.path.dirname(checked_path))
         if not entries:
             return ((), False)
         system = self._resolve_system(rom_detail.get("platform_slug", ""), rom_detail.get("platform_fs_slug"))
@@ -354,6 +388,19 @@ class RomAdoptionService:
             server_size=rom_detail.get("fs_size_bytes", 0),
             server_crc32=_whole_file_crc32(rom_detail),
             member_crc32s={match.path: self._member_crc32s(match) for match in matches},
+        )
+
+    def _local_entries(self, platform_dir: str) -> tuple[LocalEntry, ...]:
+        """Read the platform folder's top level into the values the filter works on."""
+        return tuple(
+            LocalEntry(
+                name=entry["name"],
+                path=entry["path"],
+                is_dir=entry["is_dir"],
+                size_bytes=entry["size_bytes"],
+                modified_at=entry["modified_at"],
+            )
+            for entry in self._download_file_store.list_top_level_entries(platform_dir)
         )
 
     def _member_crc32s(self, entry: LocalEntry) -> tuple[str, ...]:

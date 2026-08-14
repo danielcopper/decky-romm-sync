@@ -399,6 +399,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
 
     game_detail_service = GameDetailService(
         config=GameDetailServiceConfig(
+            candidate_probe=rom_adoption_service.has_adoption_candidate,
             settings=cfg.stores.settings,
             logger=cfg.runtime.logger,
             clock=cfg.runtime.clock,

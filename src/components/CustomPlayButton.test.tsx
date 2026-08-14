@@ -3312,6 +3312,54 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
     expect(await findByText("Download")).toBeTruthy();
   });
 
+  it("labels the button 'Use Existing Files' when the folder holds a candidate", async () => {
+    // The whole point of searching at page open: the user should not have to
+    // press Download to learn their own copy is sitting there under another name.
+    mockCachedDetail({ rom_id: 42, installed: false, adoption_candidate_present: true });
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    expect(await findByText("Use Existing Files")).toBeTruthy();
+  });
+
+  it("says Download when neither the target nor the folder holds anything", async () => {
+    mockCachedDetail({
+      rom_id: 42,
+      installed: false,
+      target_path_occupied: false,
+      adoption_candidate_present: false,
+    });
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    expect(await findByText("Download")).toBeTruthy();
+  });
+
+  it("takes the incoming rom's candidate answer on a version switch, not the outgoing one", async () => {
+    // This read path took five race fixes in two weeks; a slower answer for one
+    // rom must never land on another. The answer rides the same `cached` object
+    // the switch already binds, so it inherits that binding rather than adding
+    // a second one that could drift.
+    // Switching TOWARDS the candidate, so a switch that dropped the answer would
+    // fall back to the default of false and leave the button reading Download.
+    mockCachedDetail({ rom_id: 42, installed: false, adoption_candidate_present: false });
+    const utils = render(<CustomPlayButton appId={100} />);
+    expect(await utils.findByText("Download")).toBeTruthy();
+
+    vi.mocked(getCachedGameDetail).mockResolvedValue({
+      found: true,
+      rom_id: 43,
+      rom_name: "Other Version",
+      installed: false,
+      target_path_occupied: false,
+      adoption_candidate_present: true,
+    } as CachedGameDetail);
+    await act(async () => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_data_changed", { detail: { type: "version_switched", app_id: 100 } }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(await utils.findByText("Use Existing Files")).toBeTruthy();
+  });
+
   it("stops saying 'Use Existing Files' once the files are uninstalled", async () => {
     // The stat that set the flag ran at mount. An uninstall deletes exactly the
     // content it found, so the label has to go back — otherwise it names files

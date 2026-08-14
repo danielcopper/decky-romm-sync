@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         AchievementsReader,
         ActiveCoreReader,
+        AdoptionCandidateProbeFn,
         BiosChecker,
         Clock,
         PathExistsReader,
@@ -65,7 +66,10 @@ class GameDetailServiceConfig:
     ``.so`` will this ROM launch with?" so the core-aware BIOS filter keys off
     the per-game pin, not a platform default. ``path_exists`` /
     ``retrodeck_paths`` / ``resolve_system`` are the single ``stat`` the page
-    runs on an uninstalled ROM's target path, and nothing more.
+    runs on an uninstalled ROM's target path; ``candidate_probe`` is the one
+    ``readdir`` beside it, answering whether the same game is in the folder under
+    another name. Both are bounded and network-free, which is the whole
+    constraint on this page.
     """
 
     settings: dict[str, Any]
@@ -78,6 +82,7 @@ class GameDetailServiceConfig:
     path_exists: PathExistsReader
     retrodeck_paths: RetroDeckPaths
     resolve_system: SystemResolver
+    candidate_probe: AdoptionCandidateProbeFn
 
 
 class GameDetailService:
@@ -94,6 +99,7 @@ class GameDetailService:
         self._path_exists = config.path_exists
         self._retrodeck_paths = config.retrodeck_paths
         self._resolve_system = config.resolve_system
+        self._candidate_probe = config.candidate_probe
 
     @staticmethod
     def _resolve_rom_file(install: RomInstall | None, rom: Rom) -> str:
@@ -247,6 +253,12 @@ class GameDetailService:
         installed = install is not None
         rom_file = self._resolve_rom_file(install, rom)
         target_occupied = False if installed else self._target_path_occupied(rom)
+        # An occupied target and a candidate elsewhere are different states, and
+        # the occupied one wins: it is the exact path this ROM would claim, so
+        # there is nothing to search for. An installed ROM does neither.
+        candidate_present = (
+            False if installed or target_occupied else self._candidate_probe(rom.platform_slug, rom.fs_name)
+        )
 
         # Save sync
         save_sync_enabled = bool(self._settings.get("save_sync_enabled", False))
@@ -326,6 +338,7 @@ class GameDetailService:
             # frontend can show the space a download needs. NULL = size unknown.
             "fs_size_bytes": rom.fs_size_bytes,
             "target_path_occupied": target_occupied,
+            "adoption_candidate_present": candidate_present,
         }
 
     def _target_path_occupied(self, rom: Rom) -> bool:

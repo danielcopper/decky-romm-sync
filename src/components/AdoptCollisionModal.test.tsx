@@ -21,66 +21,55 @@ function renderModal(collisions: RenameCollision[] = COLLISIONS) {
   return { ...rendered, onChoice, closeModal };
 }
 
+// Every sentence this dialog owes the user, and what each one is for. The test
+// name IS the purpose, so parameterizing costs no legibility — and the two that
+// carry the most weight stay findable by it: the recovery net (the only surface
+// where it can be learned) and the plain statement that Replace does not delete
+// (the sentence that once contradicted the user guide).
+const STATED = [
+  { purpose: "lists every collision, not just the first", phrases: ["Game (USA).srm", "Game (USA).state"] },
+  { purpose: "says which kind of file each collision is", phrases: ["save", "savestate"] },
+  { purpose: "says nothing has been moved yet", phrases: ["Nothing has been moved"] },
+  {
+    purpose: "states the orphaning Keep produces rather than implying a clean move",
+    phrases: ["nothing will be reading them either"],
+  },
+  {
+    purpose: "tells the user where a replaced file goes, at the moment they choose",
+    phrases: [".romm-backup", "put one back by hand"],
+  },
+  { purpose: "says plainly that Replace does not delete", phrases: ["Replace does not delete"] },
+];
+
 describe("AdoptCollisionModal — what it states", () => {
-  it("lists every collision, not just the first", () => {
+  it.each(STATED)("$purpose", ({ phrases }) => {
     const { container } = renderModal();
-    expect(container.textContent).toContain("Game (USA).srm");
-    expect(container.textContent).toContain("Game (USA).state");
-  });
-
-  it("says which kind of file each collision is", () => {
-    const { container } = renderModal();
-    expect(container.textContent).toContain("save");
-    expect(container.textContent).toContain("savestate");
-  });
-
-  it("says nothing has been moved yet", () => {
-    const { container } = renderModal();
-    expect(container.textContent).toContain("Nothing has been moved");
-  });
-
-  it("states the orphaning that Keep produces rather than implying a clean move", () => {
-    const { container } = renderModal();
-    expect(container.textContent).toContain("nothing will be reading them either");
-  });
-
-  it("tells the user where a replaced file goes, at the moment they choose", () => {
-    // This is the only surface shown while deciding, so it is the only place the
-    // recovery net can be learned about — and the whole reason Replace routes
-    // through the backup funnel rather than deleting.
-    const { container } = renderModal();
-    expect(container.textContent).toContain(".romm-backup");
-    expect(container.textContent).toContain("put one back by hand");
+    for (const phrase of phrases) expect(container.textContent).toContain(phrase);
   });
 
   it("never claims Replace deletes, because it does not", () => {
-    // Guards the contradiction this dialog carried against the user guide: the
-    // guide said nothing is destroyed while the dialog said it is deleted.
+    // Separate from the table on purpose: this is the only assertion here that
+    // forbids rather than requires, and it guards a specific regression — the
+    // dialog once said the files are deleted while the user guide shipped in the
+    // same commit said they are not.
     const { container } = renderModal();
-    expect(container.textContent).toContain("Replace does not delete");
     expect(container.textContent).not.toContain("Replace deletes");
   });
 });
 
+// One answer covers the whole colliding set, so the three exits differ only in
+// which answer they resolve — the table states that rather than repeating it.
+const EXITS = [
+  { button: "Replace Them", resolves: "overwrite" },
+  { button: "Keep Them", resolves: "keep" },
+  { button: "Cancel", resolves: "cancel" },
+];
+
 describe("AdoptCollisionModal — the one decision for the whole set", () => {
-  it("Replace Them closes the modal and resolves overwrite", () => {
+  it.each(EXITS)("$button closes the modal and resolves $resolves", ({ button, resolves }) => {
     const { container, onChoice, closeModal } = renderModal();
-    fireEvent.click(buttonByText(container, "Replace Them"));
+    fireEvent.click(buttonByText(container, button));
     expect(closeModal).toHaveBeenCalledTimes(1);
-    expect(onChoice).toHaveBeenCalledWith("overwrite");
-  });
-
-  it("Keep Them closes the modal and resolves keep", () => {
-    const { container, onChoice, closeModal } = renderModal();
-    fireEvent.click(buttonByText(container, "Keep Them"));
-    expect(closeModal).toHaveBeenCalledTimes(1);
-    expect(onChoice).toHaveBeenCalledWith("keep");
-  });
-
-  it("Cancel resolves cancel", () => {
-    const { container, onChoice, closeModal } = renderModal();
-    fireEvent.click(buttonByText(container, "Cancel"));
-    expect(closeModal).toHaveBeenCalledTimes(1);
-    expect(onChoice).toHaveBeenCalledWith("cancel");
+    expect(onChoice).toHaveBeenCalledWith(resolves);
   });
 });

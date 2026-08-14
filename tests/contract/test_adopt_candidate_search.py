@@ -117,6 +117,50 @@ async def test_an_unrelated_platform_folder_downloads_as_before(harness):
     assert result.get("reason") != "adoption_candidates"
 
 
+# ── the game-detail read ─────────────────────────────────────────────────
+
+
+async def test_the_page_reports_a_candidate_without_the_user_pressing_download(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    _place_candidate(harness)
+
+    detail = await harness.plugin.get_cached_game_detail(_ROM_ID)
+
+    assert detail["installed"] is False
+    assert detail["adoption_candidate_present"] is True
+    assert detail["target_path_occupied"] is False
+
+
+async def test_an_empty_platform_folder_leaves_the_page_offering_a_download(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    _platform_dir(harness)
+
+    detail = await harness.plugin.get_cached_game_detail(_ROM_ID)
+
+    assert detail["adoption_candidate_present"] is False
+
+
+async def test_the_page_stays_usable_when_the_roms_folder_cannot_be_read(harness):
+    # A search that could not run must never make a game look uninstallable.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    harness.plugin._rom_adoption_service._retrodeck_paths = _UnreadableRomsPaths()
+
+    detail = await harness.plugin.get_cached_game_detail(_ROM_ID)
+
+    assert detail["found"] is True
+    assert detail["adoption_candidate_present"] is False
+
+
+class _UnreadableRomsPaths:
+    """A RetroDECK paths provider whose ROMs root raises, as an ejected SD card does."""
+
+    def roms_path(self) -> str:
+        raise OSError("Input/output error")
+
+
 # ── adopting the candidate ───────────────────────────────────────────────
 
 
