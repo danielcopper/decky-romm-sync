@@ -142,9 +142,10 @@ class AdoptionCandidateProbeFn(Protocol):
 
     The composition root satisfies this with
     ``RomAdoptionService.has_adoption_candidate`` — the same service as the gate
-    above, and the same ``matching_entries`` filter over the same directory
-    listing. What the two share is that filter; what they do **not** share is
-    three of its four inputs, and the difference runs one way in each case:
+    above, running the same ``matching_entries`` filter over the same folder
+    (read leaner here: names and shapes, no size or mtime). What the two share is
+    that filter; what they do **not** share is three of its four inputs, and the
+    difference runs one way in each case:
 
     * **Shape.** The page holds a ``roms`` row, and nothing on it says whether
       RomM serves this ROM as one file or as a folder, so it accepts both. The
