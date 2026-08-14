@@ -158,6 +158,21 @@ class DownloadFileStore(Protocol):
         directory entry therefore reports size 0 — its recursive total is not
         something this read pays for. Idempotent on a missing directory (returns
         ``()``).
+
+        An entry whose ``stat`` failed is listed with ``readable: False`` and
+        zeroed numbers, never dropped: this listing and
+        :meth:`list_top_level_names` must admit the same set, or the two callers
+        disagree about what is in the folder.
+        """
+        ...
+
+    def is_broken_symlink(self, path: str) -> bool:
+        """Whether *path* is a symlink whose target does not resolve.
+
+        Asked about an entry the listing could not describe, to decide whether
+        removal may be offered for it. Only a link with no resolving target
+        qualifies: it holds no data, so unlinking destroys nothing. Everything
+        else unreadable may be content that exists nowhere else.
         """
         ...
 
@@ -168,7 +183,9 @@ class DownloadFileStore(Protocol):
         page. Dropping the ``stat`` that fills in size and mtime is the whole
         point: it is one syscall per ROM on a folder that can hold a whole
         platform's library, and this one runs on every game page. Same
-        top-level-only rule, same ``()`` on a directory that cannot be read.
+        top-level-only rule, same set of entries as
+        :meth:`list_top_level_entries`, same ``()`` on a directory that cannot be
+        read.
         """
         ...
 

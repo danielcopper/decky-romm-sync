@@ -43,12 +43,20 @@ class FakeDownloadFileStore:
     - ``decode_calls`` / ``extract_calls`` / ``walk_calls`` /
       ``member_checksum_calls`` — captured argument lists for tests that
       need to assert on adapter calls.
+    - ``unreadable`` — paths the directory read sees but ``stat`` cannot
+      describe, the way a symlink pointing nowhere behaves. Listed by
+      both listings; the full one reports ``readable: False``.
+    - ``broken_symlinks`` — the subset of ``unreadable`` whose target
+      provably does not resolve, which is the only unreadable state the
+      real adapter offers for removal.
     """
 
     def __init__(self, files: dict[str, bytes] | None = None) -> None:
         self.files: dict[str, bytes] = dict(files) if files else {}
         self.mtimes: dict[str, float] = {}
         self.dirs: set[str] = set()
+        self.unreadable: set[str] = set()
+        self.broken_symlinks: set[str] = set()
         self.disk_free_bytes: int = 10 * 1024 * 1024 * 1024  # 10 GiB
         self.fail_on_atomic_write: bool = False
         self.tmp_files: set[str] = set()
@@ -83,44 +91,60 @@ class FakeDownloadFileStore:
             "modified_at": self.mtimes.get(path, 0.0),
         }
 
-    def list_top_level_entries(self, directory: str) -> tuple[TopLevelEntry, ...]:
-        """Describe what sits directly inside *directory*, without descending.
+    def _top_level(self, directory: str) -> tuple[tuple[str, str, bool], ...]:
+        """``(name, path, is_dir)`` for everything directly inside *directory*.
 
         Derived from the stored paths rather than scripted, so a fixture cannot
-        claim a listing its virtual filesystem does not have. A directory reports
-        size 0, exactly as the real adapter does.
+        claim a listing its virtual filesystem does not have. Both listings read
+        this, and neither filters it further: the real adapter drops an entry
+        only when its *type* cannot be determined, which nothing here models.
         """
         prefix = directory.rstrip("/") + "/"
         names: dict[str, bool] = {}
-        for path in list(self.files) + list(self.dirs):
+        for path in list(self.files) + list(self.dirs) + list(self.unreadable):
             if not path.startswith(prefix):
                 continue
             head, _sep, tail = path[len(prefix) :].partition("/")
             if not head:
                 continue
             names[head] = names.get(head, False) or bool(tail) or (prefix + head) in self.dirs
+        return tuple((name, prefix + name, is_dir) for name, is_dir in sorted(names.items()))
+
+    def list_top_level_entries(self, directory: str) -> tuple[TopLevelEntry, ...]:
+        """Describe what sits directly inside *directory*, without descending.
+
+        A directory reports size 0, exactly as the real adapter does. An entry in
+        ``unreadable`` is listed with ``readable: False`` and zeroed numbers —
+        the real adapter's behaviour for an entry whose ``stat`` fails, which is
+        precisely what a listing projected from the other one could never show.
+        """
         return tuple(
             {
                 "name": name,
-                "path": prefix + name,
+                "path": path,
                 "is_dir": is_dir,
-                "size_bytes": 0 if is_dir else len(self.files.get(prefix + name, b"")),
-                "modified_at": self.mtimes.get(prefix + name, 0.0),
+                "size_bytes": 0 if is_dir or path in self.unreadable else len(self.files.get(path, b"")),
+                "modified_at": 0.0 if path in self.unreadable else self.mtimes.get(path, 0.0),
+                "readable": path not in self.unreadable,
             }
-            for name, is_dir in sorted(names.items())
+            for name, path, is_dir in self._top_level(directory)
         )
 
     def list_top_level_names(self, directory: str) -> tuple[TopLevelName, ...]:
-        """Name and shape only — the same listing without the per-entry ``stat``.
+        """Name and shape only — the same set, read without the per-entry ``stat``.
 
-        Projected from :meth:`list_top_level_entries` so the two can never
-        disagree about what is in the folder, which is the one thing a test of
-        the leaner read could otherwise be lied to about.
+        Built from the same source as :meth:`list_top_level_entries` and **not**
+        projected from it: the two must agree because they apply the same skip
+        rule, not because one is derived from the other. A fake that projects
+        cannot exhibit a disagreement, which is how a real one went unnoticed.
         """
         return tuple(
-            {"name": entry["name"], "path": entry["path"], "is_dir": entry["is_dir"]}
-            for entry in self.list_top_level_entries(directory)
+            {"name": name, "path": path, "is_dir": is_dir} for name, path, is_dir in self._top_level(directory)
         )
+
+    def is_broken_symlink(self, path: str) -> bool:
+        """Whether *path* was staged as a link whose target does not resolve."""
+        return path in self.broken_symlinks
 
     def checksum(self, path: str, algorithm: str, progress_callback: Callable[[int], None] | None = None) -> str:
         """Hash the stored bytes, reporting the whole file as one progress chunk."""
@@ -188,6 +212,10 @@ class FakeDownloadFileStore:
         if path in self.remove_failures:
             raise OSError(f"simulated remove failure: {path}")
         self.files.pop(path, None)
+        # An unlink takes the entry out of the listing whether or not the entry
+        # could be described — unlinking a link does not need its target.
+        self.unreadable.discard(path)
+        self.broken_symlinks.discard(path)
 
     def remove_tree(self, path: str) -> None:
         if path in self.remove_tree_failures:

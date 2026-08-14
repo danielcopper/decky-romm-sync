@@ -71,9 +71,14 @@ class DownloadFileAdapter:
         One ``scandir`` and one ``stat`` per entry. A directory reports size 0
         rather than its recursive total: totalling one multi-file install means
         walking tens of thousands of files, which is not a price the candidate
-        search may charge a Download click. Entries that cannot be stat'd — a
-        dangling symlink, a race with a delete — are skipped, because an entry
-        nothing can be said about is not one to offer.
+        search may charge a Download click.
+
+        An entry the ``stat`` cannot describe is listed with ``readable: False``
+        rather than dropped. Dropping it made this listing and
+        :meth:`list_top_level_names` disagree about what exists — a symlink
+        pointing nowhere answers ``is_dir()`` without raising and fails
+        ``stat()``, so one read saw it and the other did not. The two now admit
+        the same set and differ only in what they measure.
         """
         found: list[TopLevelEntry] = []
         try:
@@ -96,8 +101,11 @@ class DownloadFileAdapter:
         ordinary entry costs nothing at all beyond the directory read, since
         ``scandir`` carries its type; a **symlink** still costs one, because
         ``is_dir`` resolves it — which is the answer the search wants, as a link
-        to a game directory is a game directory. An entry whose type cannot be
-        determined is skipped, exactly as an unstat-able one is above.
+        to a game directory is a game directory.
+
+        An entry whose type cannot be determined at all is skipped, and that is
+        the only skip either listing makes — :meth:`list_top_level_entries`
+        applies the same rule, so the two admit exactly the same set.
         """
         found: list[TopLevelName] = []
         try:
@@ -114,19 +122,48 @@ class DownloadFileAdapter:
 
     @staticmethod
     def _describe_entry(entry: os.DirEntry[str]) -> TopLevelEntry | None:
-        """Reduce one ``scandir`` entry to the search's shape, or ``None`` if it cannot be read."""
+        """Reduce one ``scandir`` entry to the search's shape.
+
+        ``None`` only when the entry's own type cannot be determined — the one
+        case the lean listing skips too. A ``stat`` that fails is reported as
+        ``readable: False`` instead: the entry exists and its name is known,
+        which is enough for a caller to say something about it.
+        """
         try:
             is_dir = entry.is_dir()
-            stat = entry.stat()
         except OSError:
             return None
+        try:
+            stat = entry.stat()
+        except OSError:
+            # Zeroes that are not measurements — ``readable`` is what says so.
+            return {
+                "name": entry.name,
+                "path": entry.path,
+                "is_dir": is_dir,
+                "size_bytes": 0,
+                "modified_at": 0.0,
+                "readable": False,
+            }
         return {
             "name": entry.name,
             "path": entry.path,
             "is_dir": is_dir,
             "size_bytes": 0 if is_dir else stat.st_size,
             "modified_at": stat.st_mtime,
+            "readable": True,
         }
+
+    def is_broken_symlink(self, path: str) -> bool:
+        """Whether *path* is a symlink whose target does not resolve.
+
+        The one unreadable state that can be offered for removal: the link holds
+        no data of its own and its target is not there, so unlinking it destroys
+        nothing. Every other unreadable state — a permission wall, a mount that
+        went away, a race with a writer — may be content that exists nowhere
+        else, and answers ``False`` here.
+        """
+        return os.path.islink(path) and not os.path.exists(path)
 
     @staticmethod
     def _tree_size(directory: str) -> int:

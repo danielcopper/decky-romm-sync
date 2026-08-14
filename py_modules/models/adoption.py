@@ -62,10 +62,19 @@ class TopLevelEntry(TopLevelName):
     ``size_bytes`` is ``0`` for a directory — a directory's recursive total is not
     something this read pays for, for the reason above. ``modified_at`` is POSIX
     epoch seconds.
+
+    ``readable`` is ``False`` for an entry the directory read saw but the ``stat``
+    could not describe — a symlink whose target does not resolve, a mount that
+    went away, a race with a delete. Its ``size_bytes`` and ``modified_at`` are
+    then ``0`` and mean nothing: they are not measurements, they are the absence
+    of one. Such an entry is still listed, because the two listings must admit
+    the same set — a caller that drops what it cannot measure sees a different
+    folder from one that only reads names.
     """
 
     size_bytes: int
     modified_at: float
+    readable: bool
 
 
 class MoveOutcome(TypedDict):

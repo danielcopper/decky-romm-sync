@@ -551,10 +551,33 @@ class TestListTopLevelEntries:
             "loose.gba",
         ]
 
-    def test_a_dangling_symlink_is_skipped_rather_than_offered(self, adapter, tmp_path):
+    def test_a_dangling_symlink_is_listed_as_undescribable_rather_than_dropped(self, adapter, tmp_path):
+        # Dropping it made this listing disagree with the lean one about what
+        # exists: ``is_dir()`` answers for a link pointing nowhere, ``stat()``
+        # does not. The caller needs to see the entry to be able to say so.
         (tmp_path / "real.gba").write_bytes(b"x")
         (tmp_path / "dangling.gba").symlink_to(tmp_path / "gone.gba")
-        assert [entry["name"] for entry in adapter.list_top_level_entries(str(tmp_path))] == ["real.gba"]
+
+        by_name = {entry["name"]: entry for entry in adapter.list_top_level_entries(str(tmp_path))}
+
+        assert sorted(by_name) == ["dangling.gba", "real.gba"]
+        assert by_name["dangling.gba"]["readable"] is False
+        assert by_name["dangling.gba"]["size_bytes"] == 0
+        assert by_name["dangling.gba"]["modified_at"] == 0.0
+        assert by_name["real.gba"]["readable"] is True
+
+    def test_the_two_listings_admit_the_same_set_including_what_cannot_be_read(self, adapter, tmp_path):
+        # The parity that matters, on the tree that used to break it: a listing
+        # over an ordinary folder proves nothing here.
+        (tmp_path / "real.gba").write_bytes(b"x")
+        (tmp_path / "dangling.gba").symlink_to(tmp_path / "gone.gba")
+        (tmp_path / "Game (U)").mkdir()
+
+        full = adapter.list_top_level_entries(str(tmp_path))
+        lean = adapter.list_top_level_names(str(tmp_path))
+
+        assert {entry["path"] for entry in full} == {entry["path"] for entry in lean}
+        assert {(e["name"], e["is_dir"]) for e in full} == {(e["name"], e["is_dir"]) for e in lean}
 
     def test_a_symlinked_directory_reads_as_a_directory(self, adapter, tmp_path):
         target = tmp_path / "elsewhere"
@@ -646,8 +669,8 @@ class TestListTopLevelNames:
 
     def test_a_dangling_symlink_still_reads_as_a_non_directory(self, adapter, tmp_path):
         # `is_dir()` follows the link and answers False for a broken one, which is
-        # the honest shape: it is certainly not a directory. The extension filter
-        # is what keeps it out of an answer, exactly as it does for a real file.
+        # the honest shape: it is certainly not a directory. Whether it can be
+        # read at all is the full listing's answer, not this one's.
         (tmp_path / "dangling.gba").symlink_to(tmp_path / "gone.gba")
         (entry,) = adapter.list_top_level_names(str(tmp_path))
         assert entry["is_dir"] is False
@@ -849,6 +872,7 @@ class TestProtocolMethodCount:
             "describe_path",
             "list_top_level_entries",
             "list_top_level_names",
+            "is_broken_symlink",
             "checksum",
             "list_archive_members",
             "checksum_archive_member",
