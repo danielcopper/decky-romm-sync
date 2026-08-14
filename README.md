@@ -130,11 +130,11 @@ Build from source, run the tests, and read the architecture reference on the doc
 - [Backend architecture](https://danielcopper.github.io/romm-tender/architecture/backend-architecture/)
 
 [![CI](https://github.com/danielcopper/romm-tender/actions/workflows/ci.yml/badge.svg)](https://github.com/danielcopper/romm-tender/actions/workflows/ci.yml)
-[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
-[![Coverage](https://img.shields.io/sonar/coverage/danielcopper_decky-romm-sync?server=https%3A%2F%2Fsonarcloud.io)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
-[![Maintainability](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
-[![Reliability](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
-[![Security](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_romm-tender&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=danielcopper_romm-tender)
+[![Coverage](https://img.shields.io/sonar/coverage/danielcopper_romm-tender?server=https%3A%2F%2Fsonarcloud.io)](https://sonarcloud.io/summary/new_code?id=danielcopper_romm-tender)
+[![Maintainability](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_romm-tender&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_romm-tender)
+[![Reliability](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_romm-tender&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_romm-tender)
+[![Security](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_romm-tender&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_romm-tender)
 
 ## Acknowledgments
 
