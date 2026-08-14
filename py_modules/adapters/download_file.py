@@ -89,12 +89,15 @@ class DownloadFileAdapter:
     def list_top_level_names(self, directory: str) -> tuple[TopLevelName, ...]:
         """Name and shape of everything directly inside *directory*, nothing more.
 
-        The listing for a caller that only matches names: no ``stat`` per entry,
-        because ``scandir`` already carries the entry's type from the directory
-        read itself. That is one syscall per ROM saved on a folder that can hold
-        a whole platform's library — paid on every game page, on storage that may
-        have to spin up. An entry whose type cannot be determined at all is
-        skipped, exactly as an unstat-able one is above.
+        The listing for a caller that only matches names: no ``stat`` for the
+        size and mtime, because a name match reads neither. That is one syscall
+        per ROM saved on a folder that can hold a whole platform's library —
+        paid on every game page, on storage that may have to spin up. An
+        ordinary entry costs nothing at all beyond the directory read, since
+        ``scandir`` carries its type; a **symlink** still costs one, because
+        ``is_dir`` resolves it — which is the answer the search wants, as a link
+        to a game directory is a game directory. An entry whose type cannot be
+        determined is skipped, exactly as an unstat-able one is above.
         """
         found: list[TopLevelName] = []
         try:

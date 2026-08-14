@@ -165,10 +165,10 @@ class DownloadFileStore(Protocol):
         """Name and shape of everything directly inside *directory*, nothing more.
 
         The same read for the caller that only matches names — the game-detail
-        page. Dropping the per-entry ``stat`` is the whole point: it is one
-        syscall per ROM on a folder that can hold a whole platform's library, and
-        this one runs on every game page. Same top-level-only rule, same ``()``
-        on a directory that cannot be read.
+        page. Dropping the ``stat`` that fills in size and mtime is the whole
+        point: it is one syscall per ROM on a folder that can hold a whole
+        platform's library, and this one runs on every game page. Same
+        top-level-only rule, same ``()`` on a directory that cannot be read.
         """
         ...
 

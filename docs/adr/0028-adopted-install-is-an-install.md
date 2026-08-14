@@ -225,8 +225,8 @@ exists, so the page can say a ROM is already on the device rather than offering 
 sits at the computed target path or beside it under another name. Neither read is a guarantee: an unreadable folder, an
 unresolvable ROMs root and an accept-list that could not answer all report **no** candidate, because a search that could
 not run must never make a game look uninstallable. The `readdir` is a bare directory read — name and directory-flag per
-entry, no `stat` on each, because a name match reads neither size nor mtime — plus string work; the archive-index read
-that _ranks_ candidates costs an order of magnitude more per entry and is the dialog's, not the page's. The whole
+entry, and no `stat` for the size and mtime, because a name match reads neither — plus string work; the archive-index
+read that _ranks_ candidates costs an order of magnitude more per entry and is the dialog's, not the page's. The whole
 payload is assembled on a worker thread, which is also where the Unit of Work's connection is meant to live (ADR-0004).
 
 The page-open answer labels the button and nothing more: **the search runs again at click time**, because the folder can

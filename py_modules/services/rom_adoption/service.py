@@ -379,10 +379,10 @@ class RomAdoptionService:
 
         The game-detail read's half of the search: enough to label the button, not
         enough to fill the dialog. It stops at the name match, so it is a
-        ``readdir`` with no per-entry ``stat``, one install-row query and pure
-        string work — the archive central-directory reads that rank candidates
-        are skipped entirely, because a page that only has to say "something is
-        here" never needs to know which of several is strongest.
+        ``readdir`` with no size-or-mtime ``stat``, one install-row query and
+        pure string work — the archive central-directory reads that rank
+        candidates are skipped entirely, because a page that only has to say
+        "something is here" never needs to know which of several is strongest.
 
         Deliberately **not** filtered on shape. The page holds a ``roms`` row, and
         nothing on it says whether RomM serves this ROM as one file or a folder —
@@ -463,8 +463,8 @@ class RomAdoptionService:
     def _local_names(self, platform_dir: str) -> tuple[LocalName, ...]:
         """Read the platform folder's top level as names and shapes alone.
 
-        The page's listing: no ``stat`` per entry, because a name match reads
-        neither size nor mtime. The type says so too — these cannot reach
+        The page's listing: no ``stat`` for size or mtime, because a name match
+        reads neither. The type says so too — these cannot reach
         :meth:`_rank`, which is the half of the search the page skips.
         """
         return tuple(
