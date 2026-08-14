@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import TypeVar
 
 # Ranked strongest first: what a row rests on decides where it sits in the list.
 # ``crc32`` is a checksum the ZIP's own central directory hands over for free and
@@ -42,19 +43,37 @@ CANDIDATE_LIMIT = 10
 
 
 @dataclass(frozen=True)
-class LocalEntry:
-    """One entry at the platform directory's top level, as ``scandir`` saw it.
+class LocalName:
+    """One entry at the platform directory's top level, as ``readdir`` alone saw it.
+
+    Everything :func:`matching_entries` reads and nothing more, which is why it
+    is its own type: the game-detail read pays a bare listing for it, while the
+    click-time search stats each entry as well and puts the richer
+    :class:`LocalEntry` through the same filter. Splitting them is what makes
+    "both sides share one filter" a property of the types rather than a promise
+    in a docstring — the lean side cannot reach a field it never read, and the
+    ranking below cannot be handed entries whose size nobody measured.
+    """
+
+    name: str
+    path: str
+    is_dir: bool
+
+
+@dataclass(frozen=True)
+class LocalEntry(LocalName):
+    """A top-level entry plus what a ``stat`` added — what ranking needs.
 
     ``size_bytes`` is ``0`` for a directory: the search never descends, because a
     single multi-file install can hold tens of thousands of files, so a
     directory's total is not evidence this filter can afford.
     """
 
-    name: str
-    path: str
-    is_dir: bool
     size_bytes: int
     modified_at: float
+
+
+EntryT = TypeVar("EntryT", bound=LocalName)
 
 
 @dataclass(frozen=True)
@@ -122,13 +141,13 @@ def _strip_bracketed(name: str) -> str:
 
 
 def matching_entries(
-    entries: tuple[LocalEntry, ...],
+    entries: tuple[EntryT, ...],
     *,
     wanted_name: str,
     want_dir: bool,
     accepted_extensions: frozenset[str],
     covered_paths: frozenset[str],
-) -> tuple[LocalEntry, ...]:
+) -> tuple[EntryT, ...]:
     """The entries that could be the ROM *wanted_name* names, cheapest test first.
 
     Four filters, each of which alone would be too weak:
@@ -136,7 +155,10 @@ def matching_entries(
     * **Shape** — a ROM the server serves as one file can only be a file here,
       and one it serves as a directory can only be a directory. The adopt dialog
       already refuses the mismatched shape as unusable, so offering it would be
-      offering a row the user cannot take.
+      offering a row the user cannot take. An entry that matches on everything
+      *but* shape is not nothing, though: the caller asks a second time with
+      ``want_dir`` inverted and reports it through :func:`shape_conflict_refusal`
+      rather than downloading a second copy beside it without a word.
     * **Extension** — for a file, a positive test against *accepted_extensions*
       (ES-DE's live per-system ``<extension>`` list). ``systeminfo.txt``,
       ``.directory`` and every other frontend's bookkeeping fall out without a
@@ -258,4 +280,51 @@ def candidates_refusal(
             for candidate in candidates
         ],
         "truncated": truncated,
+    }
+
+
+# Both halves of the sentence the shape refusal has to say out loud: what is
+# lying there, and what the server would send. Singular and plural are spelled
+# rather than derived, because "single files" is not "single file" + "s".
+_SHAPE_WORD = {True: "folder", False: "single file"}
+_SHAPE_WORD_PLURAL = {True: "folders", False: "single files"}
+
+
+def shape_conflict_refusal(
+    entries: tuple[LocalName, ...],
+    *,
+    served_dir: bool,
+    incoming_name: str,
+    incoming_size: int,
+    limit: int = CANDIDATE_LIMIT,
+) -> dict[str, object]:
+    """The refusal a download returns for a namesake it cannot offer to take over.
+
+    Raised when the platform folder holds an entry whose normalized name is this
+    game's but whose **shape** is the other one — a loose file where the server
+    serves a folder, or a folder where it serves one file. Nothing on disk can be
+    adopted, so there is no candidate; downloading regardless would drop a second
+    copy of the game beside the first with no word said, after a button that may
+    well have read *Use Existing Files*.
+
+    So it is asked instead: the caller's dialog names both outcomes, and the
+    download proceeds only on the user's word. The list is capped like the
+    candidate list is, and says so when it was cut — a list silently cut short
+    reads as "that is all there is".
+    """
+    shown = entries[:limit]
+    found_dir = not served_dir
+    return {
+        "success": False,
+        "reason": "shape_conflict",
+        "message": (
+            f"'{shown[0].name}' has this game's name but is a {_SHAPE_WORD[found_dir]}"
+            if len(shown) == 1
+            else f"{len(shown)} entries here have this game's name but are {_SHAPE_WORD_PLURAL[found_dir]}"
+        )
+        + f", and the server sends this game as a {_SHAPE_WORD[served_dir]}",
+        "incoming": {"name": incoming_name, "size_bytes": incoming_size},
+        "existing": [{"name": entry.name, "path": entry.path, "is_dir": entry.is_dir} for entry in shown],
+        "served_is_dir": served_dir,
+        "truncated": len(entries) > limit,
     }

@@ -106,9 +106,10 @@ class DownloadTargetGateFn(Protocol):
     replace what they were shown and it has been cleared — and a canonical
     failure dict otherwise: the ``target_occupied`` refusal carrying both sides
     of the comparison, the ``adoption_candidates`` refusal carrying the short
-    list, the ``rename_collisions`` refusal from carrying a discarded
-    candidate's saves, or the failure of a removal the replace could not
-    complete. Nothing is written and no transfer starts on a non-``None`` answer.
+    list, the ``shape_conflict`` refusal naming a namesake of the wrong shape,
+    the ``rename_collisions`` refusal from carrying a discarded candidate's
+    saves, or the failure of a removal the replace could not complete. Nothing is
+    written and no transfer starts on a non-``None`` answer.
 
     *candidate_path* names the entry the user was shown when it sat elsewhere in
     the folder under another name; with *replace* it is removed and its saves
@@ -134,6 +135,41 @@ class DownloadTargetGateFn(Protocol):
         candidate_path: str | None = None,
         collision_choice: str | None = None,
     ) -> dict[str, Any] | None: ...
+
+
+class AdoptionCandidateProbeFn(Protocol):
+    """Cheap "is this game already here under another name" answer for the game detail read.
+
+    The composition root satisfies this with
+    ``RomAdoptionService.has_adoption_candidate`` — the same service as the gate
+    above, and the same ``matching_entries`` filter over the same directory
+    listing. What the two share is that filter; what they do **not** share is
+    three of its four inputs, and the difference runs one way in each case:
+
+    * **Shape.** The page holds a ``roms`` row, and nothing on it says whether
+      RomM serves this ROM as one file or as a folder, so it accepts both. The
+      click-time search has the payload that knows and filters on it — and where
+      the two disagree it refuses with ``shape_conflict`` rather than starting a
+      download nobody was warned about.
+    * **The name.** The page matches ``roms.fs_name``; the gate matches the
+      basename of the path the download itself derived. They differ exactly where
+      the download's own name derivation does not end at ``fs_name``.
+    * **The platform directory.** The page can pass only ``platform_slug``; the
+      gate also passes the payload's ``platform_fs_slug``, which the resolver
+      consults when the slug misses its map. For such a platform the page probes
+      a directory that does not exist, answers ``False``, and the button reads
+      Download — an under-claim the click-time search then corrects.
+
+    It answers the page's question only — a boolean, enough to label the button —
+    and stops at the name match, skipping the archive reads that rank candidates
+    for the dialog. Never raises: every failure answers ``False``, because a
+    search that could not run must not make a game look uninstallable.
+
+    A UoW-opening seam — it reads the install rows to subtract content another
+    game already owns — so the caller resolves it outside any open Unit of Work.
+    """
+
+    def __call__(self, platform_slug: str, fs_name: str) -> bool: ...
 
 
 class RetryStrategy(Protocol):
@@ -537,29 +573,6 @@ class SaveSortChangeFn(Protocol):
     """
 
     def __call__(self) -> SaveLayout: ...
-
-
-class AdoptionCandidateProbeFn(Protocol):
-    """Cheap "is this game already here under another name" answer for the game detail read.
-
-    The composition root satisfies this with
-    ``RomAdoptionService.has_adoption_candidate``, so the page and the
-    Download-click search agree on what counts as a candidate by construction
-    rather than by two filters that happen to match.
-
-    It answers the page's question only — a boolean, enough to label the button
-    — and stops at the name match, skipping the archive reads that rank
-    candidates for the dialog. Takes a ``roms`` row's ``platform_slug`` and
-    ``fs_name`` because that is all this network-free path holds; it therefore
-    cannot filter on the single-file-vs-folder shape, which only the click-time
-    payload knows. Never raises: every failure answers ``False``, because a
-    search that could not run must not make a game look uninstallable.
-
-    A UoW-opening seam — it reads the install rows to subtract content another
-    game already owns — so the caller resolves it outside any open Unit of Work.
-    """
-
-    def __call__(self, platform_slug: str, fs_name: str) -> bool: ...
 
 
 class SaveQuarantineFn(Protocol):

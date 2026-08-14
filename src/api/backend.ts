@@ -46,6 +46,7 @@ import type {
   ListDevicesResponse,
   TargetOccupiedResult,
   CandidatesFoundResult,
+  ShapeConflictResult,
   RenameCollisionsResult,
   CollisionChoice,
   AdoptResult,
@@ -88,6 +89,16 @@ export function isTargetOccupied(value: object): value is TargetOccupiedResult {
  */
 export function isCandidatesFound(value: object): value is CandidatesFoundResult {
   return "reason" in value && (value as { reason?: unknown }).reason === "adoption_candidates";
+}
+
+/**
+ * Narrow a `start_download` reply to the refusal that names entries carrying
+ * this game's name in a form nothing can take over (#260). Same slug-keyed test
+ * as its two siblings; the difference is what it offers, which is to download a
+ * second copy or to stop.
+ */
+export function isShapeConflict(value: object): value is ShapeConflictResult {
+  return "reason" in value && (value as { reason?: unknown }).reason === "shape_conflict";
 }
 
 /**
@@ -172,9 +183,15 @@ export interface CachedGameDetail extends BiosAnswer {
    * another name (#260). Read at page open so the button can say so without the
    * user pressing Download to find out. Distinct from `target_path_occupied`:
    * that one is content at this ROM's own location, which wins when both are
-   * true. The backend cannot filter it on the single-file-vs-folder shape from a
-   * `roms` row, so the click-time search is the authority — a shape it rejects
-   * falls through to a download, exactly as a vanished target already does.
+   * true.
+   *
+   * The two searches share their filter but not all of its inputs — the backend
+   * cannot filter this one on the single-file-vs-folder shape from a `roms` row,
+   * and resolves the platform folder from the slug alone. So the click-time
+   * search is the authority, and this can be true for something it then finds
+   * unusable: the label overpromises, while what pressing the button leads to —
+   * a dialog — still holds, because the wrong shape is refused and asked about
+   * rather than downloaded over.
    */
   adoption_candidate_present?: boolean;
 }
@@ -225,10 +242,14 @@ export const getSyncStats = callable<[], SyncStats>("get_sync_stats");
  * declined every candidate rather than choosing one, so nothing may be deleted
  * on their behalf. `collisionChoice` answers the save-collision dialog that
  * carry can raise, and stays `null` until that dialog has been shown.
+ *
+ * `true` is also how a `shape_conflict` refusal is answered — there the user is
+ * choosing to add a second copy beside a namesake nothing can adopt, and no
+ * `candidatePath` goes with it, because that entry stays exactly where it is.
  */
 export const startDownload = callable<
   [number, boolean, string | null, CollisionChoice | null],
-  BackendResult | TargetOccupiedResult | CandidatesFoundResult | RenameCollisionsResult
+  BackendResult | TargetOccupiedResult | CandidatesFoundResult | ShapeConflictResult | RenameCollisionsResult
 >("start_download");
 /**
  * Record content already on disk as this ROM's install — nothing is fetched.

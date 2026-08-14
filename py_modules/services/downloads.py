@@ -385,9 +385,9 @@ class DownloadService:
 
             # Refuse before a single byte moves when this game is already on disk
             # — at the path this download would claim, or beside it under another
-            # name — and let the user decide between adopting it and replacing it
-            # (ADR-0028). A multi-file ROM claims its extract directory, not the
-            # archive name.
+            # name — and let the user decide what happens to it: adopt, replace,
+            # or (where nothing can be adopted) accept a second copy (ADR-0028).
+            # A multi-file ROM claims its extract directory, not the archive name.
             checked_path = target_path
             if is_multi_file_download(rom_detail):
                 checked_path = os.path.join(roms_dir, self._resolve_safe_extract_dir_name(rom_detail))

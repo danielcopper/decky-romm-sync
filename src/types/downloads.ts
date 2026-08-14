@@ -119,6 +119,27 @@ export interface CandidatesFoundResult {
   truncated: boolean;
 }
 
+/**
+ * A download that stopped because something in the platform folder carries this
+ * game's name in the wrong form — a folder where the server sends one file, or a
+ * file where it sends a folder. Nothing on disk can be taken over, so this is
+ * not a candidate list; it is the question of whether to add a second copy
+ * beside what is already there. Nothing was written and no transfer started.
+ *
+ * `served_is_dir` is what the SERVER sends, so each listed entry is the other
+ * shape. `truncated` is stated rather than implied, exactly as it is for the
+ * candidate list.
+ */
+export interface ShapeConflictResult {
+  success: false;
+  reason: "shape_conflict";
+  message: string;
+  incoming: { name: string; size_bytes: number };
+  existing: Array<{ name: string; path: string; is_dir: boolean }>;
+  served_is_dir: boolean;
+  truncated: boolean;
+}
+
 /** One name an adoption's rename needs that something else already holds. */
 export interface RenameCollision {
   name: string;

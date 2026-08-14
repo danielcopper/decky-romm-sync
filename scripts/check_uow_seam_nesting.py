@@ -28,8 +28,14 @@ nested ``def``/``lambda`` resets the scope (a helper *defined* inside a UoW
 but *called* elsewhere is not flagged). It also matches on the surface syntax:
 aliasing a seam to a local (``fn = resolver.active_core_for_rom; fn(rom_id)``)
 or holding the UoW factory under an attribute whose name does not end in
-``uow_factory`` slips past the name match. The escape hatch is a trailing
-comment on the seam-call line:
+``uow_factory`` slips past the name match. **A seam injected as a call-shaped
+Protocol is that same blind spot**: the consumer writes
+``self._candidate_probe(...)``, never the seam's own name, so the entry in
+:data:`SEAM_METHODS` guards only the call sites that name the method — the
+service's own, and any peer holding the object rather than the bound method.
+Closing it means matching the holding attribute too, which is a second list to
+keep in step and is not built. The escape hatch is a trailing comment on the
+seam-call line:
 
     self._active_core.active_core_for_rom(rom_id)  # pragma: no uow-check
 
@@ -51,13 +57,15 @@ SERVICES_DIR = REPO_ROOT / "py_modules" / "services"
 # re-enters the non-reentrant ``BEGIN IMMEDIATE`` and deadlocks. Matched by
 # method name regardless of the receiver attribute — the names are distinctive
 # to their seam, so this can't be dodged by renaming the holding field. A new
-# seam is a one-line addition here.
+# seam is a one-line addition here. The two marked ``via a …Fn`` reach their
+# only cross-service consumer as an injected bound method, which this matcher
+# does not see (module docstring); their entries hold for by-name call sites.
 SEAM_METHODS: frozenset[str] = frozenset(
     {
         "active_core_for_rom",  # ActiveCoreResolver (services/active_core_resolver.py)
         "active_emulator_for_rom",  # ActiveCoreResolver (services/active_core_resolver.py)
-        "current_save_sorting",  # RomInfoService / SaveService (services/saves/rom_info.py)
-        "has_adoption_candidate",  # RomAdoptionService (services/rom_adoption/service.py)
+        "current_save_sorting",  # RomInfoService / SaveService — via a SaveSortingProvider
+        "has_adoption_candidate",  # RomAdoptionService — via an AdoptionCandidateProbeFn
         "installed_relaunch_items",  # RelaunchOptionsResolver (services/relaunch_options_resolver.py)
         "launch_path_for_rom",  # RelaunchOptionsResolver (services/relaunch_options_resolver.py)
         "relaunch_item_for_rom",  # RelaunchOptionsResolver (services/relaunch_options_resolver.py)

@@ -256,6 +256,11 @@ class GameDetailService:
         # An occupied target and a candidate elsewhere are different states, and
         # the occupied one wins: it is the exact path this ROM would claim, so
         # there is nothing to search for. An installed ROM does neither.
+        #
+        # The slug goes in alone because the row holds no `platform_fs_slug`, so
+        # a platform missing from the resolver's map is probed in a directory
+        # that does not exist and answers False — the same one-argument shape,
+        # and the same under-claim, `_target_path_occupied` below already has.
         candidate_present = (
             False if installed or target_occupied else self._candidate_probe(rom.platform_slug, rom.fs_name)
         )

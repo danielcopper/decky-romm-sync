@@ -22,6 +22,7 @@ import {
   adoptExistingRom,
   isTargetOccupied,
   isCandidatesFound,
+  isShapeConflict,
   isRenameCollisions,
   cancelDownload,
   pauseDownload,
@@ -51,6 +52,7 @@ import { handleButtonDownloadFailure } from "../utils/downloadFailure";
 import { comparisonForCandidate, showAdoptExistingModal } from "./AdoptExistingModal";
 import { showAdoptCandidateModal } from "./AdoptCandidateModal";
 import { showAdoptCollisionModal } from "./AdoptCollisionModal";
+import { showAdoptShapeConflictModal } from "./AdoptShapeConflictModal";
 import { showCoreChangeModal } from "./CoreChangeModal";
 import { handleConflicts } from "./SyncConflictModal";
 import { showOfflineDriftModal } from "./OfflineDriftModal";
@@ -68,6 +70,7 @@ import type {
   DownloadFailedEvent,
   TargetOccupiedResult,
   CandidatesFoundResult,
+  ShapeConflictResult,
   CollisionChoice,
   UninstallProgressEvent,
 } from "../types";
@@ -1058,10 +1061,21 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       }
       if (isCandidatesFound(result)) {
         // Same refusal contract, different subject: the target path was free and
-        // the game is on disk under another name. The button does NOT go into
-        // its "already here" state — nothing occupies the location it reads.
+        // the game is on disk under another name. Recorded, because the backend
+        // just proved it — without this a cancelled dialog leaves the button
+        // reading "Download" for content it has confirmed is there.
+        setCandidatePresent(true);
         setActionPending(false);
         await resolveCandidates(romId, result);
+        return;
+      }
+      if (isShapeConflict(result)) {
+        // A namesake nothing can adopt. Neither flag moves: no content occupies
+        // this ROM's own path, and nothing here is a candidate — what the page
+        // said stands, and the honest answer to "is this game here" is the
+        // dialog the user is about to get.
+        setActionPending(false);
+        await resolveShapeConflict(result);
         return;
       }
       if (!result.success) {
@@ -1118,6 +1132,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     if (choice === "adopt") {
       await handleAdopt(rid, candidate.path);
     }
+  };
+
+  // Offer the only two honest exits for a namesake of the wrong shape: fetch the
+  // server's copy alongside it, or stop. `replace` is what carries the answer —
+  // it is what tells the backend the search has been answered — and no candidate
+  // path goes with it, because that entry is not being taken over or removed.
+  const resolveShapeConflict = async (conflict: ShapeConflictResult) => {
+    if ((await showAdoptShapeConflictModal(conflict)) === "download") await handleDownload(true);
   };
 
   // Record what is on disk as the install, then write the launch command onto
@@ -1470,6 +1492,12 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       //
       // Both states earn the label. The user should not have to press Download
       // to learn their own copy is sitting in the folder under another name.
+      //
+      // `candidatePresent` can overpromise: the page cannot filter on the shape
+      // the server serves this ROM in, so the entry it found may turn out to be
+      // one nothing can adopt. What the label promises is still kept — pressing
+      // opens a dialog either way, because the backend refuses that case and
+      // asks rather than downloading past it.
       dlLabel = "Use Existing Files";
     } else {
       dlLabel = "Download";

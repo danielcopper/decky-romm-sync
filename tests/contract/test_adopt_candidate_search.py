@@ -18,6 +18,8 @@ have.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -117,6 +119,101 @@ async def test_an_unrelated_platform_folder_downloads_as_before(harness):
     assert result.get("reason") != "adoption_candidates"
 
 
+# ── a namesake of the wrong shape ────────────────────────────────────────
+
+
+async def _drain_background_tasks() -> None:
+    """Await the fire-and-forget transfer task ``start_download`` spawned."""
+    for _ in range(6):
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
+        if not pending:
+            return
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
+def _stage_multi_file(harness) -> dict[str, Any]:
+    """A ROM the server serves as a folder, extracted to ``rom-41 (USA)``."""
+    return _stage(
+        harness,
+        fs_name_no_ext="rom-41 (USA)",
+        has_multiple_files=True,
+        files=[{"file_name": "disc1.bin"}, {"file_name": "disc2.bin"}],
+    )
+
+
+async def test_a_same_named_folder_refuses_a_single_file_download(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    folder = _platform_dir(harness) / "rom-41 (U)"
+    folder.mkdir()
+    (folder / "notes.txt").write_bytes(b"whatever the user keeps here")
+
+    result = await harness.plugin.start_download(_ROM_ID, False)
+
+    assert result["success"] is False
+    assert result["reason"] == "shape_conflict"
+    assert isinstance(result["message"], str)
+    assert result["message"]
+    assert result["existing"] == [{"name": "rom-41 (U)", "path": str(folder), "is_dir": True}]
+    assert result["served_is_dir"] is False
+    assert result["truncated"] is False
+    assert result["incoming"] == {"name": _CANONICAL, "size_bytes": 4}
+    # The point of the refusal: no transfer started behind the user's back.
+    await _drain_background_tasks()
+    assert not (_platform_dir(harness) / _CANONICAL).exists()
+    assert await harness.plugin.get_installed_rom(_ROM_ID) is None
+
+
+async def test_a_same_named_file_refuses_a_folder_download(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage_multi_file(harness)
+    loose = _platform_dir(harness) / "rom-41 (U).gba"
+    loose.write_bytes(b"my own dump")
+
+    result = await harness.plugin.start_download(_ROM_ID, False)
+
+    assert result["success"] is False
+    assert result["reason"] == "shape_conflict"
+    assert result["existing"] == [{"name": "rom-41 (U).gba", "path": str(loose), "is_dir": False}]
+    assert result["served_is_dir"] is True
+    await _drain_background_tasks()
+    assert not (_platform_dir(harness) / "rom-41 (USA)").exists()
+
+
+async def test_the_refusal_leaves_the_folder_byte_identical(harness):
+    # The Cancel exit is the frontend simply not calling again, so what the
+    # backend already did has to be nothing at all.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    folder = _platform_dir(harness) / "rom-41 (U)"
+    folder.mkdir()
+    (folder / "notes.txt").write_bytes(b"mine")
+
+    await harness.plugin.start_download(_ROM_ID, False)
+    await _drain_background_tasks()
+
+    assert sorted(path.name for path in _platform_dir(harness).iterdir()) == ["rom-41 (U)"]
+    assert (folder / "notes.txt").read_bytes() == b"mine"
+
+
+async def test_downloading_anyway_lands_beside_the_namesake(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    harness.romm.download_payloads[f"rom:{_ROM_ID}:{_CANONICAL}"] = b"srv!"
+    folder = _platform_dir(harness) / "rom-41 (U)"
+    folder.mkdir()
+    (folder / "notes.txt").write_bytes(b"mine")
+
+    result = await harness.plugin.start_download(_ROM_ID, True)
+    await _drain_background_tasks()
+
+    assert result["success"] is True
+    assert (_platform_dir(harness) / _CANONICAL).read_bytes() == b"srv!"
+    # A second copy, said out loud in the dialog — and the user's folder is
+    # neither renamed nor removed to make room for it.
+    assert (folder / "notes.txt").read_bytes() == b"mine"
+
+
 # ── the game-detail read ─────────────────────────────────────────────────
 
 
@@ -142,16 +239,23 @@ async def test_an_empty_platform_folder_leaves_the_page_offering_a_download(harn
     assert detail["adoption_candidate_present"] is False
 
 
-async def test_the_page_stays_usable_when_the_roms_folder_cannot_be_read(harness):
+async def test_the_page_stays_usable_when_the_roms_folder_cannot_be_read(harness, caplog):
     # A search that could not run must never make a game look uninstallable.
+    #
+    # The log line is the assertion that has teeth: `adoption_candidate_present`
+    # is False by default, so pinning it alone would stay green with the probe
+    # unwired, uncalled or deleted. The warning is emitted only by the guard
+    # catching this raise, so it says the probe ran AND survived.
     seed_rom(harness, _ROM_ID, platform_slug="gba")
     _stage(harness)
     harness.plugin._rom_adoption_service._retrodeck_paths = _UnreadableRomsPaths()
 
-    detail = await harness.plugin.get_cached_game_detail(_ROM_ID)
+    with caplog.at_level(logging.WARNING):
+        detail = await harness.plugin.get_cached_game_detail(_ROM_ID)
 
     assert detail["found"] is True
     assert detail["adoption_candidate_present"] is False
+    assert any("candidate probe failed" in record.message for record in caplog.records)
 
 
 class _UnreadableRomsPaths:

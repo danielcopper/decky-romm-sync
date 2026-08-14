@@ -39,10 +39,12 @@ from domain.rom_adoption import (
 )
 from domain.rom_candidates import (
     LocalEntry,
+    LocalName,
     candidates_refusal,
     matching_entries,
     normalize_rom_name,
     rank_candidates,
+    shape_conflict_refusal,
 )
 from domain.rom_files import (
     detect_launch_file,
@@ -237,8 +239,9 @@ class RomAdoptionService:
         whatever the gate showed them and it has been cleared. Anything else is a
         canonical failure the caller returns untouched — the ``target_occupied``
         refusal carrying both sides of the comparison, the ``adoption_candidates``
-        refusal carrying the short list, the ``rename_collisions`` refusal raised
-        by carrying a discarded candidate's saves, or a removal that could not be
+        refusal carrying the short list, the ``shape_conflict`` refusal naming a
+        namesake nothing can adopt, the ``rename_collisions`` refusal raised by
+        carrying a discarded candidate's saves, or a removal that could not be
         completed.
 
         None of the legs is bounded work — describing an occupied directory walks
@@ -304,21 +307,71 @@ class RomAdoptionService:
     # ── Candidate search ────────────────────────────────────────────
 
     def _candidate_refusal(self, rom_detail: dict[str, Any], checked_path: str) -> dict[str, Any] | None:
-        """Refuse the download when the same game is already on disk under another name.
+        """Refuse the download when this game is already on disk under another name.
 
         ``None`` when nothing on disk could be this game, which is every ordinary
-        download. The search runs here — at Download-click time — and never on the
-        game-detail read, which stays at its single ``stat`` (ADR-0028).
+        download. Two refusals come out of one listing:
+
+        * ``adoption_candidates`` — entries of the shape the server serves, which
+          the dialog can offer to take over.
+        * ``shape_conflict`` — the same name in the *other* shape, which nothing
+          can adopt. Reported rather than ignored: the alternative is a
+          multi-gigabyte transfer starting with no dialog and no toast, dropping
+          a second copy beside the first, after a button that may well have read
+          Use Existing Files. The page-open probe cannot filter on shape (the
+          ``roms`` row does not carry it), so this is where the two answers are
+          reconciled.
+
+        The search runs on the Download click as well as on the page open,
+        because the folder can change while the page is open and the answer the
+        user acts on has to be the current one (ADR-0028).
         """
-        candidates, truncated = self._search_candidates(rom_detail, checked_path)
-        if not candidates:
+        entries = self._local_entries(os.path.dirname(checked_path))
+        if not entries:
             return None
+        system = self._resolve_system(rom_detail.get("platform_slug", ""), rom_detail.get("platform_fs_slug"))
+        # The name both sides are matched on is ``checked_path``'s basename — the
+        # name the download itself derived — so the search can never disagree
+        # with the path it is searching around.
+        wanted_name = normalize_rom_name(os.path.basename(checked_path))
+        extensions = self._system_extensions(system)
+        covered = self._installed_paths() | {checked_path}
+        served_dir = is_multi_file_download(rom_detail)
+        matches = matching_entries(
+            entries,
+            wanted_name=wanted_name,
+            want_dir=served_dir,
+            accepted_extensions=extensions,
+            covered_paths=covered,
+        )
+        incoming_name = os.path.basename(checked_path)
+        incoming_size = rom_detail.get("fs_size_bytes", 0)
+        if not matches:
+            conflicting = matching_entries(
+                entries,
+                wanted_name=wanted_name,
+                want_dir=not served_dir,
+                accepted_extensions=extensions,
+                covered_paths=covered,
+            )
+            if not conflicting:
+                return None
+            self._logger.info(
+                f"Refusing rom {rom_detail.get('id')}: {len(conflicting)} same-named entr(ies) of the wrong shape"
+            )
+            return shape_conflict_refusal(
+                conflicting,
+                served_dir=served_dir,
+                incoming_name=incoming_name,
+                incoming_size=incoming_size,
+            )
+        candidates, truncated = self._rank(matches, rom_detail)
         self._logger.info(f"Found {len(candidates)} adoption candidate(s) for rom {rom_detail.get('id')}")
         return candidates_refusal(
             candidates,
             truncated=truncated,
-            incoming_name=os.path.basename(checked_path),
-            incoming_size=rom_detail.get("fs_size_bytes", 0),
+            incoming_name=incoming_name,
+            incoming_size=incoming_size,
         )
 
     def has_adoption_candidate(self, platform_slug: str, fs_name: str) -> bool:
@@ -326,17 +379,19 @@ class RomAdoptionService:
 
         The game-detail read's half of the search: enough to label the button, not
         enough to fill the dialog. It stops at the name match, so it is a
-        ``readdir``, one install-row query and pure string work — the archive
-        central-directory reads that rank candidates are skipped entirely,
-        because a page that only has to say "something is here" never needs to
-        know which of several is strongest.
+        ``readdir`` with no per-entry ``stat``, one install-row query and pure
+        string work — the archive central-directory reads that rank candidates
+        are skipped entirely, because a page that only has to say "something is
+        here" never needs to know which of several is strongest.
 
         Deliberately **not** filtered on shape. The page holds a ``roms`` row, and
         nothing on it says whether RomM serves this ROM as one file or a folder —
-        the click-time search has the payload that does. A shape the click-time
-        search then rejects falls through to a download, which is exactly what an
-        occupied target already does when the file vanished while the page was
-        open.
+        the click-time search has the payload that does. So this can say "here"
+        about an entry that turns out to be the wrong shape: the button then
+        overpromises, reading Use Existing Files for something no dialog can
+        offer. What it does not do is mislead about what pressing leads to. The
+        click-time search refuses that case with ``shape_conflict`` and asks, so
+        pressing always ends in an answer.
 
         Every failure is quiet and answers ``False``: an unresolvable roms path,
         an unreadable folder, an accept-list the source could not answer. A search
@@ -348,41 +403,43 @@ class RomAdoptionService:
             self._logger.warning(f"Adoption candidate probe failed for {platform_slug}/{fs_name}: {e}")
             return False
 
-    def _name_matches(self, platform_slug: str, fs_name: str) -> tuple[LocalEntry, ...]:
-        """Entries in *platform_slug*'s folder whose normalized name is *fs_name*'s, either shape."""
+    def _name_matches(self, platform_slug: str, fs_name: str) -> tuple[LocalName, ...]:
+        """Entries in *platform_slug*'s folder whose normalized name is *fs_name*'s, either shape.
+
+        The system is resolved from the slug alone — a ``roms`` row carries no
+        ``platform_fs_slug``, which the resolver consults only for a slug that
+        misses its platform map. For such a platform this probes a directory that
+        does not exist and answers "no candidate"; the click-time search, which
+        has the payload, then finds what is there. The error runs towards saying
+        too little, which the next step corrects.
+        """
         roms_path = self._retrodeck_paths.roms_path()
         if not roms_path or not fs_name or not platform_slug:
             return ()
         system = self._resolve_system(platform_slug)
         platform_dir = safe_join(roms_path, system)
-        entries = self._local_entries(platform_dir)
+        entries = self._local_names(platform_dir)
         if not entries:
             return ()
-        shared = {
-            "wanted_name": normalize_rom_name(fs_name),
-            "accepted_extensions": self._system_extensions(system),
-            "covered_paths": self._installed_paths() | {os.path.join(platform_dir, fs_name)},
-        }
-        return matching_entries(entries, want_dir=False, **shared) or matching_entries(entries, want_dir=True, **shared)
-
-    def _search_candidates(self, rom_detail: dict[str, Any], checked_path: str):
-        """List the platform directory's top level and rank what could be this ROM.
-
-        The name both sides are matched on is ``checked_path``'s basename — the
-        name the download itself derived — so the search can never disagree with
-        the path it is searching around.
-        """
-        entries = self._local_entries(os.path.dirname(checked_path))
-        if not entries:
-            return ((), False)
-        system = self._resolve_system(rom_detail.get("platform_slug", ""), rom_detail.get("platform_fs_slug"))
-        matches = matching_entries(
+        wanted_name = normalize_rom_name(fs_name)
+        extensions = self._system_extensions(system)
+        covered = self._installed_paths() | {os.path.join(platform_dir, fs_name)}
+        return matching_entries(
             entries,
-            wanted_name=normalize_rom_name(os.path.basename(checked_path)),
-            want_dir=is_multi_file_download(rom_detail),
-            accepted_extensions=self._system_extensions(system),
-            covered_paths=self._installed_paths() | {checked_path},
+            wanted_name=wanted_name,
+            want_dir=False,
+            accepted_extensions=extensions,
+            covered_paths=covered,
+        ) or matching_entries(
+            entries,
+            wanted_name=wanted_name,
+            want_dir=True,
+            accepted_extensions=extensions,
+            covered_paths=covered,
         )
+
+    def _rank(self, matches: tuple[LocalEntry, ...], rom_detail: dict[str, Any]):
+        """Order what matched by the evidence each entry supports without a byte being read."""
         return rank_candidates(
             matches,
             server_size=rom_detail.get("fs_size_bytes", 0),
@@ -391,7 +448,7 @@ class RomAdoptionService:
         )
 
     def _local_entries(self, platform_dir: str) -> tuple[LocalEntry, ...]:
-        """Read the platform folder's top level into the values the filter works on."""
+        """Read the platform folder's top level, sizes and mtimes included, for ranking."""
         return tuple(
             LocalEntry(
                 name=entry["name"],
@@ -401,6 +458,18 @@ class RomAdoptionService:
                 modified_at=entry["modified_at"],
             )
             for entry in self._download_file_store.list_top_level_entries(platform_dir)
+        )
+
+    def _local_names(self, platform_dir: str) -> tuple[LocalName, ...]:
+        """Read the platform folder's top level as names and shapes alone.
+
+        The page's listing: no ``stat`` per entry, because a name match reads
+        neither size nor mtime. The type says so too — these cannot reach
+        :meth:`_rank`, which is the half of the search the page skips.
+        """
+        return tuple(
+            LocalName(name=entry["name"], path=entry["path"], is_dir=entry["is_dir"])
+            for entry in self._download_file_store.list_top_level_names(platform_dir)
         )
 
     def _member_crc32s(self, entry: LocalEntry) -> tuple[str, ...]:

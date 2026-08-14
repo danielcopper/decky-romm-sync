@@ -284,6 +284,18 @@ dialog as above. When it finds several, you get a short list first — strongest
 is based on: a checksum read out of a zip's index, an exact size match, or the name alone. If there were more than the
 list shows, it says so.
 
+**When what is there is the wrong shape.** Your server sends each game either as a single file or as a folder of several
+files, and Tender can only take over what matches. If your folder holds a _folder_ with this game's name while the
+server sends a single file — or a loose file where the server sends a folder — there is nothing to take over, and you
+are told so instead of the download simply starting: **something with this name is here, it is not in the form this game
+comes in, so downloading leaves you with two copies.** You can go ahead and download anyway, which lands the server's
+copy beside what is already there under the server's own name, or cancel and sort it out yourself. Neither choice
+renames, moves or deletes anything you have.
+
+This is also why the button can read **Use Existing Files** for something that turns out not to be usable: when the page
+opens, Tender knows the name but not yet which form the server sends. Pressing always gets you an answer — it never
+quietly downloads past a file with this game's name.
+
 Choosing a file and pressing **Use These Files** does one thing more than before: it **renames your file to the name
 your server uses**, and moves your saves and savestates for that game along with it. That is not tidiness. Uninstalling
 a game deletes the ROM but never the saves — so a game left under your own name would, after an uninstall and a later

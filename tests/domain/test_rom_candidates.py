@@ -15,10 +15,12 @@ from domain.rom_candidates import (
     NAME_MATCH,
     SIZE_MATCH,
     LocalEntry,
+    LocalName,
     candidates_refusal,
     matching_entries,
     normalize_rom_name,
     rank_candidates,
+    shape_conflict_refusal,
 )
 
 _ACCEPTED = frozenset({".gba", ".zip", ".sfc"})
@@ -32,6 +34,11 @@ def _entry(name: str, *, is_dir: bool = False, size: int = 0, directory: str = "
         size_bytes=size,
         modified_at=1700000000.0,
     )
+
+
+def _name(name: str, *, is_dir: bool = False, directory: str = "/roms/gba") -> LocalName:
+    """What a bare directory read knows — the page's half of the search works on this."""
+    return LocalName(name=name, path=f"{directory}/{name}", is_dir=is_dir)
 
 
 class TestNormalizeRomName:
@@ -124,6 +131,19 @@ class TestMatchingEntries:
         wanted = _entry("Mario Golf - Advance Tour (U).zip")
         found = matching_entries(
             (wanted, _entry("Zelda (USA).gba")),
+            wanted_name="mario golf advance tour",
+            want_dir=False,
+            accepted_extensions=_ACCEPTED,
+            covered_paths=frozenset(),
+        )
+        assert found == (wanted,)
+
+    def test_the_page_s_leaner_entries_go_through_the_very_same_filter(self) -> None:
+        # The two halves of the search agree because one filter answers for both
+        # — the page just hands it entries it paid less to read.
+        wanted = _name("Mario Golf - Advance Tour (U).zip")
+        found = matching_entries(
+            (wanted, _name("Zelda (USA).gba")),
             wanted_name="mario golf advance tour",
             want_dir=False,
             accepted_extensions=_ACCEPTED,
@@ -371,4 +391,74 @@ class TestCandidatesRefusal:
         entries = tuple(_entry(f"Game ({index:03d}).gba") for index in range(CANDIDATE_LIMIT + 1))
         candidates, truncated = rank_candidates(entries, server_size=0, server_crc32="", member_crc32s={})
         refusal = candidates_refusal(candidates, truncated=truncated, incoming_name="Game.gba", incoming_size=0)
+        assert refusal["truncated"] is True
+
+
+class TestShapeConflictRefusal:
+    """The namesake nothing can adopt: what the user is told, and what they are offered."""
+
+    def test_the_refusal_carries_the_canonical_failure_shape(self) -> None:
+        refusal = shape_conflict_refusal(
+            (_name("Mario (U)", is_dir=True),),
+            served_dir=False,
+            incoming_name="Mario (USA).gba",
+            incoming_size=100,
+        )
+        assert refusal["success"] is False
+        assert refusal["reason"] == "shape_conflict"
+        assert isinstance(refusal["message"], str)
+        assert refusal["message"]
+        assert "error" not in refusal
+        assert "error_code" not in refusal
+
+    def test_it_names_the_entry_and_both_shapes(self) -> None:
+        refusal = shape_conflict_refusal(
+            (_name("Mario (U)", is_dir=True),),
+            served_dir=False,
+            incoming_name="Mario (USA).gba",
+            incoming_size=100,
+        )
+        assert refusal["message"] == (
+            "'Mario (U)' has this game's name but is a folder, and the server sends this game as a single file"
+        )
+        assert refusal["existing"] == [{"name": "Mario (U)", "path": "/roms/gba/Mario (U)", "is_dir": True}]
+        assert refusal["served_is_dir"] is False
+        assert refusal["incoming"] == {"name": "Mario (USA).gba", "size_bytes": 100}
+        assert refusal["truncated"] is False
+
+    def test_the_other_direction_reads_the_other_way_round(self) -> None:
+        refusal = shape_conflict_refusal(
+            (_name("Mario (U).cue"),),
+            served_dir=True,
+            incoming_name="Mario (USA)",
+            incoming_size=0,
+        )
+        assert refusal["message"] == (
+            "'Mario (U).cue' has this game's name but is a single file, and the server sends this game as a folder"
+        )
+        assert refusal["served_is_dir"] is True
+
+    def test_several_are_counted_rather_than_listed_in_the_sentence(self) -> None:
+        refusal = shape_conflict_refusal(
+            (_name("Mario (U)", is_dir=True), _name("Mario (E)", is_dir=True)),
+            served_dir=False,
+            incoming_name="Mario (USA).gba",
+            incoming_size=0,
+        )
+        assert refusal["message"] == (
+            "2 entries here have this game's name but are folders, and the server sends this game as a single file"
+        )
+        assert refusal["existing"] == [
+            {"name": "Mario (U)", "path": "/roms/gba/Mario (U)", "is_dir": True},
+            {"name": "Mario (E)", "path": "/roms/gba/Mario (E)", "is_dir": True},
+        ]
+
+    def test_a_truncated_list_is_stated_rather_than_implied(self) -> None:
+        entries = tuple(_name(f"Game ({index:03d})", is_dir=True) for index in range(CANDIDATE_LIMIT + 1))
+        refusal = shape_conflict_refusal(entries, served_dir=False, incoming_name="Game.gba", incoming_size=0)
+        # The first ten in the order they were read, and the eleventh stated as
+        # cut rather than silently dropped.
+        assert refusal["existing"] == [
+            {"name": entry.name, "path": entry.path, "is_dir": True} for entry in entries[:CANDIDATE_LIMIT]
+        ]
         assert refusal["truncated"] is True

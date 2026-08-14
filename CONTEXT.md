@@ -200,6 +200,15 @@ above another is only cheap evidence (a single-member archive's CRC32 from the Z
 The verification (CRC32/MD5, read from a ZIP's central directory where the content is archived) is always
 user-triggered, never a wait imposed before the plugin will say anything.
 
+### Shape conflict
+
+An entry whose **normalized name** equals the ROM's but whose shape is the other one — a directory where RomM serves a
+single file, or a loose file where it serves a folder. It is deliberately **not** an adoption candidate: nothing about
+it can be taken over, so it is never offered, ranked or renamed. It is still reported, because the alternative is a
+download that silently produces a second copy of the game beside it. The dialog's two exits are download-anyway (the
+server's copy lands beside it, under the server's name) and cancel; neither touches the entry. _Avoid_: mismatched
+candidate, unusable candidate — the whole point is that it is not one.
+
 ### Normalized name
 
 A ROM filename reduced to the game it denotes: extension removed, bracketed groups `(...)` / `[...]` dropped with their

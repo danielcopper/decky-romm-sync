@@ -28,6 +28,7 @@ from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock
 
 from domain.rom import Rom
+from domain.rom_candidates import CANDIDATE_LIMIT
 from domain.rom_install import RomInstall
 from domain.save_layout import ContentDir, InSaveDir, SaveLayout
 from services.rom_adoption import RomAdoptionService, RomAdoptionServiceConfig
@@ -1405,17 +1406,18 @@ class TestCandidateSearch:
         assert result["candidates"][0]["is_dir"] is True
         assert result["candidates"][0]["size_bytes"] == 0
 
-    async def test_a_user_s_own_subfolder_is_not_offered_for_a_single_file_rom(self, h):
+    async def test_a_same_named_folder_is_not_offered_as_a_single_file_rom_s_candidate(self, h):
         h.system_extensions = {"snes": frozenset({".sfc"})}
         h.store.dirs.add("/roms/snes/Game (U)")
         h.store.files["/roms/snes/Game (U)/notes.txt"] = b"x"
 
-        assert (
-            await h.service.check_download_target(
-                _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
-            )
-            is None
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
         )
+
+        assert result is not None
+        assert result["reason"] != "adoption_candidates"
+        assert "candidates" not in result
 
     async def test_the_user_who_chose_download_is_not_asked_again(self, h):
         h.system_extensions = {"snes": frozenset({".sfc"})}
@@ -1468,6 +1470,149 @@ class TestCandidateSearch:
 
         assert result is not None
         assert result["reason"] == "target_occupied"
+
+
+class TestShapeConflict:
+    """A namesake of the wrong shape is asked about, never quietly downloaded past."""
+
+    async def test_a_folder_where_the_server_sends_one_file_is_refused(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.dirs.add("/roms/snes/Game (U)")
+        h.store.files["/roms/snes/Game (U)/rom.sfc"] = b"mine"
+
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc", size=10), "/roms/snes/Game (USA).sfc", replace=False
+        )
+
+        assert result is not None
+        assert result["success"] is False
+        assert result["reason"] == "shape_conflict"
+        assert result["message"] == (
+            "'Game (U)' has this game's name but is a folder, and the server sends this game as a single file"
+        )
+        assert result["incoming"] == {"name": "Game (USA).sfc", "size_bytes": 10}
+        assert result["existing"] == [{"name": "Game (U)", "path": "/roms/snes/Game (U)", "is_dir": True}]
+        assert result["served_is_dir"] is False
+        assert result["truncated"] is False
+
+    async def test_a_loose_file_where_the_server_sends_a_folder_is_refused(self, h):
+        h.system_extensions = {"psx": frozenset({".cue"})}
+        h.store.files["/roms/psx/Game (U).cue"] = b"mine"
+
+        result = await h.service.check_download_target(
+            _multi_file_detail(dir_name="Game (USA)"), "/roms/psx/Game (USA)", replace=False
+        )
+
+        assert result is not None
+        assert result["reason"] == "shape_conflict"
+        assert result["message"] == (
+            "'Game (U).cue' has this game's name but is a single file, and the server sends this game as a folder"
+        )
+        assert result["existing"] == [{"name": "Game (U).cue", "path": "/roms/psx/Game (U).cue", "is_dir": False}]
+        assert result["served_is_dir"] is True
+
+    async def test_the_refusal_touches_nothing(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.dirs.add("/roms/snes/Game (U)")
+        h.store.files["/roms/snes/Game (U)/rom.sfc"] = b"mine"
+
+        await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
+        )
+
+        assert h.store.files == {"/roms/snes/Game (U)/rom.sfc": b"mine"}
+        assert h.store.dirs == {"/roms/snes/Game (U)"}
+
+    async def test_the_user_who_chose_to_download_anyway_is_not_asked_again(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.dirs.add("/roms/snes/Game (U)")
+        h.store.files["/roms/snes/Game (U)/rom.sfc"] = b"mine"
+
+        assert (
+            await h.service.check_download_target(
+                _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=True
+            )
+            is None
+        )
+
+    async def test_a_resume_is_never_refused_by_a_shape_conflict(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.dirs.add("/roms/snes/Game (U)")
+        h.store.files["/roms/snes/Game (U)/rom.sfc"] = b"mine"
+
+        assert (
+            await h.service.check_download_target(
+                _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False, resume=True
+            )
+            is None
+        )
+
+    async def test_a_folder_named_after_another_game_is_no_conflict(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.dirs.add("/roms/snes/Zelda (U)")
+        h.store.files["/roms/snes/Zelda (U)/rom.sfc"] = b"z"
+
+        assert (
+            await h.service.check_download_target(
+                _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
+            )
+            is None
+        )
+
+    async def test_a_file_the_system_does_not_accept_is_no_conflict(self, h):
+        # The extension filter answers before the shape question does: notes
+        # beside a folder-served game are not something to ask about.
+        h.system_extensions = {"psx": frozenset({".cue"})}
+        h.store.files["/roms/psx/Game (U).txt"] = b"notes"
+
+        assert (
+            await h.service.check_download_target(
+                _multi_file_detail(dir_name="Game (USA)"), "/roms/psx/Game (USA)", replace=False
+            )
+            is None
+        )
+
+    async def test_content_an_install_row_accounts_for_is_no_conflict(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.dirs.add("/roms/snes/Game (U)")
+        h.store.files["/roms/snes/Game (U)/rom.sfc"] = b"other game"
+        h.seed_install(rom_id=99, file_path="/roms/snes/Game (U)/rom.sfc", rom_dir="/roms/snes/Game (U)")
+
+        assert (
+            await h.service.check_download_target(
+                _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
+            )
+            is None
+        )
+
+    async def test_a_candidate_of_the_right_shape_wins_over_one_of_the_wrong_shape(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.files["/roms/snes/Game (U).sfc"] = b"mine"
+        h.store.dirs.add("/roms/snes/Game (E)")
+        h.store.files["/roms/snes/Game (E)/rom.sfc"] = b"also mine"
+
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
+        )
+
+        assert result is not None
+        assert result["reason"] == "adoption_candidates"
+        assert [candidate["name"] for candidate in result["candidates"]] == ["Game (U).sfc"]
+
+    async def test_a_capped_list_says_so(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        for index in range(CANDIDATE_LIMIT + 1):
+            h.store.dirs.add(f"/roms/snes/Game ({index})")
+            h.store.files[f"/roms/snes/Game ({index})/rom.sfc"] = b"mine"
+
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
+        )
+
+        assert result is not None
+        assert result["reason"] == "shape_conflict"
+        assert len(result["existing"]) == CANDIDATE_LIMIT
+        assert result["truncated"] is True
 
 
 class TestHasAdoptionCandidate:
@@ -1541,8 +1686,13 @@ class TestHasAdoptionCandidate:
 
         assert any("candidate probe failed" in record.message for record in caplog.records)
 
-    async def test_an_unsafe_platform_slug_answers_quietly(self, h):
-        assert h.service.has_adoption_candidate("../../etc", "passwd") is False
+    async def test_an_unsafe_platform_slug_answers_quietly(self, h, caplog):
+        with caplog.at_level(logging.WARNING):
+            assert h.service.has_adoption_candidate("../../etc", "passwd") is False
+
+        # The same guard, reached by a different raise — and the log is what says
+        # the probe ran at all, since False is also its "nothing here" answer.
+        assert any("candidate probe failed" in record.message for record in caplog.records)
 
 
 # ── downloading over a candidate ─────────────────────────────────────────
