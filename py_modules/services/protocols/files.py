@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractContextManager
 
-    from models.adoption import ArchiveMemberInfo, ExistingContent, MoveOutcome, TopLevelEntry
+    from models.adoption import ArchiveMemberInfo, ExistingContent, MoveOutcome, TopLevelEntry, TopLevelName
     from models.prune import (
         MutationOutcome,
         RecoveryArtifact,
@@ -151,12 +151,24 @@ class DownloadFileStore(Protocol):
     def list_top_level_entries(self, directory: str) -> tuple[TopLevelEntry, ...]:
         """Describe what sits directly inside *directory*, without descending.
 
-        The candidate search's one read of the platform directory. It stays on
-        the top level deliberately: a single multi-file install can hold tens of
-        thousands of files, and a user's own subfolders are their filing, not the
-        plugin's. A directory entry therefore reports size 0 — its recursive
-        total is not something this read pays for. Idempotent on a missing
-        directory (returns ``()``).
+        The Download click's read of the platform directory, which ranks what it
+        finds and so needs each entry's size and mtime. It stays on the top level
+        deliberately: a single multi-file install can hold tens of thousands of
+        files, and a user's own subfolders are their filing, not the plugin's. A
+        directory entry therefore reports size 0 — its recursive total is not
+        something this read pays for. Idempotent on a missing directory (returns
+        ``()``).
+        """
+        ...
+
+    def list_top_level_names(self, directory: str) -> tuple[TopLevelName, ...]:
+        """Name and shape of everything directly inside *directory*, nothing more.
+
+        The same read for the caller that only matches names — the game-detail
+        page. Dropping the per-entry ``stat`` is the whole point: it is one
+        syscall per ROM on a folder that can hold a whole platform's library, and
+        this one runs on every game page. Same top-level-only rule, same ``()``
+        on a directory that cannot be read.
         """
         ...
 

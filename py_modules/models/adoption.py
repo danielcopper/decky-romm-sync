@@ -42,18 +42,28 @@ class ArchiveMemberInfo(TypedDict):
     crc32: str
 
 
-class TopLevelEntry(TypedDict):
-    """One entry at a platform directory's top level, as the candidate search sees it.
+class TopLevelName(TypedDict):
+    """One top-level entry as the directory read alone described it.
 
-    ``size_bytes`` is ``0`` for a directory. The listing deliberately does not
-    descend — a single multi-file install can hold tens of thousands of files, and
-    a user's own subfolders are their filing — so a directory's recursive total is
-    not something this read pays for. ``modified_at`` is POSIX epoch seconds.
+    Name, full path, and whether it is a directory — what a name match reads, and
+    what ``scandir`` hands over without a further syscall. The listing
+    deliberately does not descend: a single multi-file install can hold tens of
+    thousands of files, and a user's own subfolders are their filing.
     """
 
     name: str
     path: str
     is_dir: bool
+
+
+class TopLevelEntry(TopLevelName):
+    """A top-level entry plus what a ``stat`` per entry added.
+
+    ``size_bytes`` is ``0`` for a directory — a directory's recursive total is not
+    something this read pays for, for the reason above. ``modified_at`` is POSIX
+    epoch seconds.
+    """
+
     size_bytes: int
     modified_at: float
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import zipfile
 from unittest.mock import patch
 
@@ -565,6 +567,102 @@ class TestListTopLevelEntries:
         assert entry["is_dir"] is True
 
 
+class _StatRecordingEntry:
+    """A ``scandir`` entry that notes every ``stat()`` the adapter asks it for.
+
+    ``os.DirEntry.stat`` is a C method, so patching ``os.stat`` would not see it —
+    a counter built that way reads zero however the adapter is written. This sits
+    where the adapter actually touches the entry.
+    """
+
+    def __init__(self, entry: os.DirEntry[str], stat_calls: list[str]) -> None:
+        self._entry = entry
+        self._stat_calls = stat_calls
+        self.name = entry.name
+        self.path = entry.path
+
+    def is_dir(self, **kwargs):
+        return self._entry.is_dir(**kwargs)
+
+    def stat(self, **kwargs):
+        self._stat_calls.append(self._entry.path)
+        return self._entry.stat(**kwargs)
+
+
+def _record_scandir_stats(monkeypatch, stat_calls: list[str]) -> None:
+    """Route the adapter's ``os.scandir`` through entries that record their stats."""
+    real_scandir = os.scandir
+
+    @contextlib.contextmanager
+    def recording_scandir(directory):
+        with real_scandir(directory) as entries:
+            yield [_StatRecordingEntry(entry, stat_calls) for entry in entries]
+
+    monkeypatch.setattr(os, "scandir", recording_scandir)
+
+
+class TestListTopLevelNames:
+    def test_a_missing_directory_lists_nothing(self, adapter, tmp_path):
+        assert adapter.list_top_level_names(str(tmp_path / "nope")) == ()
+
+    def test_it_reports_the_same_names_and_shapes_as_the_full_listing(self, adapter, tmp_path):
+        (tmp_path / "Game (U)").mkdir()
+        (tmp_path / "Game (U)" / "disc.bin").write_bytes(b"x")
+        (tmp_path / "loose.gba").write_bytes(b"y")
+
+        lean = adapter.list_top_level_names(str(tmp_path))
+
+        assert sorted(entry["name"] for entry in lean) == ["Game (U)", "loose.gba"]
+        assert {entry["name"]: (entry["path"], entry["is_dir"]) for entry in lean} == {
+            entry["name"]: (entry["path"], entry["is_dir"]) for entry in adapter.list_top_level_entries(str(tmp_path))
+        }
+
+    def test_it_carries_no_size_or_mtime(self, adapter, tmp_path):
+        # The saving IS the omission: one `stat` per ROM, on every game page.
+        (tmp_path / "Game (U).gba").write_bytes(b"0123456789")
+        (entry,) = adapter.list_top_level_names(str(tmp_path))
+        assert set(entry) == {"name", "path", "is_dir"}
+
+    def test_it_stats_nothing_per_entry(self, adapter, tmp_path, monkeypatch):
+        (tmp_path / "Game (U).gba").write_bytes(b"x")
+        (tmp_path / "Other (U).gba").write_bytes(b"y")
+        stat_calls: list[str] = []
+        _record_scandir_stats(monkeypatch, stat_calls)
+
+        assert len(adapter.list_top_level_names(str(tmp_path))) == 2
+        assert stat_calls == []
+
+    def test_the_full_listing_does_stat_each_entry(self, adapter, tmp_path, monkeypatch):
+        # The control for the test above: same instrument, same tree, and it does
+        # see the calls — so "no stats" is a statement about the leaner read and
+        # not about an instrument that cannot detect one.
+        (tmp_path / "Game (U).gba").write_bytes(b"x")
+        (tmp_path / "Other (U).gba").write_bytes(b"y")
+        stat_calls: list[str] = []
+        _record_scandir_stats(monkeypatch, stat_calls)
+
+        assert len(adapter.list_top_level_entries(str(tmp_path))) == 2
+        assert sorted(os.path.basename(path) for path in stat_calls) == ["Game (U).gba", "Other (U).gba"]
+
+    def test_a_dangling_symlink_still_reads_as_a_non_directory(self, adapter, tmp_path):
+        # `is_dir()` follows the link and answers False for a broken one, which is
+        # the honest shape: it is certainly not a directory. The extension filter
+        # is what keeps it out of an answer, exactly as it does for a real file.
+        (tmp_path / "dangling.gba").symlink_to(tmp_path / "gone.gba")
+        (entry,) = adapter.list_top_level_names(str(tmp_path))
+        assert entry["is_dir"] is False
+
+    def test_a_symlinked_directory_reads_as_a_directory(self, adapter, tmp_path):
+        target = tmp_path / "elsewhere"
+        (target / "disc.bin").parent.mkdir(parents=True)
+        (target / "disc.bin").write_bytes(b"x")
+        platform = tmp_path / "psx"
+        platform.mkdir()
+        (platform / "Game (U)").symlink_to(target)
+        (entry,) = adapter.list_top_level_names(str(platform))
+        assert entry["is_dir"] is True
+
+
 class TestChecksum:
     def test_md5_matches_hashlib(self, adapter, tmp_path):
         import hashlib
@@ -750,6 +848,7 @@ class TestProtocolMethodCount:
             "exists",
             "describe_path",
             "list_top_level_entries",
+            "list_top_level_names",
             "checksum",
             "list_archive_members",
             "checksum_archive_member",

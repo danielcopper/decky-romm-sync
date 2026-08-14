@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import IO
 
-    from models.adoption import ArchiveMemberInfo, ExistingContent, TopLevelEntry
+    from models.adoption import ArchiveMemberInfo, ExistingContent, TopLevelEntry, TopLevelName
 
 _EXTRACT_CHUNK = 1024 * 1024
 _HASH_CHUNK = 1024 * 1024
@@ -82,6 +82,29 @@ class DownloadFileAdapter:
                     described = self._describe_entry(entry)
                     if described is not None:
                         found.append(described)
+        except OSError:
+            return ()
+        return tuple(found)
+
+    def list_top_level_names(self, directory: str) -> tuple[TopLevelName, ...]:
+        """Name and shape of everything directly inside *directory*, nothing more.
+
+        The listing for a caller that only matches names: no ``stat`` per entry,
+        because ``scandir`` already carries the entry's type from the directory
+        read itself. That is one syscall per ROM saved on a folder that can hold
+        a whole platform's library — paid on every game page, on storage that may
+        have to spin up. An entry whose type cannot be determined at all is
+        skipped, exactly as an unstat-able one is above.
+        """
+        found: list[TopLevelName] = []
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    try:
+                        is_dir = entry.is_dir()
+                    except OSError:
+                        continue
+                    found.append({"name": entry.name, "path": entry.path, "is_dir": is_dir})
         except OSError:
             return ()
         return tuple(found)

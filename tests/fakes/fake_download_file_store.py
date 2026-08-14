@@ -15,7 +15,7 @@ from lib.path_safety import safe_path_component
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from models.adoption import ArchiveMemberInfo, ExistingContent, TopLevelEntry
+    from models.adoption import ArchiveMemberInfo, ExistingContent, TopLevelEntry, TopLevelName
 
 
 class FakeDownloadFileStore:
@@ -108,6 +108,18 @@ class FakeDownloadFileStore:
                 "modified_at": self.mtimes.get(prefix + name, 0.0),
             }
             for name, is_dir in sorted(names.items())
+        )
+
+    def list_top_level_names(self, directory: str) -> tuple[TopLevelName, ...]:
+        """Name and shape only — the same listing without the per-entry ``stat``.
+
+        Projected from :meth:`list_top_level_entries` so the two can never
+        disagree about what is in the folder, which is the one thing a test of
+        the leaner read could otherwise be lied to about.
+        """
+        return tuple(
+            {"name": entry["name"], "path": entry["path"], "is_dir": entry["is_dir"]}
+            for entry in self.list_top_level_entries(directory)
         )
 
     def checksum(self, path: str, algorithm: str, progress_callback: Callable[[int], None] | None = None) -> str:
