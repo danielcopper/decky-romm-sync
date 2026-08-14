@@ -554,6 +554,9 @@ class AdoptionCandidateProbeFn(Protocol):
     cannot filter on the single-file-vs-folder shape, which only the click-time
     payload knows. Never raises: every failure answers ``False``, because a
     search that could not run must not make a game look uninstallable.
+
+    A UoW-opening seam — it reads the install rows to subtract content another
+    game already owns — so the caller resolves it outside any open Unit of Work.
     """
 
     def __call__(self, platform_slug: str, fs_name: str) -> bool: ...
