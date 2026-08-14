@@ -88,7 +88,7 @@ care whether a playlist exists.
 
 A nullable `roms.selected_disc TEXT` column (migration
 [`004_add_selected_disc.sql`](https://github.com/danielcopper/decky-romm-sync/blob/main/py_modules/db/migrations/004_add_selected_disc.sql))
-holds the **disc basename** the user pinned (e.g. `"Final Fantasy VII (USA) (Disc 2).cue"`). It follows the
+holds the **disc basename** the user pinned (e.g. `"Example Quest - Second Journey (USA) (Disc 2).cue"`). It follows the
 `emulator_override` template point for point:
 
 - **`NULL` = no selection** → follow the default (see §4). The column starts NULL with no backfill.

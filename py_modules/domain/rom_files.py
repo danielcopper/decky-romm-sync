@@ -272,9 +272,9 @@ def es_de_collapse_rename(rom_dir: str, launch_file: str) -> tuple[str, str] | N
 
     ES-DE collapses a multi-file ROM directory into a single game entry only
     when the directory is named with the launch file's full name *including*
-    the extension (e.g. ``Final Fantasy VII (USA).m3u/`` containing
-    ``Final Fantasy VII (USA).m3u``). The download path extracts into a dir
-    named without the extension, so this computes the rename target.
+    the extension (e.g. ``Example Quest - Second Journey (USA).m3u/`` containing
+    ``Example Quest - Second Journey (USA).m3u``). The download path extracts
+    into a dir named without the extension, so this computes the rename target.
 
     Pure path algebra only — the caller performs the filesystem move.
 

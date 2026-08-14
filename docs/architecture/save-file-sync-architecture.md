@@ -977,9 +977,9 @@ explicitly clicks the migrate button in Settings.
 Implemented in `_resolve_save_sort_conflict` in `py_modules/services/migration.py`.
 
 **The scenario**: the user enables `sort_savefiles_enable` mid-game and saves in-game. RetroArch writes fresh progress
-to the new layout — e.g. `saves/gba/mGBA/Mario Golf.srm`. The old file at the original layout — e.g.
-`saves/gba/Mario Golf.srm` — still exists with pre-change content. When migration runs, both files are present and the
-migration logic treats this as a conflict.
+to the new layout — e.g. `saves/gba/mGBA/Example Quest.srm`. The old file at the original layout — e.g.
+`saves/gba/Example Quest.srm` — still exists with pre-change content. When migration runs, both files are present and
+the migration logic treats this as a conflict.
 
 **Resolution rule**: the file with the newer `mtime` wins.
 
@@ -1174,9 +1174,9 @@ slot switch — writes content to a path of the form:
 <saves_dir>/<rom_basename>.<server_save.file_extension>
 ```
 
-`<rom_basename>` is the ROM file's name without extension (e.g. `Mario Golf - Advance Tour (USA)` from
-`Mario Golf - Advance Tour (USA).gba`); `<server_save.file_extension>` is the `file_extension` field on the chosen RomM
-save (e.g. `srm`).
+`<rom_basename>` is the ROM file's name without extension (e.g. `Example Quest - Second Journey (USA)` from
+`Example Quest - Second Journey (USA).gba`); `<server_save.file_extension>` is the `file_extension` field on the chosen
+RomM save (e.g. `srm`).
 
 This is the **only** path used for local writes. The server's stored `file_name` (which may carry a timestamp tag like
 `[2026-03-24_15-18-50]` or come from a different client with an unrelated naming convention) and the server's

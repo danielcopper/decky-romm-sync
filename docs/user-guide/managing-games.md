@@ -264,15 +264,15 @@ server serves a single file, or the reverse. The dialog says so and only offers 
 
 ### When the same game is on your device under a different name
 
-Your copy is rarely named the way your server names it. `Mario Golf - Advance Tour (U).zip` and
-`Mario Golf - Advance Tour (USA).zip` are the same game, and a download would land beside your file rather than on it —
-leaving you with two copies of one game.
+Your copy is rarely named the way your server names it. `Example Quest - Second Journey (U).zip` and
+`Example Quest - Second Journey (USA).zip` are the same game, and a download would land beside your file rather than on
+it — leaving you with two copies of one game.
 
 So the plugin has a look around the platform folder — when the game's page opens, and again when you press the button.
 It reads that folder's top level only — never inside your subfolders, and never inside a game folder — keeps whatever
 your emulator accepts as a ROM for that system, skips anything it already has an install record for, and compares names
-with the version tags removed. `Mario Golf - Advance Tour (Rev 1) (USA).zip` and `Mario Golf - Advance Tour (U).zip`
-both reduce to the same game.
+with the version tags removed. `Example Quest - Second Journey (Rev 1) (USA).zip` and
+`Example Quest - Second Journey (U).zip` both reduce to the same game.
 
 **You find out before you press anything.** If your copy is there, the button reads **Use Existing Files** rather than
 Download — the same label it shows for a file sitting at the game's own location. You should never have to start the
@@ -324,7 +324,8 @@ the plugin tells you exactly which files moved and which did not, by name, rathe
 failure.
 
 One case is still out of reach by design: a copy of the game whose name is genuinely different, not just differently
-tagged. `Mario Golf` will not be found for `Mario Golf - Advance Tour`, and it should not be — it is a different game.
+tagged. `Example Quest` will not be found for `Example Quest - Second Journey`, and it should not be — it is a different
+game.
 
 ### Pausing and Resuming a Download
 
@@ -361,8 +362,8 @@ extraction can't be cancelled, so the cancel/pause controls are replaced by a sp
 flips to **Installed** as usual. Single-file ROMs download as a bare file and skip this phase entirely.
 
 The plugin gives the extracted game its own folder and names that folder after the real **launch file** (including the
-extension, e.g. `Final Fantasy VII (USA).m3u/` or `Halo 3 (USA).iso/`) so that ES-DE collapses it into a single game
-entry instead of showing a folder plus loose files.
+extension, e.g. `Example Quest - Second Journey (USA).m3u/` or `Example Quest (USA).iso/`) so that ES-DE collapses it
+into a single game entry instead of showing a folder plus loose files.
 
 **Disc switching only applies to systems whose emulator supports it.** For the disc-swapping consoles — PS1, Saturn,
 Sega CD, PC Engine CD, Dreamcast, GameCube, Wii, and the like — a game-named `.m3u` playlist is generated so you can

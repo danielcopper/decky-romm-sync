@@ -213,10 +213,10 @@ candidate, unusable candidate — the whole point is that it is not one.
 
 A ROM filename reduced to the game it denotes: extension removed, bracketed groups `(...)` / `[...]` dropped with their
 contents, every run of non-alphanumerics collapsed to one space, lowercased, trimmed.
-`Mario Golf - Advance Tour (Rev 1) (USA).zip` → `mario golf advance tour`. It is the candidate search's only match key,
-applied identically to both sides. An empty normalization (a name that is nothing but tags) matches nothing rather than
-everything. _Avoid_: fuzzy match, similar name — the comparison is exact equality of the normalized strings, and no edit
-distance or token scoring is involved.
+`Example Quest - Second Journey (Rev 1) (USA).zip` → `example quest second journey`. It is the candidate search's only
+match key, applied identically to both sides. An empty normalization (a name that is nothing but tags) matches nothing
+rather than everything. _Avoid_: fuzzy match, similar name — the comparison is exact equality of the normalized strings,
+and no edit distance or token scoring is involved.
 
 ### platform_slug (denormalized)
 

@@ -72,9 +72,9 @@ def rename_pairs(
 
     A companion file belongs to this ROM when its name is the stem or the stem
     followed by a dot, which is what tells ``Game (U).state.auto`` apart from
-    ``Game (U) 2.srm`` and keeps ``Mario Golf`` from claiming
-    ``Mario Golf - Advance Tour``'s saves. An empty *stem_source* matches nothing
-    — as a prefix it would claim every file in the directory.
+    ``Game (U) 2.srm`` and keeps ``Example Quest`` from claiming
+    ``Example Quest - Second Journey``'s saves. An empty *stem_source* matches
+    nothing — as a prefix it would claim every file in the directory.
 
     Pairs whose source and target are the same path are dropped: there is nothing
     to move, and a self-rename staged as a hardlink would fail on its own target.

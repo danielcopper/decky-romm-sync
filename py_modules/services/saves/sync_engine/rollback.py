@@ -292,8 +292,8 @@ class RollbackOrchestrator:
         :meth:`_resolve_conflict_use_server` and every other download path uses.
         This keeps the two resolve paths symmetric: the state key and on-disk
         path are identical regardless of which side the user picked. If the
-        local file is not at the canonical path (e.g. ``Mario.sav`` locally
-        but the server save has ``file_extension=srm``),
+        local file is not at the canonical path (e.g. ``Example Quest.sav``
+        locally but the server save has ``file_extension=srm``),
         :class:`FileNotFoundError` is raised — we never silently rename across
         extensions. Mutates *save_state* in memory; ``resolve`` owns the write UoW.
         """

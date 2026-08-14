@@ -34,11 +34,13 @@ _EVIDENCE_DETAIL = {
     NAME_MATCH: "Matched on name only",
 }
 
-# How many rows the dialog is willing to show. Measured across every populated
-# platform folder on a real device the search returns 1 to 5 entries with zero
-# normalized-name collisions, so this is a guard against a pathological folder
-# rather than a working limit — and when it bites the caller says so on screen,
-# because a silent truncation reads as "that is all there is".
+# How many rows the dialog is willing to show. Normalized-name collisions
+# concentrate inside a sibling group — the region, language and revision variants
+# of one game — and this search covers one platform folder rather than a library,
+# so the expected answer is zero or one entry and a handful at most. The cap
+# therefore guards a pathological folder rather than an ordinary one, and when it
+# bites the caller says so on screen, because a silent truncation reads as "that
+# is all there is".
 CANDIDATE_LIMIT = 10
 
 
@@ -97,19 +99,19 @@ class AdoptionCandidate:
 def normalize_rom_name(name: str) -> str:
     """Reduce *name* to the game it denotes: no extension, no tags, no punctuation.
 
-    ``Mario Golf - Advance Tour (Rev 1) (USA).zip`` and
-    ``Mario Golf - Advance Tour (U).zip`` both become
-    ``mario golf advance tour``. Bracketed groups go with their contents,
+    ``Example Quest - Second Journey (Rev 1) (USA).zip`` and
+    ``Example Quest - Second Journey (U).zip`` both become
+    ``example quest second journey``. Bracketed groups go with their contents,
     everything that is not alphanumeric collapses to a single space, and the
-    result is lowercased and trimmed. ``str.isalnum`` is Unicode-aware, so
-    ``Pokémon`` keeps its ``é`` and a non-Latin title survives intact.
+    result is lowercased and trimmed. ``str.isalnum`` is Unicode-aware, so an
+    accented title keeps its accents and a non-Latin one survives intact.
 
     The extension is removed with one ``splitext`` on both sides of the
     comparison rather than against the system's accept-list. The blunt rule is
-    symmetric — a name the server spells ``Sonic 3.0`` loses its ``.0`` wherever
-    it is read — while an accept-list rule would need a second argument and would
-    still have to guess for a directory, which carries no extension at all unless
-    ES-DE's collapse put one there.
+    symmetric — a name the server spells ``Example Quest 3.0`` loses its ``.0``
+    wherever it is read — while an accept-list rule would need a second argument
+    and would still have to guess for a directory, which carries no extension at
+    all unless ES-DE's collapse put one there.
 
     Returns ``""`` for a name that is nothing but tags. Callers must treat that
     as "matches nothing": read as a value it would match every other empty

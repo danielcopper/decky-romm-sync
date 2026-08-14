@@ -285,8 +285,8 @@ the user-facing guide is
 ### Storage: the disc pick is a basename on the `Rom` aggregate
 
 `roms.selected_disc` is a nullable `TEXT` column added by migration `004_add_selected_disc.sql`. It holds the
-**basename** of the disc the user pinned (e.g. `"Final Fantasy VII (USA) (Disc 2).cue"`), never a resolved absolute path
-and never a disc index.
+**basename** of the disc the user pinned (e.g. `"Example Quest - Second Journey (USA) (Disc 2).cue"`), never a resolved
+absolute path and never a disc index.
 
 - **`NULL` = no selection** → the ROM follows the **default**: the install's `.m3u` when `file_path` is one (the
   in-emulator disc-swap default), else the first enumerated disc.

@@ -306,16 +306,17 @@ to fix the "ES-DE label leaks into RetroArch save path" bug described in the
 to ask ES-DE which core is active and then ask the RetroArch `.info` parser for the canonical `corename`. The parser was
 written, the protocol was defined, and the migration flow was fixed.
 
-It was not until PR #227 had already merged, during live-testing on a real Steam Deck, that the second shoe dropped:
+It was not until PR #227 had already merged, during live testing on hardware, that the second shoe dropped:
 `SaveService._get_rom_save_info` — which every save-sync flow on every game launch routes through — was still calling
 `domain.save_path.resolve_save_dir(..., sort_by_core=True)` **without** the resolved `core_name` argument. The domain
 function's guard `if sort_by_core and core_name:` silently skipped the core subdir branch, so every save path fell back
 to `{saves_base}/{system}/` instead of `{saves_base}/{system}/{corename}/`.
 
-The live reproduction: a user restored a Mario Golf save from the game detail page. RetroArch had
-`sort_savefiles_enable = "true"`, so the migrated save lived at `saves/gba/mGBA/Mario Golf - Advance Tour (USA).srm`.
-The restore wrote to `saves/gba/Mario Golf - Advance Tour (USA).srm` — the parent directory. RetroArch at launch read
-from the core subdir, so the restored save was invisible to the game.
+The live reproduction: a user restored a GBA save from the game detail page. RetroArch had
+`sort_savefiles_enable = "true"`, so the migrated save lived at
+`saves/gba/mGBA/Example Quest - Second Journey (USA).srm`. The restore wrote to
+`saves/gba/Example Quest - Second Journey (USA).srm` — the parent directory. RetroArch at launch read from the core
+subdir, so the restored save was invisible to the game.
 
 The parsers were fine. The migration consumer was fine. The save-sync consumer was not, because during the #208 fix the
 author only updated the consumer that the issue explicitly named and did not audit other call sites for the same

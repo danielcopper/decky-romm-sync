@@ -119,8 +119,8 @@ is therefore **not built now** — a one-implementation Protocol is indirection 
 ## Consequences
 
 - **The override works for any filename via the plugin's shortcut.** Baking `-e` bypasses the metacharacter-sensitive
-  awk lookup (#210), so `Final Fantasy VII (USA)` gets its pinned core exactly like `Tetris.gb` does. The plugin no
-  longer depends on an upstream RetroDECK fix.
+  awk lookup (#210), so `Example Quest - Second Journey (USA)` gets its pinned core exactly like `Example Quest.gb`
+  does. The plugin no longer depends on an upstream RetroDECK fix.
 - **No gamelist writes for per-game state** moots the multi-root-XML parse failure and the
   silent-success-on-write-failure bug that the gamelist-write path suffered — there is no per-game gamelist write to
   fail. The ES-DE folder-collapse quirk ([#943](https://github.com/danielcopper/decky-romm-sync/issues/943)) is
