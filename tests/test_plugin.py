@@ -1137,6 +1137,7 @@ class TestMainStartupOrdering:
                 platform_core_reader=MagicMock(),
                 m3u_support=MagicMock(),
                 system_extensions=MagicMock(),
+                system_known=MagicMock(return_value=None),
                 list_rom_dir_files=MagicMock(),
                 settings_persister=MagicMock(),
                 log_debug=MagicMock(),

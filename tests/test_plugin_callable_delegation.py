@@ -534,8 +534,9 @@ class TestDownloadCallableDelegation:
     async def test_start_download_delegates(self, plugin):
         plugin._download_service.start_download = AsyncMock(return_value={"queued": True})
         result = await plugin.start_download(42)
-        # No candidate named and no collision answered: the plain Download press.
-        plugin._download_service.start_download.assert_awaited_once_with(42, False, None, None)
+        # No candidate named, no collision answered and nothing reported by the
+        # page: the plain Download press.
+        plugin._download_service.start_download.assert_awaited_once_with(42, False, None, None, False)
         assert result == {"queued": True}
 
     @pytest.mark.asyncio

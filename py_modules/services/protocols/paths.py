@@ -136,6 +136,26 @@ class SystemSupportedExtensionsFn(Protocol):
     def __call__(self, system_name: str) -> frozenset[str]: ...
 
 
+class SystemKnownFn(Protocol):
+    """Whether ``es_systems.xml`` lists a system at all — the same source as the accept-list.
+
+    ``True`` when the system is listed, ``False`` when the file was read and does
+    not name it, and ``None`` when the file could not be read, which is a
+    different thing from a denial and must not be treated as one.
+
+    The candidate search asks before it searches a platform directory: the
+    game-detail page resolves that directory from a RomM slug alone, and an
+    unmapped slug is taken verbatim as a directory name. A directory that is not
+    an ES-DE system is not a place a game can live, so a namesake inside it is
+    content the emulator will never look at. The same answer also protects the
+    accept-list's default-safe branch, which reads an empty extension set as
+    "cannot tell" and would otherwise let every entry through for a directory
+    that was never a system.
+    """
+
+    def __call__(self, system_name: str) -> bool | None: ...
+
+
 class PlatformCoreReader(Protocol):
     """Read seam for the plugin-owned per-platform core selection.
 

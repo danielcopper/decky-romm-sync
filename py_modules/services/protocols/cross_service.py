@@ -105,11 +105,12 @@ class DownloadTargetGateFn(Protocol):
     elsewhere in the platform folder looks like this game, or the user chose to
     replace what they were shown and it has been cleared — and a canonical
     failure dict otherwise: the ``target_occupied`` refusal carrying both sides
-    of the comparison, the ``adoption_candidates`` refusal carrying the short
-    list, the ``shape_conflict`` refusal naming a namesake of the wrong shape,
-    the ``rename_collisions`` refusal from carrying a discarded candidate's
-    saves, or the failure of a removal the replace could not complete. Nothing is
-    written and no transfer starts on a non-``None`` answer.
+    of the comparison, one of the four the candidate search can return
+    (``adoption_candidates``, ``unreadable_entry``, ``shape_conflict``,
+    ``candidate_vanished``), the ``rename_collisions`` refusal from carrying a
+    discarded candidate's saves, or the failure of a removal the replace could
+    not complete. Nothing is written and no transfer starts on a non-``None``
+    answer.
 
     *candidate_path* names the entry the user was shown when it sat elsewhere in
     the folder under another name; with *replace* it is removed and its saves
@@ -118,6 +119,12 @@ class DownloadTargetGateFn(Protocol):
     can raise. *resume* suppresses the candidate search: a resume continues a
     decision already taken, and the file the user declined must not refuse the
     transfer they started.
+
+    *page_saw_candidate* is not an answer but a report — what the game page told
+    the user before they pressed. The search's last check is a backstop over it,
+    which is what makes the button's promise keepable: the page and the search
+    read the same folder from different knowledge and have diverged four times,
+    so nothing rests on them agreeing (ADR-0028).
 
     Awaitable: describing an occupied directory walks it whole, clearing one
     deletes it whole, and the candidate search lists a directory and reads
@@ -134,6 +141,7 @@ class DownloadTargetGateFn(Protocol):
         resume: bool = False,
         candidate_path: str | None = None,
         collision_choice: str | None = None,
+        page_saw_candidate: bool = False,
     ) -> dict[str, Any] | None: ...
 
 
@@ -143,23 +151,17 @@ class AdoptionCandidateProbeFn(Protocol):
     The composition root satisfies this with
     ``RomAdoptionService.has_adoption_candidate`` — the same service as the gate
     above, running the same ``matching_entries`` filter over the same folder
-    (read leaner here: names and shapes, no size or mtime). What the two share is
-    that filter; what they do **not** share is three of its four inputs, and the
-    difference runs one way in each case:
+    (read leaner here: names and shapes, no size or mtime).
 
-    * **Shape.** The page holds a ``roms`` row, and nothing on it says whether
-      RomM serves this ROM as one file or as a folder, so it accepts both. The
-      click-time search has the payload that knows and filters on it — and where
-      the two disagree it refuses with ``shape_conflict`` rather than starting a
-      download nobody was warned about.
-    * **The name.** The page matches ``roms.fs_name``; the gate matches the
-      basename of the path the download itself derived. They differ exactly where
-      the download's own name derivation does not end at ``fs_name``.
-    * **The platform directory.** The page can pass only ``platform_slug``; the
-      gate also passes the payload's ``platform_fs_slug``, which the resolver
-      consults when the slug misses its map. For such a platform the page probes
-      a directory that does not exist, answers ``False``, and the button reads
-      Download — an under-claim the click-time search then corrects.
+    The two answer from **different knowledge** and are not held to agreeing.
+    The page has a ``roms`` row and must stay network-free and instant; the gate
+    has the server payload and the path the download derived. That difference has
+    produced a real divergence four times — the shape RomM serves, the platform
+    directory, the name matched, and the directory listing itself — so the
+    button's promise does not rest on an invariant over the two searches. It
+    rests on the gate's last check: whatever this returned, a press ends in an
+    answer, because a page that reported a copy and a search that can say nothing
+    specific produce ``candidate_vanished`` rather than a silent download.
 
     It answers the page's question only — a boolean, enough to label the button —
     and stops at the name match, skipping the archive reads that rank candidates

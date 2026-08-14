@@ -9,6 +9,8 @@ degenerate ones that would silently match everything if they were not refused.
 
 from __future__ import annotations
 
+import pytest
+
 from domain.rom_candidates import (
     CANDIDATE_LIMIT,
     CRC32_MATCH,
@@ -21,6 +23,8 @@ from domain.rom_candidates import (
     normalize_rom_name,
     rank_candidates,
     shape_conflict_refusal,
+    unreadable_refusal,
+    vanished_candidate_refusal,
 )
 
 _ACCEPTED = frozenset({".gba", ".zip", ".sfc"})
@@ -108,7 +112,7 @@ class TestMatchingEntries:
         assert (
             matching_entries(
                 (),
-                wanted_name="example quest second journey",
+                wanted_names=frozenset({"example quest second journey"}),
                 want_dir=False,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset(),
@@ -121,7 +125,7 @@ class TestMatchingEntries:
         assert (
             matching_entries(
                 entries,
-                wanted_name="example quest second journey",
+                wanted_names=frozenset({"example quest second journey"}),
                 want_dir=False,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset(),
@@ -133,7 +137,7 @@ class TestMatchingEntries:
         wanted = _entry("Example Quest - Second Journey (U).zip")
         found = matching_entries(
             (wanted, _entry("Other Game (USA).gba")),
-            wanted_name="example quest second journey",
+            wanted_names=frozenset({"example quest second journey"}),
             want_dir=False,
             accepted_extensions=_ACCEPTED,
             covered_paths=frozenset(),
@@ -146,7 +150,7 @@ class TestMatchingEntries:
         wanted = _name("Example Quest - Second Journey (U).zip")
         found = matching_entries(
             (wanted, _name("Other Game (USA).gba")),
-            wanted_name="example quest second journey",
+            wanted_names=frozenset({"example quest second journey"}),
             want_dir=False,
             accepted_extensions=_ACCEPTED,
             covered_paths=frozenset(),
@@ -158,7 +162,7 @@ class TestMatchingEntries:
         assert (
             matching_entries(
                 (covered,),
-                wanted_name="example quest second journey",
+                wanted_names=frozenset({"example quest second journey"}),
                 want_dir=False,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset({covered.path}),
@@ -170,7 +174,7 @@ class TestMatchingEntries:
         assert (
             matching_entries(
                 (_entry("Example Quest - Second Journey (U).txt"),),
-                wanted_name="example quest second journey",
+                wanted_names=frozenset({"example quest second journey"}),
                 want_dir=False,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset(),
@@ -186,7 +190,7 @@ class TestMatchingEntries:
             assert (
                 matching_entries(
                     entries,
-                    wanted_name=name,
+                    wanted_names=frozenset({name}),
                     want_dir=False,
                     accepted_extensions=_ACCEPTED,
                     covered_paths=frozenset(),
@@ -201,7 +205,7 @@ class TestMatchingEntries:
         wanted = _entry("Example Quest - Second Journey (U).xyz")
         assert matching_entries(
             (wanted,),
-            wanted_name="example quest second journey",
+            wanted_names=frozenset({"example quest second journey"}),
             want_dir=False,
             accepted_extensions=frozenset(),
             covered_paths=frozenset(),
@@ -211,7 +215,7 @@ class TestMatchingEntries:
         wanted = _entry("Example Quest - Second Journey (U)", is_dir=True)
         assert matching_entries(
             (wanted,),
-            wanted_name="example quest second journey",
+            wanted_names=frozenset({"example quest second journey"}),
             want_dir=True,
             accepted_extensions=_ACCEPTED,
             covered_paths=frozenset(),
@@ -221,7 +225,7 @@ class TestMatchingEntries:
         assert (
             matching_entries(
                 (_entry("Example Quest - Second Journey (U).zip"),),
-                wanted_name="example quest second journey",
+                wanted_names=frozenset({"example quest second journey"}),
                 want_dir=True,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset(),
@@ -233,7 +237,7 @@ class TestMatchingEntries:
         assert (
             matching_entries(
                 (_entry("Other Game (U)", is_dir=True),),
-                wanted_name="other game",
+                wanted_names=frozenset({"other game"}),
                 want_dir=False,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset(),
@@ -247,7 +251,7 @@ class TestMatchingEntries:
         assert (
             matching_entries(
                 (_entry("(USA).gba"), _entry("[!].gba")),
-                wanted_name="",
+                wanted_names=frozenset(),
                 want_dir=False,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset(),
@@ -259,7 +263,7 @@ class TestMatchingEntries:
         assert (
             matching_entries(
                 (_entry("(USA).gba"),),
-                wanted_name="other game",
+                wanted_names=frozenset({"other game"}),
                 want_dir=False,
                 accepted_extensions=_ACCEPTED,
                 covered_paths=frozenset(),
@@ -470,3 +474,125 @@ class TestShapeConflictRefusal:
             {"name": entry.name, "path": entry.path, "is_dir": True} for entry in entries[:CANDIDATE_LIMIT]
         ]
         assert refusal["truncated"] is True
+
+
+class TestMatchingUnderSeveralNames:
+    """One ROM can be on disk under more than one normalized name."""
+
+    def test_either_name_matches(self) -> None:
+        by_fs_name = _entry("Example Quest - Second Journey (U).zip")
+        found = matching_entries(
+            (by_fs_name,),
+            wanted_names=frozenset({"inner disc name", "example quest second journey"}),
+            want_dir=False,
+            accepted_extensions=_ACCEPTED,
+            covered_paths=frozenset(),
+        )
+        assert found == (by_fs_name,)
+
+    def test_an_empty_name_in_the_set_matches_nothing_on_its_own(self) -> None:
+        # A ROM whose derived name normalizes to nothing must not drag every
+        # empty-normalizing entry in the folder into the answer.
+        assert (
+            matching_entries(
+                (_entry("(USA).gba"),),
+                wanted_names=frozenset({"", "example quest"}),
+                want_dir=False,
+                accepted_extensions=_ACCEPTED,
+                covered_paths=frozenset(),
+            )
+            == ()
+        )
+
+    def test_a_set_of_only_empty_names_matches_nothing(self) -> None:
+        assert (
+            matching_entries(
+                (_entry("Example Quest (USA).gba"),),
+                wanted_names=frozenset({""}),
+                want_dir=False,
+                accepted_extensions=_ACCEPTED,
+                covered_paths=frozenset(),
+            )
+            == ()
+        )
+
+
+class TestUnreadableRefusal:
+    """What the search says about a namesake it could not read."""
+
+    def test_the_refusal_carries_the_canonical_failure_shape(self) -> None:
+        refusal = unreadable_refusal(
+            (_name("Example Quest (U).gba"),),
+            removable_paths=frozenset(),
+            incoming_name="Example Quest (USA).gba",
+            incoming_size=100,
+        )
+        assert refusal["success"] is False
+        assert refusal["reason"] == "unreadable_entry"
+        assert isinstance(refusal["message"], str)
+        assert refusal["message"]
+        assert "error" not in refusal
+
+    def test_it_names_the_entry_and_claims_nothing_about_the_content(self) -> None:
+        refusal = unreadable_refusal(
+            (_name("Example Quest (U).gba"),),
+            removable_paths=frozenset(),
+            incoming_name="Example Quest (USA).gba",
+            incoming_size=100,
+        )
+        assert refusal["message"] == "'Example Quest (U).gba' has this game's name but cannot be read"
+        assert refusal["existing"] == [
+            {"name": "Example Quest (U).gba", "path": "/roms/gba/Example Quest (U).gba", "removable": False}
+        ]
+
+    def test_only_a_proven_broken_link_is_marked_removable(self) -> None:
+        # The whole safety argument: everything else unreadable may be the only
+        # copy of something, so it is listed but never offered for removal.
+        link = _name("Example Quest (U).gba")
+        wall = _name("Example Quest (E).gba")
+        refusal = unreadable_refusal(
+            (link, wall),
+            removable_paths=frozenset({link.path}),
+            incoming_name="Example Quest (USA).gba",
+            incoming_size=0,
+        )
+        assert refusal["existing"] == [
+            {"name": link.name, "path": link.path, "removable": True},
+            {"name": wall.name, "path": wall.path, "removable": False},
+        ]
+
+    def test_several_are_counted_rather_than_named(self) -> None:
+        refusal = unreadable_refusal(
+            (_name("Example Quest (U).gba"), _name("Example Quest (E).gba")),
+            removable_paths=frozenset(),
+            incoming_name="Example Quest (USA).gba",
+            incoming_size=0,
+        )
+        assert refusal["message"] == "2 entries here have this game's name and cannot be read"
+
+    def test_a_capped_list_counts_what_was_found_not_what_is_shown(self) -> None:
+        entries = tuple(_name(f"Example Quest ({index:03d}).gba") for index in range(CANDIDATE_LIMIT + 3))
+        refusal = unreadable_refusal(
+            entries, removable_paths=frozenset(), incoming_name="Example Quest.gba", incoming_size=0
+        )
+        assert refusal["message"] == f"{CANDIDATE_LIMIT + 3} entries here have this game's name and cannot be read"
+        assert refusal["existing"] == [
+            {"name": entry.name, "path": entry.path, "removable": False} for entry in entries[:CANDIDATE_LIMIT]
+        ]
+        assert refusal["truncated"] is True
+
+    def test_it_refuses_to_describe_an_empty_set(self) -> None:
+        with pytest.raises(ValueError):
+            unreadable_refusal((), removable_paths=frozenset(), incoming_name="Example Quest.gba", incoming_size=0)
+
+
+class TestVanishedCandidateRefusal:
+    """The backstop's own sentence."""
+
+    def test_it_carries_the_canonical_failure_shape_and_claims_no_cause(self) -> None:
+        refusal = vanished_candidate_refusal(incoming_name="Example Quest (USA).gba", incoming_size=100)
+        assert refusal["success"] is False
+        assert refusal["reason"] == "candidate_vanished"
+        assert refusal["incoming"] == {"name": "Example Quest (USA).gba", "size_bytes": 100}
+        # No list: nothing was found, and naming a cause would be a guess.
+        assert "existing" not in refusal

@@ -616,6 +616,34 @@ class TestSystemSupportsM3u:
         assert parsed["switch"]["extensions"] == {".nsp", ".xci"}
 
 
+class TestIsKnownSystem:
+    """``is_known_system`` separates "not a system" from "the file did not answer"."""
+
+    def test_a_listed_system_is_known(self, resolver):
+        path = _write_temp_xml(EXTENSION_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                assert resolver.is_known_system("psx") is True
+        finally:
+            os.unlink(path)
+
+    def test_a_system_the_file_does_not_name_is_a_positive_no(self, resolver):
+        # The file was read and does not list it — a directory by that name is
+        # not a place a game can live, which is a statement the caller may act on.
+        path = _write_temp_xml(EXTENSION_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                assert resolver.is_known_system("totally_unknown") is False
+        finally:
+            os.unlink(path)
+
+    def test_an_absent_file_answers_none_rather_than_no(self, resolver):
+        # Default-safe, the same direction ``get_supported_extensions`` takes: a
+        # source that could not answer must never read as a denial.
+        with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=None):
+            assert resolver.is_known_system("psx") is None
+
+
 class TestGetSupportedExtensions:
     """``get_supported_extensions`` returns ES-DE's per-system ``<extension>`` set."""
 

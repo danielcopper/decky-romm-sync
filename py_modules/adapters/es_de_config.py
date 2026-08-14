@@ -270,6 +270,20 @@ class CoreResolver:
             return False
         return ".m3u" in system_info.get("extensions", set())
 
+    def is_known_system(self, system_name: str) -> bool | None:
+        """Whether ``es_systems.xml`` lists *system_name*.
+
+        ``None`` when the file could not be read at all — the caller must not
+        read a source that did not answer as a denial, which is the same
+        default-safe rule :meth:`get_supported_extensions` follows by returning
+        an empty set. ``False`` is therefore a positive statement: this file was
+        read, and it does not name this system.
+        """
+        es_systems = self._load_es_systems()
+        if not es_systems:
+            return None
+        return system_name in es_systems
+
     def get_supported_extensions(self, system_name: str) -> frozenset[str]:
         """Return the extensions ES-DE accepts for *system_name* (lowercased).
 

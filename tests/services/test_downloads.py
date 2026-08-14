@@ -204,6 +204,9 @@ def plugin():
             quarantine_save=lambda saves_dir, filename: False,
             m3u_support=lambda system_name: p._m3u_supported,
             system_extensions=lambda system_name: p._system_extensions.get(system_name, frozenset()),
+            # ``None`` is "es_systems.xml could not answer", which the search
+            # reads as permission to proceed — the behaviour these tests predate.
+            system_known=lambda system_name: None,
             save_layout=lambda: InSaveDir(sort_by_content=True, sort_by_core=False),
             save_sorting=lambda: InSaveDir(sort_by_content=True, sort_by_core=False),
             savestate_layout=lambda: InSaveDir(sort_by_content=False, sort_by_core=False),
@@ -214,6 +217,7 @@ def plugin():
             uow_factory=FakeUnitOfWorkFactory(p._uow),
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
+            log_debug=lambda msg: None,
             emit=decky.emit,
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
         ),
@@ -6075,7 +6079,7 @@ class TestResumeSupersede:
         # The stand-in gate refuses exactly as that search would.
         seen: list[bool] = []
 
-        async def gate(rom_detail, checked_path, *, replace, resume=False, candidate_path=None, collision_choice=None):
+        async def gate(rom_detail, checked_path, *, replace, resume=False, **answer):
             seen.append(resume)
             if resume:
                 return None
@@ -6095,7 +6099,7 @@ class TestResumeSupersede:
     async def test_a_fresh_download_still_faces_the_candidate_search(self, plugin):
         # The counterpart: the skip is scoped to a resume, and a first attempt is
         # still refused by the same gate.
-        async def gate(rom_detail, checked_path, *, replace, resume=False, candidate_path=None, collision_choice=None):
+        async def gate(rom_detail, checked_path, *, replace, resume=False, **answer):
             if resume:
                 return None
             return {"success": False, "reason": "adoption_candidates", "message": "already on this device"}

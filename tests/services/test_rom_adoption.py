@@ -191,6 +191,11 @@ class Harness:
         # whatever a test has staged. Default: nothing to supersede.
         self.superseded: list[int] = []
         self.supersede_result: dict[str, Any] | None = None
+        # Which directories ES-DE lists as systems. A system no test staged
+        # answers ``None`` — the source could not answer, which is not a denial,
+        # so the search behaves exactly as it did before the check existed.
+        self.known_systems: dict[str, bool | None] = {}
+        self.debug_log: list[str] = []
         self.service = RomAdoptionService(
             config=RomAdoptionServiceConfig(
                 romm_api=self.romm_api,
@@ -206,11 +211,13 @@ class Harness:
                 save_sorting=lambda: self.save_sorting,
                 savestate_layout=lambda: self.savestate_layout,
                 active_core=self.active_core,
+                system_known=lambda system_name: self.known_systems.get(system_name),
                 get_core_name=lambda core_so: self.core_name,
                 sibling_supersede=lambda: self._supersede,
                 uow_factory=FakeUnitOfWorkFactory(self.uow),
                 loop=loop,
                 logger=logging.getLogger("test_rom_adoption"),
+                log_debug=lambda msg: self.debug_log.append(msg),
                 emit=self._emit,
                 clock=self.clock,
             ),
@@ -1416,7 +1423,7 @@ class TestCandidateSearch:
         )
 
         assert result is not None
-        assert result["reason"] != "adoption_candidates"
+        assert result["reason"] == "shape_conflict"
         assert "candidates" not in result
 
     async def test_the_user_who_chose_download_is_not_asked_again(self, h):
@@ -1470,6 +1477,295 @@ class TestCandidateSearch:
 
         assert result is not None
         assert result["reason"] == "target_occupied"
+
+
+class TestUnreadableNamesake:
+    """A namesake the search could not read is asked about, never downloaded past."""
+
+    @staticmethod
+    def _stage(h, *, broken: bool = False) -> str:
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        path = "/roms/snes/Game (U).sfc"
+        h.store.unreadable.add(path)
+        if broken:
+            h.store.broken_symlinks.add(path)
+        return path
+
+    async def test_it_is_refused_rather_than_offered(self, h):
+        path = self._stage(h)
+
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc", size=10), "/roms/snes/Game (USA).sfc", replace=False
+        )
+
+        assert result is not None
+        assert result["success"] is False
+        assert result["reason"] == "unreadable_entry"
+        assert result["message"] == "'Game (U).sfc' has this game's name but cannot be read"
+        assert result["existing"] == [{"name": "Game (U).sfc", "path": path, "removable": False}]
+        assert result["incoming"] == {"name": "Game (USA).sfc", "size_bytes": 10}
+        assert result["truncated"] is False
+
+    async def test_a_proven_broken_link_may_be_removed(self, h):
+        path = self._stage(h, broken=True)
+
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
+        )
+
+        assert result is not None
+        assert result["existing"] == [{"name": "Game (U).sfc", "path": path, "removable": True}]
+
+    async def test_a_readable_candidate_of_the_right_shape_is_still_preferred(self, h):
+        # An entry that could be offered beats one nothing can be said about.
+        self._stage(h)
+        h.store.files["/roms/snes/Game (E).sfc"] = b"readable"
+
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
+        )
+
+        assert result is not None
+        assert result["reason"] == "adoption_candidates"
+        assert [candidate["name"] for candidate in result["candidates"]] == ["Game (E).sfc"]
+
+    async def test_it_is_answered_before_a_wrong_shape_namesake(self, h):
+        # Nothing has been ruled out about an unreadable entry — it may be the
+        # very copy the user meant — while a wrong-shape one was read and
+        # rejected, so the unresolvable fact is the one worth saying first.
+        self._stage(h)
+        h.store.dirs.add("/roms/snes/Game (E)")
+        h.store.files["/roms/snes/Game (E)/rom.sfc"] = b"folder"
+
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
+        )
+
+        assert result is not None
+        assert result["reason"] == "unreadable_entry"
+
+    async def test_the_refusal_touches_nothing(self, h):
+        self._stage(h, broken=True)
+
+        await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
+        )
+
+        assert h.store.unreadable == {"/roms/snes/Game (U).sfc"}
+        assert h.store.files == {}
+
+    async def test_downloading_anyway_leaves_the_entry_alone(self, h):
+        self._stage(h, broken=True)
+
+        assert (
+            await h.service.check_download_target(
+                _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=True
+            )
+            is None
+        )
+        assert h.store.unreadable == {"/roms/snes/Game (U).sfc"}
+
+    async def test_naming_a_proven_broken_link_removes_it(self, h):
+        path = self._stage(h, broken=True)
+
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc"),
+            "/roms/snes/Game (USA).sfc",
+            replace=True,
+            candidate_path=path,
+        )
+
+        assert result is None
+        assert path not in h.store.unreadable
+
+    async def test_naming_an_entry_that_is_not_a_proven_broken_link_removes_nothing(self, h):
+        # The register's rule: an entry that merely failed to be read may be the
+        # only copy of something, so the download lands beside it instead.
+        path = self._stage(h)
+
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc"),
+            "/roms/snes/Game (USA).sfc",
+            replace=True,
+            candidate_path=path,
+        )
+
+        assert result is None
+        assert path in h.store.unreadable
+
+
+class TestSearchableDirectory:
+    """A directory that is not an ES-DE system is not a place a game can live."""
+
+    async def test_a_directory_that_is_not_a_system_yields_no_candidate(self, h):
+        h.known_systems = {"snes": False}
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.files["/roms/snes/Game (U).sfc"] = b"x"
+
+        assert (
+            await h.service.check_download_target(
+                _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
+            )
+            is None
+        )
+        assert h.service.has_adoption_candidate("snes", "Game (USA).sfc") is False
+
+    async def test_a_real_system_still_answers(self, h):
+        h.known_systems = {"snes": True}
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.files["/roms/snes/Game (U).sfc"] = b"x"
+
+        assert h.service.has_adoption_candidate("snes", "Game (USA).sfc") is True
+
+    async def test_a_source_that_could_not_answer_is_not_a_denial(self, h):
+        # ``None`` is "es_systems.xml could not be read", which must not turn the
+        # search off — the same default-safe reading the accept-list applies.
+        h.known_systems = {}
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.files["/roms/snes/Game (U).sfc"] = b"x"
+
+        assert h.service.has_adoption_candidate("snes", "Game (USA).sfc") is True
+
+    async def test_an_unknown_directory_with_no_accept_list_matches_nothing(self, h):
+        # The second hole the same check closes: an empty accept-list means
+        # "cannot tell" and skips the extension test, so without the system check
+        # every file in a non-system directory would match on name alone.
+        h.known_systems = {"not-a-system": False}
+        h.system_extensions = {}
+        h.store.files["/roms/not-a-system/Game (U).sfc"] = b"x"
+
+        assert h.service.has_adoption_candidate("not-a-system", "Game (USA).sfc") is False
+
+
+class TestVanishedBackstop:
+    """The page found a copy and the search cannot name one."""
+
+    async def test_it_refuses_rather_than_downloading_silently(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc", size=10),
+            "/roms/snes/Game (USA).sfc",
+            replace=False,
+            page_saw_candidate=True,
+        )
+
+        assert result is not None
+        assert result["success"] is False
+        assert result["reason"] == "candidate_vanished"
+        assert result["incoming"] == {"name": "Game (USA).sfc", "size_bytes": 10}
+
+    async def test_a_page_that_found_nothing_downloads_as_before(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+
+        assert (
+            await h.service.check_download_target(
+                _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
+            )
+            is None
+        )
+
+    async def test_every_specific_answer_wins_over_it(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.files["/roms/snes/Game (U).sfc"] = b"x"
+
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc"),
+            "/roms/snes/Game (USA).sfc",
+            replace=False,
+            page_saw_candidate=True,
+        )
+
+        assert result is not None
+        assert result["reason"] == "adoption_candidates"
+
+    async def test_answering_it_downloads(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+
+        assert (
+            await h.service.check_download_target(
+                _single_file_detail(name="Game (USA).sfc"),
+                "/roms/snes/Game (USA).sfc",
+                replace=True,
+                page_saw_candidate=True,
+            )
+            is None
+        )
+
+    async def test_a_resume_is_never_refused_by_it(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+
+        assert (
+            await h.service.check_download_target(
+                _single_file_detail(name="Game (USA).sfc"),
+                "/roms/snes/Game (USA).sfc",
+                replace=False,
+                resume=True,
+                page_saw_candidate=True,
+            )
+            is None
+        )
+
+
+class TestSearchUnderBothNames:
+    """A folder-served ROM whose inner file carries a different name."""
+
+    @staticmethod
+    def _nested_single(h):
+        # RomM serves this as a folder holding one file named after the disc, so
+        # the download derives that inner name while the user's copy is named
+        # after the game.
+        h.system_extensions = {"psx": frozenset({".cue"})}
+        return _multi_file_detail(dir_name="Game (USA)", files=[{"file_name": "disc1.cue"}])
+
+    async def test_the_user_s_copy_is_found_under_the_fs_name(self, h):
+        detail = self._nested_single(h)
+        h.store.dirs.add("/roms/psx/Game (U)")
+        h.store.files["/roms/psx/Game (U)/disc1.cue"] = b"mine"
+
+        result = await h.service.check_download_target(detail, "/roms/psx/Game (USA)", replace=False)
+
+        assert result is not None
+        assert result["reason"] == "adoption_candidates"
+        assert [candidate["name"] for candidate in result["candidates"]] == ["Game (U)"]
+
+    async def test_an_unrelated_folder_is_still_not_a_candidate(self, h):
+        detail = self._nested_single(h)
+        h.store.dirs.add("/roms/psx/Other Game (U)")
+        h.store.files["/roms/psx/Other Game (U)/disc1.cue"] = b"not mine"
+
+        assert await h.service.check_download_target(detail, "/roms/psx/Game (USA)", replace=False) is None
+
+
+class TestSearchLogging:
+    """A divergence has to be reconstructible from the log afterwards."""
+
+    async def test_the_click_search_records_what_it_looked_for_and_found(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.files["/roms/snes/Game (U).sfc"] = b"x"
+
+        await h.service.check_download_target(
+            _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
+        )
+
+        (line,) = [entry for entry in h.debug_log if entry.startswith("adopt search:")]
+        assert "dir=/roms/snes" in line
+        assert "'game'" in line
+        assert "candidates=1" in line
+        assert "unreadable=0" in line
+        assert "wrong_shape=0" in line
+        assert "page_saw_candidate=False" in line
+
+    async def test_the_page_probe_records_its_own_answer(self, h):
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.files["/roms/snes/Game (U).sfc"] = b"x"
+
+        h.service.has_adoption_candidate("snes", "Game (USA).sfc")
+
+        (line,) = [entry for entry in h.debug_log if entry.startswith("adopt probe:")]
+        assert "dir=/roms/snes" in line
+        assert "name=game" in line
+        assert "found=1" in line
 
 
 class TestShapeConflict:
@@ -1676,10 +1972,12 @@ class TestHasAdoptionCandidate:
 
     async def test_a_read_that_raises_answers_quietly(self, h, caplog):
         # A search that could not run must never make a game look uninstallable.
+        # The probe's own listing is the lean one — the fake no longer projects
+        # it from the full one, so breaking the wrong method proves nothing.
         def boom(_directory):
             raise OSError("SD card ejected")
 
-        h.store.list_top_level_entries = boom
+        h.store.list_top_level_names = boom
 
         with caplog.at_level(logging.WARNING):
             assert h.service.has_adoption_candidate("snes", "Game (USA).sfc") is False

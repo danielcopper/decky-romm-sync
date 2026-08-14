@@ -240,20 +240,22 @@ class DownloadService:
         if cleaned:
             self._logger.info(f"Cleaned {cleaned} leftover tmp file(s)")
 
-    async def start_download(self, rom_id, replace_existing=False, candidate_path=None, collision_choice=None):
+    async def start_download(
+        self, rom_id, replace_existing=False, candidate_path=None, collision_choice=None, page_saw_candidate=False
+    ):
         """Start a download, refusing when this game is already on disk.
 
-        *replace_existing*, *candidate_path* and *collision_choice* are the
-        user's answers to that refusal; ``DownloadTargetGateFn`` owns what each
-        means. They ride on this callable rather than a second one so every
-        download — first attempt or replace — passes the same prologue: the
-        ``already_downloading`` guard, the path-safety coercion, the occupancy
-        gate, the supersede, the disk pre-flight.
+        The user's answers to that refusal and the game page's own report ride on
+        this callable rather than a second one, so every download — first attempt
+        or replace — passes the same prologue: the ``already_downloading`` guard,
+        the path-safety coercion, the occupancy gate, the supersede, the disk
+        pre-flight. ``DownloadTargetGateFn`` owns what each of them means.
         """
         rom_id = int(rom_id)
         if rom_id in self._download_in_progress:
             return {"success": False, "reason": "already_downloading", "message": "Already downloading"}
         answer = {"candidate_path": candidate_path, "collision_choice": collision_choice}
+        answer["page_saw_candidate"] = page_saw_candidate
         return await self._begin_download(rom_id, resume=False, replace_existing=bool(replace_existing), **answer)
 
     async def supersede_sibling_installs(self, rom_id: int) -> dict[str, Any] | None:
@@ -333,18 +335,12 @@ class DownloadService:
     async def _begin_download(self, rom_id, *, resume: bool, replace_existing=False, **answer):
         """Shared core of ``start_download`` and ``resume_download``.
 
-        *answer* passes the adopt dialog's answers through to the gate, unread.
-
-        Fetches ROM detail, resolves the platform path, then runs the three
-        pre-flights **in this order**: the occupancy gate, the #1298 sibling
-        supersede, the disk-space check. Only then are the queue entry, task,
-        byte reservation and control token registered. On ``resume=True`` the
-        disk pre-flight discounts the bytes already on the existing ``.tmp``
-        (only the remainder is still needed) and ``_do_download`` is started with
-        ``resume=True`` so the transfer appends rather than restarts.
-
-        The ``already_downloading`` guard stays with ``start_download``;
-        ``resume_download`` validates the paused entry before calling here.
+        *answer* passes the adopt dialog's answers, and what the game page reported, through to the gate unread.
+        Fetches ROM detail, resolves the platform path, then runs the three pre-flights **in this order**: the occupancy
+        gate, the #1298 sibling supersede, the disk-space check. Only then are the queue entry, task, byte reservation
+        and control token registered. On ``resume=True`` the disk pre-flight discounts the bytes already on the existing
+        ``.tmp`` and ``_do_download`` appends rather than restarts. The ``already_downloading`` guard stays with
+        ``start_download``; ``resume_download`` validates the paused entry before calling here.
         """
         self._download_in_progress.add(rom_id)
         try:

@@ -69,10 +69,16 @@ class LocalEntry(LocalName):
     ``size_bytes`` is ``0`` for a directory: the search never descends, because a
     single multi-file install can hold tens of thousands of files, so a
     directory's total is not evidence this filter can afford.
+
+    ``readable`` is ``False`` when the ``stat`` failed. Both numbers are then
+    ``0`` and neither is a measurement, so such an entry is never ranked and
+    never offered — it is reported as what it is, something present and
+    undescribable.
     """
 
     size_bytes: int
     modified_at: float
+    readable: bool = True
 
 
 EntryT = TypeVar("EntryT", bound=LocalName)
@@ -145,12 +151,20 @@ def _strip_bracketed(name: str) -> str:
 def matching_entries(
     entries: tuple[EntryT, ...],
     *,
-    wanted_name: str,
+    wanted_names: frozenset[str],
     want_dir: bool,
     accepted_extensions: frozenset[str],
     covered_paths: frozenset[str],
 ) -> tuple[EntryT, ...]:
-    """The entries that could be the ROM *wanted_name* names, cheapest test first.
+    """The entries that could be the ROM *wanted_names* name, cheapest test first.
+
+    *wanted_names* is a set because one ROM can be known under more than one
+    normalized name: the game-detail page matches ``roms.fs_name`` while the
+    download derives its own local filename, and for a ROM the server serves as
+    a folder around a differently-named file the two are different strings. The
+    user's copy is named after the game, so a search under the derived name
+    alone would never find it. Empty names are dropped, and an empty set matches
+    nothing — read as a value, an empty normalization equals every other one.
 
     Four filters, each of which alone would be too weak:
 
@@ -178,7 +192,8 @@ def matching_entries(
     the path a download of *this* ROM would write to belongs in there too, so a
     free target is never offered back as a candidate for itself.
     """
-    if not wanted_name:
+    wanted = frozenset(name for name in wanted_names if name)
+    if not wanted:
         return ()
     return tuple(
         entry
@@ -186,7 +201,7 @@ def matching_entries(
         if entry.is_dir == want_dir
         and entry.path not in covered_paths
         and (entry.is_dir or not accepted_extensions or _extension_of(entry.name) in accepted_extensions)
-        and normalize_rom_name(entry.name) == wanted_name
+        and normalize_rom_name(entry.name) in wanted
     )
 
 
@@ -311,8 +326,15 @@ def shape_conflict_refusal(
     So it is asked instead: the caller's dialog names both outcomes, and the
     download proceeds only on the user's word. The list is capped like the
     candidate list is, and says so when it was cut — a list silently cut short
-    reads as "that is all there is".
+    reads as "that is all there is". The sentence counts what was **found**, not
+    what is shown, so a capped list never understates the folder.
+
+    Raises ``ValueError`` on an empty *entries*: there is no sentence for "no
+    namesake of the wrong shape", and a caller that reached here without one has
+    a bug the refusal must not paper over.
     """
+    if not entries:
+        raise ValueError("shape_conflict_refusal needs at least one entry")
     shown = entries[:limit]
     found_dir = not served_dir
     return {
@@ -320,12 +342,80 @@ def shape_conflict_refusal(
         "reason": "shape_conflict",
         "message": (
             f"'{shown[0].name}' has this game's name but is a {_SHAPE_WORD[found_dir]}"
-            if len(shown) == 1
-            else f"{len(shown)} entries here have this game's name but are {_SHAPE_WORD[found_dir]}s"
+            if len(entries) == 1
+            else f"{len(entries)} entries here have this game's name but are {_SHAPE_WORD[found_dir]}s"
         )
         + f", and the server sends this game as a {_SHAPE_WORD[served_dir]}",
         "incoming": {"name": incoming_name, "size_bytes": incoming_size},
         "existing": [{"name": entry.name, "path": entry.path, "is_dir": entry.is_dir} for entry in shown],
         "served_is_dir": served_dir,
         "truncated": len(entries) > limit,
+    }
+
+
+def unreadable_refusal(
+    entries: tuple[LocalName, ...],
+    *,
+    removable_paths: frozenset[str],
+    incoming_name: str,
+    incoming_size: int,
+    limit: int = CANDIDATE_LIMIT,
+) -> dict[str, object]:
+    """The refusal a download returns for a namesake it could not read.
+
+    The directory read saw it and its ``stat`` did not answer — a symlink
+    pointing nowhere, a mount that went away, a race with a writer. Nothing can
+    be said about the content, so it can be neither offered nor rejected on its
+    merits; what can be said is that something with this game's name is here and
+    cannot be used as this game.
+
+    *removable_paths* names the entries proven to be links with no resolving
+    target. Only those may be offered for removal, because only those hold no
+    data: everything else unreadable may be the only copy of something, and the
+    rule against deleting what exists nowhere else does not bend for an entry we
+    merely failed to stat. ``removable`` per row carries that decision to the
+    dialog rather than letting it re-derive one.
+
+    Raises ``ValueError`` on an empty *entries*, for the reason
+    :func:`shape_conflict_refusal` does.
+    """
+    if not entries:
+        raise ValueError("unreadable_refusal needs at least one entry")
+    shown = entries[:limit]
+    return {
+        "success": False,
+        "reason": "unreadable_entry",
+        "message": (
+            f"'{shown[0].name}' has this game's name but cannot be read"
+            if len(entries) == 1
+            else f"{len(entries)} entries here have this game's name and cannot be read"
+        ),
+        "incoming": {"name": incoming_name, "size_bytes": incoming_size},
+        "existing": [
+            {"name": entry.name, "path": entry.path, "removable": entry.path in removable_paths} for entry in shown
+        ],
+        "truncated": len(entries) > limit,
+    }
+
+
+def vanished_candidate_refusal(*, incoming_name: str, incoming_size: int) -> dict[str, object]:
+    """The refusal a download returns when the game page found a copy and this search did not.
+
+    The backstop, and the last answer in the chain. The page and the click-time
+    search read the same folder from different knowledge and have diverged four
+    times over — shape, platform directory, matched name, and the listing itself
+    — so the button's promise no longer rests on them agreeing. It rests on this:
+    if the page said a copy was here and nothing specific can be said now, the
+    download stops and says so rather than starting behind a label that read
+    *Use Existing Files*.
+
+    The sentence claims no cause, because none is known. What the page found is
+    either gone or no longer matches, and both readings are true of the ordinary
+    race where the file was deleted between opening the page and pressing.
+    """
+    return {
+        "success": False,
+        "reason": "candidate_vanished",
+        "message": "What was found on this device is no longer there, or can no longer be matched to this game",
+        "incoming": {"name": incoming_name, "size_bytes": incoming_size},
     }

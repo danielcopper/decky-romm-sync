@@ -122,13 +122,17 @@ async def test_an_unrelated_platform_folder_downloads_as_before(harness):
 # ── a namesake of the wrong shape ────────────────────────────────────────
 
 
-async def _drain_background_tasks() -> None:
-    """Await the fire-and-forget transfer task ``start_download`` spawned."""
-    for _ in range(6):
-        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
-        if not pending:
-            return
-        await asyncio.gather(*pending, return_exceptions=True)
+async def _drain_download(harness) -> None:
+    """Await the fire-and-forget transfer task ``start_download`` spawned, and only it.
+
+    Gathering every pending task in the loop would also await work this test
+    never started — the harness's own background jobs — and would pass whether
+    or not a download was ever queued. The service hands out the task it made,
+    so the test waits on exactly that one.
+    """
+    task = harness.plugin._download_service.task_for_rom(_ROM_ID)
+    if task is not None:
+        await asyncio.gather(task, return_exceptions=True)
 
 
 def _stage_multi_file(harness) -> dict[str, Any]:
@@ -159,7 +163,7 @@ async def test_a_same_named_folder_refuses_a_single_file_download(harness):
     assert result["truncated"] is False
     assert result["incoming"] == {"name": _CANONICAL, "size_bytes": 4}
     # The point of the refusal: no transfer started behind the user's back.
-    await _drain_background_tasks()
+    await _drain_download(harness)
     assert not (_platform_dir(harness) / _CANONICAL).exists()
     assert await harness.plugin.get_installed_rom(_ROM_ID) is None
 
@@ -176,7 +180,7 @@ async def test_a_same_named_file_refuses_a_folder_download(harness):
     assert result["reason"] == "shape_conflict"
     assert result["existing"] == [{"name": "rom-41 (U).gba", "path": str(loose), "is_dir": False}]
     assert result["served_is_dir"] is True
-    await _drain_background_tasks()
+    await _drain_download(harness)
     assert not (_platform_dir(harness) / "rom-41 (USA)").exists()
 
 
@@ -190,7 +194,7 @@ async def test_the_refusal_leaves_the_folder_byte_identical(harness):
     (folder / "notes.txt").write_bytes(b"mine")
 
     await harness.plugin.start_download(_ROM_ID, False)
-    await _drain_background_tasks()
+    await _drain_download(harness)
 
     assert sorted(path.name for path in _platform_dir(harness).iterdir()) == ["rom-41 (U)"]
     assert (folder / "notes.txt").read_bytes() == b"mine"
@@ -205,7 +209,7 @@ async def test_downloading_anyway_lands_beside_the_namesake(harness):
     (folder / "notes.txt").write_bytes(b"mine")
 
     result = await harness.plugin.start_download(_ROM_ID, True)
-    await _drain_background_tasks()
+    await _drain_download(harness)
 
     assert result["success"] is True
     assert (_platform_dir(harness) / _CANONICAL).read_bytes() == b"srv!"
@@ -248,7 +252,7 @@ async def test_the_page_stays_usable_when_the_roms_folder_cannot_be_read(harness
     # catching this raise, so it says the probe ran AND survived.
     seed_rom(harness, _ROM_ID, platform_slug="gba")
     _stage(harness)
-    harness.plugin._rom_adoption_service._retrodeck_paths = _UnreadableRomsPaths()
+    harness.plugin._rom_adoption_service._search._retrodeck_paths = _UnreadableRomsPaths()
 
     with caplog.at_level(logging.WARNING):
         detail = await harness.plugin.get_cached_game_detail(_ROM_ID)
@@ -624,3 +628,119 @@ async def test_the_content_check_reports_a_candidate_that_is_a_different_dump(ha
 
     assert result["status"] == "mismatch"
     assert result["differences"] == [{"name": _CANONICAL, "detail": "contents differ from the server's copy"}]
+
+
+# ── a namesake that cannot be read ───────────────────────────────────────
+
+
+def _place_broken_link(harness, name: str = "rom-41 (U).gba") -> Path:
+    """A symlink whose target does not exist — present, named, undescribable."""
+    path = _platform_dir(harness) / name
+    path.symlink_to(_platform_dir(harness) / "gone.gba")
+    return path
+
+
+async def test_a_namesake_that_cannot_be_read_refuses_the_download(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    link = _place_broken_link(harness)
+
+    result = await harness.plugin.start_download(_ROM_ID, False)
+
+    assert result["success"] is False
+    assert result["reason"] == "unreadable_entry"
+    assert isinstance(result["message"], str)
+    assert result["message"]
+    assert result["existing"] == [{"name": link.name, "path": str(link), "removable": True}]
+    assert result["truncated"] is False
+    await _drain_download(harness)
+    assert not (_platform_dir(harness) / _CANONICAL).exists()
+    assert link.is_symlink()
+
+
+async def test_removing_a_proven_broken_link_unlinks_it_and_downloads(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    harness.romm.download_payloads[f"rom:{_ROM_ID}:{_CANONICAL}"] = b"srv!"
+    link = _place_broken_link(harness)
+
+    result = await harness.plugin.start_download(_ROM_ID, True, str(link), None)
+    await _drain_download(harness)
+
+    assert result["success"] is True
+    assert not link.is_symlink()
+    assert (_platform_dir(harness) / _CANONICAL).read_bytes() == b"srv!"
+
+
+async def test_downloading_anyway_leaves_the_unreadable_entry_alone(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    harness.romm.download_payloads[f"rom:{_ROM_ID}:{_CANONICAL}"] = b"srv!"
+    link = _place_broken_link(harness)
+
+    result = await harness.plugin.start_download(_ROM_ID, True)
+    await _drain_download(harness)
+
+    assert result["success"] is True
+    assert link.is_symlink()
+    assert (_platform_dir(harness) / _CANONICAL).read_bytes() == b"srv!"
+
+
+async def test_the_page_and_the_click_search_see_the_same_broken_link(harness):
+    # The divergence this round closed: the page's listing kept it and the
+    # click-time listing dropped it, so the button offered what the search
+    # could not find.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    _place_broken_link(harness)
+
+    detail = await harness.plugin.get_cached_game_detail(_ROM_ID)
+    result = await harness.plugin.start_download(_ROM_ID, False)
+
+    assert detail["adoption_candidate_present"] is True
+    assert result["reason"] == "unreadable_entry"
+
+
+# ── the backstop ─────────────────────────────────────────────────────────
+
+
+async def test_a_page_that_found_a_copy_never_ends_in_a_silent_download(harness):
+    # The ordinary race: the page found the file, it was deleted before the
+    # press, and nothing specific can be said about the folder any more.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    harness.romm.download_payloads[f"rom:{_ROM_ID}:{_CANONICAL}"] = b"srv!"
+
+    result = await harness.plugin.start_download(_ROM_ID, False, None, None, True)
+
+    assert result["success"] is False
+    assert result["reason"] == "candidate_vanished"
+    assert isinstance(result["message"], str)
+    assert result["message"]
+    assert result["incoming"] == {"name": _CANONICAL, "size_bytes": 4}
+    await _drain_download(harness)
+    assert not (_platform_dir(harness) / _CANONICAL).exists()
+
+
+async def test_answering_the_backstop_downloads(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    harness.romm.download_payloads[f"rom:{_ROM_ID}:{_CANONICAL}"] = b"srv!"
+
+    result = await harness.plugin.start_download(_ROM_ID, True, None, None, True)
+    await _drain_download(harness)
+
+    assert result["success"] is True
+    assert (_platform_dir(harness) / _CANONICAL).read_bytes() == b"srv!"
+
+
+async def test_a_page_that_found_nothing_still_downloads_without_a_dialog(harness):
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    harness.romm.download_payloads[f"rom:{_ROM_ID}:{_CANONICAL}"] = b"srv!"
+
+    result = await harness.plugin.start_download(_ROM_ID, False, None, None, False)
+    await _drain_download(harness)
+
+    assert result["success"] is True
+    assert (_platform_dir(harness) / _CANONICAL).read_bytes() == b"srv!"

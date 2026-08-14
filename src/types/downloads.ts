@@ -140,6 +140,40 @@ export interface ShapeConflictResult {
   truncated: boolean;
 }
 
+/**
+ * A download that stopped because something carrying this game's name could not
+ * be read at all — a link pointing nowhere, a mount that went away, a race with
+ * a writer. Nothing can be said about the content, so it can be neither offered
+ * nor rejected on its merits.
+ *
+ * `removable` is true only for an entry proven to be a link with no resolving
+ * target: those hold no data, so removing one destroys nothing. Everything else
+ * unreadable may be the only copy of something and is never offered for removal.
+ */
+export interface UnreadableEntryResult {
+  success: false;
+  reason: "unreadable_entry";
+  message: string;
+  incoming: { name: string; size_bytes: number };
+  existing: Array<{ name: string; path: string; removable: boolean }>;
+  truncated: boolean;
+}
+
+/**
+ * A download that stopped because the game page reported a copy on this device
+ * and the click-time search then found nothing it could name. The backstop, and
+ * the reason the button's promise is keepable at all: the page and the search
+ * read the same folder from different knowledge and have diverged repeatedly, so
+ * this catches whatever the specific answers do not — including the ordinary
+ * race where the file was deleted between opening the page and pressing.
+ */
+export interface CandidateVanishedResult {
+  success: false;
+  reason: "candidate_vanished";
+  message: string;
+  incoming: { name: string; size_bytes: number };
+}
+
 /** One name an adoption's rename needs that something else already holds. */
 export interface RenameCollision {
   name: string;

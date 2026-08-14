@@ -98,6 +98,7 @@ if TYPE_CHECKING:
         Sleeper,
         SteamConfigStore,
         SteamRecoveryStore,
+        SystemKnownFn,
         SystemM3uSupportFn,
         SystemSupportedExtensionsFn,
         UnitOfWorkFactory,
@@ -170,6 +171,7 @@ class CallbackBundle:
     get_core_name: CoreNameProviderFn
     platform_core_reader: PlatformCoreReader
     m3u_support: SystemM3uSupportFn
+    system_known: SystemKnownFn
     system_extensions: SystemSupportedExtensionsFn
     list_rom_dir_files: DirectoryFileListerFn
     settings_persister: SettingsPersister
@@ -395,6 +397,7 @@ def bootstrap(
         get_core_name=retroarch_core_info.get_corename,
         platform_core_reader=platform_core_reader,
         m3u_support=core_resolver.system_supports_m3u,
+        system_known=core_resolver.is_known_system,
         system_extensions=core_resolver.get_supported_extensions,
         list_rom_dir_files=download_file_store.list_files,
         settings_persister=settings_persister,

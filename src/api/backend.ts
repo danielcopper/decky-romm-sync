@@ -47,6 +47,8 @@ import type {
   TargetOccupiedResult,
   CandidatesFoundResult,
   ShapeConflictResult,
+  UnreadableEntryResult,
+  CandidateVanishedResult,
   RenameCollisionsResult,
   CollisionChoice,
   AdoptResult,
@@ -99,6 +101,25 @@ export function isCandidatesFound(value: object): value is CandidatesFoundResult
  */
 export function isShapeConflict(value: object): value is ShapeConflictResult {
   return "reason" in value && (value as { reason?: unknown }).reason === "shape_conflict";
+}
+
+/**
+ * Narrow a `start_download` reply to the refusal naming entries that carry this
+ * game's name and could not be read (#260). Same slug-keyed test as its
+ * siblings; what it offers depends on the entry — removal only where a link is
+ * proven to point nowhere.
+ */
+export function isUnreadableEntry(value: object): value is UnreadableEntryResult {
+  return "reason" in value && (value as { reason?: unknown }).reason === "unreadable_entry";
+}
+
+/**
+ * Narrow a `start_download` reply to the backstop: the page reported a copy and
+ * the click-time search found nothing it could name (#260). Last in the chain,
+ * so a more specific refusal always wins over it.
+ */
+export function isCandidateVanished(value: object): value is CandidateVanishedResult {
+  return "reason" in value && (value as { reason?: unknown }).reason === "candidate_vanished";
 }
 
 /**
@@ -185,13 +206,16 @@ export interface CachedGameDetail extends BiosAnswer {
    * that one is content at this ROM's own location, which wins when both are
    * true.
    *
-   * The two searches share their filter but not all of its inputs — the backend
-   * cannot filter this one on the single-file-vs-folder shape from a `roms` row,
-   * and resolves the platform folder from the slug alone. So the click-time
-   * search is the authority, and this can be true for something it then finds
-   * unusable: the label overpromises, while what pressing the button leads to —
-   * a dialog — still holds, because the wrong shape is refused and asked about
-   * rather than downloaded over.
+   * The page and the click-time search answer from different knowledge — a
+   * `roms` row against the server payload — and are not held to agreeing; they
+   * have diverged on the served shape, the platform folder, the matched name and
+   * the directory listing itself. So this can be true for something the search
+   * then finds unusable, and the label overpromises.
+   *
+   * What still holds is what the label actually promises: pressing ends in an
+   * answer. Every way the search can find less than this did is a refusal that
+   * says so, and the last of them is a backstop for the ways nobody has thought
+   * of yet — which is why this value is sent back on the press.
    */
   adoption_candidate_present?: boolean;
 }
@@ -243,13 +267,26 @@ export const getSyncStats = callable<[], SyncStats>("get_sync_stats");
  * on their behalf. `collisionChoice` answers the save-collision dialog that
  * carry can raise, and stays `null` until that dialog has been shown.
  *
- * `true` is also how a `shape_conflict` refusal is answered — there the user is
- * choosing to add a second copy beside a namesake nothing can adopt, and no
- * `candidatePath` goes with it, because that entry stays exactly where it is.
+ * `true` is also how the three "cannot use what is here" refusals are answered —
+ * `shape_conflict`, `unreadable_entry` and `candidate_vanished`. There the user
+ * is choosing to add a second copy, and no `candidatePath` goes with it because
+ * nothing is being taken over. The one exception is an unreadable entry the
+ * backend proved to be a link pointing nowhere: naming it removes it, since a
+ * link with no target holds no data.
+ *
+ * `pageSawCandidate` is not an answer but a report — whether the game page told
+ * this user a copy was on the device. The backend's last check is a backstop
+ * over it, so a page that found a copy can never end in a silent download.
  */
 export const startDownload = callable<
-  [number, boolean, string | null, CollisionChoice | null],
-  BackendResult | TargetOccupiedResult | CandidatesFoundResult | ShapeConflictResult | RenameCollisionsResult
+  [number, boolean, string | null, CollisionChoice | null, boolean],
+  | BackendResult
+  | TargetOccupiedResult
+  | CandidatesFoundResult
+  | ShapeConflictResult
+  | UnreadableEntryResult
+  | CandidateVanishedResult
+  | RenameCollisionsResult
 >("start_download");
 /**
  * Record content already on disk as this ROM's install — nothing is fetched.

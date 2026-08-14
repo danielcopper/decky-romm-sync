@@ -13,7 +13,10 @@ the replace leg of the download gate and the overwrite leg of the rename, each
 run only because the user chose it over the alternative it was shown beside.
 
 What a rename *consists of* — the plan, the collision question, how far a move
-got — belongs to ``AdoptionRenamer``, which both exits of the dialog share.
+got — belongs to ``AdoptionRenamer``, which both exits of the dialog share. What
+counts as "already on disk", and what is said when the answer is not a candidate
+the dialog can offer, belongs to ``CandidateSearch``, which the game page's probe
+and the Download click's gate both go through.
 """
 
 from __future__ import annotations
@@ -37,15 +40,6 @@ from domain.rom_adoption import (
     unconfirmed_reason,
     verification_status,
 )
-from domain.rom_candidates import (
-    LocalEntry,
-    LocalName,
-    candidates_refusal,
-    matching_entries,
-    normalize_rom_name,
-    rank_candidates,
-    shape_conflict_refusal,
-)
 from domain.rom_files import (
     detect_launch_file,
     is_multi_file_download,
@@ -57,6 +51,7 @@ from lib.errors import error_response
 from lib.path_safety import PathTraversalError, coerce_safe_component, is_safe_rom_path, safe_join
 from services.rom_adoption._target import Target as _Target
 from services.rom_adoption.renamer import AdoptionRenamer, AdoptionRenamerConfig
+from services.rom_adoption.search import CandidateSearch, CandidateSearchConfig
 
 if TYPE_CHECKING:
     import asyncio
@@ -69,6 +64,7 @@ if TYPE_CHECKING:
         AdoptionMoveStore,
         Clock,
         CoreNameProviderFn,
+        DebugLogger,
         DownloadFileStore,
         EventEmitter,
         RetroArchSaveLayoutProvider,
@@ -79,6 +75,7 @@ if TYPE_CHECKING:
         SaveQuarantineFn,
         SaveSortingProvider,
         SiblingSupersedeProvider,
+        SystemKnownFn,
         SystemM3uSupportFn,
         SystemResolver,
         SystemSupportedExtensionsFn,
@@ -103,17 +100,6 @@ _UNCONFIRMED_MESSAGES = {
     "whole_archive": "The server publishes one checksum for this whole archive, which cannot be matched "
     "against the files inside it",
 }
-
-
-def _whole_file_crc32(rom_detail: dict[str, Any]) -> str:
-    """RomM's CRC32 for this ROM's one file, or ``""`` when it does not have exactly one.
-
-    A ROM the server holds as several files publishes no single number that could
-    describe one entry on disk, so the candidate search ranks those on size or
-    name instead of on a checksum it would have to invent.
-    """
-    manifest = server_manifest(rom_detail)
-    return manifest[0].crc32 if len(manifest) == 1 else ""
 
 
 def _target_taken_refusal() -> dict[str, Any]:
@@ -156,11 +142,12 @@ class RomAdoptionServiceConfig:
     ``install_recorder`` is the shared install writer — the reason an adopted row
     cannot drift from a downloaded one. ``m3u_support`` gates whether a bundled
     ``.m3u`` may be chosen as an adopted directory's launch file, exactly as it
-    does for an extracted one. ``system_extensions`` is the live ES-DE accept-list
-    the candidate search filters a platform directory through. The layout and
-    core seams below are the renamer's — they are taken here and handed straight
-    on, so the service has one constructor rather than two the composition root
-    has to keep in step.
+    does for an extracted one. ``system_extensions`` and ``system_known`` are the
+    two questions the candidate search puts to ``es_systems.xml``: what a system
+    accepts, and whether the directory it is about to search is a system at all.
+    The layout and core seams below are the renamer's, and the search seams the
+    search's — they are taken here and handed straight on, so the service has one
+    constructor rather than three the composition root has to keep in step.
     """
 
     romm_api: RommRomReader
@@ -172,6 +159,7 @@ class RomAdoptionServiceConfig:
     install_recorder: RomInstallRecorder
     m3u_support: SystemM3uSupportFn
     system_extensions: SystemSupportedExtensionsFn
+    system_known: SystemKnownFn
     save_layout: RetroArchSaveLayoutProvider
     save_sorting: SaveSortingProvider
     savestate_layout: RetroArchSavestateLayoutProvider
@@ -183,6 +171,7 @@ class RomAdoptionServiceConfig:
     uow_factory: UnitOfWorkFactory
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
+    log_debug: DebugLogger
     emit: EventEmitter
     clock: Clock
 
@@ -213,6 +202,18 @@ class RomAdoptionService:
                 logger=config.logger,
             )
         )
+        self._search = CandidateSearch(
+            config=CandidateSearchConfig(
+                download_file_store=config.download_file_store,
+                resolve_system=config.resolve_system,
+                system_extensions=config.system_extensions,
+                system_known=config.system_known,
+                retrodeck_paths=config.retrodeck_paths,
+                uow_factory=config.uow_factory,
+                logger=config.logger,
+                log_debug=config.log_debug,
+            )
+        )
         self._sibling_supersede = config.sibling_supersede
         self._uow_factory = config.uow_factory
         self._loop = config.loop
@@ -231,6 +232,7 @@ class RomAdoptionService:
         resume: bool = False,
         candidate_path=None,
         collision_choice=None,
+        page_saw_candidate: bool = False,
     ) -> dict[str, Any] | None:
         """Decide whether a download may write the content it computed *checked_path* for.
 
@@ -238,11 +240,16 @@ class RomAdoptionService:
         belongs to this ROM's own install, or the user chose to download over
         whatever the gate showed them and it has been cleared. Anything else is a
         canonical failure the caller returns untouched — the ``target_occupied``
-        refusal carrying both sides of the comparison, the ``adoption_candidates``
-        refusal carrying the short list, the ``shape_conflict`` refusal naming a
-        namesake nothing can adopt, the ``rename_collisions`` refusal raised by
-        carrying a discarded candidate's saves, or a removal that could not be
-        completed.
+        refusal carrying both sides of the comparison, one of the four the
+        candidate search can return (``adoption_candidates``,
+        ``unreadable_entry``, ``shape_conflict``, ``candidate_vanished``), the
+        ``rename_collisions`` refusal raised by carrying a discarded candidate's
+        saves, or a removal that could not be completed.
+
+        *page_saw_candidate* is what the game page told the user before they
+        pressed. It is carried this far because the search's last answer is a
+        backstop over it: a page that found a copy must never end in a silent
+        download, whatever the two searches disagree about (ADR-0028).
 
         None of the legs is bounded work — describing an occupied directory walks
         it whole (a multi-file install can hold tens of thousands of files),
@@ -259,6 +266,7 @@ class RomAdoptionService:
             resume=resume,
             candidate_path=candidate_path,
             collision_choice=collision_choice,
+            page_saw_candidate=page_saw_candidate,
         )
         return await self._loop.run_in_executor(None, worker)
 
@@ -271,6 +279,7 @@ class RomAdoptionService:
         resume: bool = False,
         candidate_path=None,
         collision_choice=None,
+        page_saw_candidate: bool = False,
     ) -> dict[str, Any] | None:
         """Synchronous body of the download-target gate. Runs on an executor thread."""
         existing = self._download_file_store.describe_path(checked_path)
@@ -289,7 +298,9 @@ class RomAdoptionService:
             # user has never seen and the gate must ask about it. Here nothing was
             # consumed. Two different reasons, and neither generalises to the
             # other.
-            return None if resume else self._candidate_refusal(rom_detail, checked_path)
+            if resume:
+                return None
+            return self._search.refusal(rom_detail, checked_path, page_saw_candidate=page_saw_candidate)
         if self._is_own_install(rom_detail, checked_path):
             return None
         if not replace:
@@ -306,74 +317,6 @@ class RomAdoptionService:
 
     # ── Candidate search ────────────────────────────────────────────
 
-    def _candidate_refusal(self, rom_detail: dict[str, Any], checked_path: str) -> dict[str, Any] | None:
-        """Refuse the download when this game is already on disk under another name.
-
-        ``None`` when nothing on disk could be this game, which is every ordinary
-        download. Two refusals come out of one listing:
-
-        * ``adoption_candidates`` — entries of the shape the server serves, which
-          the dialog can offer to take over.
-        * ``shape_conflict`` — the same name in the *other* shape, which nothing
-          can adopt. Reported rather than ignored: the alternative is a
-          multi-gigabyte transfer starting with no dialog and no toast, dropping
-          a second copy beside the first, after a button that may well have read
-          Use Existing Files. The page-open probe cannot filter on shape (the
-          ``roms`` row does not carry it), so this is where the two answers are
-          reconciled.
-
-        The search runs on the Download click as well as on the page open,
-        because the folder can change while the page is open and the answer the
-        user acts on has to be the current one (ADR-0028).
-        """
-        entries = self._local_entries(os.path.dirname(checked_path))
-        if not entries:
-            return None
-        system = self._resolve_system(rom_detail.get("platform_slug", ""), rom_detail.get("platform_fs_slug"))
-        # The name both sides are matched on is ``checked_path``'s basename — the
-        # name the download itself derived — so the search can never disagree
-        # with the path it is searching around.
-        wanted_name = normalize_rom_name(os.path.basename(checked_path))
-        extensions = self._system_extensions(system)
-        covered = self._installed_paths() | {checked_path}
-        served_dir = is_multi_file_download(rom_detail)
-        matches = matching_entries(
-            entries,
-            wanted_name=wanted_name,
-            want_dir=served_dir,
-            accepted_extensions=extensions,
-            covered_paths=covered,
-        )
-        incoming_name = os.path.basename(checked_path)
-        incoming_size = rom_detail.get("fs_size_bytes", 0)
-        if not matches:
-            conflicting = matching_entries(
-                entries,
-                wanted_name=wanted_name,
-                want_dir=not served_dir,
-                accepted_extensions=extensions,
-                covered_paths=covered,
-            )
-            if not conflicting:
-                return None
-            self._logger.info(
-                f"Refusing rom {rom_detail.get('id')}: {len(conflicting)} same-named entr(ies) of the wrong shape"
-            )
-            return shape_conflict_refusal(
-                conflicting,
-                served_dir=served_dir,
-                incoming_name=incoming_name,
-                incoming_size=incoming_size,
-            )
-        candidates, truncated = self._rank(matches, rom_detail)
-        self._logger.info(f"Found {len(candidates)} adoption candidate(s) for rom {rom_detail.get('id')}")
-        return candidates_refusal(
-            candidates,
-            truncated=truncated,
-            incoming_name=incoming_name,
-            incoming_size=incoming_size,
-        )
-
     def has_adoption_candidate(self, platform_slug: str, fs_name: str) -> bool:
         """Whether this platform folder holds an entry that could be this ROM.
 
@@ -384,118 +327,22 @@ class RomAdoptionService:
         candidates are skipped entirely, because a page that only has to say
         "something is here" never needs to know which of several is strongest.
 
-        Deliberately **not** filtered on shape. The page holds a ``roms`` row, and
-        nothing on it says whether RomM serves this ROM as one file or a folder —
-        the click-time search has the payload that does. So this can say "here"
-        about an entry that turns out to be the wrong shape: the button then
-        overpromises, reading Use Existing Files for something no dialog can
-        offer. What it does not do is mislead about what pressing leads to. The
-        click-time search refuses that case with ``shape_conflict`` and asks, so
-        pressing always ends in an answer.
+        It reads a ``roms`` row and the click-time search reads the server
+        payload, so the two answer from different knowledge and are not held to
+        agreeing. What holds instead is that a ``True`` here always ends in an
+        answer when the button is pressed: every way the click-time search can
+        find less than this did is a refusal that says so, the last of them being
+        the backstop for the ways nobody has thought of yet (ADR-0028).
 
         Every failure is quiet and answers ``False``: an unresolvable roms path,
         an unreadable folder, an accept-list the source could not answer. A search
         that could not run must never make a game look uninstallable.
         """
         try:
-            return bool(self._name_matches(platform_slug, fs_name))
+            return bool(self._search.name_matches(platform_slug, fs_name))
         except Exception as e:
             self._logger.warning(f"Adoption candidate probe failed for {platform_slug}/{fs_name}: {e}")
             return False
-
-    def _name_matches(self, platform_slug: str, fs_name: str) -> tuple[LocalName, ...]:
-        """Entries in *platform_slug*'s folder whose normalized name is *fs_name*'s, either shape.
-
-        The system is resolved from the slug alone — a ``roms`` row carries no
-        ``platform_fs_slug``, which the resolver consults only for a slug that
-        misses its platform map. For such a platform this probes a directory that
-        does not exist and answers "no candidate"; the click-time search, which
-        has the payload, then finds what is there. The error runs towards saying
-        too little, which the next step corrects.
-        """
-        roms_path = self._retrodeck_paths.roms_path()
-        if not roms_path or not fs_name or not platform_slug:
-            return ()
-        system = self._resolve_system(platform_slug)
-        platform_dir = safe_join(roms_path, system)
-        entries = self._local_names(platform_dir)
-        if not entries:
-            return ()
-        wanted_name = normalize_rom_name(fs_name)
-        extensions = self._system_extensions(system)
-        covered = self._installed_paths() | {os.path.join(platform_dir, fs_name)}
-        return matching_entries(
-            entries,
-            wanted_name=wanted_name,
-            want_dir=False,
-            accepted_extensions=extensions,
-            covered_paths=covered,
-        ) or matching_entries(
-            entries,
-            wanted_name=wanted_name,
-            want_dir=True,
-            accepted_extensions=extensions,
-            covered_paths=covered,
-        )
-
-    def _rank(self, matches: tuple[LocalEntry, ...], rom_detail: dict[str, Any]):
-        """Order what matched by the evidence each entry supports without a byte being read."""
-        return rank_candidates(
-            matches,
-            server_size=rom_detail.get("fs_size_bytes", 0),
-            server_crc32=_whole_file_crc32(rom_detail),
-            member_crc32s={match.path: self._member_crc32s(match) for match in matches},
-        )
-
-    def _local_entries(self, platform_dir: str) -> tuple[LocalEntry, ...]:
-        """Read the platform folder's top level, sizes and mtimes included, for ranking."""
-        return tuple(
-            LocalEntry(
-                name=entry["name"],
-                path=entry["path"],
-                is_dir=entry["is_dir"],
-                size_bytes=entry["size_bytes"],
-                modified_at=entry["modified_at"],
-            )
-            for entry in self._download_file_store.list_top_level_entries(platform_dir)
-        )
-
-    def _local_names(self, platform_dir: str) -> tuple[LocalName, ...]:
-        """Read the platform folder's top level as names and shapes alone.
-
-        The page's listing: no ``stat`` for size or mtime, because a name match
-        reads neither. The type says so too — these cannot reach
-        :meth:`_rank`, which is the half of the search the page skips.
-        """
-        return tuple(
-            LocalName(name=entry["name"], path=entry["path"], is_dir=entry["is_dir"])
-            for entry in self._download_file_store.list_top_level_names(platform_dir)
-        )
-
-    def _member_crc32s(self, entry: LocalEntry) -> tuple[str, ...]:
-        """The CRC32 of every member inside *entry*, from the central directory alone.
-
-        Empty for anything that is not an archive by name and for a container this
-        store cannot open — an absence of evidence, which leaves the entry ranked
-        on what else it has.
-        """
-        if entry.is_dir or not is_archive_name(entry.name):
-            return ()
-        members = self._download_file_store.list_archive_members(entry.path)
-        return () if members is None else tuple(member["crc32"] for member in members)
-
-    def _installed_paths(self) -> frozenset[str]:
-        """Every path a ``rom_installs`` row already accounts for.
-
-        A ROM the plugin installed is another game's content and the row is the
-        plugin's claim on it, so the search subtracts it rather than offering one
-        game's files as a candidate for another's.
-        """
-        with self._uow_factory() as uow:
-            installs = list(uow.rom_installs.iter_all())
-        return frozenset(
-            path for install in installs for path in (install.file_path, install.rom_dir) if path is not None
-        )
 
     def _is_own_install(self, rom_detail: dict[str, Any], checked_path: str) -> bool:
         """Whether *checked_path* is already this ROM's recorded install.
@@ -590,6 +437,13 @@ class RomAdoptionService:
         under the canonical name. It is named rather than moved back — a retry of
         the same download finds the saves already in place and re-plans to
         nothing, where an undo would have to be undone again.
+
+        A path the store cannot describe is removed only when it is **proven** to
+        be a symlink with no resolving target: such a link holds no data, so
+        unlinking it destroys nothing. Anything else undescribable is left where
+        it is and the download simply proceeds — an entry we failed to read may
+        be the only copy of something, and the rule against deleting what exists
+        nowhere else does not bend for a failed ``stat``.
         """
         if not candidate_path:
             return None
@@ -609,7 +463,9 @@ class RomAdoptionService:
             }
         existing = self._download_file_store.describe_path(source_path)
         if existing is None:
-            return None
+            if not self._download_file_store.is_broken_symlink(source_path):
+                return None
+            return self._remove_under_roms(source_path, is_dir=False)
         rom_id = int(rom_detail.get("id") or 0)
         refusal, carried = self._renamer.move_planned(
             self._renamer.discarded_save_pairs(rom_id, target, source_path), collision_choice

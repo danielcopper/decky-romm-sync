@@ -23,6 +23,8 @@ import {
   isTargetOccupied,
   isCandidatesFound,
   isShapeConflict,
+  isUnreadableEntry,
+  isCandidateVanished,
   isRenameCollisions,
   cancelDownload,
   pauseDownload,
@@ -53,6 +55,8 @@ import { comparisonForCandidate, showAdoptExistingModal } from "./AdoptExistingM
 import { showAdoptCandidateModal } from "./AdoptCandidateModal";
 import { showAdoptCollisionModal } from "./AdoptCollisionModal";
 import { showAdoptShapeConflictModal } from "./AdoptShapeConflictModal";
+import { showAdoptUnreadableModal } from "./AdoptUnreadableModal";
+import { showAdoptVanishedModal } from "./AdoptVanishedModal";
 import { showCoreChangeModal } from "./CoreChangeModal";
 import { handleConflicts } from "./SyncConflictModal";
 import { showOfflineDriftModal } from "./OfflineDriftModal";
@@ -71,6 +75,8 @@ import type {
   TargetOccupiedResult,
   CandidatesFoundResult,
   ShapeConflictResult,
+  UnreadableEntryResult,
+  CandidateVanishedResult,
   CollisionChoice,
   UninstallProgressEvent,
 } from "../types";
@@ -1039,7 +1045,17 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     if (!romId || actionPending) return;
     setActionPending(true);
     try {
-      const result = await startDownload(romId, replaceExisting, discardPath ?? null, collisionChoice);
+      // Only a FIRST press reports what the page found. Every re-entry carries
+      // `replace`, which is the user's answer to a refusal the page's report
+      // already produced — reporting it again would ask the backstop to fire on
+      // an answer it just received.
+      const result = await startDownload(
+        romId,
+        replaceExisting,
+        discardPath ?? null,
+        collisionChoice,
+        !replaceExisting && candidatePresent,
+      );
       if (isRenameCollisions(result)) {
         // Carrying the discarded candidate's saves would land on names that are
         // taken. Nothing has been removed or moved; the one answer covers the
@@ -1076,6 +1092,24 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         // dialog the user is about to get.
         setActionPending(false);
         await resolveShapeConflict(result);
+        return;
+      }
+      if (isUnreadableEntry(result)) {
+        // Something with this game's name that could not be read. Same reason
+        // neither flag moves as above — and the removal exit, when the backend
+        // proved the entry is a link pointing nowhere, is the one case where
+        // naming a path deletes something.
+        setActionPending(false);
+        await resolveUnreadable(result);
+        return;
+      }
+      if (isCandidateVanished(result)) {
+        // The backstop fired: this page said a copy was here and the search can
+        // name nothing. The flag goes, because the one thing now known is that
+        // what the page found is not there to be used.
+        setCandidatePresent(false);
+        setActionPending(false);
+        await resolveVanished(result);
         return;
       }
       if (!result.success) {
@@ -1140,6 +1174,23 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // path goes with it, because that entry is not being taken over or removed.
   const resolveShapeConflict = async (conflict: ShapeConflictResult) => {
     if ((await showAdoptShapeConflictModal(conflict)) === "download") await handleDownload(true);
+  };
+
+  // An entry that could not be read. Download-anyway and cancel behave as they
+  // do for a shape conflict; the third exit names the path, which is what tells
+  // the backend to unlink it — and it is offered only for an entry the backend
+  // itself proved to be a link with no target, never for one it merely failed to
+  // read.
+  const resolveUnreadable = async (unreadable: UnreadableEntryResult) => {
+    const choice = await showAdoptUnreadableModal(unreadable);
+    if (choice.kind === "download") await handleDownload(true);
+    if (choice.kind === "remove") await handleDownload(true, choice.path);
+  };
+
+  // The backstop's two exits. Nothing is named, because nothing was found:
+  // `replace` here only says the search has been answered.
+  const resolveVanished = async (vanished: CandidateVanishedResult) => {
+    if ((await showAdoptVanishedModal(vanished)) === "download") await handleDownload(true);
   };
 
   // Record what is on disk as the install, then write the launch command onto
@@ -1493,11 +1544,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       // Both states earn the label. The user should not have to press Download
       // to learn their own copy is sitting in the folder under another name.
       //
-      // `candidatePresent` can overpromise: the page cannot filter on the shape
-      // the server serves this ROM in, so the entry it found may turn out to be
-      // one nothing can adopt. What the label promises is still kept — pressing
-      // opens a dialog either way, because the backend refuses that case and
-      // asks rather than downloading past it.
+      // `candidatePresent` can overpromise: the page and the click-time search
+      // read the same folder knowing different things about it, and have
+      // disagreed on the served shape, the platform folder, the matched name and
+      // the listing itself. What the label promises is still kept — pressing
+      // ends in a dialog either way — but not because those differences are
+      // known to run one way. It holds because the search's last answer is a
+      // backstop: this flag is sent back on the press, and a page that reported
+      // a copy can never end in a silent download.
       dlLabel = "Use Existing Files";
     } else {
       dlLabel = "Download";
