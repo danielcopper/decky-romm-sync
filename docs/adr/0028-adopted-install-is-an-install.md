@@ -34,13 +34,13 @@ sends `archive_members: null` for every archived ROM in a library it has not res
 file-level digest and not the member list is what the plugin depends on. Hashes are computed by default and opt out
 through `filesystem.skip_hash_calculation`.
 
-Cost was measured rather than assumed. On a Steam Deck SD card the read rate is 77 MiB/s, so a 1.53 GiB image hashes in
-19.8 s — I/O-bound, identical for CRC32, MD5 and SHA-1. Across a real library the median ROM is 2 MiB, roughly 70 % sit
-under 10 MiB, and about 11 % exceed 500 MiB. A ZIP's central directory yields each member's uncompressed size and CRC32
-without decompressing anything; 10 of 24 top-level ROM files in that library are `.zip`, so the archived case is the
-common one, not the exception. Platform directories hold one or two subdirectories, while a single multi-file install
-can hold tens of thousands of files — 53 864 in the largest observed — which is why any directory scan must stay on the
-top level.
+Cost was measured rather than assumed, and the shape of the answer is what matters here. Hashing is I/O-bound at the
+storage's read rate and identical for CRC32, MD5 and SHA-1, so a disc-sized image costs tens of seconds while a
+cartridge-sized ROM is imperceptible — a spread wide enough that a verification cannot be a wait imposed before the
+dialog opens. A ZIP's central directory yields each member's uncompressed size and CRC32 without decompressing anything,
+and a library keeps enough of its ROMs archived for that path to be the common one rather than the exception. Platform
+directories hold a handful of subdirectories, while a single multi-file install can hold tens of thousands of files —
+which is why any directory scan must stay on the top level.
 
 ## Decision
 
@@ -61,26 +61,25 @@ something is in the way:
 keying the search on it would miss the whole common case — a different rip of the same game, which is exactly what a
 differently-tagged filename usually denotes — while matching any unrelated file that happens to be the same length. The
 name is also the only key a **directory** has, because the search may not descend to total one (a single multi-file
-install held 53 864 files) and a directory therefore has no size to compare.
+install can hold tens of thousands of files) and a directory therefore has no size to compare.
 
 **What "the same name" means is a normalization, and stripping the version tags is the point of it.** Bracketed groups
 go with their contents, everything non-alphanumeric collapses to one space, and the result is lowercased:
-`Mario Golf - Advance Tour (Rev 1) (USA).zip` and `Mario Golf - Advance Tour (U).zip` both reduce to
-`mario golf advance tour`. We are looking for the _game_; whether it is the same dump is what the digest answers, on the
-button. Measured on a real 9299-ROM library, 37 % of entries share a normalized name with a sibling — but every one of
-those collisions is _within_ a sibling group, and the search runs over the **platform folder**, not the library. Across
-every populated platform folder on a real device: 1 to 5 entries each, **zero** normalized-name collisions. So zero or
-one candidate is the expected result; several open a short list ranked by evidence, each row stating what it rests on,
-and a capped list says so — a silent truncation reads as "that is all there is".
+`Example Quest - Second Journey (Rev 1) (USA).zip` and `Example Quest - Second Journey (U).zip` both reduce to
+`example quest second journey`. We are looking for the _game_; whether it is the same dump is what the digest answers,
+on the button. Normalized-name collisions concentrate _within_ a sibling group — the region, language and revision
+variants of one game — and the search runs over the **platform folder**, not the library, so zero or one candidate is
+the expected result; several open a short list ranked by evidence, each row stating what it rests on, and a capped list
+says so — a silent truncation reads as "that is all there is".
 
 **The search stays on the platform folder's top level, and admits an entry by a positive test.** Not descending is the
-same 53 864-file constraint that keeps `describe_path` off the search's path, and a user's own subfolders are their
-filing rather than ours. What survives is what ES-DE's live per-system `<extension>` list accepts, so `systeminfo.txt`,
-`.directory` and every other frontend's bookkeeping fall out without a blacklist anyone has to maintain. An accept-list
-that could not answer skips the test rather than turning the feature off — the name match plus the user's confirmation
-is what the offer rests on, and this is the same default-safe reading every other consumer of that list applies. A
-directory is never extension-tested (it usually carries none) and the candidate's shape must match what the server
-serves, so a shape the dialog would refuse as unusable is never offered in the first place.
+same tens-of-thousands-of-files constraint that keeps `describe_path` off the search's path, and a user's own subfolders
+are their filing rather than ours. What survives is what ES-DE's live per-system `<extension>` list accepts, so
+`systeminfo.txt`, `.directory` and every other frontend's bookkeeping fall out without a blacklist anyone has to
+maintain. An accept-list that could not answer skips the test rather than turning the feature off — the name match plus
+the user's confirmation is what the offer rests on, and this is the same default-safe reading every other consumer of
+that list applies. A directory is never extension-tested (it usually carries none) and the candidate's shape must match
+what the server serves, so a shape the dialog would refuse as unusable is never offered in the first place.
 
 **Adopting a candidate renames it to the canonical name and carries its saves and savestates with it.** This is a
 lifecycle argument, not tidiness. `compute_local_save_target` derives a save's filename from the **local** ROM's
@@ -179,8 +178,8 @@ manifest, matched against `is_top_level`, with extra files allowed — the plugi
 **A content check compares content identity, never container identity.** RomM hashes what is _inside_ an archive: its
 current scanner streams every member's decompressed bytes, in ASCII name order, into one accumulator, and the one before
 4.9.0 took the archive's largest member. Either way the file-level digest describes the content while `file_size_bytes`
-is the container's size on disk. The two describe different things, which is why the size agrees and the digest cannot —
-measured on device, a zipped GBA ROM the plugin itself downloaded reported a mismatch on the same bytes RomM sent.
+is the container's size on disk. The two describe different things, which is why the size agrees and the digest cannot:
+a zipped ROM the plugin downloaded from RomM itself reports a mismatch against the very bytes RomM sent.
 
 **The file-level digest is the carrier; `archive_members` is an optional extra.** Measured against a live RomM 5.1.0
 instance, `archive_members` is null for every archived ROM: the column arrived in 4.9.0 and stays null until the library
@@ -275,10 +274,9 @@ than by walking the tree, so an unrecorded copy is left behind at the old home w
 nothing would ever reclaim it. At ROM sizes that is silent, unbounded consumption of the storage the user has least of.
 
 **One case is out of reach by design.** A copy whose name differs by more than its version tags is not found —
-`Mario
-Golf` is not offered for `Mario Golf - Advance Tour` — and it should not be, because it is a different game.
-Closing that gap means fuzzy matching, and a fuzzy match that is wrong writes a row carrying deletion authority over
-content the server cannot hand back.
+`Example Quest` is not offered for `Example Quest - Second Journey` — and it should not be, because it is a different
+game. Closing that gap means fuzzy matching, and a fuzzy match that is wrong writes a row carrying deletion authority
+over content the server cannot hand back.
 
 **The plugin renames files the user placed, which is a second thing it does to content it did not create.** It is the
 direct consequence of one class of install row: a row whose filename disagrees with the server's is an install that

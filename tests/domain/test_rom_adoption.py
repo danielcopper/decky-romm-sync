@@ -249,16 +249,15 @@ def _archived(*members: ServerMember, name: str = "Game.zip", size: int = 4096) 
 
 _MEMBER = ServerMember(name="Game.gba", size_bytes=64, algorithm="md5", digest="ab", crc32="0000beef")
 
-# What a real server sends for a zipped ROM: no ``archive_members`` at all, a
-# size that is the container's, and a digest that is the content's. The values
-# are the measured ones from a RomM 5.1.0 instance — its md5 and crc are the
-# member's, not the archive's.
+# The shape RomM sends for a zipped ROM: no ``archive_members`` at all, a size
+# that is the container's, and a digest that is the content's — its md5 and crc
+# describe the member, not the archive.
 _WHOLE_ARCHIVE = ServerFile(
     name="Game.zip",
-    size_bytes=12058408,
+    size_bytes=12000000,
     algorithm="md5",
-    digest="2e8814e664675572a43b01900bbbb16b",
-    crc32="d56c2e54",
+    digest="1111111122222222333333334444aaaa",
+    crc32="0000c0de",
 )
 
 
@@ -388,20 +387,20 @@ class TestCompareArchiveWithoutStatedMembers:
     """
 
     def _opened(self, *members: LocalMember) -> LocalFile:
-        return LocalFile(size_bytes=12058408, digest="", members=members, is_archive=True)
+        return LocalFile(size_bytes=12000000, digest="", members=members, is_archive=True)
 
     def test_a_sole_member_that_agrees_yields_no_difference(self):
-        local = self._opened(LocalMember("Game.gba", 16777216, "d56c2e54", "2e8814e664675572a43b01900bbbb16b"))
+        local = self._opened(LocalMember("Game.gba", 16000000, "0000c0de", "1111111122222222333333334444aaaa"))
         assert compare_manifest((_WHOLE_ARCHIVE,), {"Game.zip": local}) == ()
 
     def test_a_sole_member_that_differs_is_reported_under_the_archive(self):
-        local = self._opened(LocalMember("Game.gba", 16777216, "d56c2e54", "0" * 32))
+        local = self._opened(LocalMember("Game.gba", 16000000, "0000c0de", "0" * 32))
         (difference,) = compare_manifest((_WHOLE_ARCHIVE,), {"Game.zip": local})
         assert difference.name == "Game.zip"
         assert difference.detail == "contents differ from the server's copy"
 
     def test_a_sole_member_is_disqualified_by_its_crc_alone(self):
-        local = self._opened(LocalMember("Game.gba", 16777216, "0000dead", ""))
+        local = self._opened(LocalMember("Game.gba", 16000000, "0000dead", ""))
         (difference,) = compare_manifest((_WHOLE_ARCHIVE,), {"Game.zip": local})
         assert difference.detail == "contents differ from the server's copy"
 
@@ -409,7 +408,7 @@ class TestCompareArchiveWithoutStatedMembers:
         local = LocalFile(
             size_bytes=999,
             digest="",
-            members=(LocalMember("Game.gba", 16777216, "d56c2e54", "2e8814e664675572a43b01900bbbb16b"),),
+            members=(LocalMember("Game.gba", 16000000, "0000c0de", "1111111122222222333333334444aaaa"),),
             is_archive=True,
         )
         assert compare_manifest((_WHOLE_ARCHIVE,), {"Game.zip": local}) == ()
@@ -422,7 +421,7 @@ class TestCompareArchiveWithoutStatedMembers:
         assert compare_manifest((_WHOLE_ARCHIVE,), {"Game.zip": local}) == ()
 
     def test_a_container_that_could_not_be_opened_is_not_compared(self):
-        local = LocalFile(size_bytes=12058408, digest="", is_archive=True)
+        local = LocalFile(size_bytes=12000000, digest="", is_archive=True)
         assert compare_manifest((_WHOLE_ARCHIVE,), {"Game.zip": local}) == ()
 
 
@@ -520,7 +519,7 @@ class TestDigestsToRead:
 
     def test_a_sole_member_is_read_against_the_file_level_digest(self):
         found = LocalFile(
-            size_bytes=4096, digest="", members=(LocalMember("Game.gba", 64, "d56c2e54"),), is_archive=True
+            size_bytes=4096, digest="", members=(LocalMember("Game.gba", 64, "0000c0de"),), is_archive=True
         )
         assert digests_to_read(_WHOLE_ARCHIVE, found) == (
             DigestRequest(member="Game.gba", algorithm="md5", size_bytes=64),
@@ -624,9 +623,9 @@ class TestVerificationStatus:
     def test_a_sole_member_that_was_read_matches(self):
         local = {
             "Game.zip": LocalFile(
-                size_bytes=12058408,
+                size_bytes=12000000,
                 digest="",
-                members=(LocalMember("Game.gba", 16777216, "d56c2e54", "2e8814e664675572a43b01900bbbb16b"),),
+                members=(LocalMember("Game.gba", 16000000, "0000c0de", "1111111122222222333333334444aaaa"),),
                 is_archive=True,
             )
         }
@@ -635,9 +634,9 @@ class TestVerificationStatus:
     def test_a_sole_member_that_was_never_read_is_not_a_match(self):
         local = {
             "Game.zip": LocalFile(
-                size_bytes=12058408,
+                size_bytes=12000000,
                 digest="",
-                members=(LocalMember("Game.gba", 16777216, "d56c2e54"),),
+                members=(LocalMember("Game.gba", 16000000, "0000c0de"),),
                 is_archive=True,
             )
         }
@@ -646,7 +645,7 @@ class TestVerificationStatus:
     def test_several_members_the_server_only_described_as_a_whole_cannot_match(self):
         local = {
             "Game.zip": LocalFile(
-                size_bytes=12058408,
+                size_bytes=12000000,
                 digest="",
                 members=(
                     LocalMember("disc1.bin", 64, "0000beef", "ab"),
@@ -658,7 +657,7 @@ class TestVerificationStatus:
         assert verification_status((_WHOLE_ARCHIVE,), local, ()) == "unverifiable"
 
     def test_an_archive_that_could_not_be_opened_cannot_match(self):
-        local = {"Game.zip": LocalFile(size_bytes=12058408, digest="anything", is_archive=True)}
+        local = {"Game.zip": LocalFile(size_bytes=12000000, digest="anything", is_archive=True)}
         assert verification_status((_WHOLE_ARCHIVE,), local, ()) == "unverifiable"
 
     def test_a_member_the_server_put_no_digest_on_is_exempt(self):

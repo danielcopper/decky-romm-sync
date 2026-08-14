@@ -488,7 +488,7 @@ def digests_to_read(entry: ServerFile, found: LocalFile) -> tuple[DigestRequest,
     Cheap evidence first, in the order it costs. A size that already disagrees —
     or, inside an archive, a CRC32 the central directory hands over for free —
     is proof of a difference, and re-reading a gigabyte to restate it would cost
-    the user 20 seconds (measured: 77 MiB/s on a Steam Deck SD card). Cheap
+    the user tens of seconds at the read rate of a memory card. Cheap
     *agreement* is never the answer, only the reason to go and read: CRC32 is a
     32-bit checksum, at a library's member counts an accidental collision is
     credible, and a ``match`` is what authorises keeping bytes the server would

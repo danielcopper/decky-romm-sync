@@ -19,17 +19,18 @@ and routed the **ordinary uninstall** through the same path. Nothing recorded th
 inherited a discipline designed for a different trust situation.
 
 The cost is proportional to bytes, for every uninstall. A multi-file ROM is read four times — at `claim_source`, at the
-post-rename inventory, while acquiring writer-exclusion leases, and once more immediately before each unlink. On the
-reporting device a 31 GB install moved roughly 124 GB off an SD card at a measured 91 MB/s: **22 minutes 48 seconds**,
-with no progress indication, during which repeat presses raced the first removal and produced spurious failure toasts.
-Nothing about this is specific to 31 GB; it is simply invisible below a few gigabytes.
+post-rename inventory, while acquiring writer-exclusion leases, and once more immediately before each unlink. A
+tens-of-gigabytes install therefore moves several times its own size off the storage it sits on, and at the read rate of
+a memory card that came back from the field as **over twenty minutes** with no progress indication, during which repeat
+presses raced the first removal and produced spurious failure toasts. Nothing about this is specific to one install
+size; it is simply invisible below a few gigabytes.
 
 A second, sharper defect sits in the same machinery. Whole-tree writer exclusion holds one open descriptor per regular
 file for the entire removal. The plugin process runs with a soft `RLIMIT_NOFILE` of 1024 (hard 524288), so any tree with
 more files than that raises `EMFILE` during lease acquisition — and because the rollback then restores the tree intact,
-those ROMs become **permanently un-uninstallable through the UI**. Six titles in a real library exceed the limit today,
-at 1685, 2025, 2999, 3802, 4488 and 53864 files. Multi-thousand-file dumps are ordinary on some platforms, so this is
-reached in practice rather than in theory.
+those ROMs become **permanently un-uninstallable through the UI**. Multi-thousand-file dumps are ordinary on some
+platforms — and tens of thousands of files in one install is not exotic — so a collection that holds any of them is over
+the limit already. This is reached in practice rather than in theory.
 
 What the hashes actually buy was measured against the code rather than assumed. In a cleanup run,
 `RecoveryBundleAdapter._require_records_match_claims` refuses any artifact record whose `sha256` differs from the sealed
@@ -67,13 +68,13 @@ authorization is unchanged — a file another process holds open for writing is 
 runs before any unlink and takes each file's lease in turn, so a writer already holding any file in the tree, or any
 identity drift, refuses with nothing deleted. Only a writer arriving **during** the unlink loop reaches a partial
 removal. That partial is reported as partial and ambiguous, never as success, and its message names how far the removal
-got ("3 of 331 files were removed", or that no file was removed), so a caller can tell an untouched source from a
+got ("3 of 128 files were removed", or that no file was removed), so a caller can tell an untouched source from a
 half-removed one. The remainder stays under the staging name, which the next attempt reclaims.
 
-**What this buys.** Measured on a 2.59 GiB tree of 331 files: content-bound reads 10.34 GiB in 13.66 s — exactly four
-times the tree, confirming the four-pass diagnosis — where identity-only reads **0.00 GiB in 0.38 s**. Applying that
-byte count at the 91 MB/s the reporting device recorded reproduces the observed 22:48, so the model is validated rather
-than plausible. Trees larger than the descriptor limit become removable at all.
+**What this buys.** A content-bound removal reads the whole tree four times over — the four-pass diagnosis, confirmed by
+measurement — while an identity-only removal reads none of it and finishes in a fraction of a second. Dividing those
+bytes by a storage read rate reproduces the reported wall-clock exactly, so the model is validated rather than
+plausible. Trees larger than the descriptor limit become removable at all.
 
 **What is not weakened.** The prune path keeps every hash it had, including the fresh claims it seals for sources a
 bundle did not capture. Deletion authority is untouched: it is still, only, a fresh single-attempt exact-id 404 under
@@ -97,8 +98,9 @@ both no-bundle cases with one rule.
 an adapter in the business of mutating a process-global limit, it holds tens of thousands of concurrent kernel leases
 for a single uninstall, and it only moves the ceiling — there is always a larger dump.
 
-**Leave the descriptor exhaustion for later.** Rejected: six titles in a real library exceed the limit today, one of
-them fifty-fold, and the failure mode is a ROM that can never be uninstalled from the UI rather than a slow one.
+**Leave the descriptor exhaustion for later.** Rejected: an ordinary collection already holds titles over the limit, the
+largest of them by a factor of tens, and the failure mode is a ROM that can never be uninstalled from the UI rather than
+a slow one.
 
 ## See also
 
