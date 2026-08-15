@@ -126,6 +126,22 @@ describe("AdoptExistingModal — the comparison", () => {
     }
   });
 
+  it("states when a file was last changed", () => {
+    const { container } = renderModal();
+    expect(container.textContent).toContain("Last changed");
+  });
+
+  it("withholds the timestamp for anything whose mtime is not the game's", () => {
+    // `lstat` gives a link's own mtime — when it was pointed somewhere, not when
+    // the game was touched — and under a column headed "On this device" that
+    // reads as the game's. The size beside it is already withheld for the same
+    // reason; this was the one line left implying otherwise.
+    for (const occupied of [linkOccupied(), unknownOccupied()]) {
+      const { container } = renderModal({ occupied });
+      expect(container.textContent).not.toContain("Last changed");
+    }
+  });
+
   it("has no word and no number for something that is neither file, folder nor shortcut", () => {
     const { container } = renderModal({ occupied: unknownOccupied() });
     expect(container.textContent).toContain("A thing is already where this game would be downloaded");

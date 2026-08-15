@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import io
 import logging
+import re
 import zipfile
 import zlib
 from types import SimpleNamespace
@@ -1946,7 +1947,40 @@ class TestSearchLogging:
 
         (line,) = [entry for entry in h.debug_log if entry.startswith("adopt probe:")]
         assert "slug=snes" in line
+        assert "name=<empty>" in line
         assert "found=0" in line
+
+    async def test_a_name_that_is_only_tags_answers_the_same_way(self, h):
+        # It has a name and still nothing to match on, which is the same answer
+        # and now the same line.
+        h.service.has_adoption_candidate("snes", "(USA).sfc")
+
+        (line,) = [entry for entry in h.debug_log if entry.startswith("adopt probe:")]
+        assert "name=<empty>" in line
+        assert "found=0" in line
+
+    async def test_every_exit_states_the_same_five_keys(self, h):
+        # A log read across a divergence is unreadable if its shape changes per
+        # exit — the reason this line exists is to be compared with the click
+        # search's, and with the same call on another day. The game name carries
+        # a space on purpose: a normalized name usually does, so a line that only
+        # parses for single-word titles would be no shape at all.
+        h.system_extensions = {"snes": frozenset({".sfc"})}
+        h.store.files["/roms/snes/Example Quest (U).sfc"] = b"x"
+
+        h.service.has_adoption_candidate("snes", "Example Quest (USA).sfc")
+        h.service.has_adoption_candidate("snes", "")
+        h.service.has_adoption_candidate("../escape", "Example Quest (USA).sfc")
+
+        lines = [entry for entry in h.debug_log if entry.startswith("adopt probe:")]
+        assert len(lines) == 3
+        shape = re.compile(r"adopt probe: slug=(.*) dir=(.*) name=(.*) entries=(\d+) found=(\d+)")
+        names: list[str] = []
+        for line in lines:
+            match = shape.fullmatch(line)
+            assert match is not None, line
+            names.append(match.group(3))
+        assert names == ["example quest", "<empty>", "example quest"]
 
 
 class TestWrongShapeNamesake:

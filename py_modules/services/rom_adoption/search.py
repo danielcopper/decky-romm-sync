@@ -39,6 +39,7 @@ from lib.path_safety import PathTraversalError, safe_join
 
 if TYPE_CHECKING:
     import logging
+    from collections.abc import Sequence
 
     from services.protocols import (
         DebugLogger,
@@ -200,23 +201,40 @@ class CandidateSearch:
         that is not an ES-DE system: a namesake in such a directory is content
         no emulator will ever look at.
         """
-        if not fs_name:
-            self._log_debug(f"adopt probe: slug={platform_slug} name=<empty> found=0")
-            return ()
         system = self._resolve_system(platform_slug)
         platform_dir = self._platform_dir(system)
-        if platform_dir is None:
-            self._log_debug(f"adopt probe: slug={platform_slug} name={fs_name} dir=unresolved")
+        wanted_name = normalize_rom_name(fs_name)
+        if platform_dir is None or not wanted_name:
+            self._log_probe(platform_slug, platform_dir, wanted_name, entries=(), found=())
             return ()
-        wanted = frozenset({normalize_rom_name(fs_name)})
         covered = self._installed_paths() | {os.path.join(platform_dir, fs_name)}
         entries = self._local_names(platform_dir)
-        found = self._named(entries, system=system, wanted=wanted, covered=covered)
-        self._log_debug(
-            f"adopt probe: dir={platform_dir} name={normalize_rom_name(fs_name)} "
-            f"entries={len(entries)} found={len(found)}"
-        )
+        found = self._named(entries, system=system, wanted=frozenset({wanted_name}), covered=covered)
+        self._log_probe(platform_slug, platform_dir, wanted_name, entries=entries, found=found)
         return found
+
+    def _log_probe(
+        self,
+        platform_slug: str,
+        platform_dir: str | None,
+        wanted_name: str,
+        *,
+        entries: Sequence[LocalName],
+        found: Sequence[LocalName],
+    ) -> None:
+        """The probe's one log line, the same keys whichever exit reached it.
+
+        This log exists to reconstruct a divergence between the page and the
+        click search after the fact, and a line whose shape changes per exit is
+        exactly what makes that hard to read. So every exit states all five, and
+        the ones that gave up early say so in the value rather than by omitting
+        the key: an unresolvable directory is ``unresolved``, a name with nothing
+        left to match on is ``<empty>``.
+        """
+        self._log_debug(
+            f"adopt probe: slug={platform_slug} dir={platform_dir or 'unresolved'} "
+            f"name={wanted_name or '<empty>'} entries={len(entries)} found={len(found)}"
+        )
 
     def _platform_dir(self, system: str) -> str | None:
         """The folder *system*'s games live in, derived as the download derives it.

@@ -564,23 +564,13 @@ class RomAdoptionService:
         exist for the install's foreign key, and asking here turns what would
         otherwise be an exception *after* the supersede into a refusal before it.
         """
-        existing = self._download_file_store.describe_path(source_path)
-        if existing is None:
-            return {
-                "success": False,
-                "reason": "nothing_to_adopt",
-                "message": "The files are no longer there — nothing was adopted",
-            }
-        # Kind and shape in one question, asked here rather than trusted from the
-        # dialog: the entry offered as a regular file may have become a link
-        # between the gate's answer and the user's confirmation, and this service
-        # re-validates every path immediately before it uses it.
-        if not adoptable_content(existing["kind"], served_dir=target.is_multi):
-            return {
-                "success": False,
-                "reason": "unexpected_content_kind",
-                "message": unadoptable_reason(existing["kind"]),
-            }
+        # Asked here rather than trusted from the dialog: the entry offered as a
+        # regular file may have become a link between the gate's answer and the
+        # user's confirmation, and this service re-validates every path
+        # immediately before it uses it.
+        refusal = self._unadoptable_refusal(source_path, target)
+        if refusal is not None:
+            return refusal
         if source_path != target.path and self._renamer.target_taken(target):
             return _target_taken_refusal()
         with self._uow_factory() as uow:
@@ -590,6 +580,39 @@ class RomAdoptionService:
                 "success": False,
                 "reason": "invalid_install",
                 "message": "This game is not in the local library — nothing was adopted",
+            }
+        return None
+
+    def _unadoptable_refusal(self, path: str, target: _Target) -> dict[str, Any] | None:
+        """Why content at *path* cannot become *target*'s install, or ``None``.
+
+        Both the validation before the move and the last check after it ask this,
+        and they must give the same answers: a user who is told "the files are no
+        longer there" by one and "a shortcut is in the way" by the other for the
+        same disk state has been told two different things about one folder. One
+        function is what makes that true rather than asserted — the argument
+        ``unadoptable_reason`` makes for not taking the served shape, and the one
+        this whole search has been rebuilt around.
+
+        The two refusals are two situations. Content that vanished is
+        ``nothing_to_adopt``; content still sitting there but of a kind no
+        install row may point at — a link, a directory where the server serves
+        one file, something with no kind at all — is ``unexpected_content_kind``.
+        Saying "no longer there" of a file that merely became a link sends the
+        user looking for something that has not happened.
+        """
+        existing = self._download_file_store.describe_path(path)
+        if existing is None:
+            return {
+                "success": False,
+                "reason": "nothing_to_adopt",
+                "message": "The files are no longer there — nothing was adopted",
+            }
+        if not adoptable_content(existing["kind"], served_dir=target.is_multi):
+            return {
+                "success": False,
+                "reason": "unexpected_content_kind",
+                "message": unadoptable_reason(existing["kind"]),
             }
         return None
 
@@ -608,32 +631,17 @@ class RomAdoptionService:
     def _adopt_io(self, rom_id: int, rom_detail: dict[str, Any], target: _Target) -> dict[str, Any]:
         """Persist the install record for content ``_validate_adoption_io`` accepted.
 
-        The target is stat'd once more: the supersede ran in between, and content
-        that vanished across it — or turned into something no row may point at —
-        must be refused rather than recorded. That window is the one refusal that
-        can follow a completed supersede, and it cannot be closed: a row pointing
-        at files that are gone would be worse, and one pointing at a link could
-        never be removed.
-
-        The two outcomes are two different situations and get two different
-        answers, the same pair :meth:`_validate_adoption_io` gives one function
-        up. "The files are no longer there" said of content that is still there
-        and merely changed kind sends the user looking for something that has
-        not happened.
+        The target is asked about once more through the same
+        :meth:`_unadoptable_refusal` the validation used: the supersede ran in
+        between, and content that vanished across it — or turned into something
+        no install row may point at — must be refused rather than recorded. That
+        window is the one refusal that can follow a completed supersede, and it
+        cannot be closed: a row pointing at files that are gone would be worse,
+        and one pointing at a link could never be removed.
         """
-        existing = self._download_file_store.describe_path(target.path)
-        if existing is None:
-            return {
-                "success": False,
-                "reason": "nothing_to_adopt",
-                "message": "The files are no longer there — nothing was adopted",
-            }
-        if not adoptable_content(existing["kind"], served_dir=target.is_multi):
-            return {
-                "success": False,
-                "reason": "unexpected_content_kind",
-                "message": unadoptable_reason(existing["kind"]),
-            }
+        refusal = self._unadoptable_refusal(target.path, target)
+        if refusal is not None:
+            return refusal
         file_path = self._adopted_launch_file(target) if target.is_multi else target.path
         rom_dir = target.path if target.is_multi else None
         # A no-op cleanup, deliberately: the recorder removes the artifact when

@@ -329,9 +329,9 @@ _KIND_PLURAL = {FILE: "single files", DIR: "folders", LINK: "shortcuts to somewh
 def _namesake_message(shown: tuple[LocalName, ...], *, count: int, served_dir: bool) -> str:
     """One sentence naming what was found and why none of it can be this game.
 
-    *count* is how many were found and *shown* is how many were looked at, which
-    is why both are needed and nothing else is: whether the list was cut is the
-    difference between them.
+    *count* is how many were found and *shown* is the ones that were looked at,
+    which is why both are needed and nothing else is: whether the list was cut is
+    the difference between *count* and the length of *shown*.
 
     The two halves are chosen separately because the reasons are not the same
     reason. A wrong shape is only wrong *against what the server sends*, so that

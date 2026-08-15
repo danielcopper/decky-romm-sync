@@ -62,6 +62,22 @@ function nounFor(occupied: TargetOccupiedResult): string {
 }
 
 /**
+ * Whether what is at the path is the game's own content, and so whether the
+ * numbers `stat` returned describe the game at all. Only a file or a directory
+ * is: a symlink's size and mtime are the link's own — when it was pointed
+ * somewhere, not when the game was last touched — and a kindless entry's belong
+ * to something the plugin has no word for.
+ *
+ * Everything under "On this device" is read as being about this game's copy, so
+ * a measurement that is not gets left out rather than qualified. Half that
+ * column already says so where the size would be; a bare "Last changed" beside
+ * it is the one line still implying otherwise.
+ */
+function describesTheGame(occupied: TargetOccupiedResult): boolean {
+  return occupied.existing.kind === "file" || occupied.existing.kind === "dir";
+}
+
+/**
  * How the existing side's size is stated. Only a file or a folder has a byte
  * count that is the game's; a shortcut's `stat` reports the length of the path
  * it stores, which is a real-looking number about nothing the user is deciding
@@ -193,7 +209,7 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({
             <div style={LABEL_STYLE}>On this device</div>
             <div style={VALUE_STYLE}>{occupied.existing.name}</div>
             <div style={VALUE_STYLE}>{existingSize(occupied, Boolean(candidatePath))}</div>
-            {modified && <div style={LABEL_STYLE}>Last changed {modified}</div>}
+            {modified && describesTheGame(occupied) && <div style={LABEL_STYLE}>Last changed {modified}</div>}
           </div>
           <div>
             <div style={LABEL_STYLE}>On the server</div>
