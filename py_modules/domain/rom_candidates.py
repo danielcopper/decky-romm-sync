@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 # Ranked strongest first: what a row rests on decides where it sits in the list.
 # ``crc32`` is a checksum the ZIP's own central directory hands over for free and
@@ -56,9 +56,15 @@ CANDIDATE_LIMIT = 10
 # Anything else a filesystem can hold — a FIFO, a socket, a device node — has no
 # truthful value in a vocabulary of "file or directory", and inventing one is
 # what let a named pipe be offered as a game.
-FILE = "file"
-DIR = "dir"
-LINK = "link"
+#
+# The vocabulary is a ``Literal`` rather than three ``str`` constants so the type
+# checker holds it closed. "There is no fourth value" was a docstring promise
+# through three review rounds while the code kept acquiring one.
+Kind = Literal["file", "dir", "link"]
+
+FILE: Kind = "file"
+DIR: Kind = "dir"
+LINK: Kind = "link"
 
 
 @dataclass(frozen=True)
@@ -80,7 +86,7 @@ class LocalName:
 
     name: str
     path: str
-    kind: str
+    kind: Kind
 
 
 @dataclass(frozen=True)
@@ -317,6 +323,35 @@ def candidates_refusal(
 # is what a toast shows if that dialog never opens.
 _SERVED_WORD = {True: "folder", False: "single file"}
 _KIND_WORD = {FILE: "a single file", DIR: "a folder", LINK: "a shortcut to somewhere else"}
+_KIND_PLURAL = {FILE: "single files", DIR: "folders", LINK: "shortcuts to somewhere else"}
+
+
+def _namesake_message(shown: tuple[LocalName, ...], *, count: int, served_dir: bool, truncated: bool) -> str:
+    """One sentence naming what was found and why none of it can be this game.
+
+    The two halves are chosen separately because the reasons are not the same
+    reason. A wrong shape is only wrong *against what the server sends*, so that
+    clause has to name the served shape. A link is unusable on its own terms, and
+    appending "and the server sends this game as a single file" to one invites
+    exactly the wrong reading — that the shortcut would have been fine had the
+    server served a folder.
+
+    What was found is stated by kind where the kind is known for all of it: a
+    capped list saw only the first few, so it says "entries" rather than claiming
+    the ones it never looked at were folders too.
+    """
+    kinds = {entry.kind for entry in shown}
+    only_kind = next(iter(kinds)) if len(kinds) == 1 and not truncated else None
+    if count == 1:
+        subject = f"'{shown[0].name}' has this game's name but is {_KIND_WORD[shown[0].kind]}"
+    else:
+        what = _KIND_PLURAL[only_kind] if only_kind else "entries"
+        subject = f"{count} {what} here have this game's name"
+    if only_kind == LINK:
+        return f"{subject}, which cannot be used as this game whatever it points at"
+    if only_kind is None:
+        return f"{subject}, and none of them can be used as this game"
+    return f"{subject}, and the server sends this game as a {_SERVED_WORD[served_dir]}"
 
 
 def unusable_namesake_refusal(
@@ -353,19 +388,15 @@ def unusable_namesake_refusal(
     if not entries:
         raise ValueError("unusable_namesake_refusal needs at least one entry")
     shown = entries[:limit]
+    truncated = len(entries) > limit
     return {
         "success": False,
         "reason": "unusable_namesake",
-        "message": (
-            f"'{shown[0].name}' has this game's name but is {_KIND_WORD[shown[0].kind]}"
-            if len(entries) == 1
-            else f"{len(entries)} entries here have this game's name and cannot be used as this game"
-        )
-        + f", and the server sends this game as a {_SERVED_WORD[served_dir]}",
+        "message": _namesake_message(shown, count=len(entries), served_dir=served_dir, truncated=truncated),
         "incoming": {"name": incoming_name, "size_bytes": incoming_size},
         "existing": [{"name": entry.name, "path": entry.path, "kind": entry.kind} for entry in shown],
         "served_is_dir": served_dir,
-        "truncated": len(entries) > limit,
+        "truncated": truncated,
     }
 
 

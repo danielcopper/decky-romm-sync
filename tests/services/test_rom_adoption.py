@@ -298,7 +298,7 @@ class TestCheckDownloadTarget:
         assert result["success"] is False
         assert result["reason"] == "target_occupied"
         assert result["existing"]["size_bytes"] == 25
-        assert result["existing"]["is_dir"] is False
+        assert result["existing"]["kind"] == "file"
         assert result["existing"]["modified_at"] == 1_700_000_000.0
         assert result["incoming"] == {"name": "Game.sfc", "size_bytes": 10}
         assert result["sizes_match"] is False
@@ -316,7 +316,7 @@ class TestCheckDownloadTarget:
         result = await h.service.check_download_target(_single_file_detail(), "/roms/snes/Game.sfc", replace=False)
 
         assert result is not None
-        assert result["existing"]["is_dir"] is True
+        assert result["existing"]["kind"] == "dir"
         assert result["adoptable"] is False
 
     async def test_a_directory_in_a_multi_file_ROM_s_way_is_adoptable(self, h):
@@ -550,6 +550,35 @@ class TestAdopt:
 
         assert result["success"] is False
         assert result["reason"] == "unexpected_content_kind"
+
+    async def test_a_symlink_at_the_target_is_refused_by_the_acting_site_itself(self, h):
+        # The offering sites already refuse one, and this is the reachable case
+        # they cannot cover: the entry was a regular file when the dialog opened
+        # and is a link by the time the user confirms. Only this check stands
+        # between that and a row ``claim_source`` will never let go of.
+        h.seed_rom()
+        h.stage_detail(_single_file_detail())
+        h.store.links["/roms/snes/Game.sfc"] = "/roms/snes/real.sfc"
+
+        result = await h.service.adopt_existing_rom(_ROM_ID)
+
+        assert result["success"] is False
+        assert result["reason"] == "unexpected_content_kind"
+        assert result["message"] == "A shortcut is in the way — a shortcut cannot be used as this game"
+        assert h.uow.rom_installs.get(_ROM_ID) is None
+        assert set(h.store.links) == {"/roms/snes/Game.sfc"}
+
+    async def test_a_named_pipe_at_the_target_is_refused_the_same_way(self, h):
+        h.seed_rom()
+        h.stage_detail(_single_file_detail())
+        h.store.other_kinds.add("/roms/snes/Game.sfc")
+
+        result = await h.service.adopt_existing_rom(_ROM_ID)
+
+        assert result["success"] is False
+        assert result["reason"] == "unexpected_content_kind"
+        assert result["message"] == "What is in the way is neither a file nor a folder"
+        assert h.uow.rom_installs.get(_ROM_ID) is None
 
     async def test_a_rejected_install_never_deletes_the_content(self, h):
         # A ROM with no `roms` row cannot carry an install. Refused up front —
@@ -1486,7 +1515,7 @@ class TestTheAdmissionRule:
         # Adopting one writes an install row the UI can never undo: every
         # uninstall goes through ``claim_source``, which refuses a symlink.
         h.system_extensions = {"snes": frozenset({".sfc"})}
-        h.store.links.add("/roms/snes/Game (U).sfc")
+        h.store.links["/roms/snes/Game (U).sfc"] = "/roms/snes/real.sfc"
 
         result = await h.service.check_download_target(
             _single_file_detail(name="Game (USA).sfc", size=10), "/roms/snes/Game (USA).sfc", replace=False
@@ -1499,7 +1528,7 @@ class TestTheAdmissionRule:
 
     async def test_a_symlink_is_named_for_what_it_is(self, h):
         h.system_extensions = {"snes": frozenset({".sfc"})}
-        h.store.links.add("/roms/snes/Game (U).sfc")
+        h.store.links["/roms/snes/Game (U).sfc"] = "/roms/snes/real.sfc"
 
         result = await h.service.check_download_target(
             _single_file_detail(name="Game (USA).sfc"), "/roms/snes/Game (USA).sfc", replace=False
@@ -1508,7 +1537,7 @@ class TestTheAdmissionRule:
         assert result is not None
         assert result["message"] == (
             "'Game (U).sfc' has this game's name but is a shortcut to somewhere else, "
-            "and the server sends this game as a single file"
+            "which cannot be used as this game whatever it points at"
         )
 
     async def test_a_named_pipe_is_not_mentioned_at_all(self, h):
@@ -1526,7 +1555,7 @@ class TestTheAdmissionRule:
 
     async def test_a_real_file_is_still_a_candidate_beside_a_link(self, h):
         h.system_extensions = {"snes": frozenset({".sfc"})}
-        h.store.links.add("/roms/snes/Game (J).sfc")
+        h.store.links["/roms/snes/Game (J).sfc"] = "/roms/snes/real.sfc"
         h.store.files["/roms/snes/Game (U).sfc"] = b"mine"
 
         result = await h.service.check_download_target(
@@ -1540,13 +1569,13 @@ class TestTheAdmissionRule:
     async def test_the_page_still_reports_a_link_so_the_button_is_honest(self, h):
         # It is content the user has: a download lands beside it and leaves two.
         h.system_extensions = {"snes": frozenset({".sfc"})}
-        h.store.links.add("/roms/snes/Game (U).sfc")
+        h.store.links["/roms/snes/Game (U).sfc"] = "/roms/snes/real.sfc"
 
         assert h.service.has_adoption_candidate("snes", "Game (USA).sfc") is True
 
     async def test_downloading_anyway_leaves_the_link_alone(self, h):
         h.system_extensions = {"snes": frozenset({".sfc"})}
-        h.store.links.add("/roms/snes/Game (U).sfc")
+        h.store.links["/roms/snes/Game (U).sfc"] = "/roms/snes/real.sfc"
 
         assert (
             await h.service.check_download_target(
@@ -1554,7 +1583,7 @@ class TestTheAdmissionRule:
             )
             is None
         )
-        assert h.store.links == {"/roms/snes/Game (U).sfc"}
+        assert set(h.store.links) == {"/roms/snes/Game (U).sfc"}
 
 
 class TestSymlinkAtTheTargetPath:
@@ -1563,7 +1592,7 @@ class TestSymlinkAtTheTargetPath:
     async def test_a_link_at_the_target_path_is_not_adoptable(self, h):
         # PR #1712's dialog offered to adopt it, because ``describe_path``
         # followed and reported ordinary content.
-        h.store.links.add("/roms/snes/Game.sfc")
+        h.store.links["/roms/snes/Game.sfc"] = "/roms/snes/real.sfc"
 
         result = await h.service.check_download_target(
             _single_file_detail(name="Game.sfc"), "/roms/snes/Game.sfc", replace=False
@@ -1587,7 +1616,7 @@ class TestSymlinkAtTheTargetPath:
     async def test_a_link_at_the_target_path_is_not_read_as_nothing(self, h):
         # Reported as absent, the download proceeded and the finalize replace
         # destroyed the link in silence. It occupies the path; the user is asked.
-        h.store.links.add("/roms/snes/Game.sfc")
+        h.store.links["/roms/snes/Game.sfc"] = "/roms/snes/real.sfc"
 
         result = await h.service.check_download_target(
             _single_file_detail(name="Game.sfc"), "/roms/snes/Game.sfc", replace=False
@@ -1595,6 +1624,37 @@ class TestSymlinkAtTheTargetPath:
 
         assert result is not None
         assert result["reason"] == "target_occupied"
+
+    async def test_a_named_pipe_at_the_target_path_is_reported_rather_than_written_over(self, h):
+        # The listings leave one out, so the search says "nothing here" and the
+        # download would have run and replaced it without a word. This door
+        # reports it — with no kind, because there is no honest word for it.
+        h.store.other_kinds.add("/roms/snes/Game.sfc")
+
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game.sfc"), "/roms/snes/Game.sfc", replace=False
+        )
+
+        assert result is not None
+        assert result["reason"] == "target_occupied"
+        assert result["existing"]["kind"] is None
+        assert result["adoptable"] is False
+        assert result["sizes_match"] is None
+        assert result["message"] == "Something named 'Game.sfc' is already in place"
+
+    async def test_a_link_at_the_target_path_states_no_size_verdict(self, h):
+        # Its byte count is the length of the path it stores, and the dialog was
+        # showing that as the content's and comparing it with the server's.
+        h.store.links["/roms/snes/Game.sfc"] = "/roms/snes/real.sfc"
+
+        result = await h.service.check_download_target(
+            _single_file_detail(name="Game.sfc", size=len("/roms/snes/real.sfc")),
+            "/roms/snes/Game.sfc",
+            replace=False,
+        )
+
+        assert result is not None
+        assert result["sizes_match"] is None
 
 
 class TestSearchableDirectory:
@@ -1854,7 +1914,7 @@ class TestWrongShapeNamesake:
             is None
         )
 
-    async def test_a_resume_is_never_refused_by_a_shape_conflict(self, h):
+    async def test_a_resume_is_never_refused_by_an_unusable_namesake(self, h):
         h.system_extensions = {"snes": frozenset({".sfc"})}
         h.store.dirs.add("/roms/snes/Game (U)")
         h.store.files["/roms/snes/Game (U)/rom.sfc"] = b"mine"

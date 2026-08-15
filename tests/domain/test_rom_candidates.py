@@ -19,6 +19,7 @@ from domain.rom_candidates import (
     LINK,
     NAME_MATCH,
     SIZE_MATCH,
+    Kind,
     LocalEntry,
     LocalName,
     candidates_refusal,
@@ -32,7 +33,7 @@ from domain.rom_candidates import (
 _ACCEPTED = frozenset({".gba", ".zip", ".sfc"})
 
 
-def _entry(name: str, *, kind: str = FILE, size: int = 0, directory: str = "/roms/gba") -> LocalEntry:
+def _entry(name: str, *, kind: Kind = FILE, size: int = 0, directory: str = "/roms/gba") -> LocalEntry:
     return LocalEntry(
         name=name,
         path=f"{directory}/{name}",
@@ -42,7 +43,7 @@ def _entry(name: str, *, kind: str = FILE, size: int = 0, directory: str = "/rom
     )
 
 
-def _name(name: str, *, kind: str = FILE, directory: str = "/roms/gba") -> LocalName:
+def _name(name: str, *, kind: Kind = FILE, directory: str = "/roms/gba") -> LocalName:
     """What a bare directory read knows — the page's half of the search works on this."""
     return LocalName(name=name, path=f"{directory}/{name}", kind=kind)
 
@@ -142,6 +143,20 @@ class TestMatchingEntries:
             covered_paths=frozenset(),
         )
         assert found == (wanted,)
+
+    def test_any_of_several_wanted_names_matches(self) -> None:
+        # The caller derives more than one name for one ROM — the path the
+        # download built, the inner file's name, ``fs_name`` — and a copy on disk
+        # may be under any of them.
+        by_derived = _entry("Inner Disc (U).zip")
+        by_fs_name = _entry("Example Quest - Second Journey (U).zip")
+        found = matching_entries(
+            (by_derived, by_fs_name, _entry("Other Game (USA).gba")),
+            wanted_names=frozenset({"inner disc", "example quest second journey"}),
+            accepted_extensions=_ACCEPTED,
+            covered_paths=frozenset(),
+        )
+        assert set(found) == {by_derived, by_fs_name}
 
     def test_the_page_s_leaner_entries_go_through_the_very_same_filter(self) -> None:
         # The two halves of the search agree because one filter answers for both
@@ -259,6 +274,33 @@ class TestMatchingEntries:
             )
             == ()
         )
+
+    def test_an_empty_string_among_the_wanted_names_is_dropped_not_matched(self) -> None:
+        # The reachable shape of the case above: the caller derives several names
+        # for one ROM and one of them normalizes away, so the set is non-empty but
+        # holds "". Read as a value it equals every entry whose own name is only
+        # tags, and the folder's tag-only files all become candidates for this
+        # game. Passing an empty *set* does not reach this — that is refused one
+        # line earlier — so this is the only witness the filter has.
+        assert (
+            matching_entries(
+                (_entry("(USA).gba"), _entry("[!].gba")),
+                wanted_names=frozenset({"", "example quest"}),
+                accepted_extensions=_ACCEPTED,
+                covered_paths=frozenset(),
+            )
+            == ()
+        )
+
+    def test_dropping_the_empty_name_leaves_the_real_ones_matching(self) -> None:
+        # The other half: the filter drops "" rather than giving up on the set.
+        wanted = _entry("Example Quest (USA).gba")
+        assert matching_entries(
+            (wanted, _entry("(USA).gba")),
+            wanted_names=frozenset({"", "example quest"}),
+            accepted_extensions=_ACCEPTED,
+            covered_paths=frozenset(),
+        ) == (wanted,)
 
     def test_an_entry_that_normalizes_to_nothing_is_not_a_candidate_either(self) -> None:
         assert (
@@ -452,7 +494,10 @@ class TestUnusableNamesakeRefusal:
 
     def test_a_link_is_named_for_what_it_is_rather_than_a_shape(self) -> None:
         # A symlink is not the wrong shape — it is the wrong *kind*, and would be
-        # refused even where it resolves to exactly the right thing.
+        # refused even where it resolves to exactly the right thing. So the
+        # sentence must NOT end in the served shape: "…is a shortcut, and the
+        # server sends this game as a single file" reads as though a folder-served
+        # game would have taken the shortcut happily.
         refusal = unusable_namesake_refusal(
             (_name("Example Quest (U).gba", kind=LINK),),
             served_dir=False,
@@ -461,37 +506,60 @@ class TestUnusableNamesakeRefusal:
         )
         assert refusal["message"] == (
             "'Example Quest (U).gba' has this game's name but is a shortcut to somewhere else, "
-            "and the server sends this game as a single file"
+            "which cannot be used as this game whatever it points at"
         )
         assert refusal["existing"] == [
             {"name": "Example Quest (U).gba", "path": "/roms/gba/Example Quest (U).gba", "kind": LINK}
         ]
 
-    def test_several_are_counted_rather_than_listed_in_the_sentence(self) -> None:
+    def test_several_of_one_kind_are_counted_and_still_named(self) -> None:
+        refusal = unusable_namesake_refusal(
+            (_name("Example Quest (U)", kind=DIR), _name("Example Quest (E)", kind=DIR)),
+            served_dir=False,
+            incoming_name="Example Quest (USA).gba",
+            incoming_size=0,
+        )
+        assert refusal["message"] == (
+            "2 folders here have this game's name, and the server sends this game as a single file"
+        )
+
+    def test_several_links_keep_the_reason_that_belongs_to_a_link(self) -> None:
+        refusal = unusable_namesake_refusal(
+            (_name("Example Quest (U).gba", kind=LINK), _name("Example Quest (E).gba", kind=LINK)),
+            served_dir=False,
+            incoming_name="Example Quest (USA).gba",
+            incoming_size=0,
+        )
+        assert refusal["message"] == (
+            "2 shortcuts to somewhere else here have this game's name, "
+            "which cannot be used as this game whatever it points at"
+        )
+
+    def test_a_mixed_list_names_no_kind_and_no_shape(self) -> None:
+        # Two kinds with two different reasons, so the sentence claims neither —
+        # the dialog labels each row and that is where the detail belongs.
         refusal = unusable_namesake_refusal(
             (_name("Example Quest (U)", kind=DIR), _name("Example Quest (E).gba", kind=LINK)),
             served_dir=False,
             incoming_name="Example Quest (USA).gba",
             incoming_size=0,
         )
-        # Two kinds in one list, so the sentence counts rather than naming one.
-        assert refusal["message"] == (
-            "2 entries here have this game's name and cannot be used as this game, "
-            "and the server sends this game as a single file"
-        )
+        assert refusal["message"] == "2 entries here have this game's name, and none of them can be used as this game"
         assert refusal["existing"] == [
             {"name": "Example Quest (U)", "path": "/roms/gba/Example Quest (U)", "kind": DIR},
             {"name": "Example Quest (E).gba", "path": "/roms/gba/Example Quest (E).gba", "kind": LINK},
         ]
 
-    def test_a_capped_list_counts_what_was_found_not_what_is_shown(self) -> None:
+    def test_a_capped_list_counts_what_was_found_and_claims_no_kind_for_it(self) -> None:
+        # The count is what was found; the kind is only what was looked at. Naming
+        # the shown kind here would claim the entries beyond the cap were folders
+        # too, which nothing read.
         entries = tuple(_name(f"Example Quest ({index:03d})", kind=DIR) for index in range(CANDIDATE_LIMIT + 3))
         refusal = unusable_namesake_refusal(
             entries, served_dir=False, incoming_name="Example Quest.gba", incoming_size=0
         )
         assert refusal["message"] == (
-            f"{CANDIDATE_LIMIT + 3} entries here have this game's name and cannot be used as this game, "
-            "and the server sends this game as a single file"
+            f"{CANDIDATE_LIMIT + 3} entries here have this game's name, and none of them can be used as this game"
         )
         assert refusal["existing"] == [
             {"name": entry.name, "path": entry.path, "kind": DIR} for entry in entries[:CANDIDATE_LIMIT]

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -756,6 +757,50 @@ async def test_a_link_pointing_nowhere_at_the_target_path_is_not_silently_destro
     assert result["success"] is False
     assert result["reason"] == "target_occupied"
     assert link.is_symlink()
+
+
+async def test_a_named_pipe_at_the_target_path_is_never_offered_as_this_game(harness):
+    # The search leaves one out, so the whole question reaches this door and no
+    # other. Adopting one wrote a row ``claim_source`` then refused to release,
+    # leaving a game that could not be uninstalled.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    harness.romm.download_payloads[f"rom:{_ROM_ID}:{_CANONICAL}"] = b"srv!"
+    pipe = _platform_dir(harness) / _CANONICAL
+    os.mkfifo(str(pipe))
+
+    result = await harness.plugin.start_download(_ROM_ID, False)
+    adopted = await harness.plugin.adopt_existing_rom(_ROM_ID, None, None)
+    await _drain_download(harness)
+
+    assert result["success"] is False
+    assert result["reason"] == "target_occupied"
+    assert result["existing"]["kind"] is None
+    assert result["adoptable"] is False
+    assert adopted["success"] is False
+    assert adopted["reason"] == "unexpected_content_kind"
+    assert await harness.plugin.get_installed_rom(_ROM_ID) is None
+    # And it is still a pipe: nothing wrote over it, and nothing removed it.
+    assert stat.S_ISFIFO(os.lstat(str(pipe)).st_mode)
+
+
+async def test_a_symlink_at_the_target_path_cannot_be_adopted_either(harness):
+    # The gate disables the button; this is the same answer from the acting
+    # site, which is what a stale dialog or a repeated call reaches.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    real = _platform_dir(harness) / "real.gba"
+    real.write_bytes(b"my own dump")
+    link = _platform_dir(harness) / _CANONICAL
+    link.symlink_to(real)
+
+    adopted = await harness.plugin.adopt_existing_rom(_ROM_ID, None, None)
+
+    assert adopted["success"] is False
+    assert adopted["reason"] == "unexpected_content_kind"
+    assert await harness.plugin.get_installed_rom(_ROM_ID) is None
+    assert link.is_symlink()
+    assert real.read_bytes() == b"my own dump"
 
 
 # ── the backstop ─────────────────────────────────────────────────────────

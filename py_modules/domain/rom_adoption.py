@@ -12,6 +12,8 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+from domain.rom_candidates import DIR, FILE, LINK, Kind
+
 # RomM publishes CRC32, MD5 and SHA-1 side by side — per file and per archive
 # member — and computes them by default (``filesystem.skip_hash_calculation``
 # opts out). MD5 is taken first because CRC32 is a 32-bit checksum: at a
@@ -22,6 +24,16 @@ from typing import Any
 _DIGEST_PREFERENCE: tuple[tuple[str, str], ...] = (("md5", "md5_hash"), ("crc32", "crc_hash"))
 
 _TARGET_OCCUPIED = "target_occupied"
+
+# How each kind is named in the one-line message. The kindless case is deliberately
+# vague: the plugin has looked and has no word for what is there, and guessing one
+# would be the same invention that let a named pipe be offered as a game.
+_A_KIND: dict[Kind | None, str] = {
+    FILE: "A file",
+    DIR: "A folder",
+    LINK: "A shortcut",
+    None: "Something",
+}
 
 # The extensions RomM reads as archives, so its digest for such a file describes
 # the content inside rather than the container's own bytes (``ARCHIVE_READERS``
@@ -295,40 +307,75 @@ def sizes_agree(existing_size: int, incoming_size: int) -> bool | None:
     return existing_size == incoming_size
 
 
+def adoptable_content(kind: Kind | None, *, served_dir: bool) -> bool:
+    """Whether content of this *kind* could become this ROM's install row.
+
+    The one expression behind every adoption decision — the gate's ``adoptable``
+    flag, the validation immediately before the move, and the last check after
+    it. Written as a single equality rather than a chain of refusals because the
+    positive set is what is short: a directory where the server serves a folder,
+    a file where it serves one, and nothing else. A link fails it whatever it
+    resolves to (an install row has to be removable and the uninstall path
+    refuses one), and so does content with no kind at all.
+    """
+    return kind == (DIR if served_dir else FILE)
+
+
+def unadoptable_reason(kind: Kind | None) -> str:
+    """Why content of this *kind* cannot be this ROM, in one sentence.
+
+    Only called where :func:`adoptable_content` said no, which is what makes the
+    served shape unnecessary here: a directory that was refused was refused
+    because the server serves one file, and a file because it serves a folder.
+    Taking the shape as a parameter would offer a second place for the two to
+    disagree about the same refusal.
+    """
+    if kind == LINK:
+        return "A shortcut is in the way — a shortcut cannot be used as this game"
+    if kind is None:
+        return "What is in the way is neither a file nor a folder"
+    return (
+        "A folder is in the way where a file belongs" if kind == DIR else "A file is in the way where a folder belongs"
+    )
+
+
 def occupied_target_refusal(
     *,
     path: str,
-    is_dir: bool,
+    kind: Kind | None,
     size_bytes: int,
     modified_at: float,
     incoming_name: str,
     incoming_size: int,
-    adoptable: bool,
+    served_dir: bool,
 ) -> dict[str, Any]:
     """The refusal a download returns when its target path is already taken.
 
     Carries both sides of the comparison plus the verdict on their sizes, so the
     dialog can state whether they match rather than printing two numbers and
-    leaving the subtraction to the user. *adoptable* is false when what is in the
-    way is the wrong shape to be this ROM — a folder where the server serves one
-    file, or a file where it serves a folder — which leaves replacing or
-    cancelling as the only honest exits.
+    leaving the subtraction to the user. ``adoptable`` is derived here rather
+    than passed in: it is :func:`adoptable_content`, and a caller that computed
+    it separately is a second copy of the rule.
+
+    The size verdict is withheld for anything but a file or a folder. A link's
+    ``stat`` reports the length of the path it stores, not of the content behind
+    it, so relating that number to the server's would be a comparison of two
+    unrelated things dressed as evidence.
     """
-    kind = "folder" if is_dir else "file"
     return {
         "success": False,
         "reason": _TARGET_OCCUPIED,
-        "message": f"A {kind} named '{os.path.basename(path)}' is already in place",
+        "message": f"{_A_KIND[kind]} named '{os.path.basename(path)}' is already in place",
         "existing": {
             "name": os.path.basename(path),
             "path": path,
-            "is_dir": is_dir,
+            "kind": kind,
             "size_bytes": size_bytes,
             "modified_at": modified_at,
         },
         "incoming": {"name": incoming_name, "size_bytes": incoming_size},
-        "sizes_match": sizes_agree(size_bytes, incoming_size),
-        "adoptable": adoptable,
+        "sizes_match": sizes_agree(size_bytes, incoming_size) if kind in (FILE, DIR) else None,
+        "adoptable": adoptable_content(kind, served_dir=served_dir),
     }
 
 

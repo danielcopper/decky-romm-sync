@@ -24,7 +24,13 @@ import { addEventListener, removeEventListener } from "@decky/api";
 import { debugLog, verifyExistingContent } from "../api/backend";
 import { formatBytes } from "../utils/formatters";
 import { detach } from "../utils/detach";
-import type { AdoptionCandidate, TargetOccupiedResult, VerifyContentResult, VerifyProgressEvent } from "../types";
+import type {
+  AdoptionCandidate,
+  EntryKind,
+  TargetOccupiedResult,
+  VerifyContentResult,
+  VerifyProgressEvent,
+} from "../types";
 
 export type AdoptChoice = "adopt" | "replace" | "cancel";
 
@@ -52,6 +58,22 @@ function formatTimestamp(epochSeconds: number): string {
 }
 
 /**
+ * The noun for what is in the way. A `null` kind is something the backend looked
+ * at and has no word for — a named pipe, a socket — so this has none either,
+ * rather than calling it a file: that guess is what let one be offered as a game.
+ */
+const KIND_NOUN: Record<EntryKind, string> = {
+  file: "file",
+  dir: "folder",
+  link: "shortcut to somewhere else",
+};
+
+function nounFor(occupied: TargetOccupiedResult): string {
+  const kind = occupied.existing.kind;
+  return kind === null ? "thing" : KIND_NOUN[kind];
+}
+
+/**
  * How the existing side's size is stated. A candidate folder was deliberately
  * never measured — the search stays on the platform folder's top level, because
  * descending into one multi-file game can mean tens of thousands of files — so
@@ -59,18 +81,26 @@ function formatTimestamp(epochSeconds: number): string {
  * one thing this must not print.
  */
 function existingSize(occupied: TargetOccupiedResult, candidate: boolean): string {
-  if (candidate && occupied.existing.is_dir) return "Folder — not measured";
+  if (candidate && occupied.existing.kind === "dir") return "Folder — not measured";
   return formatBytes(occupied.existing.size_bytes);
 }
 
 /**
  * One sentence on how the two sizes relate — never two bare numbers to subtract,
  * and never our own choice not to measure reported as the server's silence.
+ *
+ * A shortcut's byte count is the length of the path it stores and a kindless
+ * entry's is nothing in particular, so neither is a number the server's can be
+ * related to. Printing a difference for either would invent evidence.
  */
 function sizeVerdict(occupied: TargetOccupiedResult, candidate: boolean): string {
-  if (candidate && occupied.existing.is_dir) {
+  if (candidate && occupied.existing.kind === "dir") {
     return "Folders are not measured before you open this, so the two sizes are not compared.";
   }
+  if (occupied.existing.kind === "link") {
+    return "The size shown is the shortcut's own, not the game's, so the two are not compared.";
+  }
+  if (occupied.existing.kind === null) return "This is not a file or a folder, so the two sizes are not compared.";
   if (occupied.sizes_match === null) return "The server did not state a size, so the two cannot be compared.";
   if (occupied.sizes_match) return "Both are the same size.";
   const delta = occupied.existing.size_bytes - occupied.incoming.size_bytes;
@@ -128,7 +158,7 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({
     onChoice(choice);
   };
 
-  const kind = occupied.existing.is_dir ? "folder" : "file";
+  const noun = nounFor(occupied);
   const modified = formatTimestamp(occupied.existing.modified_at);
 
   return (
@@ -139,9 +169,9 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({
         </div>
         <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.7)", marginBottom: "12px" }}>
           {candidatePath
-            ? `This ${kind} carries this game's name. Tender did not put it there, so it will not be touched until you ` +
-              "decide."
-            : `A ${kind} is already where this game would be downloaded. Tender did not put it there, so it will not ` +
+            ? `This ${noun} carries this game's name. Tender did not put it there, so it will not be touched until ` +
+              "you decide."
+            : `A ${noun} is already where this game would be downloaded. Tender did not put it there, so it will not ` +
               "be touched until you decide."}
         </div>
 
@@ -191,9 +221,12 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({
         {confirmingReplace ? (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             <div style={{ fontSize: "13px", color: "#ff8a80" }}>
-              Downloading deletes the {kind} that is here now — {occupied.existing.name}, {""}
-              {existingSize(occupied, Boolean(candidatePath))}. If it is your own dump, patch or romhack, it is gone.
-              Continue?
+              {occupied.existing.kind === "link"
+                ? `Downloading deletes the shortcut that is here now — ${occupied.existing.name}. Whatever it points ` +
+                  "at is left alone. Continue?"
+                : `Downloading deletes the ${noun} that is here now — ${occupied.existing.name}, ` +
+                  `${existingSize(occupied, Boolean(candidatePath))}. If it is your own dump, patch or romhack, it ` +
+                  "is gone. Continue?"}
             </div>
             <DialogButton onClick={() => choose("replace")}>Delete and Download</DialogButton>
             <DialogButton onClick={() => setConfirmingReplace(false)} style={{ opacity: 0.5 }}>
@@ -203,7 +236,7 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             <DialogButton onClick={() => choose("adopt")} disabled={!occupied.adoptable}>
-              {occupied.adoptable ? "Use These Files" : `Can't use this ${kind} for this game`}
+              {occupied.adoptable ? "Use These Files" : `Can't use this ${noun} for this game`}
             </DialogButton>
             <DialogButton
               onClick={() => {
@@ -259,7 +292,9 @@ export function comparisonForCandidate(
     existing: {
       name: candidate.name,
       path: candidate.path,
-      is_dir: candidate.is_dir,
+      // The search offers only what an install row may point at, so a candidate
+      // is one of the two adoptable kinds and never a link.
+      kind: candidate.is_dir ? "dir" : "file",
       size_bytes: candidate.size_bytes,
       modified_at: candidate.modified_at,
     },
@@ -267,7 +302,7 @@ export function comparisonForCandidate(
     // A directory candidate is never sized by the search — it does not descend —
     // so there are no two numbers to relate. Same `null` as "the server stated no
     // size", but NOT the same sentence: `existingSize` / `sizeVerdict` tell the
-    // two apart on `is_dir`, because attributing our own choice not to measure to
+    // two apart on the kind, because attributing our own choice not to measure to
     // the server would be a claim about their setup that is simply untrue.
     sizes_match: candidate.is_dir || !incoming.size_bytes ? null : candidate.size_bytes === incoming.size_bytes,
     adoptable: true,

@@ -8,26 +8,29 @@ from domain.rom_adoption import (
     LocalMember,
     ServerFile,
     ServerMember,
+    adoptable_content,
     compare_manifest,
     digests_to_read,
     is_archive_name,
     occupied_target_refusal,
     server_manifest,
     sizes_agree,
+    unadoptable_reason,
     unpacked_member,
     verification_status,
 )
+from domain.rom_candidates import DIR, FILE, LINK
 
 
 def _refusal(**overrides):
     payload = {
         "path": "/roms/snes/Game.sfc",
-        "is_dir": False,
+        "kind": FILE,
         "size_bytes": 1024,
         "modified_at": 1_700_000_000.0,
         "incoming_name": "Game.sfc",
         "incoming_size": 1024,
-        "adoptable": True,
+        "served_dir": False,
     }
     payload.update(overrides)
     return occupied_target_refusal(**payload)
@@ -166,7 +169,7 @@ class TestOccupiedTargetRefusal:
         assert payload["existing"] == {
             "name": "Game.sfc",
             "path": "/roms/snes/Game.sfc",
-            "is_dir": False,
+            "kind": FILE,
             "size_bytes": 2048,
             "modified_at": 1_700_000_000.0,
         }
@@ -174,11 +177,53 @@ class TestOccupiedTargetRefusal:
         assert payload["sizes_match"] is False
 
     def test_names_the_kind_in_the_message(self):
-        assert "folder" in _refusal(is_dir=True, path="/roms/psx/Game")["message"]
-        assert "file" in _refusal(is_dir=False)["message"]
+        assert _refusal(kind=DIR, path="/roms/psx/Game")["message"] == "A folder named 'Game' is already in place"
+        assert _refusal()["message"] == "A file named 'Game.sfc' is already in place"
+        assert _refusal(kind=LINK)["message"] == "A shortcut named 'Game.sfc' is already in place"
 
-    def test_adoptable_is_carried_through(self):
-        assert _refusal(adoptable=False)["adoptable"] is False
+    def test_something_with_no_kind_is_named_as_vaguely_as_it_is_known(self):
+        # The plugin looked and has no word for what is there. Calling it a file
+        # is the invention that let a named pipe be offered as a game.
+        assert _refusal(kind=None)["message"] == "Something named 'Game.sfc' is already in place"
+
+    def test_only_the_served_shape_is_adoptable(self):
+        assert _refusal()["adoptable"] is True
+        assert _refusal(kind=DIR)["adoptable"] is False
+        assert _refusal(kind=DIR, served_dir=True)["adoptable"] is True
+        assert _refusal(served_dir=True)["adoptable"] is False
+
+    def test_a_link_is_never_adoptable_in_either_direction(self):
+        # An install row has to be removable and the uninstall path refuses a
+        # link, so this holds whatever the link resolves to.
+        assert _refusal(kind=LINK)["adoptable"] is False
+        assert _refusal(kind=LINK, served_dir=True)["adoptable"] is False
+
+    def test_something_with_no_kind_is_never_adoptable(self):
+        assert _refusal(kind=None)["adoptable"] is False
+        assert _refusal(kind=None, served_dir=True)["adoptable"] is False
+
+    def test_a_size_verdict_is_withheld_where_the_number_is_not_the_content_s(self):
+        # A link's stat reports the length of the path it stores; relating that to
+        # the server's byte count would dress two unrelated numbers as evidence.
+        assert _refusal(kind=LINK, size_bytes=1024, incoming_size=1024)["sizes_match"] is None
+        assert _refusal(kind=None, size_bytes=1024, incoming_size=1024)["sizes_match"] is None
+        assert _refusal(size_bytes=1024, incoming_size=1024)["sizes_match"] is True
+
+
+class TestUnadoptableReason:
+    """The sentence the acting site refuses with, one per way content can fail."""
+
+    def test_each_kind_gets_the_reason_that_belongs_to_it(self):
+        assert unadoptable_reason(DIR) == "A folder is in the way where a file belongs"
+        assert unadoptable_reason(FILE) == "A file is in the way where a folder belongs"
+        assert unadoptable_reason(LINK) == "A shortcut is in the way — a shortcut cannot be used as this game"
+        assert unadoptable_reason(None) == "What is in the way is neither a file nor a folder"
+
+    def test_every_kind_the_predicate_can_refuse_has_a_sentence(self):
+        for kind in (FILE, DIR, LINK, None):
+            for served_dir in (True, False):
+                if not adoptable_content(kind, served_dir=served_dir):
+                    assert unadoptable_reason(kind)
 
 
 class TestCompareManifest:

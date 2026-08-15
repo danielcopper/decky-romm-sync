@@ -135,9 +135,12 @@ class DownloadFileStore(Protocol):
         the server's ``fs_size_bytes`` for a multi-file ROM — which makes this
         an ``os.walk`` of the whole tree, so callers offload it.
 
-        Existence is answered without following, so a symlink is reported as
-        occupying its path — with ``is_symlink`` set, because it may not be
-        offered for adoption — rather than as nothing at all.
+        Existence is answered without following, and ``kind`` is the same rule
+        the two listings apply, so a symlink is reported as occupying its path —
+        as a link, which may not be adopted — rather than as nothing at all.
+        Where the listings leave out what is neither file, directory nor link,
+        this reports it with no ``kind``: something that is there must not come
+        back as nothing.
         """
         ...
 

@@ -61,12 +61,25 @@ export interface DownloadFailedEvent {
 }
 
 /**
+ * What an entry on this device *is*, judged without following it (#260). The
+ * whole vocabulary: the backend reports one of these three or reports no kind at
+ * all, and a FIFO, a socket or a device node is never given one — "file or
+ * folder" has no truthful answer for those, and inventing one is what let a
+ * named pipe be offered as a game.
+ */
+export type EntryKind = "file" | "dir" | "link";
+
+/**
  * The two sides of a download that stopped because its target path is taken
- * (#260). `sizes_match` is the comparison already made — `null` when the server
- * stated no size, so the dialog says "can't compare" rather than implying a
- * difference. `adoptable` is false when what is in the way is the wrong shape
- * for this ROM (a folder where the server serves one file, or the reverse),
- * which leaves replacing or cancelling as the only honest exits.
+ * (#260). `sizes_match` is the comparison already made — `null` when it cannot
+ * be made at all, so the dialog says so rather than implying a difference. That
+ * covers a server that stated no size, and content whose byte count is not the
+ * game's: a link's `size_bytes` is the length of the path it stores.
+ *
+ * `adoptable` is false whenever what is in the way could not become this game's
+ * install: the wrong shape (a folder where the server serves one file, or the
+ * reverse), a shortcut — which an uninstall can never remove — or something with
+ * no `kind` at all. Replacing or cancelling are then the only honest exits.
  */
 export interface TargetOccupiedResult {
   success: false;
@@ -75,7 +88,13 @@ export interface TargetOccupiedResult {
   existing: {
     name: string;
     path: string;
-    is_dir: boolean;
+    /**
+     * What is in the way, judged without following it. `null` for something that
+     * is none of the three — a FIFO, a socket, a device node — which the backend
+     * reports rather than describes, because it is there and must not be written
+     * over in silence.
+     */
+    kind: EntryKind | null;
     size_bytes: number;
     /** POSIX epoch seconds. */
     modified_at: number;
@@ -130,16 +149,16 @@ export interface CandidatesFoundResult {
  * question of whether to add a second copy beside what is already there.
  * Nothing was written and no transfer started.
  *
- * `kind` is `"file"`, `"dir"` or `"link"` — what each entry *is*, judged
- * without following it. `served_is_dir` is what the SERVER sends. `truncated` is
- * stated rather than implied, exactly as it is for the candidate list.
+ * Every entry here has a `kind` — the search lists nothing that has none.
+ * `served_is_dir` is what the SERVER sends. `truncated` is stated rather than
+ * implied, exactly as it is for the candidate list.
  */
 export interface UnusableNamesakeResult {
   success: false;
   reason: "unusable_namesake";
   message: string;
   incoming: { name: string; size_bytes: number };
-  existing: Array<{ name: string; path: string; kind: string }>;
+  existing: Array<{ name: string; path: string; kind: EntryKind }>;
   served_is_dir: boolean;
   truncated: boolean;
 }

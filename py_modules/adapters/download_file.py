@@ -19,7 +19,7 @@ import zipfile
 import zlib
 from typing import TYPE_CHECKING
 
-from domain.rom_candidates import DIR, FILE, LINK
+from domain.rom_candidates import DIR, FILE, LINK, Kind
 from lib.path_safety import safe_path_component
 
 if TYPE_CHECKING:
@@ -32,26 +32,47 @@ _EXTRACT_CHUNK = 1024 * 1024
 _HASH_CHUNK = 1024 * 1024
 
 
-def _entry_kind(entry: os.DirEntry[str]) -> str | None:
-    """What *entry* is, judged without following it — or ``None`` to leave it out.
+def _kind_of(*, is_link: bool, is_dir: bool, is_file: bool) -> Kind | None:
+    """The whole admission rule, in the one place every door asks it.
+
+    The three answers arrive from whichever syscall the caller already made — a
+    directory read's ``d_type``, or an ``lstat``'s mode — because *how* the
+    filesystem was asked is the door's business and the rule is not. What lives
+    here is the rule itself: the order the three questions are put in, and the
+    fact that the vocabulary ends after them.
+
+    A link is asked about first and answered as a link, never as whatever it
+    resolves to: following it would re-admit it as ordinary content, and an
+    install row pointing at a link can never be removed (``claim_source``
+    refuses one outright). ``None`` is "not a thing a game can be" — a FIFO, a
+    socket, a device node. Inventing a kind for those is what let a named pipe
+    be offered as a game, and re-deriving this rule per door is what let one keep
+    being offered after the rule was written.
+    """
+    if is_link:
+        return LINK
+    if is_dir:
+        return DIR
+    return FILE if is_file else None
+
+
+def _entry_kind(entry: os.DirEntry[str]) -> Kind | None:
+    """:func:`_kind_of` for one directory entry, or ``None`` to leave it out.
 
     The directory read already carries the type on every filesystem that reports
-    ``d_type``, so this costs nothing; where it does not, one ``lstat`` answers.
-    Either way the link itself is judged, never its target: following would
-    re-admit a symlink as an ordinary file, and an install row pointing at one
-    can never be removed (``claim_source`` refuses a symlink outright).
+    ``d_type``, so the three questions cost nothing; where it does not, the
+    first one falls back to an ``lstat`` whose answer the rest reuse.
 
-    ``None`` covers both "not a thing a game can be" — a FIFO, a socket, a device
-    node — and "gone or unreadable between the read and the question". Neither is
-    something to offer, and inventing a kind for the first is what let a named
-    pipe be offered as a game.
+    An ``OSError`` here means the entry was there for the directory read and is
+    not there now, which folds into the same ``None``: a listing that came up
+    one entry shorter, not something to offer.
     """
     try:
-        if entry.is_symlink():
-            return LINK
-        if entry.is_dir(follow_symlinks=False):
-            return DIR
-        return FILE if entry.is_file(follow_symlinks=False) else None
+        return _kind_of(
+            is_link=entry.is_symlink(),
+            is_dir=entry.is_dir(follow_symlinks=False),
+            is_file=entry.is_file(follow_symlinks=False),
+        )
     except OSError:
         return None
 
@@ -74,8 +95,13 @@ class DownloadFileAdapter:
         The existence question is answered with ``lstat``, which does not follow:
         a symlink occupies its path whether or not its target resolves, and a
         listing that calls a dangling one "nothing here" is how the finalize
-        ``os.replace`` came to destroy one without a word. ``is_symlink`` carries
-        that on to the caller, which may not offer a link for adoption.
+        ``os.replace`` came to destroy one without a word.
+
+        The kind comes from :func:`_kind_of`, the same rule the two listings ask,
+        so this door cannot admit what they exclude. Where they answer a kindless
+        entry by leaving it out, this one reports it with ``kind`` unset: a
+        listing is a set and this is one named path, and something that is there
+        must not come back as nothing.
 
         A directory reports the recursive total of its contents so the number is
         comparable with the server's ``fs_size_bytes`` for a multi-file ROM; the
@@ -89,13 +115,15 @@ class DownloadFileAdapter:
             lstat = os.lstat(path)
         except OSError:
             return None
-        is_symlink = stat.S_ISLNK(lstat.st_mode)
-        is_dir = stat.S_ISDIR(lstat.st_mode)
+        kind = _kind_of(
+            is_link=stat.S_ISLNK(lstat.st_mode),
+            is_dir=stat.S_ISDIR(lstat.st_mode),
+            is_file=stat.S_ISREG(lstat.st_mode),
+        )
         return {
             "path": path,
-            "is_dir": is_dir,
-            "is_symlink": is_symlink,
-            "size_bytes": self._tree_size(path) if is_dir else lstat.st_size,
+            "kind": kind,
+            "size_bytes": self._tree_size(path) if kind == DIR else lstat.st_size,
             "modified_at": lstat.st_mtime,
         }
 

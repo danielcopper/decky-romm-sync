@@ -20,7 +20,7 @@ function occupied(overrides: Partial<TargetOccupiedResult> = {}): TargetOccupied
     existing: {
       name: "Game.sfc",
       path: "/roms/snes/Game.sfc",
-      is_dir: false,
+      kind: "file",
       size_bytes: 2048,
       modified_at: 1_700_000_000,
     },
@@ -29,6 +29,26 @@ function occupied(overrides: Partial<TargetOccupiedResult> = {}): TargetOccupied
     adoptable: true,
     ...overrides,
   };
+}
+
+/** A shortcut at the ROM's own path: never adoptable, and its size is the path's. */
+function linkOccupied(): TargetOccupiedResult {
+  return occupied({
+    message: "A shortcut named 'Game.sfc' is already in place",
+    existing: { ...occupied().existing, kind: "link", size_bytes: 19 },
+    sizes_match: null,
+    adoptable: false,
+  });
+}
+
+/** A named pipe or socket: there, and with no kind the backend will claim. */
+function unknownOccupied(): TargetOccupiedResult {
+  return occupied({
+    message: "Something named 'Game.sfc' is already in place",
+    existing: { ...occupied().existing, kind: null, size_bytes: 0 },
+    sizes_match: null,
+    adoptable: false,
+  });
 }
 
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
@@ -81,9 +101,32 @@ describe("AdoptExistingModal — the comparison", () => {
 
   it("calls the occupying content a folder when it is one", () => {
     const { container } = renderModal({
-      occupied: occupied({ existing: { ...occupied().existing, is_dir: true } }),
+      occupied: occupied({ existing: { ...occupied().existing, kind: "dir" } }),
     });
     expect(container.textContent).toContain("A folder is already where this game would be downloaded");
+  });
+
+  it("calls a shortcut a shortcut, not a file", () => {
+    // It was described as a file, which is what made adopting one look sensible.
+    const { container } = renderModal({ occupied: linkOccupied() });
+    expect(container.textContent).toContain("A shortcut to somewhere else is already where this game would be");
+    expect(container.textContent).not.toContain("A file is already where");
+  });
+
+  it("does not relate a shortcut's byte count to the server's", () => {
+    // `lstat` reports the length of the path a link stores. Comparing that with
+    // the server's size dressed two unrelated numbers as a verdict.
+    const { container } = renderModal({ occupied: linkOccupied() });
+    expect(container.textContent).toContain("the shortcut's own, not the game's");
+    for (const verdict of ["Both are the same size", "larger than what the server", "smaller than what the server"]) {
+      expect(container.textContent).not.toContain(verdict);
+    }
+  });
+
+  it("has no word for something that is neither file, folder nor shortcut", () => {
+    const { container } = renderModal({ occupied: unknownOccupied() });
+    expect(container.textContent).toContain("A thing is already where this game would be downloaded");
+    expect(container.textContent).toContain("not a file or a folder, so the two sizes are not compared");
   });
 });
 
@@ -128,9 +171,26 @@ describe("AdoptExistingModal — the three exits", () => {
 
   it("adopt is disabled when the content is the wrong shape for this ROM", () => {
     const { container } = renderModal({
-      occupied: occupied({ adoptable: false, existing: { ...occupied().existing, is_dir: true } }),
+      occupied: occupied({ adoptable: false, existing: { ...occupied().existing, kind: "dir" } }),
     });
     expect(buttonByText(container, "Can't use this folder for this game").disabled).toBe(true);
+  });
+
+  it("adopt is disabled for a shortcut, and says so as a shortcut", () => {
+    const { container } = renderModal({ occupied: linkOccupied() });
+    expect(buttonByText(container, "Can't use this shortcut to somewhere else for this game").disabled).toBe(true);
+  });
+
+  it("the replace confirmation for a shortcut describes what is actually destroyed", () => {
+    // "If it is your own dump, patch or romhack, it is gone" is false here: only
+    // the shortcut is unlinked, and whatever it points at is untouched.
+    const { container, onChoice } = renderModal({ occupied: linkOccupied() });
+    fireEvent.click(buttonByText(container, "Download Instead"));
+    expect(container.textContent).toContain("Downloading deletes the shortcut that is here now");
+    expect(container.textContent).toContain("Whatever it points at is left alone");
+    expect(container.textContent).not.toContain("If it is your own dump");
+    fireEvent.click(buttonByText(container, "Delete and Download"));
+    expect(onChoice).toHaveBeenCalledWith("replace");
   });
 });
 
@@ -331,7 +391,7 @@ describe("AdoptExistingModal — a candidate found under another name", () => {
   it("never prints 0 B for a folder the search deliberately did not measure", () => {
     const { container } = renderModal({
       occupied: occupied({
-        existing: { ...occupied().existing, name: "Game (U)", path: "/roms/psx/Game (U)", is_dir: true, size_bytes: 0 },
+        existing: { ...occupied().existing, name: "Game (U)", path: "/roms/psx/Game (U)", kind: "dir", size_bytes: 0 },
         sizes_match: null,
       }),
       candidatePath: "/roms/psx/Game (U)",
@@ -344,7 +404,7 @@ describe("AdoptExistingModal — a candidate found under another name", () => {
   it("does not blame the server for a comparison we chose not to make", () => {
     const { container } = renderModal({
       occupied: occupied({
-        existing: { ...occupied().existing, name: "Game (U)", path: "/roms/psx/Game (U)", is_dir: true, size_bytes: 0 },
+        existing: { ...occupied().existing, name: "Game (U)", path: "/roms/psx/Game (U)", kind: "dir", size_bytes: 0 },
         incoming: { name: "Game (USA)", size_bytes: 4096 },
         sizes_match: null,
       }),
@@ -361,7 +421,7 @@ describe("AdoptExistingModal — a candidate found under another name", () => {
   it("the deletion confirmation does not claim a folder is 0 B either", () => {
     const { container } = renderModal({
       occupied: occupied({
-        existing: { ...occupied().existing, name: "Game (U)", path: "/roms/psx/Game (U)", is_dir: true, size_bytes: 0 },
+        existing: { ...occupied().existing, name: "Game (U)", path: "/roms/psx/Game (U)", kind: "dir", size_bytes: 0 },
         sizes_match: null,
       }),
       candidatePath: "/roms/psx/Game (U)",
@@ -409,7 +469,7 @@ describe("comparisonForCandidate", () => {
     expect(comparison.existing).toEqual({
       name: "Game (U).sfc",
       path: "/roms/snes/Game (U).sfc",
-      is_dir: false,
+      kind: "file",
       size_bytes: 2048,
       modified_at: 1_700_000_000,
     });

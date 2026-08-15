@@ -200,11 +200,13 @@ class CandidateSearch:
         that is not an ES-DE system: a namesake in such a directory is content
         no emulator will ever look at.
         """
-        platform_dir = self._platform_dir(platform_slug, fs_name)
+        if not fs_name:
+            return ()
+        system = self._resolve_system(platform_slug)
+        platform_dir = self._platform_dir(system)
         if platform_dir is None:
             self._log_debug(f"adopt probe: slug={platform_slug} name={fs_name} dir=unresolved")
             return ()
-        system = self._resolve_system(platform_slug)
         wanted = frozenset({normalize_rom_name(fs_name)})
         covered = self._installed_paths() | {os.path.join(platform_dir, fs_name)}
         entries = self._local_names(platform_dir)
@@ -215,8 +217,8 @@ class CandidateSearch:
         )
         return found
 
-    def _platform_dir(self, platform_slug: str, fs_name: str) -> str | None:
-        """The folder the page searches, derived exactly as the download derives it.
+    def _platform_dir(self, system: str) -> str | None:
+        """The folder *system*'s games live in, derived as the download derives it.
 
         ``safe_join`` is the download's own derivation (``services/downloads.py``
         builds every target path with it), and it resolves symlinks. Both sides
@@ -232,10 +234,10 @@ class CandidateSearch:
         what an unresolvable directory honestly supports.
         """
         roms_path = self._retrodeck_paths.roms_path()
-        if not roms_path or not fs_name or not platform_slug:
+        if not roms_path or not system:
             return None
         try:
-            return safe_join(roms_path, self._resolve_system(platform_slug))
+            return safe_join(roms_path, system)
         except PathTraversalError:
             return None
 

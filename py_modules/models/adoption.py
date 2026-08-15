@@ -12,7 +12,16 @@ the adapters.
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Literal, TypedDict
+
+# The entry-kind vocabulary, spelled a second time. ``domain.rom_candidates``
+# owns it and states why it is closed, but ``models`` may not import ``domain``
+# (the layer contract in ``.importlinter``), so the two declarations sit side by
+# side. They are not held together by convention: every value crossing this
+# boundary is checked against both spellings — the adapter assigns a domain
+# ``Kind`` into these dicts, and the search reads them back into ``LocalName`` —
+# so a fourth value added to one and not the other fails the type check.
+Kind = Literal["file", "dir", "link"]
 
 
 class ExistingContent(TypedDict):
@@ -22,15 +31,21 @@ class ExistingContent(TypedDict):
     directory's contents so it is comparable with the server's ``fs_size_bytes``
     for a multi-file ROM. ``modified_at`` is POSIX epoch seconds.
 
-    ``is_symlink`` is answered without following, and is what separates content
-    that can be adopted from content that cannot: an install row has to be
-    removable, and the uninstall path refuses a link. A link is still *there* —
-    reporting it as nothing is how a download comes to replace one in silence.
+    ``kind`` is what is in the way, judged without following it, and it is what
+    separates content that can be adopted from content that cannot: only a file
+    or a directory can become an install row, because a row has to be removable
+    and the uninstall path refuses a link.
+
+    It is the one place in this module where the kind may be **absent**. The
+    listings simply leave out what is neither file, directory nor link; this
+    describes one named path, and something that is there must never be reported
+    as nothing — that is how a download came to replace a symlink in silence.
+    ``None`` says "occupied, by something this plugin has no word for", which is
+    a refusal to describe rather than a fourth kind.
     """
 
     path: str
-    is_dir: bool
-    is_symlink: bool
+    kind: Kind | None
     size_bytes: int
     modified_at: float
 
@@ -51,10 +66,9 @@ class ArchiveMemberInfo(TypedDict):
 class TopLevelName(TypedDict):
     """One top-level entry as the directory read alone described it.
 
-    ``kind`` is what the entry **is**, judged without following it: ``"file"``,
-    ``"dir"`` or ``"link"`` (``domain.rom_candidates`` owns the vocabulary).
-    There is no fourth value — a FIFO, a socket or a device node is not listed at
-    all, because "file or directory" has no truthful answer for one.
+    ``kind`` is what the entry **is**, judged without following it. There is no
+    fourth value and no absent one — a FIFO, a socket or a device node is not
+    listed at all, because "file or directory" has no truthful answer for one.
 
     The listing deliberately does not descend: a single multi-file install can
     hold tens of thousands of files, and a user's own subfolders are their
@@ -63,7 +77,7 @@ class TopLevelName(TypedDict):
 
     name: str
     path: str
-    kind: str
+    kind: Kind
 
 
 class TopLevelEntry(TopLevelName):

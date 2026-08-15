@@ -665,8 +665,7 @@ class TestOccupiedTargetPreFlight:
         store.describe_path = lambda path: (
             {
                 "path": path,
-                "is_dir": is_dir,
-                "is_symlink": False,
+                "kind": "dir" if is_dir else "file",
                 "size_bytes": size,
                 "modified_at": 1_700_000_000.0,
             }
@@ -714,7 +713,7 @@ class TestOccupiedTargetPreFlight:
 
         assert result["reason"] == "target_occupied"
         assert result["existing"]["path"] == extract_dir
-        assert result["existing"]["is_dir"] is True
+        assert result["existing"]["kind"] == "dir"
         assert result["sizes_match"] is True
 
     @pytest.mark.asyncio
@@ -837,8 +836,7 @@ class TestResumingAReplaceDownload:
         store.describe_path = lambda path: (
             {
                 "path": path,
-                "is_dir": path == occupied_path and detail is _MULTI_DETAIL,
-                "is_symlink": False,
+                "kind": "dir" if detail is _MULTI_DETAIL else "file",
                 "size_bytes": 8,
                 "modified_at": 0.0,
             }

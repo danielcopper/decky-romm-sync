@@ -530,7 +530,7 @@ describe("CustomPlayButton — pause/resume on active download (#1124)", () => {
       success: false,
       reason: "target_occupied",
       message: "A folder named 'Game 1' is already in place",
-      existing: { name: "Game 1", path: "/roms/psx/Game 1", is_dir: true, size_bytes: 2048, modified_at: 0 },
+      existing: { name: "Game 1", path: "/roms/psx/Game 1", kind: "dir", size_bytes: 2048, modified_at: 0 },
       incoming: { name: "Game 1", size_bytes: 2048 },
       sizes_match: true,
       adoptable: true,
@@ -3293,7 +3293,7 @@ describe("CustomPlayButton — content already on disk (#260)", () => {
     success: false as const,
     reason: "target_occupied" as const,
     message: "A file named 'game.z64' is already in place",
-    existing: { name: "game.z64", path: "/roms/n64/game.z64", is_dir: false, size_bytes: 2048, modified_at: 0 },
+    existing: { name: "game.z64", path: "/roms/n64/game.z64", kind: "file" as const, size_bytes: 2048, modified_at: 0 },
     incoming: { name: "game.z64", size_bytes: 1024 },
     sizes_match: false,
     adoptable: true,
@@ -3947,14 +3947,14 @@ describe("CustomPlayButton — a namesake it cannot adopt (#260)", () => {
     reason: "unusable_namesake" as const,
     message: "'game (U)' has this game's name but is a folder",
     incoming: { name: "game (USA).z64", size_bytes: 2048 },
-    existing: [{ name: "game (U)", path: "/roms/n64/game (U)", kind: "dir" }],
+    existing: [{ name: "game (U)", path: "/roms/n64/game (U)", kind: "dir" as const }],
     served_is_dir: false,
     truncated: false,
   };
   const LINK = {
     ...WRONG_SHAPE,
     message: "'game (U).z64' has this game's name but is a shortcut to somewhere else",
-    existing: [{ name: "game (U).z64", path: "/roms/n64/game (U).z64", kind: "link" }],
+    existing: [{ name: "game (U).z64", path: "/roms/n64/game (U).z64", kind: "link" as const }],
   };
 
   beforeEach(() => {

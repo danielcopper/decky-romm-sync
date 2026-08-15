@@ -67,7 +67,7 @@ async def test_start_download_refuses_an_occupied_target_with_the_comparison(har
     assert result["existing"] == {
         "name": "rom-41",
         "path": str(path),
-        "is_dir": False,
+        "kind": "file",
         "size_bytes": len(b"user's own dump"),
         "modified_at": path.stat().st_mtime,
     }

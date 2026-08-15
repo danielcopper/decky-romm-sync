@@ -35,19 +35,23 @@ def _stage_real(tmp_path) -> str:
 
 
 def _stage_fake(directory: str) -> FakeDownloadFileStore:
-    """The same folder, staged in the fake."""
+    """The same folder, staged in the fake — link targets and all."""
     store = FakeDownloadFileStore()
     store.files[f"{directory}/Game (U).sfc"] = b"cartridge"
     store.dirs.add(f"{directory}/Game (E)")
     store.files[f"{directory}/Game (E)/rom.sfc"] = b"x"
-    store.links.add(f"{directory}/Game (J).sfc")
-    store.links.add(f"{directory}/Game (F).sfc")
+    store.links[f"{directory}/Game (J).sfc"] = f"{directory}/Game (U).sfc"
+    store.links[f"{directory}/Game (F).sfc"] = f"{directory}/gone.sfc"
     store.other_kinds.add(f"{directory}/Game (I).sfc")
     return store
 
 
 def _kinds(entries) -> dict[str, str]:
     return {entry["name"]: entry["kind"] for entry in entries}
+
+
+def _sizes(entries) -> dict[str, int]:
+    return {entry["name"]: entry["size_bytes"] for entry in entries}
 
 
 class TestFakeMatchesTheAdapter:
@@ -101,16 +105,37 @@ class TestFakeMatchesTheAdapter:
         finally:
             sock.close()
 
-    def test_describe_path_reports_a_link_as_a_link_in_either(self, real, tmp_path):
-        (tmp_path / "real.gba").write_bytes(b"x")
-        link = tmp_path / "Game.gba"
-        link.symlink_to(tmp_path / "real.gba")
-        fake = FakeDownloadFileStore()
-        fake.files[str(tmp_path / "real.gba")] = b"x"
-        fake.links.add(str(link))
+    def test_the_full_listing_agrees_on_the_numbers_too(self, real, tmp_path):
+        # Kinds agreeing is not enough: the size is what the occupied-target
+        # dialog puts on screen, and the fake used to answer 0 for a link where
+        # ``lstat`` reports the length of the path it stores.
+        directory = _stage_real(tmp_path)
+        fake = _stage_fake(directory)
+
+        assert _sizes(fake.list_top_level_entries(directory)) == _sizes(real.list_top_level_entries(directory))
+
+    def test_describe_path_agrees_entry_for_entry_on_kind_and_size(self, real, tmp_path):
+        directory = _stage_real(tmp_path)
+        fake = _stage_fake(directory)
+        names = ("Game (U).sfc", "Game (E)", "Game (J).sfc", "Game (F).sfc", "Game (I).sfc", "nothing.sfc")
+
+        def described(store) -> dict[str, tuple[str | None, int] | None]:
+            out = {}
+            for name in names:
+                answer = store.describe_path(f"{directory}/{name}")
+                out[name] = None if answer is None else (answer["kind"], answer["size_bytes"])
+            return out
+
+        assert described(fake) == described(real)
+
+    def test_the_kindless_entry_is_described_by_either_rather_than_reported_absent(self, real, tmp_path):
+        # The one place the two doors differ on purpose: a listing leaves it out,
+        # this reports it with no kind. Both implementations have to do that, or
+        # a service test would prove a download safe that destroys one.
+        directory = _stage_real(tmp_path)
+        fake = _stage_fake(directory)
 
         for store in (real, fake):
-            described = store.describe_path(str(link))
-            assert described is not None
-            assert described["is_symlink"] is True
-            assert described["is_dir"] is False
+            answer = store.describe_path(f"{directory}/Game (I).sfc")
+            assert answer is not None
+            assert answer["kind"] is None

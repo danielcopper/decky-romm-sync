@@ -32,14 +32,17 @@ from domain.rom_adoption import (
     LocalFile,
     LocalMember,
     ServerFile,
+    adoptable_content,
     compare_manifest,
     digests_to_read,
     is_archive_name,
     occupied_target_refusal,
     server_manifest,
+    unadoptable_reason,
     unconfirmed_reason,
     verification_status,
 )
+from domain.rom_candidates import DIR
 from domain.rom_files import (
     detect_launch_file,
     is_multi_file_download,
@@ -306,18 +309,14 @@ class RomAdoptionService:
         if not replace:
             return occupied_target_refusal(
                 path=existing["path"],
-                is_dir=existing["is_dir"],
+                kind=existing["kind"],
                 size_bytes=existing["size_bytes"],
                 modified_at=existing["modified_at"],
                 incoming_name=os.path.basename(checked_path),
                 incoming_size=rom_detail.get("fs_size_bytes", 0),
-                # A symlink is never adoptable, whatever it resolves to: an
-                # install row has to be removable and the uninstall path refuses
-                # a link, so adopting one would write a row the UI can never
-                # undo (ADR-0028).
-                adoptable=existing["is_dir"] == is_multi_file_download(rom_detail) and not existing["is_symlink"],
+                served_dir=is_multi_file_download(rom_detail),
             )
-        return self._clear_for_replace(rom_detail, checked_path, is_dir=existing["is_dir"])
+        return self._clear_for_replace(rom_detail, checked_path, is_dir=existing["kind"] == DIR)
 
     # ── Candidate search ────────────────────────────────────────────
 
@@ -470,7 +469,7 @@ class RomAdoptionService:
         )
         if refusal is not None:
             return refusal
-        removal = self._remove_under_roms(source_path, is_dir=existing["is_dir"])
+        removal = self._remove_under_roms(source_path, is_dir=existing["kind"] == DIR)
         return removal if removal is None else _add_carried_note(removal, carried)
 
     # ── Adopt ───────────────────────────────────────────────────────
@@ -572,15 +571,15 @@ class RomAdoptionService:
                 "reason": "nothing_to_adopt",
                 "message": "The files are no longer there — nothing was adopted",
             }
-        if existing["is_dir"] != target.is_multi:
+        # Kind and shape in one question, asked here rather than trusted from the
+        # dialog: the entry offered as a regular file may have become a link
+        # between the gate's answer and the user's confirmation, and this service
+        # re-validates every path immediately before it uses it.
+        if not adoptable_content(existing["kind"], served_dir=target.is_multi):
             return {
                 "success": False,
                 "reason": "unexpected_content_kind",
-                "message": (
-                    "A folder is in the way where a file belongs"
-                    if existing["is_dir"]
-                    else "A file is in the way where a folder belongs"
-                ),
+                "message": unadoptable_reason(existing["kind"]),
             }
         if source_path != target.path and self._renamer.target_taken(target):
             return _target_taken_refusal()
@@ -610,12 +609,14 @@ class RomAdoptionService:
         """Persist the install record for content ``_validate_adoption_io`` accepted.
 
         The target is stat'd once more: the supersede ran in between, and content
-        that vanished across it must be refused rather than recorded. That window
-        is the one refusal that can follow a completed supersede, and it cannot
-        be closed — a row pointing at files that are gone would be worse.
+        that vanished across it — or turned into something no row may point at —
+        must be refused rather than recorded. That window is the one refusal that
+        can follow a completed supersede, and it cannot be closed: a row pointing
+        at files that are gone would be worse, and one pointing at a link could
+        never be removed.
         """
         existing = self._download_file_store.describe_path(target.path)
-        if existing is None or existing["is_dir"] != target.is_multi:
+        if existing is None or not adoptable_content(existing["kind"], served_dir=target.is_multi):
             return {
                 "success": False,
                 "reason": "nothing_to_adopt",

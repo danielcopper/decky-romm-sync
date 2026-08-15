@@ -42,8 +42,9 @@ describe("AdoptVanishedModal — what it states", () => {
 
   it("names no cause, because it knows of none", () => {
     // The backstop knows the two searches disagreed, not why — and one of the
-    // ways they can disagree is that both spellings of the same folder describe
-    // the same file, where "moved, renamed or deleted" is simply false.
+    // ways they can disagree is that the page counted an entry the click path
+    // then judged unusable and answered for separately, where "moved, renamed
+    // or deleted" is simply false.
     //
     // Asserted against the words a cause would be given in, not against
     // "error"/"failed" — the sentence this replaced passed those and still

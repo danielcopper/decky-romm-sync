@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from adapters.download_file import DownloadFileAdapter
+from domain.rom_candidates import DIR, FILE, LINK
 
 
 @pytest.fixture
@@ -478,7 +479,7 @@ class TestDescribePath:
         described = adapter.describe_path(str(f))
         assert described is not None
         assert described["path"] == str(f)
-        assert described["is_dir"] is False
+        assert described["kind"] == FILE
         assert described["size_bytes"] == 10
         assert described["modified_at"] == pytest.approx(f.stat().st_mtime)
 
@@ -491,7 +492,7 @@ class TestDescribePath:
         (game / "sub" / "disc2.bin").write_bytes(b"b" * 55)
         described = adapter.describe_path(str(game))
         assert described is not None
-        assert described["is_dir"] is True
+        assert described["kind"] == DIR
         assert described["size_bytes"] == 155
 
     def test_an_empty_directory_reports_zero(self, adapter, tmp_path):
@@ -613,8 +614,7 @@ class TestDescribePathDoesNotFollow:
         rom.write_bytes(b"0123456789")
         described = adapter.describe_path(str(rom))
         assert described is not None
-        assert described["is_dir"] is False
-        assert described["is_symlink"] is False
+        assert described["kind"] == FILE
         assert described["size_bytes"] == 10
 
     def test_a_link_to_a_real_file_is_reported_as_a_link(self, adapter, tmp_path):
@@ -625,8 +625,7 @@ class TestDescribePathDoesNotFollow:
         link.symlink_to(tmp_path / "real.gba")
         described = adapter.describe_path(str(link))
         assert described is not None
-        assert described["is_symlink"] is True
-        assert described["is_dir"] is False
+        assert described["kind"] == LINK
 
     def test_a_link_pointing_nowhere_still_occupies_its_path(self, adapter, tmp_path):
         # Reported as "nothing here", the finalize ``os.replace`` destroyed it
@@ -635,7 +634,7 @@ class TestDescribePathDoesNotFollow:
         link.symlink_to(tmp_path / "gone.gba")
         described = adapter.describe_path(str(link))
         assert described is not None
-        assert described["is_symlink"] is True
+        assert described["kind"] == LINK
 
     def test_a_link_to_a_directory_is_not_described_as_a_directory(self, adapter, tmp_path):
         (tmp_path / "elsewhere").mkdir()
@@ -644,13 +643,57 @@ class TestDescribePathDoesNotFollow:
         link.symlink_to(tmp_path / "elsewhere")
         described = adapter.describe_path(str(link))
         assert described is not None
-        assert described["is_symlink"] is True
-        assert described["is_dir"] is False
+        assert described["kind"] == LINK
         # And no tree walk was charged for a link's own size.
         assert described["size_bytes"] != 32
 
     def test_nothing_at_all_is_still_nothing(self, adapter, tmp_path):
         assert adapter.describe_path(str(tmp_path / "gone.gba")) is None
+
+    def test_a_named_pipe_occupies_its_path_with_no_kind_at_all(self, adapter, tmp_path):
+        # It came back as an ordinary zero-byte file, so the dialog said "a file
+        # is already in place", offered it, and the uninstall path could then
+        # never remove the row. The listings leave one out; this door cannot,
+        # because something that is there must not be reported as nothing.
+        pipe = tmp_path / "Game.gba"
+        os.mkfifo(str(pipe))
+
+        described = adapter.describe_path(str(pipe))
+
+        assert described is not None
+        assert described["kind"] is None
+        assert described["path"] == str(pipe)
+
+    def test_a_unix_socket_answers_the_same_way(self, adapter, tmp_path):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.bind(str(tmp_path / "Game.gba"))
+
+            described = adapter.describe_path(str(tmp_path / "Game.gba"))
+
+            assert described is not None
+            assert described["kind"] is None
+        finally:
+            sock.close()
+
+    def test_the_kinds_it_answers_are_the_kinds_the_listings_admit(self, adapter, tmp_path):
+        # The two doors ask one function, so what one calls a link the other
+        # cannot call a file. The pipe is the asymmetry, and it is the only one:
+        # the listing leaves it out where this reports it kindless.
+        (tmp_path / "real.gba").write_bytes(b"x")
+        (tmp_path / "Game (U).gba").write_bytes(b"x")
+        (tmp_path / "Game (E)").mkdir()
+        (tmp_path / "Game (J).gba").symlink_to(tmp_path / "real.gba")
+        os.mkfifo(str(tmp_path / "Game (I).gba"))
+
+        listed = {entry["name"]: entry["kind"] for entry in adapter.list_top_level_entries(str(tmp_path))}
+        described = {
+            name: (adapter.describe_path(str(tmp_path / name)) or {}).get("kind")
+            for name in ("Game (U).gba", "Game (E)", "Game (J).gba", "Game (I).gba")
+        }
+
+        assert described == {"Game (U).gba": FILE, "Game (E)": DIR, "Game (J).gba": LINK, "Game (I).gba": None}
+        assert listed == {"real.gba": FILE, "Game (U).gba": FILE, "Game (E)": DIR, "Game (J).gba": LINK}
 
 
 class _StatRecordingEntry:

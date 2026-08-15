@@ -150,7 +150,7 @@ class AdoptionCandidateProbeFn(Protocol):
     The composition root satisfies this with
     ``RomAdoptionService.has_adoption_candidate`` — the same service as the gate
     above, running the same ``matching_entries`` filter over the same folder
-    (read leaner here: names and shapes, no size or mtime).
+    (read leaner here: names and kinds, no size or mtime).
 
     The two answer from **different knowledge** and are not held to agreeing.
     The page has a ``roms`` row and must stay network-free and instant; the gate
