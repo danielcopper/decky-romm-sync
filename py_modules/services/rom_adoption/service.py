@@ -614,13 +614,25 @@ class RomAdoptionService:
         can follow a completed supersede, and it cannot be closed: a row pointing
         at files that are gone would be worse, and one pointing at a link could
         never be removed.
+
+        The two outcomes are two different situations and get two different
+        answers, the same pair :meth:`_validate_adoption_io` gives one function
+        up. "The files are no longer there" said of content that is still there
+        and merely changed kind sends the user looking for something that has
+        not happened.
         """
         existing = self._download_file_store.describe_path(target.path)
-        if existing is None or not adoptable_content(existing["kind"], served_dir=target.is_multi):
+        if existing is None:
             return {
                 "success": False,
                 "reason": "nothing_to_adopt",
                 "message": "The files are no longer there — nothing was adopted",
+            }
+        if not adoptable_content(existing["kind"], served_dir=target.is_multi):
+            return {
+                "success": False,
+                "reason": "unexpected_content_kind",
+                "message": unadoptable_reason(existing["kind"]),
             }
         file_path = self._adopted_launch_file(target) if target.is_multi else target.path
         rom_dir = target.path if target.is_multi else None

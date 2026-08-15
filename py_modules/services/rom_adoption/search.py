@@ -201,6 +201,7 @@ class CandidateSearch:
         no emulator will ever look at.
         """
         if not fs_name:
+            self._log_debug(f"adopt probe: slug={platform_slug} name=<empty> found=0")
             return ()
         system = self._resolve_system(platform_slug)
         platform_dir = self._platform_dir(system)
@@ -319,7 +320,7 @@ class CandidateSearch:
         )
 
     def _local_names(self, platform_dir: str) -> tuple[LocalName, ...]:
-        """Read the platform folder's top level as names and shapes alone.
+        """Read the platform folder's top level as names and kinds alone.
 
         The page's listing: no ``stat`` for size or mtime, because a name match
         reads neither. The type says so too — these cannot reach :meth:`_rank`,

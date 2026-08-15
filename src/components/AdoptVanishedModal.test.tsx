@@ -41,10 +41,11 @@ describe("AdoptVanishedModal — what it states", () => {
   });
 
   it("names no cause, because it knows of none", () => {
-    // The backstop knows the two searches disagreed, not why — and one of the
-    // ways they can disagree is that the page counted an entry the click path
-    // then judged unusable and answered for separately, where "moved, renamed
-    // or deleted" is simply false.
+    // The backstop knows the two searches disagreed, not why. One way they can:
+    // the page matches `roms.fs_name` while the click path matches the name
+    // derived from the server's payload, so a rename on the server leaves the
+    // entry sitting untouched in the folder while the click search finds
+    // nothing — and "you moved, renamed or deleted it" is then simply false.
     //
     // Asserted against the words a cause would be given in, not against
     // "error"/"failed" — the sentence this replaced passed those and still

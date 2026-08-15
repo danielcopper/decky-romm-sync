@@ -113,20 +113,25 @@ describe("AdoptExistingModal — the comparison", () => {
     expect(container.textContent).not.toContain("A file is already where");
   });
 
-  it("does not relate a shortcut's byte count to the server's", () => {
-    // `lstat` reports the length of the path a link stores. Comparing that with
-    // the server's size dressed two unrelated numbers as a verdict.
+  it("does not print a shortcut's byte count, let alone compare it", () => {
+    // `lstat` reports the length of the path a link stores. Printing that beside
+    // the server's real size reads as a comparison however it is disclaimed two
+    // lines below, so the number does not appear at all.
     const { container } = renderModal({ occupied: linkOccupied() });
-    expect(container.textContent).toContain("the shortcut's own, not the game's");
+    expect(container.textContent).toContain("Shortcut — no size of its own");
+    expect(container.textContent).toContain("nothing here to compare");
+    expect(container.textContent).not.toContain("19 B");
     for (const verdict of ["Both are the same size", "larger than what the server", "smaller than what the server"]) {
       expect(container.textContent).not.toContain(verdict);
     }
   });
 
-  it("has no word for something that is neither file, folder nor shortcut", () => {
+  it("has no word and no number for something that is neither file, folder nor shortcut", () => {
     const { container } = renderModal({ occupied: unknownOccupied() });
     expect(container.textContent).toContain("A thing is already where this game would be downloaded");
-    expect(container.textContent).toContain("not a file or a folder, so the two sizes are not compared");
+    expect(container.textContent).toContain("No size to show");
+    expect(container.textContent).toContain("nothing here to compare");
+    expect(container.textContent).not.toContain("0 B");
   });
 });
 
@@ -191,6 +196,17 @@ describe("AdoptExistingModal — the three exits", () => {
     expect(container.textContent).not.toContain("If it is your own dump");
     fireEvent.click(buttonByText(container, "Delete and Download"));
     expect(onChoice).toHaveBeenCalledWith("replace");
+  });
+
+  it("the replace confirmation claims no more about a kindless entry than that it goes", () => {
+    // It is neither a dump the user may have made nor a shortcut whose target
+    // survives, so the confirmation says only what is certain.
+    const { container } = renderModal({ occupied: unknownOccupied() });
+    fireEvent.click(buttonByText(container, "Download Instead"));
+    expect(container.textContent).toContain("Downloading removes what is here now");
+    expect(container.textContent).toContain("Tender cannot tell what it is, only that it goes");
+    expect(container.textContent).not.toContain("If it is your own dump");
+    expect(container.textContent).not.toContain("0 B");
   });
 });
 

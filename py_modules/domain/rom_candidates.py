@@ -326,8 +326,12 @@ _KIND_WORD = {FILE: "a single file", DIR: "a folder", LINK: "a shortcut to somew
 _KIND_PLURAL = {FILE: "single files", DIR: "folders", LINK: "shortcuts to somewhere else"}
 
 
-def _namesake_message(shown: tuple[LocalName, ...], *, count: int, served_dir: bool, truncated: bool) -> str:
+def _namesake_message(shown: tuple[LocalName, ...], *, count: int, served_dir: bool) -> str:
     """One sentence naming what was found and why none of it can be this game.
+
+    *count* is how many were found and *shown* is how many were looked at, which
+    is why both are needed and nothing else is: whether the list was cut is the
+    difference between them.
 
     The two halves are chosen separately because the reasons are not the same
     reason. A wrong shape is only wrong *against what the server sends*, so that
@@ -341,7 +345,7 @@ def _namesake_message(shown: tuple[LocalName, ...], *, count: int, served_dir: b
     the ones it never looked at were folders too.
     """
     kinds = {entry.kind for entry in shown}
-    only_kind = next(iter(kinds)) if len(kinds) == 1 and not truncated else None
+    only_kind = next(iter(kinds)) if len(kinds) == 1 and count == len(shown) else None
     if count == 1:
         subject = f"'{shown[0].name}' has this game's name but is {_KIND_WORD[shown[0].kind]}"
     else:
@@ -388,15 +392,14 @@ def unusable_namesake_refusal(
     if not entries:
         raise ValueError("unusable_namesake_refusal needs at least one entry")
     shown = entries[:limit]
-    truncated = len(entries) > limit
     return {
         "success": False,
         "reason": "unusable_namesake",
-        "message": _namesake_message(shown, count=len(entries), served_dir=served_dir, truncated=truncated),
+        "message": _namesake_message(shown, count=len(entries), served_dir=served_dir),
         "incoming": {"name": incoming_name, "size_bytes": incoming_size},
         "existing": [{"name": entry.name, "path": entry.path, "kind": entry.kind} for entry in shown],
         "served_is_dir": served_dir,
-        "truncated": truncated,
+        "truncated": len(entries) > len(shown),
     }
 
 

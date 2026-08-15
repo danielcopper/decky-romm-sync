@@ -20,6 +20,7 @@
 
 import { FC } from "react";
 import { ModalRoot, DialogButton, showModal } from "@decky/ui";
+import { ENTRY_KIND_LABEL } from "../utils/formatters";
 import type { UnusableNamesakeResult } from "../types";
 
 export type UnusableChoice = "download" | "cancel";
@@ -31,12 +32,6 @@ interface AdoptUnusableModalProps {
 }
 
 const LABEL_STYLE = { fontSize: "12px", color: "rgba(255,255,255,0.55)" };
-
-const KIND_LABEL: Record<string, string> = {
-  file: "file",
-  dir: "folder",
-  link: "shortcut to somewhere else",
-};
 
 export const AdoptUnusableModal: FC<AdoptUnusableModalProps> = ({ unusable, closeModal, onChoice }) => {
   const choose = (choice: UnusableChoice) => {
@@ -60,7 +55,7 @@ export const AdoptUnusableModal: FC<AdoptUnusableModalProps> = ({ unusable, clos
         <div style={{ marginBottom: "12px" }}>
           {unusable.existing.map((entry) => (
             <div key={entry.path} style={{ fontSize: "13px", color: "#fff", marginBottom: "2px" }}>
-              {entry.name} <span style={LABEL_STYLE}>({KIND_LABEL[entry.kind] ?? entry.kind})</span>
+              {entry.name} <span style={LABEL_STYLE}>({ENTRY_KIND_LABEL[entry.kind]})</span>
             </div>
           ))}
         </div>

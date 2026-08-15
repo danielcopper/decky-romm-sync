@@ -22,15 +22,9 @@ import { FC, useEffect, useState } from "react";
 import { ModalRoot, DialogButton, showModal } from "@decky/ui";
 import { addEventListener, removeEventListener } from "@decky/api";
 import { debugLog, verifyExistingContent } from "../api/backend";
-import { formatBytes } from "../utils/formatters";
+import { ENTRY_KIND_LABEL, formatBytes } from "../utils/formatters";
 import { detach } from "../utils/detach";
-import type {
-  AdoptionCandidate,
-  EntryKind,
-  TargetOccupiedResult,
-  VerifyContentResult,
-  VerifyProgressEvent,
-} from "../types";
+import type { AdoptionCandidate, TargetOccupiedResult, VerifyContentResult, VerifyProgressEvent } from "../types";
 
 export type AdoptChoice = "adopt" | "replace" | "cancel";
 
@@ -62,51 +56,70 @@ function formatTimestamp(epochSeconds: number): string {
  * at and has no word for — a named pipe, a socket — so this has none either,
  * rather than calling it a file: that guess is what let one be offered as a game.
  */
-const KIND_NOUN: Record<EntryKind, string> = {
-  file: "file",
-  dir: "folder",
-  link: "shortcut to somewhere else",
-};
-
 function nounFor(occupied: TargetOccupiedResult): string {
   const kind = occupied.existing.kind;
-  return kind === null ? "thing" : KIND_NOUN[kind];
+  return kind === null ? "thing" : ENTRY_KIND_LABEL[kind];
 }
 
 /**
- * How the existing side's size is stated. A candidate folder was deliberately
- * never measured — the search stays on the platform folder's top level, because
- * descending into one multi-file game can mean tens of thousands of files — so
- * it has no size to show, and "0 B" about something that may be gigabytes is the
- * one thing this must not print.
+ * How the existing side's size is stated. Only a file or a folder has a byte
+ * count that is the game's; a shortcut's `stat` reports the length of the path
+ * it stores, which is a real-looking number about nothing the user is deciding
+ * on, and a kindless entry's is not the game's either. Those say so instead —
+ * printing the number and disclaiming it two lines below still puts it beside
+ * the server's real one, to be read as a comparison.
+ *
+ * A candidate folder is the third case and a different reason: the search stays
+ * on the platform folder's top level, because descending into one multi-file
+ * game can mean tens of thousands of files, so nothing measured it. "0 B" about
+ * something that may be gigabytes is the one thing this must not print.
  */
 function existingSize(occupied: TargetOccupiedResult, candidate: boolean): string {
   if (candidate && occupied.existing.kind === "dir") return "Folder — not measured";
+  if (occupied.existing.kind === "link") return "Shortcut — no size of its own";
+  if (occupied.existing.kind === null) return "No size to show";
   return formatBytes(occupied.existing.size_bytes);
 }
 
 /**
  * One sentence on how the two sizes relate — never two bare numbers to subtract,
  * and never our own choice not to measure reported as the server's silence.
- *
- * A shortcut's byte count is the length of the path it stores and a kindless
- * entry's is nothing in particular, so neither is a number the server's can be
- * related to. Printing a difference for either would invent evidence.
  */
 function sizeVerdict(occupied: TargetOccupiedResult, candidate: boolean): string {
   if (candidate && occupied.existing.kind === "dir") {
     return "Folders are not measured before you open this, so the two sizes are not compared.";
   }
   if (occupied.existing.kind === "link") {
-    return "The size shown is the shortcut's own, not the game's, so the two are not compared.";
+    return "A shortcut is not the game's bytes, so there is nothing here to compare.";
   }
-  if (occupied.existing.kind === null) return "This is not a file or a folder, so the two sizes are not compared.";
+  if (occupied.existing.kind === null) return "This is not a file or a folder, so there is nothing here to compare.";
   if (occupied.sizes_match === null) return "The server did not state a size, so the two cannot be compared.";
   if (occupied.sizes_match) return "Both are the same size.";
   const delta = occupied.existing.size_bytes - occupied.incoming.size_bytes;
   return delta > 0
     ? `What is here is ${formatBytes(delta)} larger than what the server would send.`
     : `What is here is ${formatBytes(-delta)} smaller than what the server would send.`;
+}
+
+/**
+ * What the second confirmation promises will be destroyed. Three sentences,
+ * because three different things are: a file or folder may be the user's own
+ * dump and is gone for good, a shortcut is one line of filesystem bookkeeping
+ * whose target survives, and a kindless entry is something the plugin can only
+ * say it is removing.
+ */
+function replaceWarning(occupied: TargetOccupiedResult, candidate: boolean, noun: string): string {
+  const name = occupied.existing.name;
+  if (occupied.existing.kind === "link") {
+    return `Downloading deletes the shortcut that is here now — ${name}. Whatever it points at is left alone. Continue?`;
+  }
+  if (occupied.existing.kind === null) {
+    return `Downloading removes what is here now — ${name}. Tender cannot tell what it is, only that it goes. Continue?`;
+  }
+  return (
+    `Downloading deletes the ${noun} that is here now — ${name}, ${existingSize(occupied, candidate)}. ` +
+    "If it is your own dump, patch or romhack, it is gone. Continue?"
+  );
 }
 
 const VERIFY_COLORS: Record<VerifyContentResult["status"], string> = {
@@ -221,12 +234,7 @@ export const AdoptExistingModal: FC<AdoptExistingModalProps> = ({
         {confirmingReplace ? (
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             <div style={{ fontSize: "13px", color: "#ff8a80" }}>
-              {occupied.existing.kind === "link"
-                ? `Downloading deletes the shortcut that is here now — ${occupied.existing.name}. Whatever it points ` +
-                  "at is left alone. Continue?"
-                : `Downloading deletes the ${noun} that is here now — ${occupied.existing.name}, ` +
-                  `${existingSize(occupied, Boolean(candidatePath))}. If it is your own dump, patch or romhack, it ` +
-                  "is gone. Continue?"}
+              {replaceWarning(occupied, Boolean(candidatePath), noun)}
             </div>
             <DialogButton onClick={() => choose("replace")}>Delete and Download</DialogButton>
             <DialogButton onClick={() => setConfirmingReplace(false)} style={{ opacity: 0.5 }}>

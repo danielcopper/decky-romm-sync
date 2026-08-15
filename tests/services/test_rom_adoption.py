@@ -657,6 +657,94 @@ class TestAdopt:
         assert result["reason"] == "nothing_to_adopt"
         assert h.superseded == []
 
+    def _change_target_during_supersede(self, h, change) -> None:
+        """Run *change* against the store in the window ``_adopt_io`` guards.
+
+        The validation has already accepted the content and the supersede has
+        already run its real I/O, so this is the only place a test can put a
+        change that the last re-stat is the sole check against. Hooking the
+        supersede seam rather than counting ``describe_path`` calls keeps the
+        witness tied to the ordering the service actually has.
+        """
+
+        async def _supersede(rom_id: int) -> None:
+            h.superseded.append(rom_id)
+            change()
+
+        h.service._sibling_supersede = lambda: _supersede
+
+    async def test_content_that_turns_into_a_link_across_the_supersede_is_refused(self, h):
+        # The window the re-stat exists for: a regular file when the validation
+        # looked, a link by the time the row would be written. Recording it would
+        # be the install ``claim_source`` never releases.
+        h.seed_rom()
+        h.stage_detail(_single_file_detail())
+        h.store.files["/roms/snes/Game.sfc"] = b"mine"
+
+        def _becomes_a_link() -> None:
+            del h.store.files["/roms/snes/Game.sfc"]
+            h.store.links["/roms/snes/Game.sfc"] = "/roms/snes/real.sfc"
+
+        self._change_target_during_supersede(h, _becomes_a_link)
+
+        result = await h.service.adopt_existing_rom(_ROM_ID)
+
+        assert result["success"] is False
+        assert result["reason"] == "unexpected_content_kind"
+        assert result["message"] == "A shortcut is in the way — a shortcut cannot be used as this game"
+        assert h.superseded == [_ROM_ID]
+        assert h.uow.rom_installs.get(_ROM_ID) is None
+        assert set(h.store.links) == {"/roms/snes/Game.sfc"}
+
+    async def test_content_that_loses_its_kind_across_the_supersede_is_refused_too(self, h):
+        h.seed_rom()
+        h.stage_detail(_single_file_detail())
+        h.store.files["/roms/snes/Game.sfc"] = b"mine"
+
+        def _becomes_a_pipe() -> None:
+            del h.store.files["/roms/snes/Game.sfc"]
+            h.store.other_kinds.add("/roms/snes/Game.sfc")
+
+        self._change_target_during_supersede(h, _becomes_a_pipe)
+
+        result = await h.service.adopt_existing_rom(_ROM_ID)
+
+        assert result["reason"] == "unexpected_content_kind"
+        assert result["message"] == "What is in the way is neither a file nor a folder"
+        assert h.uow.rom_installs.get(_ROM_ID) is None
+
+    async def test_content_that_vanishes_across_the_supersede_says_it_is_gone(self, h):
+        # The guard's other half, and a different situation: nothing is there, so
+        # "the files are no longer there" is the true sentence here and the wrong
+        # one above.
+        h.seed_rom()
+        h.stage_detail(_single_file_detail())
+        h.store.files["/roms/snes/Game.sfc"] = b"mine"
+
+        self._change_target_during_supersede(h, lambda: h.store.files.pop("/roms/snes/Game.sfc"))
+
+        result = await h.service.adopt_existing_rom(_ROM_ID)
+
+        assert result["success"] is False
+        assert result["reason"] == "nothing_to_adopt"
+        assert result["message"] == "The files are no longer there — nothing was adopted"
+        assert h.superseded == [_ROM_ID]
+        assert h.uow.rom_installs.get(_ROM_ID) is None
+
+    async def test_content_that_survives_the_supersede_unchanged_is_still_recorded(self, h):
+        # The control: the same seam, the same ordering, no change — so the three
+        # refusals above are about what changed and not about the hook itself.
+        h.seed_rom()
+        h.stage_detail(_single_file_detail())
+        h.store.files["/roms/snes/Game.sfc"] = b"mine"
+
+        self._change_target_during_supersede(h, lambda: None)
+
+        result = await h.service.adopt_existing_rom(_ROM_ID)
+
+        assert result["success"] is True
+        assert h.uow.rom_installs.get(_ROM_ID) is not None
+
     async def test_a_server_failure_surfaces_the_canonical_shape(self, h):
         h.romm_api.fail_on_next(OSError("boom"))
 
@@ -1849,6 +1937,16 @@ class TestSearchLogging:
         assert "dir=/roms/snes" in line
         assert "name=game" in line
         assert "found=1" in line
+
+    async def test_a_probe_with_no_name_to_match_still_says_what_it_answered(self, h):
+        # Every exit from the probe leaves a line, including the ones that give
+        # up before reading anything — a probe that logged nothing is a probe
+        # that cannot be told apart from one that never ran.
+        h.service.has_adoption_candidate("snes", "")
+
+        (line,) = [entry for entry in h.debug_log if entry.startswith("adopt probe:")]
+        assert "slug=snes" in line
+        assert "found=0" in line
 
 
 class TestWrongShapeNamesake:
