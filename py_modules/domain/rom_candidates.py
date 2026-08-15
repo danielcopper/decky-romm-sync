@@ -43,6 +43,23 @@ _EVIDENCE_DETAIL = {
 # is all there is".
 CANDIDATE_LIMIT = 10
 
+# What an entry *is*, judged without following it. The whole vocabulary: an entry
+# is one of these three or it is not reported at all.
+#
+# A symlink is its own kind rather than whatever it points at, because following
+# it answers a different question from the one adoption asks. An install row must
+# be removable — every uninstall goes through ``claim_source``, which refuses a
+# symlink outright — so a link that resolves to a perfectly good ROM still cannot
+# become one. Judging the entry itself also costs nothing: the directory read
+# already carries the type.
+#
+# Anything else a filesystem can hold — a FIFO, a socket, a device node — has no
+# truthful value in a vocabulary of "file or directory", and inventing one is
+# what let a named pipe be offered as a game.
+FILE = "file"
+DIR = "dir"
+LINK = "link"
+
 
 @dataclass(frozen=True)
 class LocalName:
@@ -55,11 +72,15 @@ class LocalName:
     "both sides share one filter" a property of the types rather than a promise
     in a docstring — the lean side cannot reach a field it never read, and the
     ranking below cannot be handed entries whose size nobody measured.
+
+    ``kind`` is one of :data:`FILE`, :data:`DIR` or :data:`LINK`. There is no
+    fourth value and no "unknown": an entry that is none of the three is not
+    reported, so nothing downstream has to carry a case for it.
     """
 
     name: str
     path: str
-    is_dir: bool
+    kind: str
 
 
 @dataclass(frozen=True)
@@ -69,16 +90,10 @@ class LocalEntry(LocalName):
     ``size_bytes`` is ``0`` for a directory: the search never descends, because a
     single multi-file install can hold tens of thousands of files, so a
     directory's total is not evidence this filter can afford.
-
-    ``readable`` is ``False`` when the ``stat`` failed. Both numbers are then
-    ``0`` and neither is a measurement, so such an entry is never ranked and
-    never offered — it is reported as what it is, something present and
-    undescribable.
     """
 
     size_bytes: int
     modified_at: float
-    readable: bool = True
 
 
 EntryT = TypeVar("EntryT", bound=LocalName)
@@ -152,11 +167,10 @@ def matching_entries(
     entries: tuple[EntryT, ...],
     *,
     wanted_names: frozenset[str],
-    want_dir: bool,
     accepted_extensions: frozenset[str],
     covered_paths: frozenset[str],
 ) -> tuple[EntryT, ...]:
-    """The entries that could be the ROM *wanted_names* name, cheapest test first.
+    """Every entry that could be the ROM *wanted_names* names, cheapest test first.
 
     *wanted_names* is a set because one ROM can be known under more than one
     normalized name: the game-detail page matches ``roms.fs_name`` while the
@@ -166,23 +180,22 @@ def matching_entries(
     alone would never find it. Empty names are dropped, and an empty set matches
     nothing — read as a value, an empty normalization equals every other one.
 
-    Four filters, each of which alone would be too weak:
+    Shape is deliberately **not** filtered here. Every namesake comes back and
+    the caller decides what each one means, because "it is the wrong shape" and
+    "it is a link" are things to tell the user about rather than reasons to
+    pretend an entry is not there.
 
-    * **Shape** — a ROM the server serves as one file can only be a file here,
-      and one it serves as a directory can only be a directory. The adopt dialog
-      already refuses the mismatched shape as unusable, so offering it would be
-      offering a row the user cannot take. An entry that matches on everything
-      *but* shape is not nothing, though: the caller asks a second time with
-      ``want_dir`` inverted and reports it through :func:`shape_conflict_refusal`
-      rather than downloading a second copy beside it without a word.
-    * **Extension** — for a file, a positive test against *accepted_extensions*
-      (ES-DE's live per-system ``<extension>`` list). ``systeminfo.txt``,
-      ``.directory`` and every other frontend's bookkeeping fall out without a
-      blacklist anyone has to maintain. An **empty** set means the source could
-      not answer, and the test is skipped rather than turned into a refusal —
-      the same default-safe reading every other consumer of that list applies.
-      A directory is never extension-tested: it usually carries none, and
-      excluding it would exclude the whole multi-file case.
+    Three filters, each of which alone would be too weak:
+
+    * **Extension** — for anything that is not a directory, a positive test
+      against *accepted_extensions* (ES-DE's live per-system ``<extension>``
+      list). ``systeminfo.txt``, ``.directory`` and every other frontend's
+      bookkeeping fall out without a blacklist anyone has to maintain. An
+      **empty** set means the source could not answer, and the test is skipped
+      rather than turned into a refusal — the same default-safe reading every
+      other consumer of that list applies. A directory is never
+      extension-tested: it usually carries none, and excluding it would exclude
+      the whole multi-file case.
     * **Install rows** — anything a ``rom_installs`` row already accounts for is
       another ROM's content, and the plugin's claim on it is that row.
     * **Name** — the normalized names must be equal. An empty normalization
@@ -198,9 +211,8 @@ def matching_entries(
     return tuple(
         entry
         for entry in entries
-        if entry.is_dir == want_dir
-        and entry.path not in covered_paths
-        and (entry.is_dir or not accepted_extensions or _extension_of(entry.name) in accepted_extensions)
+        if entry.path not in covered_paths
+        and (entry.kind == DIR or not accepted_extensions or _extension_of(entry.name) in accepted_extensions)
         and normalize_rom_name(entry.name) in wanted
     )
 
@@ -244,7 +256,7 @@ def _describe(entry: LocalEntry, server_size: int, server_crc32: str, members: t
     return AdoptionCandidate(
         name=entry.name,
         path=entry.path,
-        is_dir=entry.is_dir,
+        is_dir=entry.kind == DIR,
         size_bytes=entry.size_bytes,
         modified_at=entry.modified_at,
         evidence=evidence,
@@ -256,7 +268,7 @@ def _evidence_for(entry: LocalEntry, server_size: int, server_crc32: str, member
     """The strongest of the three claims *entry* supports without a byte being read."""
     if server_crc32 and len(members) == 1 and members[0] == server_crc32:
         return CRC32_MATCH
-    if server_size and not entry.is_dir and entry.size_bytes == server_size:
+    if server_size and entry.kind != DIR and entry.size_bytes == server_size:
         return SIZE_MATCH
     return NAME_MATCH
 
@@ -300,13 +312,14 @@ def candidates_refusal(
     }
 
 
-# How the refusal's own sentence names a shape. It has to read as a sentence on
-# its own: the dialog renders its own copy from the payload, but this message is
-# what a toast shows if that dialog never opens.
-_SHAPE_WORD = {True: "folder", False: "single file"}
+# What the refusal's own sentence calls each thing. It has to read as a sentence
+# on its own: the dialog renders its own copy from the payload, but this message
+# is what a toast shows if that dialog never opens.
+_SERVED_WORD = {True: "folder", False: "single file"}
+_KIND_WORD = {FILE: "a single file", DIR: "a folder", LINK: "a shortcut to somewhere else"}
 
 
-def shape_conflict_refusal(
+def unusable_namesake_refusal(
     entries: tuple[LocalName, ...],
     *,
     served_dir: bool,
@@ -316,84 +329,42 @@ def shape_conflict_refusal(
 ) -> dict[str, object]:
     """The refusal a download returns for a namesake it cannot offer to take over.
 
-    Raised when the platform folder holds an entry whose normalized name is this
-    game's but whose **shape** is the other one — a loose file where the server
-    serves a folder, or a folder where it serves one file. Nothing on disk can be
-    adopted, so there is no candidate; downloading regardless would drop a second
-    copy of the game beside the first with no word said, after a button that may
-    well have read *Use Existing Files*.
+    Two things reach it, and they are one answer because the user's choice is the
+    same for both: an entry whose **shape** is the other one — a loose file where
+    the server serves a folder, or a folder where it serves one file — and a
+    **symlink**, which is never adoptable whatever it points at, because an
+    install row has to be removable and the uninstall path refuses a link.
 
-    So it is asked instead: the caller's dialog names both outcomes, and the
-    download proceeds only on the user's word. The list is capped like the
-    candidate list is, and says so when it was cut — a list silently cut short
-    reads as "that is all there is". The sentence counts what was **found**, not
-    what is shown, so a capped list never understates the folder.
+    Nothing here can be adopted, so there is no candidate; downloading regardless
+    would drop a second copy of the game beside the first with no word said,
+    after a button that may well have read *Use Existing Files*. So it is asked
+    instead: the caller's dialog names both outcomes, and the download proceeds
+    only on the user's word.
+
+    The list is capped like the candidate list is, and says so when it was cut —
+    a list silently cut short reads as "that is all there is". The sentence
+    counts what was **found**, not what is shown, so a capped list never
+    understates the folder.
 
     Raises ``ValueError`` on an empty *entries*: there is no sentence for "no
-    namesake of the wrong shape", and a caller that reached here without one has
-    a bug the refusal must not paper over.
+    unusable namesake", and a caller that reached here without one has a bug the
+    refusal must not paper over.
     """
     if not entries:
-        raise ValueError("shape_conflict_refusal needs at least one entry")
+        raise ValueError("unusable_namesake_refusal needs at least one entry")
     shown = entries[:limit]
-    found_dir = not served_dir
     return {
         "success": False,
-        "reason": "shape_conflict",
+        "reason": "unusable_namesake",
         "message": (
-            f"'{shown[0].name}' has this game's name but is a {_SHAPE_WORD[found_dir]}"
+            f"'{shown[0].name}' has this game's name but is {_KIND_WORD[shown[0].kind]}"
             if len(entries) == 1
-            else f"{len(entries)} entries here have this game's name but are {_SHAPE_WORD[found_dir]}s"
+            else f"{len(entries)} entries here have this game's name and cannot be used as this game"
         )
-        + f", and the server sends this game as a {_SHAPE_WORD[served_dir]}",
+        + f", and the server sends this game as a {_SERVED_WORD[served_dir]}",
         "incoming": {"name": incoming_name, "size_bytes": incoming_size},
-        "existing": [{"name": entry.name, "path": entry.path, "is_dir": entry.is_dir} for entry in shown],
+        "existing": [{"name": entry.name, "path": entry.path, "kind": entry.kind} for entry in shown],
         "served_is_dir": served_dir,
-        "truncated": len(entries) > limit,
-    }
-
-
-def unreadable_refusal(
-    entries: tuple[LocalName, ...],
-    *,
-    removable_paths: frozenset[str],
-    incoming_name: str,
-    incoming_size: int,
-    limit: int = CANDIDATE_LIMIT,
-) -> dict[str, object]:
-    """The refusal a download returns for a namesake it could not read.
-
-    The directory read saw it and its ``stat`` did not answer — a symlink
-    pointing nowhere, a mount that went away, a race with a writer. Nothing can
-    be said about the content, so it can be neither offered nor rejected on its
-    merits; what can be said is that something with this game's name is here and
-    cannot be used as this game.
-
-    *removable_paths* names the entries proven to be links with no resolving
-    target. Only those may be offered for removal, because only those hold no
-    data: everything else unreadable may be the only copy of something, and the
-    rule against deleting what exists nowhere else does not bend for an entry we
-    merely failed to stat. ``removable`` per row carries that decision to the
-    dialog rather than letting it re-derive one.
-
-    Raises ``ValueError`` on an empty *entries*, for the reason
-    :func:`shape_conflict_refusal` does.
-    """
-    if not entries:
-        raise ValueError("unreadable_refusal needs at least one entry")
-    shown = entries[:limit]
-    return {
-        "success": False,
-        "reason": "unreadable_entry",
-        "message": (
-            f"'{shown[0].name}' has this game's name but cannot be read"
-            if len(entries) == 1
-            else f"{len(entries)} entries here have this game's name and cannot be read"
-        ),
-        "incoming": {"name": incoming_name, "size_bytes": incoming_size},
-        "existing": [
-            {"name": entry.name, "path": entry.path, "removable": entry.path in removable_paths} for entry in shown
-        ],
         "truncated": len(entries) > limit,
     }
 

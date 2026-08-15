@@ -38,11 +38,11 @@ export const AdoptVanishedModal: FC<AdoptVanishedModalProps> = ({ vanished, clos
     <ModalRoot closeModal={closeModal}>
       <div style={{ padding: "16px", minWidth: "420px" }}>
         <div style={{ fontSize: "16px", fontWeight: "bold", color: "#fff", marginBottom: "4px" }}>
-          The Copy on This Device Is No Longer There
+          The Copy on This Device Cannot Be Found
         </div>
         <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.7)", marginBottom: "12px" }}>
-          This game&apos;s page found a copy on this device, and looking again now turns up nothing that matches — it
-          has been moved, renamed or deleted since. Nothing has been changed on your device.
+          This game&apos;s page found a copy on this device, and looking again now turns up nothing that matches.
+          Nothing has been changed on your device.
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>

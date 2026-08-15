@@ -106,11 +106,10 @@ class DownloadTargetGateFn(Protocol):
     replace what they were shown and it has been cleared — and a canonical
     failure dict otherwise: the ``target_occupied`` refusal carrying both sides
     of the comparison, one of the four the candidate search can return
-    (``adoption_candidates``, ``unreadable_entry``, ``shape_conflict``,
-    ``candidate_vanished``), the ``rename_collisions`` refusal from carrying a
-    discarded candidate's saves, or the failure of a removal the replace could
-    not complete. Nothing is written and no transfer starts on a non-``None``
-    answer.
+    (``adoption_candidates``, ``unusable_namesake``, ``candidate_vanished``), the
+    ``rename_collisions`` refusal from carrying a discarded candidate's saves, or
+    the failure of a removal the replace could not complete. Nothing is written
+    and no transfer starts on a non-``None`` answer.
 
     *candidate_path* names the entry the user was shown when it sat elsewhere in
     the folder under another name; with *replace* it is removed and its saves

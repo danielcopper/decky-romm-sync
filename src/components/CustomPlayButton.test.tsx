@@ -100,11 +100,8 @@ vi.mock("../components/AdoptCandidateModal", () => ({
 vi.mock("../components/AdoptCollisionModal", () => ({
   showAdoptCollisionModal: vi.fn(),
 }));
-vi.mock("../components/AdoptShapeConflictModal", () => ({
-  showAdoptShapeConflictModal: vi.fn(),
-}));
-vi.mock("../components/AdoptUnreadableModal", () => ({
-  showAdoptUnreadableModal: vi.fn(),
+vi.mock("../components/AdoptUnusableModal", () => ({
+  showAdoptUnusableModal: vi.fn(),
 }));
 vi.mock("../components/AdoptVanishedModal", () => ({
   showAdoptVanishedModal: vi.fn(),
@@ -124,8 +121,7 @@ import { showStopGameModal } from "../components/StopGameModal";
 import { showAdoptExistingModal } from "../components/AdoptExistingModal";
 import { showAdoptCandidateModal } from "../components/AdoptCandidateModal";
 import { showAdoptCollisionModal } from "../components/AdoptCollisionModal";
-import { showAdoptShapeConflictModal } from "../components/AdoptShapeConflictModal";
-import { showAdoptUnreadableModal } from "../components/AdoptUnreadableModal";
+import { showAdoptUnusableModal } from "../components/AdoptUnusableModal";
 import { showAdoptVanishedModal } from "../components/AdoptVanishedModal";
 import { mountPruneLeasePlugin, releaseAllPruneLeases } from "../utils/pruneLease";
 import { resetBoundVanished, setBoundVanished } from "../utils/vanishedBinding";
@@ -3945,15 +3941,20 @@ describe("CustomPlayButton — the same game under another name (#260)", () => {
   });
 });
 
-describe("CustomPlayButton — a namesake of the wrong shape (#260)", () => {
-  const CONFLICT = {
+describe("CustomPlayButton — a namesake it cannot adopt (#260)", () => {
+  const WRONG_SHAPE = {
     success: false as const,
-    reason: "shape_conflict" as const,
+    reason: "unusable_namesake" as const,
     message: "'game (U)' has this game's name but is a folder",
     incoming: { name: "game (USA).z64", size_bytes: 2048 },
-    existing: [{ name: "game (U)", path: "/roms/n64/game (U)", is_dir: true }],
+    existing: [{ name: "game (U)", path: "/roms/n64/game (U)", kind: "dir" }],
     served_is_dir: false,
     truncated: false,
+  };
+  const LINK = {
+    ...WRONG_SHAPE,
+    message: "'game (U).z64' has this game's name but is a shortcut to somewhere else",
+    existing: [{ name: "game (U).z64", path: "/roms/n64/game (U).z64", kind: "link" }],
   };
 
   beforeEach(() => {
@@ -3962,14 +3963,14 @@ describe("CustomPlayButton — a namesake of the wrong shape (#260)", () => {
     vi.mocked(backend.adoptExistingRom).mockReset();
     vi.mocked(showAdoptExistingModal).mockReset();
     vi.mocked(showAdoptCandidateModal).mockReset();
-    vi.mocked(showAdoptShapeConflictModal).mockReset();
+    vi.mocked(showAdoptUnusableModal).mockReset();
     vi.mocked(toaster.toast).mockClear();
   });
 
   it("opens its own dialog rather than the adopt or candidate one", async () => {
     mockCachedDetail({ rom_id: 42, installed: false, adoption_candidate_present: true });
-    vi.mocked(backend.startDownload).mockResolvedValue(CONFLICT);
-    vi.mocked(showAdoptShapeConflictModal).mockResolvedValue("cancel");
+    vi.mocked(backend.startDownload).mockResolvedValue(WRONG_SHAPE);
+    vi.mocked(showAdoptUnusableModal).mockResolvedValue("cancel");
     const utils = render(<CustomPlayButton appId={100} />);
     const btn = await utils.findByText("Use Existing Files");
 
@@ -3977,9 +3978,24 @@ describe("CustomPlayButton — a namesake of the wrong shape (#260)", () => {
       btn.click();
     });
 
-    expect(vi.mocked(showAdoptShapeConflictModal)).toHaveBeenCalledWith(CONFLICT);
+    expect(vi.mocked(showAdoptUnusableModal)).toHaveBeenCalledWith(WRONG_SHAPE);
     expect(vi.mocked(showAdoptExistingModal)).not.toHaveBeenCalled();
     expect(vi.mocked(showAdoptCandidateModal)).not.toHaveBeenCalled();
+  });
+
+  it("takes the same door for a symlink, which is never adoptable", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false, adoption_candidate_present: true });
+    vi.mocked(backend.startDownload).mockResolvedValue(LINK);
+    vi.mocked(showAdoptUnusableModal).mockResolvedValue("cancel");
+    const utils = render(<CustomPlayButton appId={100} />);
+    const btn = await utils.findByText("Use Existing Files");
+
+    await act(async () => {
+      btn.click();
+    });
+
+    expect(vi.mocked(showAdoptUnusableModal)).toHaveBeenCalledWith(LINK);
+    expect(vi.mocked(showAdoptExistingModal)).not.toHaveBeenCalled();
   });
 
   it("downloading anyway re-sends with replace, and names no candidate", async () => {
@@ -3987,9 +4003,9 @@ describe("CustomPlayButton — a namesake of the wrong shape (#260)", () => {
     // delete that entry, and nothing here is being taken over.
     mockCachedDetail({ rom_id: 42, installed: false });
     vi.mocked(backend.startDownload)
-      .mockResolvedValueOnce(CONFLICT)
+      .mockResolvedValueOnce(WRONG_SHAPE)
       .mockResolvedValueOnce({ success: true, message: "Download started" });
-    vi.mocked(showAdoptShapeConflictModal).mockResolvedValue("download");
+    vi.mocked(showAdoptUnusableModal).mockResolvedValue("download");
     const utils = render(<CustomPlayButton appId={100} />);
     const btn = await utils.findByText("Download");
 
@@ -4005,8 +4021,8 @@ describe("CustomPlayButton — a namesake of the wrong shape (#260)", () => {
 
   it("cancelling starts nothing and says nothing alarming", async () => {
     mockCachedDetail({ rom_id: 42, installed: false });
-    vi.mocked(backend.startDownload).mockResolvedValue(CONFLICT);
-    vi.mocked(showAdoptShapeConflictModal).mockResolvedValue("cancel");
+    vi.mocked(backend.startDownload).mockResolvedValue(WRONG_SHAPE);
+    vi.mocked(showAdoptUnusableModal).mockResolvedValue("cancel");
     const utils = render(<CustomPlayButton appId={100} />);
     const btn = await utils.findByText("Download");
 
@@ -4021,8 +4037,8 @@ describe("CustomPlayButton — a namesake of the wrong shape (#260)", () => {
 
   it("leaves the button pressable again after the dialog closes", async () => {
     mockCachedDetail({ rom_id: 42, installed: false });
-    vi.mocked(backend.startDownload).mockResolvedValue(CONFLICT);
-    vi.mocked(showAdoptShapeConflictModal).mockResolvedValue("cancel");
+    vi.mocked(backend.startDownload).mockResolvedValue(WRONG_SHAPE);
+    vi.mocked(showAdoptUnusableModal).mockResolvedValue("cancel");
     const utils = render(<CustomPlayButton appId={100} />);
     const btn = await utils.findByText("Download");
 
@@ -4034,89 +4050,6 @@ describe("CustomPlayButton — a namesake of the wrong shape (#260)", () => {
     });
 
     expect(vi.mocked(backend.startDownload)).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("CustomPlayButton — a namesake that cannot be read (#260)", () => {
-  const UNREADABLE = {
-    success: false as const,
-    reason: "unreadable_entry" as const,
-    message: "'game (U).z64' has this game's name but cannot be read",
-    incoming: { name: "game (USA).z64", size_bytes: 2048 },
-    existing: [{ name: "game (U).z64", path: "/roms/n64/game (U).z64", removable: true }],
-    truncated: false,
-  };
-
-  beforeEach(() => {
-    vi.mocked(getCachedGameDetail).mockReset();
-    vi.mocked(backend.startDownload).mockReset();
-    vi.mocked(showAdoptExistingModal).mockReset();
-    vi.mocked(showAdoptCandidateModal).mockReset();
-    vi.mocked(showAdoptUnreadableModal).mockReset();
-    vi.mocked(toaster.toast).mockClear();
-  });
-
-  it("opens its own dialog rather than the adopt or candidate one", async () => {
-    mockCachedDetail({ rom_id: 42, installed: false, adoption_candidate_present: true });
-    vi.mocked(backend.startDownload).mockResolvedValue(UNREADABLE);
-    vi.mocked(showAdoptUnreadableModal).mockResolvedValue({ kind: "cancel" });
-    const utils = render(<CustomPlayButton appId={100} />);
-    const btn = await utils.findByText("Use Existing Files");
-
-    await act(async () => {
-      btn.click();
-    });
-
-    expect(vi.mocked(showAdoptUnreadableModal)).toHaveBeenCalledWith(UNREADABLE);
-    expect(vi.mocked(showAdoptExistingModal)).not.toHaveBeenCalled();
-    expect(vi.mocked(showAdoptCandidateModal)).not.toHaveBeenCalled();
-  });
-
-  it("removal names the path, which is what tells the backend to unlink it", async () => {
-    mockCachedDetail({ rom_id: 42, installed: false });
-    vi.mocked(backend.startDownload)
-      .mockResolvedValueOnce(UNREADABLE)
-      .mockResolvedValueOnce({ success: true, message: "Download started" });
-    vi.mocked(showAdoptUnreadableModal).mockResolvedValue({ kind: "remove", path: "/roms/n64/game (U).z64" });
-    const utils = render(<CustomPlayButton appId={100} />);
-    const btn = await utils.findByText("Download");
-
-    await act(async () => {
-      btn.click();
-    });
-
-    expect(vi.mocked(backend.startDownload).mock.calls[1]).toEqual([42, true, "/roms/n64/game (U).z64", null, false]);
-  });
-
-  it("downloading anyway names no path, so nothing is removed", async () => {
-    mockCachedDetail({ rom_id: 42, installed: false });
-    vi.mocked(backend.startDownload)
-      .mockResolvedValueOnce(UNREADABLE)
-      .mockResolvedValueOnce({ success: true, message: "Download started" });
-    vi.mocked(showAdoptUnreadableModal).mockResolvedValue({ kind: "download" });
-    const utils = render(<CustomPlayButton appId={100} />);
-    const btn = await utils.findByText("Download");
-
-    await act(async () => {
-      btn.click();
-    });
-
-    expect(vi.mocked(backend.startDownload).mock.calls[1]).toEqual([42, true, null, null, false]);
-  });
-
-  it("cancelling starts nothing and says nothing alarming", async () => {
-    mockCachedDetail({ rom_id: 42, installed: false });
-    vi.mocked(backend.startDownload).mockResolvedValue(UNREADABLE);
-    vi.mocked(showAdoptUnreadableModal).mockResolvedValue({ kind: "cancel" });
-    const utils = render(<CustomPlayButton appId={100} />);
-    const btn = await utils.findByText("Download");
-
-    await act(async () => {
-      btn.click();
-    });
-
-    expect(vi.mocked(backend.startDownload)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
   });
 });
 

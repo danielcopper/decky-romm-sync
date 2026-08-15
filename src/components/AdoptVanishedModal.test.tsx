@@ -40,12 +40,18 @@ describe("AdoptVanishedModal — what it states", () => {
     expect(container.textContent).toContain("Example Quest (USA).gba");
   });
 
-  it("blames nothing and nobody", () => {
-    // The backstop knows that the two searches disagreed, not why. A sentence
-    // naming a cause would be a guess dressed as an explanation.
+  it("names no cause, because it knows of none", () => {
+    // The backstop knows the two searches disagreed, not why — and one of the
+    // ways they can disagree is that both spellings of the same folder describe
+    // the same file, where "moved, renamed or deleted" is simply false.
+    //
+    // Asserted against the words a cause would be given in, not against
+    // "error"/"failed" — the sentence this replaced passed those and still
+    // claimed a cause.
     const { container } = renderModal();
-    expect(container.textContent).not.toContain("error");
-    expect(container.textContent).not.toContain("failed");
+    for (const cause of ["moved", "renamed", "deleted", "removed", "because"]) {
+      expect(container.textContent).not.toContain(cause);
+    }
   });
 });
 

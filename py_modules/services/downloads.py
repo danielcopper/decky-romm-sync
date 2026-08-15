@@ -254,6 +254,9 @@ class DownloadService:
         rom_id = int(rom_id)
         if rom_id in self._download_in_progress:
             return {"success": False, "reason": "already_downloading", "message": "Already downloading"}
+        # The page's report rides with the user's answers because the gate reads
+        # them together, but it is added apart from them to keep the difference
+        # visible: the two above are choices the user made, this one is not.
         answer = {"candidate_path": candidate_path, "collision_choice": collision_choice}
         answer["page_saw_candidate"] = page_saw_candidate
         return await self._begin_download(rom_id, resume=False, replace_existing=bool(replace_existing), **answer)

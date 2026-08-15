@@ -240,11 +240,11 @@ class RomAdoptionService:
         belongs to this ROM's own install, or the user chose to download over
         whatever the gate showed them and it has been cleared. Anything else is a
         canonical failure the caller returns untouched — the ``target_occupied``
-        refusal carrying both sides of the comparison, one of the four the
+        refusal carrying both sides of the comparison, one of the three the
         candidate search can return (``adoption_candidates``,
-        ``unreadable_entry``, ``shape_conflict``, ``candidate_vanished``), the
-        ``rename_collisions`` refusal raised by carrying a discarded candidate's
-        saves, or a removal that could not be completed.
+        ``unusable_namesake``, ``candidate_vanished``), the ``rename_collisions``
+        refusal raised by carrying a discarded candidate's saves, or a removal
+        that could not be completed.
 
         *page_saw_candidate* is what the game page told the user before they
         pressed. It is carried this far because the search's last answer is a
@@ -311,7 +311,11 @@ class RomAdoptionService:
                 modified_at=existing["modified_at"],
                 incoming_name=os.path.basename(checked_path),
                 incoming_size=rom_detail.get("fs_size_bytes", 0),
-                adoptable=existing["is_dir"] == is_multi_file_download(rom_detail),
+                # A symlink is never adoptable, whatever it resolves to: an
+                # install row has to be removable and the uninstall path refuses
+                # a link, so adopting one would write a row the UI can never
+                # undo (ADR-0028).
+                adoptable=existing["is_dir"] == is_multi_file_download(rom_detail) and not existing["is_symlink"],
             )
         return self._clear_for_replace(rom_detail, checked_path, is_dir=existing["is_dir"])
 
@@ -438,12 +442,8 @@ class RomAdoptionService:
         the same download finds the saves already in place and re-plans to
         nothing, where an undo would have to be undone again.
 
-        A path the store cannot describe is removed only when it is **proven** to
-        be a symlink with no resolving target: such a link holds no data, so
-        unlinking it destroys nothing. Anything else undescribable is left where
-        it is and the download simply proceeds — an entry we failed to read may
-        be the only copy of something, and the rule against deleting what exists
-        nowhere else does not bend for a failed ``stat``.
+        A path the store cannot describe at all is left alone and the download
+        simply proceeds: nothing was named that could be removed.
         """
         if not candidate_path:
             return None
@@ -463,9 +463,7 @@ class RomAdoptionService:
             }
         existing = self._download_file_store.describe_path(source_path)
         if existing is None:
-            if not self._download_file_store.is_broken_symlink(source_path):
-                return None
-            return self._remove_under_roms(source_path, is_dir=False)
+            return None
         rom_id = int(rom_detail.get("id") or 0)
         refusal, carried = self._renamer.move_planned(
             self._renamer.discarded_save_pairs(rom_id, target, source_path), collision_choice

@@ -16,15 +16,21 @@ from typing import TypedDict
 
 
 class ExistingContent(TypedDict):
-    """What one ``stat`` found at an occupied ROM target path.
+    """What occupies a ROM target path, and enough about it to ask the user.
 
     ``size_bytes`` is the file's own size, or the recursive total of a
     directory's contents so it is comparable with the server's ``fs_size_bytes``
     for a multi-file ROM. ``modified_at`` is POSIX epoch seconds.
+
+    ``is_symlink`` is answered without following, and is what separates content
+    that can be adopted from content that cannot: an install row has to be
+    removable, and the uninstall path refuses a link. A link is still *there* —
+    reporting it as nothing is how a download comes to replace one in silence.
     """
 
     path: str
     is_dir: bool
+    is_symlink: bool
     size_bytes: int
     modified_at: float
 
@@ -45,15 +51,19 @@ class ArchiveMemberInfo(TypedDict):
 class TopLevelName(TypedDict):
     """One top-level entry as the directory read alone described it.
 
-    Name, full path, and whether it is a directory — what a name match reads, and
-    what ``scandir`` hands over without a further syscall. The listing
-    deliberately does not descend: a single multi-file install can hold tens of
-    thousands of files, and a user's own subfolders are their filing.
+    ``kind`` is what the entry **is**, judged without following it: ``"file"``,
+    ``"dir"`` or ``"link"`` (``domain.rom_candidates`` owns the vocabulary).
+    There is no fourth value — a FIFO, a socket or a device node is not listed at
+    all, because "file or directory" has no truthful answer for one.
+
+    The listing deliberately does not descend: a single multi-file install can
+    hold tens of thousands of files, and a user's own subfolders are their
+    filing.
     """
 
     name: str
     path: str
-    is_dir: bool
+    kind: str
 
 
 class TopLevelEntry(TopLevelName):
@@ -62,19 +72,10 @@ class TopLevelEntry(TopLevelName):
     ``size_bytes`` is ``0`` for a directory — a directory's recursive total is not
     something this read pays for, for the reason above. ``modified_at`` is POSIX
     epoch seconds.
-
-    ``readable`` is ``False`` for an entry the directory read saw but the ``stat``
-    could not describe — a symlink whose target does not resolve, a mount that
-    went away, a race with a delete. Its ``size_bytes`` and ``modified_at`` are
-    then ``0`` and mean nothing: they are not measurements, they are the absence
-    of one. Such an entry is still listed, because the two listings must admit
-    the same set — a caller that drops what it cannot measure sees a different
-    folder from one that only reads names.
     """
 
     size_bytes: int
     modified_at: float
-    readable: bool
 
 
 class MoveOutcome(TypedDict):

@@ -120,42 +120,27 @@ export interface CandidatesFoundResult {
 }
 
 /**
- * A download that stopped because something in the platform folder carries this
- * game's name in the wrong form — a folder where the server sends one file, or a
- * file where it sends a folder. Nothing on disk can be taken over, so this is
- * not a candidate list; it is the question of whether to add a second copy
- * beside what is already there. Nothing was written and no transfer started.
+ * A download that stopped because something carrying this game's name cannot
+ * become its install: the other shape — a folder where the server sends one
+ * file, or a file where it sends a folder — or a symlink, which is never
+ * adoptable whatever it points at, because an install row has to be removable
+ * and the uninstall path refuses a link.
  *
- * `served_is_dir` is what the SERVER sends, so each listed entry is the other
- * shape. `truncated` is stated rather than implied, exactly as it is for the
- * candidate list.
+ * Nothing here can be taken over, so this is not a candidate list; it is the
+ * question of whether to add a second copy beside what is already there.
+ * Nothing was written and no transfer started.
+ *
+ * `kind` is `"file"`, `"dir"` or `"link"` — what each entry *is*, judged
+ * without following it. `served_is_dir` is what the SERVER sends. `truncated` is
+ * stated rather than implied, exactly as it is for the candidate list.
  */
-export interface ShapeConflictResult {
+export interface UnusableNamesakeResult {
   success: false;
-  reason: "shape_conflict";
+  reason: "unusable_namesake";
   message: string;
   incoming: { name: string; size_bytes: number };
-  existing: Array<{ name: string; path: string; is_dir: boolean }>;
+  existing: Array<{ name: string; path: string; kind: string }>;
   served_is_dir: boolean;
-  truncated: boolean;
-}
-
-/**
- * A download that stopped because something carrying this game's name could not
- * be read at all — a link pointing nowhere, a mount that went away, a race with
- * a writer. Nothing can be said about the content, so it can be neither offered
- * nor rejected on its merits.
- *
- * `removable` is true only for an entry proven to be a link with no resolving
- * target: those hold no data, so removing one destroys nothing. Everything else
- * unreadable may be the only copy of something and is never offered for removal.
- */
-export interface UnreadableEntryResult {
-  success: false;
-  reason: "unreadable_entry";
-  message: string;
-  incoming: { name: string; size_bytes: number };
-  existing: Array<{ name: string; path: string; removable: boolean }>;
   truncated: boolean;
 }
 

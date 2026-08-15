@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -155,10 +156,10 @@ async def test_a_same_named_folder_refuses_a_single_file_download(harness):
     result = await harness.plugin.start_download(_ROM_ID, False)
 
     assert result["success"] is False
-    assert result["reason"] == "shape_conflict"
+    assert result["reason"] == "unusable_namesake"
     assert isinstance(result["message"], str)
     assert result["message"]
-    assert result["existing"] == [{"name": "rom-41 (U)", "path": str(folder), "is_dir": True}]
+    assert result["existing"] == [{"name": "rom-41 (U)", "path": str(folder), "kind": "dir"}]
     assert result["served_is_dir"] is False
     assert result["truncated"] is False
     assert result["incoming"] == {"name": _CANONICAL, "size_bytes": 4}
@@ -177,8 +178,8 @@ async def test_a_same_named_file_refuses_a_folder_download(harness):
     result = await harness.plugin.start_download(_ROM_ID, False)
 
     assert result["success"] is False
-    assert result["reason"] == "shape_conflict"
-    assert result["existing"] == [{"name": "rom-41 (U).gba", "path": str(loose), "is_dir": False}]
+    assert result["reason"] == "unusable_namesake"
+    assert result["existing"] == [{"name": "rom-41 (U).gba", "path": str(loose), "kind": "file"}]
     assert result["served_is_dir"] is True
     await _drain_download(harness)
     assert not (_platform_dir(harness) / "rom-41 (USA)").exists()
@@ -630,53 +631,72 @@ async def test_the_content_check_reports_a_candidate_that_is_a_different_dump(ha
     assert result["differences"] == [{"name": _CANONICAL, "detail": "contents differ from the server's copy"}]
 
 
-# ── a namesake that cannot be read ───────────────────────────────────────
+# ── a namesake that cannot become the install ────────────────────────────
 
 
-def _place_broken_link(harness, name: str = "rom-41 (U).gba") -> Path:
-    """A symlink whose target does not exist — present, named, undescribable."""
+def _place_link(harness, name: str = "rom-41 (U).gba", *, target: str = "real.gba") -> Path:
+    """A real symlink in the platform folder, pointing at a real file."""
+    real = _platform_dir(harness) / target
+    real.write_bytes(b"my own dump")
     path = _platform_dir(harness) / name
-    path.symlink_to(_platform_dir(harness) / "gone.gba")
+    path.symlink_to(real)
     return path
 
 
-async def test_a_namesake_that_cannot_be_read_refuses_the_download(harness):
+async def test_a_symlink_is_never_offered_as_a_candidate(harness):
+    # Adopting one writes an install row the uninstall path can never remove:
+    # ``claim_source`` refuses a symlink outright.
     seed_rom(harness, _ROM_ID, platform_slug="gba")
     _stage(harness)
-    link = _place_broken_link(harness)
+    link = _place_link(harness)
 
     result = await harness.plugin.start_download(_ROM_ID, False)
 
     assert result["success"] is False
-    assert result["reason"] == "unreadable_entry"
-    assert isinstance(result["message"], str)
-    assert result["message"]
-    assert result["existing"] == [{"name": link.name, "path": str(link), "removable": True}]
-    assert result["truncated"] is False
+    assert result["reason"] == "unusable_namesake"
+    assert result["existing"] == [{"name": link.name, "path": str(link), "kind": "link"}]
+    assert "candidates" not in result
     await _drain_download(harness)
     assert not (_platform_dir(harness) / _CANONICAL).exists()
     assert link.is_symlink()
 
 
-async def test_removing_a_proven_broken_link_unlinks_it_and_downloads(harness):
+async def test_a_link_pointing_nowhere_is_reported_the_same_way(harness):
+    # The kind is the entry's own, so a dangling link needs no separate outcome —
+    # and nothing offers to delete it, because nothing can prove it holds no data.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    link = _platform_dir(harness) / "rom-41 (U).gba"
+    link.symlink_to(_platform_dir(harness) / "gone.gba")
+
+    result = await harness.plugin.start_download(_ROM_ID, False)
+
+    assert result["reason"] == "unusable_namesake"
+    assert result["existing"] == [{"name": link.name, "path": str(link), "kind": "link"}]
+    assert link.is_symlink()
+
+
+async def test_a_named_pipe_with_the_game_s_name_is_not_mentioned_at_all(harness):
+    # It reported as an ordinary zero-byte file and was offered as the game.
     seed_rom(harness, _ROM_ID, platform_slug="gba")
     _stage(harness)
     harness.romm.download_payloads[f"rom:{_ROM_ID}:{_CANONICAL}"] = b"srv!"
-    link = _place_broken_link(harness)
+    os.mkfifo(str(_platform_dir(harness) / "rom-41 (U).gba"))
 
-    result = await harness.plugin.start_download(_ROM_ID, True, str(link), None)
+    detail = await harness.plugin.get_cached_game_detail(_ROM_ID)
+    result = await harness.plugin.start_download(_ROM_ID, False)
     await _drain_download(harness)
 
+    assert detail["adoption_candidate_present"] is False
     assert result["success"] is True
-    assert not link.is_symlink()
     assert (_platform_dir(harness) / _CANONICAL).read_bytes() == b"srv!"
 
 
-async def test_downloading_anyway_leaves_the_unreadable_entry_alone(harness):
+async def test_downloading_anyway_leaves_the_link_alone(harness):
     seed_rom(harness, _ROM_ID, platform_slug="gba")
     _stage(harness)
     harness.romm.download_payloads[f"rom:{_ROM_ID}:{_CANONICAL}"] = b"srv!"
-    link = _place_broken_link(harness)
+    link = _place_link(harness)
 
     result = await harness.plugin.start_download(_ROM_ID, True)
     await _drain_download(harness)
@@ -686,19 +706,56 @@ async def test_downloading_anyway_leaves_the_unreadable_entry_alone(harness):
     assert (_platform_dir(harness) / _CANONICAL).read_bytes() == b"srv!"
 
 
-async def test_the_page_and_the_click_search_see_the_same_broken_link(harness):
-    # The divergence this round closed: the page's listing kept it and the
-    # click-time listing dropped it, so the button offered what the search
-    # could not find.
+async def test_the_page_and_the_click_search_see_the_same_link(harness):
+    # The page reports it — it is content the user has, and a download lands
+    # beside it — and the click search answers for what it is.
     seed_rom(harness, _ROM_ID, platform_slug="gba")
     _stage(harness)
-    _place_broken_link(harness)
+    _place_link(harness)
 
     detail = await harness.plugin.get_cached_game_detail(_ROM_ID)
     result = await harness.plugin.start_download(_ROM_ID, False)
 
     assert detail["adoption_candidate_present"] is True
-    assert result["reason"] == "unreadable_entry"
+    assert result["reason"] == "unusable_namesake"
+
+
+# ── a symlink at the ROM's own target path ───────────────────────────────
+
+
+async def test_a_link_at_the_target_path_is_not_adoptable(harness):
+    # Reached through the occupied-target dialog rather than the search, and the
+    # same rule: an install row may not point at a link.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    real = _platform_dir(harness) / "real.gba"
+    real.write_bytes(b"my own dump")
+    link = _platform_dir(harness) / _CANONICAL
+    link.symlink_to(real)
+
+    result = await harness.plugin.start_download(_ROM_ID, False)
+
+    assert result["success"] is False
+    assert result["reason"] == "target_occupied"
+    assert result["adoptable"] is False
+    assert link.is_symlink()
+
+
+async def test_a_link_pointing_nowhere_at_the_target_path_is_not_silently_destroyed(harness):
+    # Described as "nothing here", the finalize replace overwrote the link
+    # without a word. It occupies the path, so the user is asked.
+    seed_rom(harness, _ROM_ID, platform_slug="gba")
+    _stage(harness)
+    harness.romm.download_payloads[f"rom:{_ROM_ID}:{_CANONICAL}"] = b"srv!"
+    link = _platform_dir(harness) / _CANONICAL
+    link.symlink_to(_platform_dir(harness) / "gone.gba")
+
+    result = await harness.plugin.start_download(_ROM_ID, False)
+    await _drain_download(harness)
+
+    assert result["success"] is False
+    assert result["reason"] == "target_occupied"
+    assert link.is_symlink()
 
 
 # ── the backstop ─────────────────────────────────────────────────────────

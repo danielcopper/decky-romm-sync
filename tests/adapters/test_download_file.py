@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import socket
 import zipfile
 from unittest.mock import patch
 
@@ -521,13 +522,13 @@ class TestListTopLevelEntries:
         empty.mkdir()
         assert adapter.list_top_level_entries(str(empty)) == ()
 
-    def test_a_file_carries_its_size_and_mtime(self, adapter, tmp_path):
+    def test_a_file_carries_its_kind_size_and_mtime(self, adapter, tmp_path):
         rom = tmp_path / "Game (U).gba"
         rom.write_bytes(b"0123456789")
         (entry,) = adapter.list_top_level_entries(str(tmp_path))
         assert entry["name"] == "Game (U).gba"
         assert entry["path"] == str(rom)
-        assert entry["is_dir"] is False
+        assert entry["kind"] == "file"
         assert entry["size_bytes"] == 10
         assert entry["modified_at"] == pytest.approx(rom.stat().st_mtime)
 
@@ -539,7 +540,7 @@ class TestListTopLevelEntries:
         (game / "disc1.bin").write_bytes(b"a" * 100)
         (game / "sub" / "disc2.bin").write_bytes(b"b" * 55)
         (entry,) = adapter.list_top_level_entries(str(tmp_path))
-        assert entry["is_dir"] is True
+        assert entry["kind"] == "dir"
         assert entry["size_bytes"] == 0
 
     def test_nested_entries_are_not_listed(self, adapter, tmp_path):
@@ -551,43 +552,105 @@ class TestListTopLevelEntries:
             "loose.gba",
         ]
 
-    def test_a_dangling_symlink_is_listed_as_undescribable_rather_than_dropped(self, adapter, tmp_path):
-        # Dropping it made this listing disagree with the lean one about what
-        # exists: ``is_dir()`` answers for a link pointing nowhere, ``stat()``
-        # does not. The caller needs to see the entry to be able to say so.
-        (tmp_path / "real.gba").write_bytes(b"x")
-        (tmp_path / "dangling.gba").symlink_to(tmp_path / "gone.gba")
 
-        by_name = {entry["name"]: entry for entry in adapter.list_top_level_entries(str(tmp_path))}
+class TestTheAdmissionRule:
+    """What an entry *is*, judged without following it — the same rule for both listings."""
 
-        assert sorted(by_name) == ["dangling.gba", "real.gba"]
-        assert by_name["dangling.gba"]["readable"] is False
-        assert by_name["dangling.gba"]["size_bytes"] == 0
-        assert by_name["dangling.gba"]["modified_at"] == 0.0
-        assert by_name["real.gba"]["readable"] is True
+    def _kinds(self, adapter, directory) -> dict[str, str]:
+        full = {entry["name"]: entry["kind"] for entry in adapter.list_top_level_entries(str(directory))}
+        lean = {entry["name"]: entry["kind"] for entry in adapter.list_top_level_names(str(directory))}
+        assert full == lean, "the two listings must admit the same set, with the same kinds"
+        return full
 
-    def test_the_two_listings_admit_the_same_set_including_what_cannot_be_read(self, adapter, tmp_path):
-        # The parity that matters, on the tree that used to break it: a listing
-        # over an ordinary folder proves nothing here.
-        (tmp_path / "real.gba").write_bytes(b"x")
-        (tmp_path / "dangling.gba").symlink_to(tmp_path / "gone.gba")
+    def test_a_file_and_a_directory_are_what_they_are(self, adapter, tmp_path):
+        (tmp_path / "rom.gba").write_bytes(b"x")
         (tmp_path / "Game (U)").mkdir()
+        assert self._kinds(adapter, tmp_path) == {"rom.gba": "file", "Game (U)": "dir"}
 
-        full = adapter.list_top_level_entries(str(tmp_path))
-        lean = adapter.list_top_level_names(str(tmp_path))
+    def test_a_link_is_a_link_however_well_its_target_resolves(self, adapter, tmp_path):
+        # Following would report an ordinary file here, and an install row
+        # pointing at a link can never be removed — the uninstall path refuses
+        # one outright — so the link is judged, never its target.
+        (tmp_path / "real.gba").write_bytes(b"x")
+        (tmp_path / "link.gba").symlink_to(tmp_path / "real.gba")
+        assert self._kinds(adapter, tmp_path)["link.gba"] == "link"
 
-        assert {entry["path"] for entry in full} == {entry["path"] for entry in lean}
-        assert {(e["name"], e["is_dir"]) for e in full} == {(e["name"], e["is_dir"]) for e in lean}
-
-    def test_a_symlinked_directory_reads_as_a_directory(self, adapter, tmp_path):
+    def test_a_link_to_a_directory_is_a_link_too(self, adapter, tmp_path):
         target = tmp_path / "elsewhere"
         (target / "disc.bin").parent.mkdir(parents=True)
         (target / "disc.bin").write_bytes(b"x")
         platform = tmp_path / "psx"
         platform.mkdir()
         (platform / "Game (U)").symlink_to(target)
-        (entry,) = adapter.list_top_level_entries(str(platform))
-        assert entry["is_dir"] is True
+        assert self._kinds(adapter, platform) == {"Game (U)": "link"}
+
+    def test_a_link_pointing_nowhere_is_a_link(self, adapter, tmp_path):
+        (tmp_path / "dangling.gba").symlink_to(tmp_path / "gone.gba")
+        assert self._kinds(adapter, tmp_path) == {"dangling.gba": "link"}
+
+    def test_a_named_pipe_is_not_listed_at_all(self, adapter, tmp_path):
+        # It reported as an ordinary zero-byte file and was offered as a game.
+        # "File or directory" has no truthful answer for a FIFO, so it has none.
+        os.mkfifo(str(tmp_path / "Game (U).sfc"))
+        (tmp_path / "real.gba").write_bytes(b"x")
+        assert self._kinds(adapter, tmp_path) == {"real.gba": "file"}
+
+    def test_a_unix_socket_is_not_listed_either(self, adapter, tmp_path):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.bind(str(tmp_path / "Game (U).sfc"))
+            (tmp_path / "real.gba").write_bytes(b"x")
+            assert self._kinds(adapter, tmp_path) == {"real.gba": "file"}
+        finally:
+            sock.close()
+
+
+class TestDescribePathDoesNotFollow:
+    """What occupies a path, judged without following — item 3's whole subject."""
+
+    def test_a_file_is_described_as_before(self, adapter, tmp_path):
+        rom = tmp_path / "Game.gba"
+        rom.write_bytes(b"0123456789")
+        described = adapter.describe_path(str(rom))
+        assert described is not None
+        assert described["is_dir"] is False
+        assert described["is_symlink"] is False
+        assert described["size_bytes"] == 10
+
+    def test_a_link_to_a_real_file_is_reported_as_a_link(self, adapter, tmp_path):
+        # Following described it as ordinary content, and the occupied-target
+        # dialog then offered to adopt it — an install row the UI can never undo.
+        (tmp_path / "real.gba").write_bytes(b"0123456789")
+        link = tmp_path / "Game.gba"
+        link.symlink_to(tmp_path / "real.gba")
+        described = adapter.describe_path(str(link))
+        assert described is not None
+        assert described["is_symlink"] is True
+        assert described["is_dir"] is False
+
+    def test_a_link_pointing_nowhere_still_occupies_its_path(self, adapter, tmp_path):
+        # Reported as "nothing here", the finalize ``os.replace`` destroyed it
+        # without a word. It is something, and the caller has to be told.
+        link = tmp_path / "Game.gba"
+        link.symlink_to(tmp_path / "gone.gba")
+        described = adapter.describe_path(str(link))
+        assert described is not None
+        assert described["is_symlink"] is True
+
+    def test_a_link_to_a_directory_is_not_described_as_a_directory(self, adapter, tmp_path):
+        (tmp_path / "elsewhere").mkdir()
+        (tmp_path / "elsewhere" / "disc.bin").write_bytes(b"x" * 32)
+        link = tmp_path / "Game"
+        link.symlink_to(tmp_path / "elsewhere")
+        described = adapter.describe_path(str(link))
+        assert described is not None
+        assert described["is_symlink"] is True
+        assert described["is_dir"] is False
+        # And no tree walk was charged for a link's own size.
+        assert described["size_bytes"] != 32
+
+    def test_nothing_at_all_is_still_nothing(self, adapter, tmp_path):
+        assert adapter.describe_path(str(tmp_path / "gone.gba")) is None
 
 
 class _StatRecordingEntry:
@@ -604,8 +667,14 @@ class _StatRecordingEntry:
         self.name = entry.name
         self.path = entry.path
 
+    def is_symlink(self):
+        return self._entry.is_symlink()
+
     def is_dir(self, **kwargs):
         return self._entry.is_dir(**kwargs)
+
+    def is_file(self, **kwargs):
+        return self._entry.is_file(**kwargs)
 
     def stat(self, **kwargs):
         self._stat_calls.append(self._entry.path)
@@ -628,23 +697,23 @@ class TestListTopLevelNames:
     def test_a_missing_directory_lists_nothing(self, adapter, tmp_path):
         assert adapter.list_top_level_names(str(tmp_path / "nope")) == ()
 
-    def test_it_reports_the_same_names_and_shapes_as_the_full_listing(self, adapter, tmp_path):
+    def test_it_reports_the_same_names_and_kinds_as_the_full_listing(self, adapter, tmp_path):
         (tmp_path / "Game (U)").mkdir()
         (tmp_path / "Game (U)" / "disc.bin").write_bytes(b"x")
         (tmp_path / "loose.gba").write_bytes(b"y")
+        (tmp_path / "link.gba").symlink_to(tmp_path / "loose.gba")
 
         lean = adapter.list_top_level_names(str(tmp_path))
 
-        assert sorted(entry["name"] for entry in lean) == ["Game (U)", "loose.gba"]
-        assert {entry["name"]: (entry["path"], entry["is_dir"]) for entry in lean} == {
-            entry["name"]: (entry["path"], entry["is_dir"]) for entry in adapter.list_top_level_entries(str(tmp_path))
+        assert {entry["name"]: (entry["path"], entry["kind"]) for entry in lean} == {
+            entry["name"]: (entry["path"], entry["kind"]) for entry in adapter.list_top_level_entries(str(tmp_path))
         }
 
     def test_it_carries_no_size_or_mtime(self, adapter, tmp_path):
         # The saving IS the omission: one `stat` per ROM, on every game page.
         (tmp_path / "Game (U).gba").write_bytes(b"0123456789")
         (entry,) = adapter.list_top_level_names(str(tmp_path))
-        assert set(entry) == {"name", "path", "is_dir"}
+        assert set(entry) == {"name", "path", "kind"}
 
     def test_it_stats_nothing_per_entry(self, adapter, tmp_path, monkeypatch):
         (tmp_path / "Game (U).gba").write_bytes(b"x")
@@ -666,24 +735,6 @@ class TestListTopLevelNames:
 
         assert len(adapter.list_top_level_entries(str(tmp_path))) == 2
         assert sorted(os.path.basename(path) for path in stat_calls) == ["Game (U).gba", "Other (U).gba"]
-
-    def test_a_dangling_symlink_still_reads_as_a_non_directory(self, adapter, tmp_path):
-        # `is_dir()` follows the link and answers False for a broken one, which is
-        # the honest shape: it is certainly not a directory. Whether it can be
-        # read at all is the full listing's answer, not this one's.
-        (tmp_path / "dangling.gba").symlink_to(tmp_path / "gone.gba")
-        (entry,) = adapter.list_top_level_names(str(tmp_path))
-        assert entry["is_dir"] is False
-
-    def test_a_symlinked_directory_reads_as_a_directory(self, adapter, tmp_path):
-        target = tmp_path / "elsewhere"
-        (target / "disc.bin").parent.mkdir(parents=True)
-        (target / "disc.bin").write_bytes(b"x")
-        platform = tmp_path / "psx"
-        platform.mkdir()
-        (platform / "Game (U)").symlink_to(target)
-        (entry,) = adapter.list_top_level_names(str(platform))
-        assert entry["is_dir"] is True
 
 
 class TestChecksum:
@@ -872,7 +923,6 @@ class TestProtocolMethodCount:
             "describe_path",
             "list_top_level_entries",
             "list_top_level_names",
-            "is_broken_symlink",
             "checksum",
             "list_archive_members",
             "checksum_archive_member",

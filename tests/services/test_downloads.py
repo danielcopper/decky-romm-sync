@@ -663,7 +663,13 @@ class TestOccupiedTargetPreFlight:
         plugin._download_service._loop.create_task = MagicMock(side_effect=lambda coro: (coro.close(), MagicMock())[1])
         store = plugin._download_service._download_file_store
         store.describe_path = lambda path: (
-            {"path": path, "is_dir": is_dir, "size_bytes": size, "modified_at": 1_700_000_000.0}
+            {
+                "path": path,
+                "is_dir": is_dir,
+                "is_symlink": False,
+                "size_bytes": size,
+                "modified_at": 1_700_000_000.0,
+            }
             if path == occupied_path
             else None
         )
@@ -832,6 +838,7 @@ class TestResumingAReplaceDownload:
             {
                 "path": path,
                 "is_dir": path == occupied_path and detail is _MULTI_DETAIL,
+                "is_symlink": False,
                 "size_bytes": 8,
                 "modified_at": 0.0,
             }

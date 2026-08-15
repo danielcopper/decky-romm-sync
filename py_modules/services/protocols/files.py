@@ -134,6 +134,10 @@ class DownloadFileStore(Protocol):
         directory reports the recursive total of its contents, comparable with
         the server's ``fs_size_bytes`` for a multi-file ROM — which makes this
         an ``os.walk`` of the whole tree, so callers offload it.
+
+        Existence is answered without following, so a symlink is reported as
+        occupying its path — with ``is_symlink`` set, because it may not be
+        offered for adoption — rather than as nothing at all.
         """
         ...
 
@@ -159,33 +163,21 @@ class DownloadFileStore(Protocol):
         something this read pays for. Idempotent on a missing directory (returns
         ``()``).
 
-        An entry whose ``stat`` failed is listed with ``readable: False`` and
-        zeroed numbers, never dropped: this listing and
-        :meth:`list_top_level_names` must admit the same set, or the two callers
-        disagree about what is in the folder.
-        """
-        ...
-
-    def is_broken_symlink(self, path: str) -> bool:
-        """Whether *path* is a symlink whose target does not resolve.
-
-        Asked about an entry the listing could not describe, to decide whether
-        removal may be offered for it. Only a link with no resolving target
-        qualifies: it holds no data, so unlinking destroys nothing. Everything
-        else unreadable may be content that exists nowhere else.
+        Admits exactly what :meth:`list_top_level_names` admits: an entry is a
+        file, a directory or a symlink, judged without following it, and anything
+        else is not listed at all.
         """
         ...
 
     def list_top_level_names(self, directory: str) -> tuple[TopLevelName, ...]:
-        """Name and shape of everything directly inside *directory*, nothing more.
+        """Name and kind of everything directly inside *directory*, nothing more.
 
         The same read for the caller that only matches names — the game-detail
         page. Dropping the ``stat`` that fills in size and mtime is the whole
         point: it is one syscall per ROM on a folder that can hold a whole
         platform's library, and this one runs on every game page. Same
-        top-level-only rule, same set of entries as
-        :meth:`list_top_level_entries`, same ``()`` on a directory that cannot be
-        read.
+        top-level-only rule, same admitted set, same ``()`` on a directory that
+        cannot be read.
         """
         ...
 

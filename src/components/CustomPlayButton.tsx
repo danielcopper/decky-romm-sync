@@ -22,8 +22,7 @@ import {
   adoptExistingRom,
   isTargetOccupied,
   isCandidatesFound,
-  isShapeConflict,
-  isUnreadableEntry,
+  isUnusableNamesake,
   isCandidateVanished,
   isRenameCollisions,
   cancelDownload,
@@ -54,8 +53,7 @@ import { handleButtonDownloadFailure } from "../utils/downloadFailure";
 import { comparisonForCandidate, showAdoptExistingModal } from "./AdoptExistingModal";
 import { showAdoptCandidateModal } from "./AdoptCandidateModal";
 import { showAdoptCollisionModal } from "./AdoptCollisionModal";
-import { showAdoptShapeConflictModal } from "./AdoptShapeConflictModal";
-import { showAdoptUnreadableModal } from "./AdoptUnreadableModal";
+import { showAdoptUnusableModal } from "./AdoptUnusableModal";
 import { showAdoptVanishedModal } from "./AdoptVanishedModal";
 import { showCoreChangeModal } from "./CoreChangeModal";
 import { handleConflicts } from "./SyncConflictModal";
@@ -74,8 +72,7 @@ import type {
   DownloadFailedEvent,
   TargetOccupiedResult,
   CandidatesFoundResult,
-  ShapeConflictResult,
-  UnreadableEntryResult,
+  UnusableNamesakeResult,
   CandidateVanishedResult,
   CollisionChoice,
   UninstallProgressEvent,
@@ -1085,22 +1082,13 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         await resolveCandidates(romId, result);
         return;
       }
-      if (isShapeConflict(result)) {
-        // A namesake nothing can adopt. Neither flag moves: no content occupies
-        // this ROM's own path, and nothing here is a candidate — what the page
-        // said stands, and the honest answer to "is this game here" is the
-        // dialog the user is about to get.
+      if (isUnusableNamesake(result)) {
+        // A namesake nothing can adopt — the other shape, or a link. Neither
+        // flag moves: no content occupies this ROM's own path, and nothing here
+        // is a candidate — what the page said stands, and the honest answer to
+        // "is this game here" is the dialog the user is about to get.
         setActionPending(false);
-        await resolveShapeConflict(result);
-        return;
-      }
-      if (isUnreadableEntry(result)) {
-        // Something with this game's name that could not be read. Same reason
-        // neither flag moves as above — and the removal exit, when the backend
-        // proved the entry is a link pointing nowhere, is the one case where
-        // naming a path deletes something.
-        setActionPending(false);
-        await resolveUnreadable(result);
+        await resolveUnusable(result);
         return;
       }
       if (isCandidateVanished(result)) {
@@ -1168,23 +1156,13 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
   };
 
-  // Offer the only two honest exits for a namesake of the wrong shape: fetch the
-  // server's copy alongside it, or stop. `replace` is what carries the answer —
-  // it is what tells the backend the search has been answered — and no candidate
-  // path goes with it, because that entry is not being taken over or removed.
-  const resolveShapeConflict = async (conflict: ShapeConflictResult) => {
-    if ((await showAdoptShapeConflictModal(conflict)) === "download") await handleDownload(true);
-  };
-
-  // An entry that could not be read. Download-anyway and cancel behave as they
-  // do for a shape conflict; the third exit names the path, which is what tells
-  // the backend to unlink it — and it is offered only for an entry the backend
-  // itself proved to be a link with no target, never for one it merely failed to
-  // read.
-  const resolveUnreadable = async (unreadable: UnreadableEntryResult) => {
-    const choice = await showAdoptUnreadableModal(unreadable);
-    if (choice.kind === "download") await handleDownload(true);
-    if (choice.kind === "remove") await handleDownload(true, choice.path);
+  // Offer the only two honest exits for a namesake that cannot become this
+  // install: fetch the server's copy alongside it, or stop. `replace` is what
+  // carries the answer — it is what tells the backend the search has been
+  // answered — and no candidate path goes with it, because nothing on disk is
+  // being taken over or removed.
+  const resolveUnusable = async (unusable: UnusableNamesakeResult) => {
+    if ((await showAdoptUnusableModal(unusable)) === "download") await handleDownload(true);
   };
 
   // The backstop's two exits. Nothing is named, because nothing was found:

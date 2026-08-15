@@ -46,8 +46,7 @@ import type {
   ListDevicesResponse,
   TargetOccupiedResult,
   CandidatesFoundResult,
-  ShapeConflictResult,
-  UnreadableEntryResult,
+  UnusableNamesakeResult,
   CandidateVanishedResult,
   RenameCollisionsResult,
   CollisionChoice,
@@ -94,23 +93,13 @@ export function isCandidatesFound(value: object): value is CandidatesFoundResult
 }
 
 /**
- * Narrow a `start_download` reply to the refusal that names entries carrying
- * this game's name in a form nothing can take over (#260). Same slug-keyed test
- * as its two siblings; the difference is what it offers, which is to download a
- * second copy or to stop.
- */
-export function isShapeConflict(value: object): value is ShapeConflictResult {
-  return "reason" in value && (value as { reason?: unknown }).reason === "shape_conflict";
-}
-
-/**
  * Narrow a `start_download` reply to the refusal naming entries that carry this
- * game's name and could not be read (#260). Same slug-keyed test as its
- * siblings; what it offers depends on the entry — removal only where a link is
- * proven to point nowhere.
+ * game's name and cannot become its install — the other shape, or a symlink
+ * (#260). Same slug-keyed test as its siblings; what it offers is a second copy
+ * or a stop.
  */
-export function isUnreadableEntry(value: object): value is UnreadableEntryResult {
-  return "reason" in value && (value as { reason?: unknown }).reason === "unreadable_entry";
+export function isUnusableNamesake(value: object): value is UnusableNamesakeResult {
+  return "reason" in value && (value as { reason?: unknown }).reason === "unusable_namesake";
 }
 
 /**
@@ -267,12 +256,10 @@ export const getSyncStats = callable<[], SyncStats>("get_sync_stats");
  * on their behalf. `collisionChoice` answers the save-collision dialog that
  * carry can raise, and stays `null` until that dialog has been shown.
  *
- * `true` is also how the three "cannot use what is here" refusals are answered —
- * `shape_conflict`, `unreadable_entry` and `candidate_vanished`. There the user
- * is choosing to add a second copy, and no `candidatePath` goes with it because
- * nothing is being taken over. The one exception is an unreadable entry the
- * backend proved to be a link pointing nowhere: naming it removes it, since a
- * link with no target holds no data.
+ * `true` is also how the two "cannot use what is here" refusals are answered —
+ * `unusable_namesake` and `candidate_vanished`. There the user is choosing to
+ * add a second copy, and no `candidatePath` goes with it, because nothing on
+ * disk is being taken over or removed.
  *
  * `pageSawCandidate` is not an answer but a report — whether the game page told
  * this user a copy was on the device. The backend's last check is a backstop
@@ -283,8 +270,7 @@ export const startDownload = callable<
   | BackendResult
   | TargetOccupiedResult
   | CandidatesFoundResult
-  | ShapeConflictResult
-  | UnreadableEntryResult
+  | UnusableNamesakeResult
   | CandidateVanishedResult
   | RenameCollisionsResult
 >("start_download");
