@@ -278,11 +278,20 @@ already been decided.
 > round. Most of them were answering a problem created by admitting entries that should never have been visible, so the
 > admission rule replaces them and they are deleted rather than repaired.
 >
-> **Judged by its own type, without following it.** A directory entry is a **file**, a **directory** or a **symlink**,
-> and anything else — a FIFO, a socket, a device node — is not reported at all. The directory read already carries the
-> type, so this costs nothing; resolving the entry instead would cost a syscall per link and, worse, re-admit a link as
-> ordinary content. "File or directory" has no truthful answer for a named pipe, and inventing one is what let a pipe
-> carrying a game's name be offered as that game, with a size of zero and the evidence line "Matched on name only".
+> **Judged by its own type, without following it.** An entry is a **file**, a **directory** or a **symlink**, and
+> anything else — a FIFO, a socket, a device node — gets no kind at all. The directory read already carries the type, so
+> this costs nothing; resolving the entry instead would cost a syscall per link and, worse, re-admit a link as ordinary
+> content. "File or directory" has no truthful answer for a named pipe, and inventing one is what let a pipe carrying a
+> game's name be offered as that game, with a size of zero and the evidence line "Matched on name only".
+>
+> **One function answers it, and every read of the filesystem asks that function.** This was first written as a rule and
+> re-derived per caller, so the door the rule was written for was closed and the one beside it stayed open: a pipe at a
+> ROM's own target path was still described as an ordinary file and still offered. A rule with two implementations is a
+> rule with one exception nobody has found yet, which is why the answers are shared rather than agreed.
+>
+> **A kindless entry is dropped from a listing and reported by a description.** That is not two rules but two questions:
+> a listing answers "what is here", where something with no name for it is nothing to offer, and a description answers
+> "what occupies this exact path", where the only wrong answer is "nothing" — that is the answer a write then acts on.
 >
 > **A symlink is mentioned and never adopted.** Every uninstall goes through `claim_source`, which refuses a symlink
 > outright, so an install row pointing at one could never be removed through the UI — the outcome the decision above
@@ -291,8 +300,14 @@ already been decided.
 >
 > **This holds at the ROM's own target path too**, where the occupied-target dialog reaches the same content without the
 > search. Existence is answered without following, so a link there is reported as occupying its path and marked
-> unadoptable. That also ends a silent destruction: a link whose target did not resolve was described as "nothing is
-> here", and the finalize `os.replace` then overwrote it without a word.
+> unadoptable, and the dialog names it for what it is: the right noun, no size verdict computed from a number that is
+> the length of a stored path rather than a byte count, and a replace warning that says only the shortcut goes. That
+> also ends a silent destruction: a link whose target did not resolve was described as "nothing is here", and the
+> finalize `os.replace` then overwrote it without a word.
+>
+> **The check runs again immediately before the adoption, not only before the dialog.** The entry offered as a regular
+> file can be a link by the time the user confirms, and the offering sites cannot cover that. So the acting site asks
+> the same question — kind and shape in one predicate — rather than trusting a disabled button.
 >
 > **The deletion offer is gone, and the "cannot be read" outcome with it.** Deletion was offered for a link whose target
 > did not resolve, on the grounds that it holds no data. The proof does not exist — "the target is not there" and "the

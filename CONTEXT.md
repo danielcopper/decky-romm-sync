@@ -202,11 +202,14 @@ user-triggered, never a wait imposed before the plugin will say anything.
 
 ### Entry kind
 
-What a directory entry **is**, judged by its own type without following it: `file`, `dir` or `link`. There is no fourth
-value — anything else a filesystem can hold (a FIFO, a socket, a device node) is not listed at all, because "file or
-directory" has no truthful answer for one and inventing one is what let a named pipe be offered as a game. A `link` is
-its own kind rather than whatever it resolves to: an install row must be removable, the uninstall path refuses a
-symlink, so a link is never adoptable however well its target resolves. _Avoid_: "shape" for this — **shape** is the
+What an entry on disk **is**, judged by its own type without following it: `file`, `dir` or `link`. There is no fourth
+value — anything else a filesystem can hold (a FIFO, a socket, a device node) gets no kind at all, because "file or
+directory" has no truthful answer for one and inventing one is what let a named pipe be offered as a game. One rule
+answers this for every read of the filesystem, and the two kinds of read differ only in what they do with a kindless
+entry: a **directory listing** leaves it out, while **describing one named path** reports it with the kind absent —
+something that is there must never come back as nothing, or the next write goes over it in silence. A `link` is its own
+kind rather than whatever it resolves to: an install row must be removable, the uninstall path refuses a symlink, so a
+link is never adoptable however well its target resolves. _Avoid_: "shape" for this — **shape** is the
 single-file-vs-folder question the server answers, and the two are different judgements about different things.
 
 ### Unusable namesake
@@ -216,7 +219,10 @@ directory where RomM serves a single file, or a loose file where it serves a fol
 **not** an adoption candidate: nothing about it can be taken over, so it is never offered, ranked or renamed. It is
 still reported, because the alternative is a download that silently produces a second copy of the game beside it. The
 dialog's two exits are download-anyway (the server's copy lands beside it, under the server's name) and cancel; neither
-touches the entry. _Avoid_: mismatched candidate, unusable candidate — the whole point is that it is not one.
+touches the entry. The two reasons are not one reason: a wrong shape is wrong only against what the server sends, so
+that refusal names the served shape, while a `link` is unusable on its own terms and naming a shape beside it would
+suggest the other shape would have taken it. _Avoid_: mismatched candidate, unusable candidate — the whole point is that
+it is not one.
 
 ### Normalized name
 

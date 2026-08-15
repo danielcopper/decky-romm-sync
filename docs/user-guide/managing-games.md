@@ -301,7 +301,9 @@ server's copy beside what is already there under the server's own name, or cance
 choice renames, moves or deletes anything you have.
 
 Things that are neither files, folders nor shortcuts are ignored entirely — Tender will not offer you something that
-only looks like a game because it happens to have the right name.
+only looks like a game because it happens to have the right name. The one place it does mention such a thing is when it
+sits at the exact spot the download would write to: there it says something is in the way without claiming to know what,
+because downloading over it would destroy it and you should be the one to decide that.
 
 **And if it finds nothing at all.** If the page told you a copy was here and pressing turns up nothing that matches —
 you moved it, renamed it or deleted it in between — you get told that too, instead of a download starting on its own.
