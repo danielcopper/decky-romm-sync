@@ -248,21 +248,12 @@ extracts fresh — the user chose replace, not merge.
 > **The chain, most specific answer first.** The search runs again at click time — the folder can change while the page
 > is open — and returns the first of these that applies:
 >
-> 1. `adoption_candidates` — entries of the served shape it could read. The dialog offers them.
-> 2. `unreadable_entry` — a namesake whose `stat` did not answer: a link pointing nowhere, a mount that went away, a
->    race with a writer. Nothing can be said about the content, so it is neither offered nor rejected on its merits; the
->    user is told what is known and chooses between downloading a second copy and stopping. It is answered **before** a
->    wrong-shape namesake because nothing about it has been ruled out — it may be the very copy the user meant — where a
->    wrong-shape entry was read and found unusable.
-> 3. `shape_conflict` — a readable namesake in the other shape, which nothing can adopt. Same two exits.
-> 4. `candidate_vanished` — the backstop. The page reported a copy and none of the above applies, so the download stops
->    and says so instead of starting silently. It claims no cause, because none is known; it also covers the ordinary
->    race where the file was deleted between opening the page and pressing.
->
-> **Deletion is offered for exactly one unreadable state.** A symlink whose target does not resolve holds no data, so
-> unlinking it destroys nothing and the dialog may offer it — for a single such entry, so the one path the wire carries
-> is unambiguous. Every other unreadable state may be content that exists nowhere else, and the register's rule against
-> deleting what exists nowhere else does not bend for an entry the plugin merely failed to `stat`.
+> 1. `adoption_candidates` — entries of the served shape that an install row may point at. The dialog offers them.
+> 2. `unusable_namesake` — this game's name on something that cannot become the install: the other shape, or a symlink.
+>    The user is told what is there and chooses between downloading a second copy beside it and stopping.
+> 3. `candidate_vanished` — the backstop. The page reported a copy and neither of the above applies, so the download
+>    stops and says so instead of starting silently. It claims no cause, because none is known; it also covers the
+>    ordinary race where the file was deleted between opening the page and pressing.
 >
 > **The directory has to be a system.** Before searching, the plugin asks `es_systems.xml` — the source the accept-list
 > already comes from — whether the directory it is about to read is a system at all. An unmapped RomM slug is otherwise
@@ -279,6 +270,37 @@ extracts fresh — the user chose replace, not merge.
 > the page a second, disagreeing source of truth for a question `domain/rom_files.py` exists to answer once, and would
 > leave exactly that class still lying. Refusing the disagreement at click time covers the nested-single case too, which
 > no stored shape could.
+
+What none of that settles is what counts as an entry in the first place — the question every answer above assumes has
+already been decided.
+
+> **Amendment (an entry is judged by what it is — #260 PR 2).** The search had acquired one special case per review
+> round. Most of them were answering a problem created by admitting entries that should never have been visible, so the
+> admission rule replaces them and they are deleted rather than repaired.
+>
+> **Judged by its own type, without following it.** A directory entry is a **file**, a **directory** or a **symlink**,
+> and anything else — a FIFO, a socket, a device node — is not reported at all. The directory read already carries the
+> type, so this costs nothing; resolving the entry instead would cost a syscall per link and, worse, re-admit a link as
+> ordinary content. "File or directory" has no truthful answer for a named pipe, and inventing one is what let a pipe
+> carrying a game's name be offered as that game, with a size of zero and the evidence line "Matched on name only".
+>
+> **A symlink is mentioned and never adopted.** Every uninstall goes through `claim_source`, which refuses a symlink
+> outright, so an install row pointing at one could never be removed through the UI — the outcome the decision above
+> rejects by name. But it is content the user has, and a download lands beside it and leaves them two, so it is named in
+> the same dialog the wrong shape uses: one refusal for "this cannot become the install", whatever the reason.
+>
+> **This holds at the ROM's own target path too**, where the occupied-target dialog reaches the same content without the
+> search. Existence is answered without following, so a link there is reported as occupying its path and marked
+> unadoptable. That also ends a silent destruction: a link whose target did not resolve was described as "nothing is
+> here", and the finalize `os.replace` then overwrote it without a word.
+>
+> **The deletion offer is gone, and the "cannot be read" outcome with it.** Deletion was offered for a link whose target
+> did not resolve, on the grounds that it holds no data. The proof does not exist — "the target is not there" and "the
+> target is on a drive that is not plugged in" are the same answer from the operating system — and the act bought
+> nothing, because the entry is beside the target path and the download lands on the canonical name either way. The
+> outcome that carried it went too: under the admission rule the bucket is empty on a static filesystem, and what
+> remains — an entry deleted between the directory read and the description — is a search that came up empty, which the
+> backstop already answers.
 
 ## Consequences
 

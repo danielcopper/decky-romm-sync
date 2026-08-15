@@ -200,14 +200,23 @@ above another is only cheap evidence (a single-member archive's CRC32 from the Z
 The verification (CRC32/MD5, read from a ZIP's central directory where the content is archived) is always
 user-triggered, never a wait imposed before the plugin will say anything.
 
-### Shape conflict
+### Entry kind
 
-An entry whose **normalized name** equals the ROM's but whose shape is the other one — a directory where RomM serves a
-single file, or a loose file where it serves a folder. It is deliberately **not** an adoption candidate: nothing about
-it can be taken over, so it is never offered, ranked or renamed. It is still reported, because the alternative is a
-download that silently produces a second copy of the game beside it. The dialog's two exits are download-anyway (the
-server's copy lands beside it, under the server's name) and cancel; neither touches the entry. _Avoid_: mismatched
-candidate, unusable candidate — the whole point is that it is not one.
+What a directory entry **is**, judged by its own type without following it: `file`, `dir` or `link`. There is no fourth
+value — anything else a filesystem can hold (a FIFO, a socket, a device node) is not listed at all, because "file or
+directory" has no truthful answer for one and inventing one is what let a named pipe be offered as a game. A `link` is
+its own kind rather than whatever it resolves to: an install row must be removable, the uninstall path refuses a
+symlink, so a link is never adoptable however well its target resolves. _Avoid_: "shape" for this — **shape** is the
+single-file-vs-folder question the server answers, and the two are different judgements about different things.
+
+### Unusable namesake
+
+An entry whose **normalized name** equals the ROM's but which cannot become its install: the other **shape** — a
+directory where RomM serves a single file, or a loose file where it serves a folder — or any `link`. It is deliberately
+**not** an adoption candidate: nothing about it can be taken over, so it is never offered, ranked or renamed. It is
+still reported, because the alternative is a download that silently produces a second copy of the game beside it. The
+dialog's two exits are download-anyway (the server's copy lands beside it, under the server's name) and cancel; neither
+touches the entry. _Avoid_: mismatched candidate, unusable candidate — the whole point is that it is not one.
 
 ### Normalized name
 

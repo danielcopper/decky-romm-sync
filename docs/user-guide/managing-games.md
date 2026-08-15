@@ -284,19 +284,24 @@ dialog as above. When it finds several, you get a short list first — strongest
 is based on: a checksum read out of a zip's index, an exact size match, or the name alone. If there were more than the
 list shows, it says so.
 
-**When what is there is the wrong shape.** Your server sends each game either as a single file or as a folder of several
-files, and Tender can only take over what matches. If your folder holds a _folder_ with this game's name while the
-server sends a single file — or a loose file where the server sends a folder — there is nothing to take over, and you
-are told so instead of the download simply starting: **something with this name is here, it is not in the form this game
-comes in, so downloading leaves you with two copies.** You can go ahead and download anyway, which lands the server's
-copy beside what is already there under the server's own name, or cancel and sort it out yourself. Neither choice
-renames, moves or deletes anything you have.
+**When what is there cannot be used.** Two things carry this game's name and still cannot become it, and both get the
+same answer.
 
-**When it cannot be read at all.** Sometimes an entry carries this game's name and Tender cannot read it — a shortcut
-pointing at a drive that is not plugged in, a folder it is not allowed to open. It says so rather than guessing: it
-cannot tell whether that is your copy, so it will not use it as this game, and downloading leaves you with both. The one
-case it offers to tidy up is a shortcut that points at nothing at all — there is no file behind it, so removing it
-deletes nothing. Anything else it could not read is left exactly where it is.
+The first is the **wrong shape**: your server sends each game either as a single file or as a folder of several files,
+and Tender can only take over what matches. A _folder_ with this game's name where the server sends a single file — or a
+loose file where it sends a folder — is not something it can use.
+
+The second is a **shortcut** (a symlink). Tender never adopts one, even when it points at exactly the right game file.
+Once a game counts as installed, Uninstall has to be able to remove it, and it will not remove a shortcut — so adopting
+one would leave you with a game you could never uninstall from here.
+
+Either way you are told instead of the download simply starting: **something with this name is here, it cannot be used
+as this game, so downloading leaves you with two copies.** You can go ahead and download anyway, which lands the
+server's copy beside what is already there under the server's own name, or cancel and sort it out yourself. Neither
+choice renames, moves or deletes anything you have.
+
+Things that are neither files, folders nor shortcuts are ignored entirely — Tender will not offer you something that
+only looks like a game because it happens to have the right name.
 
 **And if it finds nothing at all.** If the page told you a copy was here and pressing turns up nothing that matches —
 you moved it, renamed it or deleted it in between — you get told that too, instead of a download starting on its own.
