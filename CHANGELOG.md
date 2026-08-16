@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.31.0](https://github.com/danielcopper/romm-tender/compare/tender-v0.30.1...tender-v0.31.0) (2026-08-16)
+
+
+### Features
+
+* **brand:** add the TENDER banner lockup ([#1706](https://github.com/danielcopper/romm-tender/issues/1706)) ([17ccb76](https://github.com/danielcopper/romm-tender/commit/17ccb76da991144ba00d2161cbfd9e16b7ac354c))
+* **brand:** rename the plugin to Tender ([#1707](https://github.com/danielcopper/romm-tender/issues/1707)) ([96b4e54](https://github.com/danielcopper/romm-tender/commit/96b4e54a4b81d8a6150ec8b1fcf13c34a17dd9e6))
+* **downloads:** find the game already on the device under a different name ([#1733](https://github.com/danielcopper/romm-tender/issues/1733)) ([8b4288e](https://github.com/danielcopper/romm-tender/commit/8b4288e6cf56067833b5200069484e99ba387dd9)), closes [#260](https://github.com/danielcopper/romm-tender/issues/260)
+* **downloads:** use ROM files already on the device instead of overwriting them ([#1712](https://github.com/danielcopper/romm-tender/issues/1712)) ([524f766](https://github.com/danielcopper/romm-tender/commit/524f76678ed30362b82a5a04075dd4f7bee4861e))
+
+
+### Bug Fixes
+
+* **bios:** tell a check that could not answer apart from one reporting no requirement ([#1703](https://github.com/danielcopper/romm-tender/issues/1703)) ([f528e23](https://github.com/danielcopper/romm-tender/commit/f528e233caa0454143884b230c9bf91da7f37f85))
+* **brand:** give the README banner its animation back ([#1710](https://github.com/danielcopper/romm-tender/issues/1710)) ([74ae758](https://github.com/danielcopper/romm-tender/commit/74ae7589d88d0dc3b51aa950f6d0417bbdd3be3c))
+* **ci:** copy the release zip somewhere writable before uploading ([#1711](https://github.com/danielcopper/romm-tender/issues/1711)) ([1044f1a](https://github.com/danielcopper/romm-tender/commit/1044f1a8091d6c058bc4ec1df12d04dde5483640))
+* **saves:** correct the get_save_slots active_slot type and record the setup-path divergence ([#1723](https://github.com/danielcopper/romm-tender/issues/1723)) ([971efa8](https://github.com/danielcopper/romm-tender/commit/971efa86e577d640b202d1b6be58f6c5afe0db36))
+* **ui:** bind the info panel's background reads to the rom they were issued for ([#1721](https://github.com/danielcopper/romm-tender/issues/1721)) ([220d8b2](https://github.com/danielcopper/romm-tender/commit/220d8b263664f1a47985e394230a7ff917ee30cf))
+* **ui:** bind the save-sync display note to the rom it describes ([#1715](https://github.com/danielcopper/romm-tender/issues/1715)) ([d0e81d0](https://github.com/danielcopper/romm-tender/commit/d0e81d00d6297545613aa95ccf6bbb39185a29d9))
+* **ui:** report a downed plugin backend instead of spinning forever ([#1732](https://github.com/danielcopper/romm-tender/issues/1732)) ([6fddbb7](https://github.com/danielcopper/romm-tender/commit/6fddbb7c600d1a826ded5a24a894294c4a82d7a6)), closes [#1730](https://github.com/danielcopper/romm-tender/issues/1730)
+
 ## [0.30.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.30.0...decky-romm-sync-v0.30.1) (2026-08-10)
 
 
