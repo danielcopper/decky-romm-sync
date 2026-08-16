@@ -7,6 +7,8 @@ import {
   getServerRetryProgress,
   setServerRetryProgress,
   onServerRetryProgressChange,
+  beginServerLoad,
+  settleServerLoad,
 } from "./connectionState";
 import { debugLog } from "../api/backend";
 
@@ -128,5 +130,49 @@ describe("serverRetryProgress store (#1345)", () => {
     unsubscribe();
     setServerRetryProgress({ attempt: 3, maxAttempts: 3 });
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("shared server-load generation (#1345 F2)", () => {
+  beforeEach(() => {
+    setServerRetryProgress(null);
+  });
+
+  it("clears the retry frame when the settling load is still the newest", () => {
+    const load = beginServerLoad();
+    setServerRetryProgress({ attempt: 2, maxAttempts: 3 });
+    settleServerLoad(load);
+    expect(getServerRetryProgress()).toBeNull();
+  });
+
+  // The case the pair exists for: the save-slot lane and the achievements lane
+  // feed one store, so an older load settling late must leave the newer lane's
+  // live frame standing — and that newer lane must still be able to clear it.
+  it("keeps the frame a newer load of another lane owns, and lets that lane clear it", () => {
+    const slots = beginServerLoad();
+    const achievements = beginServerLoad();
+    setServerRetryProgress({ attempt: 2, maxAttempts: 3 });
+
+    settleServerLoad(slots);
+    expect(getServerRetryProgress()).toEqual({ attempt: 2, maxAttempts: 3 });
+
+    settleServerLoad(achievements);
+    expect(getServerRetryProgress()).toBeNull();
+  });
+
+  it("supersedes a load re-issued by the same lane", () => {
+    const firstAttempt = beginServerLoad();
+    const reload = beginServerLoad();
+    setServerRetryProgress({ attempt: 1, maxAttempts: 3 });
+
+    settleServerLoad(firstAttempt);
+    expect(getServerRetryProgress()).toEqual({ attempt: 1, maxAttempts: 3 });
+
+    settleServerLoad(reload);
+    expect(getServerRetryProgress()).toBeNull();
+  });
+
+  it("hands out a distinct claim per call", () => {
+    expect(beginServerLoad()).not.toEqual(beginServerLoad());
   });
 });

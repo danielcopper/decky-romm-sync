@@ -102,6 +102,33 @@ export function onServerRetryProgressChange(cb: (p: ServerRetryProgress | null) 
   };
 }
 
+/** One load's claim on the retry-progress store, handed out by
+ *  {@link beginServerLoad} and read only by {@link settleServerLoad}. */
+export interface ServerLoadToken {
+  readonly generation: number;
+}
+
+let _loadGeneration = 0;
+
+/** Claim the retry-progress store for a load that is starting now.
+ *
+ *  Several lazy lanes on the game detail page — the panel's save-slot load, the
+ *  achievements tab's load — feed this ONE store and run concurrently: a lane
+ *  torn down mid-flight still settles later. Counting claims across all lanes
+ *  rather than per lane is what makes that late settle distinguishable from the
+ *  newest one (#1345 F2). */
+export function beginServerLoad(): ServerLoadToken {
+  _loadGeneration += 1;
+  return { generation: _loadGeneration };
+}
+
+/** Drop the retry frame a settling load was showing — but only while its claim
+ *  is still the newest one taken out by ANY lane. A stale load resolving late
+ *  must not wipe the live "(attempt N/M)" frame a newer load now owns. */
+export function settleServerLoad(token: ServerLoadToken): void {
+  if (token.generation === _loadGeneration) setServerRetryProgress(null);
+}
+
 /** Subscribe to the retry-progress store. Re-renders the caller on every
  *  change; cleans up its listener on unmount. */
 export function useServerRetryProgress(): ServerRetryProgress | null {
