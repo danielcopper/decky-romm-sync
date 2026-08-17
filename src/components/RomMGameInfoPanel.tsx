@@ -14,41 +14,15 @@
  */
 
 import { useState, useEffect, useRef, FC, createElement } from "react";
-import { addEventListener, removeEventListener } from "@decky/api";
 import { DialogButton, Focusable } from "@decky/ui";
-import {
-  getCachedGameDetail,
-  invalidateCachedGameDetail,
-  getRomMetadata,
-  getInstalledRom,
-  checkPlatformBios,
-  getPlatformCoreInfo,
-  getSaveStatus,
-  isCallableFailure,
-  getArtworkBase64,
-  getSaveSlots,
-  isSaveTrackingConfigured,
-  debugLog,
-  refreshMigrationState,
-  logError,
-} from "../api/backend";
-import type { BiosAnswer } from "../api/backend";
+import { getSaveSlots, debugLog, refreshMigrationState, logError } from "../api/backend";
 import { SlotSetupWizard } from "./SlotSetupWizard";
 import { SavesTab } from "./SavesTab";
 import { AchievementsTab } from "./AchievementsTab";
 import { BiosTab } from "./BiosTab";
 import { infoRow, section } from "./panelSection";
-import type {
-  RomMetadata,
-  InstalledRom,
-  BiosStatus,
-  CoreInfo,
-  SaveStatus,
-  SyncConflict,
-  SaveSlotSummary,
-  DownloadCompleteEvent,
-} from "../types";
-import type { RommDataChangedDetail } from "../types/events";
+import { loadData, type PanelState } from "./panelState";
+import { wirePanelEvents } from "./panelEvents";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
 import { getSettingsResetState, onSettingsResetChange } from "../utils/settingsResetStore";
 import {
@@ -63,7 +37,7 @@ import {
   settleServerLoad,
   useRommConnectionState,
 } from "../utils/connectionState";
-import { applyLoadSlotsResult, applyRefreshSlotResult } from "../utils/slotState";
+import { applyLoadSlotsResult } from "../utils/slotState";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { MigrationBlockedCard } from "./MigrationBlockedCard";
 import { SettingsResetCard } from "./SettingsResetCard";
@@ -73,297 +47,12 @@ interface RomMGameInfoPanelProps {
   appId: number;
 }
 
-interface PanelState {
-  loading: boolean;
-  romId: number | null;
-  romName: string;
-  platformName: string;
-  platformSlug: string;
-  installed: boolean;
-  installedRom: InstalledRom | null;
-  metadata: RomMetadata | null;
-  coverBase64: string | null;
-  biosStatus: BiosStatus | null;
-  // unmanaged/ok/partial/missing classification — single source of truth is the
-  // backend (`compute_bios_level`); both the cache path and the bios-change refresh
-  // path thread `bios_level` straight off their respective payloads, never
-  // re-deriving it. Drives the BIOS status-dot color, in `BiosTab`.
-  // "unmanaged" (server files present, none registry-known) renders neutral grey.
-  // null when no BIOS need.
-  biosLevel: "ok" | "partial" | "missing" | "unmanaged" | null;
-  // Core info comes from the dedicated get_platform_core_info path (#923), not
-  // from biosStatus — the two concerns are decoupled. It stays here rather than
-  // in the BIOS tab because it has to reach the render in the SAME update as
-  // biosStatus: two updates would briefly highlight the previous core and name
-  // it in the "Active Core" row against the new core's requirements.
-  coreInfo: CoreInfo | null;
-  saveSyncEnabled: boolean;
-  saveStatus: SaveStatus | null;
-  conflicts: SyncConflict[];
-  error: boolean;
-  activeTab: string;
-  raId: number | null;
-  slotConfirmed: boolean;
-  activeSlot: string | null;
-  availableSlots: SaveSlotSummary[];
-  slotsLoading: boolean;
-  // Region / Languages of the ACTIVE version (ADR-0021), rendered as GAME INFO
-  // rows; empty arrays hide their row. Refreshed on a version switch.
-  regions: string[];
-  languages: string[];
-}
-
-/** A ROM identity paired with the only writer allowed to fold an answer read for
- *  it into panel state.
- *
- *  `write` drops the update when the panel that issued the read is gone, and
- *  when the panel has been re-bound to a different ROM since. Those are two
- *  separate ends, and neither covers the other: a version switch re-binds the
- *  shortcut to a new rom_id without changing the appId, so the `[appId]` effect
- *  never re-runs and its `cancelled` flag never fires for it (#1713).
- *
- *  Carrying the ROM alongside its writer is what keeps the two from drifting
- *  apart — a read issued off `binding.romId` cannot be folded in through a
- *  writer bound to some other version. */
-interface RomBinding {
-  readonly romId: number;
-  readonly write: React.Dispatch<React.SetStateAction<PanelState>>;
-}
-
-/** Bind reads for `romId` to the panel showing it.
- *
- *  The check reads `romIdRef` when the answer LANDS, not when the read was
- *  issued: the version-switch handler re-points the ref the moment the switch
- *  resolves, so everything still in flight for the previous version is refused
- *  from that point on. */
-function bindRom(
-  romId: number,
-  romIdRef: React.MutableRefObject<number | null>,
-  cancelled: () => boolean,
-  setter: React.Dispatch<React.SetStateAction<PanelState>>,
-): RomBinding {
-  return {
-    romId,
-    write: (update) => {
-      if (cancelled() || romIdRef.current !== romId) return;
-      setter(update);
-    },
-  };
-}
-
 /** Format a Unix timestamp (seconds) as a release date string (e.g. "15 Mar 2003") */
 function formatReleaseDate(timestamp: number | null): string | null {
   if (!timestamp || timestamp <= 0) return null;
   const date = new Date(timestamp * 1000);
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
-}
-
-/** Refresh slot configuration and available slots — extracted to reduce nesting depth. */
-function refreshSlotState(binding: RomBinding): void {
-  isSaveTrackingConfigured(binding.romId)
-    .then((result) => binding.write((prev) => ({ ...prev, slotConfirmed: result.configured })))
-    .catch(() => {});
-  getSaveSlots(binding.romId)
-    .then((slotResult) => applyRefreshSlotResult<PanelState>(slotResult, binding.write))
-    .catch(() => {});
-}
-
-/** Fire-and-forget installed-rom fetch — kept at module scope to avoid nesting. */
-function refreshInstalledRomInBackground(binding: RomBinding): Promise<void> {
-  return getInstalledRom(binding.romId)
-    .then((installed) => {
-      if (installed) {
-        binding.write((prev) => ({ ...prev, installedRom: installed }));
-      }
-    })
-    .catch(() => {});
-}
-
-/** Fire-and-forget cover-art fetch — kept at module scope to avoid nesting. */
-function refreshCoverArtInBackground(binding: RomBinding): Promise<void> {
-  return getArtworkBase64(binding.romId)
-    .then((result) => {
-      if (result.base64) {
-        binding.write((prev) => ({ ...prev, coverBase64: result.base64 }));
-      }
-    })
-    .catch(() => {});
-}
-
-/** Fire-and-forget metadata fetch — kept at module scope to avoid nesting. */
-function refreshMetadataInBackground(binding: RomBinding): Promise<void> {
-  return getRomMetadata(binding.romId)
-    .then((meta) => binding.write((prev) => ({ ...prev, metadata: meta })))
-    .catch(() => {});
-}
-
-/** The panel's two BIOS fields as a cached game detail answers them, or `null`
- *  when the payload carries no BIOS answer — a detail derived while the firmware
- *  cache was cold, which every BIOS download and delete makes it. The caller then
- *  leaves the shown status standing instead of hiding the BIOS tab on a
- *  non-answer (#1693).
- *
- *  `bios_level` is computed by the backend (`compute_bios_level`) and threaded
- *  straight through, never re-derived; it is null whenever there is no
- *  requirement. */
-function biosFieldsFromCache(cached: BiosAnswer): Pick<PanelState, "biosStatus" | "biosLevel"> | null {
-  if (cached.bios_status_unknown) return null;
-  if (!cached.bios_status) return { biosStatus: null, biosLevel: null };
-  return {
-    biosStatus: { needs_bios: true, ...cached.bios_status },
-    biosLevel: cached.bios_level ?? null,
-  };
-}
-
-/** Build a `SaveStatus` from a cached game detail's `save_status` field. */
-function saveStatusFromCache(
-  romId: number,
-  cachedSave: NonNullable<Awaited<ReturnType<typeof getCachedGameDetail>>["save_status"]> | null | undefined,
-): SaveStatus | null {
-  if (!cachedSave) return null;
-  return {
-    rom_id: romId,
-    files: cachedSave.files.map((f) => ({
-      filename: f.filename,
-      status: f.status as "skip" | "download" | "upload" | "conflict",
-      local_path: null,
-      local_hash: null,
-      local_mtime: null,
-      local_size: null,
-      server_save_id: null,
-      server_file_name: null,
-      server_emulator: null,
-      server_updated_at: null,
-      server_size: null,
-      last_sync_at: f.last_sync_at ?? null,
-    })),
-    playtime: {
-      total_seconds: 0,
-      session_count: 0,
-      last_session_start: null,
-      last_session_duration_sec: null,
-      last_played: null,
-    },
-    device_id: "",
-    last_sync_check_at: cachedSave.last_sync_check_at ?? null,
-  };
-}
-
-/** Kick off background fetches that fill in fields not present in the cache:
- *  installed-rom details, cover art, and fresh metadata (if stale or missing). */
-function startBackgroundRefreshes(
-  cached: Awaited<ReturnType<typeof getCachedGameDetail>>,
-  binding: RomBinding,
-): Promise<void[]> {
-  const bgPromises: Promise<void>[] = [];
-
-  if (cached.installed) {
-    bgPromises.push(refreshInstalledRomInBackground(binding));
-  }
-
-  bgPromises.push(refreshCoverArtInBackground(binding));
-
-  const metaStale = cached.stale_fields?.includes("metadata") ?? true;
-  if (!cached.metadata || metaStale) {
-    bgPromises.push(refreshMetadataInBackground(binding));
-  }
-
-  // Core info from its own path (#923), decoupled from BIOS status.
-  if (binding.romId) {
-    bgPromises.push(refreshCoreInfoInBackground(binding));
-  }
-
-  return Promise.all(bgPromises);
-}
-
-/** Fetch active-core + available-cores for a ROM from the dedicated
- *  `get_platform_core_info` path (#923) and merge into panel state. Keyed on
- *  rom_id so the active core reflects a per-game DB override (epic #945) when
- *  one is pinned. */
-function refreshCoreInfoInBackground(binding: RomBinding): Promise<void> {
-  return getPlatformCoreInfo(binding.romId)
-    .then((coreInfo) => binding.write((prev) => ({ ...prev, coreInfo })))
-    .catch(() => {});
-}
-
-/** Cache-first initial render. Resolves the cached game detail for this appId,
- *  pushes it into PanelState, and fires the background refresh tasks whose
- *  results are merged in later. Module-scope so the FC body stays focused on
- *  rendering. */
-async function loadData(
-  appId: number,
-  cancelled: () => boolean,
-  romIdRef: React.MutableRefObject<number | null>,
-  platformSlugRef: React.MutableRefObject<string>,
-  setter: React.Dispatch<React.SetStateAction<PanelState>>,
-): Promise<void> {
-  try {
-    // Phase 1: Cache-first — render instantly from cached data
-    const cached = await getCachedGameDetail(appId);
-    if (cancelled()) return;
-    if (!cached.found) {
-      setter((prev) => ({ ...prev, loading: false, error: true }));
-      return;
-    }
-
-    const romId = cached.rom_id!;
-    const romName = cached.rom_name || "";
-    const platformName = cached.platform_name || "";
-    const platformSlug = cached.platform_slug || "";
-
-    romIdRef.current = romId;
-    platformSlugRef.current = platformSlug;
-
-    // Nothing is shown yet on a first render, so a payload carrying no BIOS
-    // answer starts the panel out with none either.
-    const { biosStatus, biosLevel } = biosFieldsFromCache(cached) ?? { biosStatus: null, biosLevel: null };
-    const saveStatus = saveStatusFromCache(romId, cached.save_status);
-    const conflicts: SyncConflict[] = cached.save_status?.conflicts ?? [];
-    const raId = cached.ra_id ?? null;
-
-    // Render immediately with cached data (metadata may be null — that's OK).
-    // Unbound by construction: this is the write that INSTALLS the identity every
-    // background fold below compares itself against.
-    setter({
-      loading: false,
-      romId,
-      romName,
-      platformName,
-      platformSlug,
-      installed: cached.installed ?? false,
-      installedRom: null, // Will be filled by background fetch if installed
-      metadata: cached.metadata as RomMetadata | null,
-      coverBase64: null, // Will be filled by background fetch
-      biosStatus,
-      biosLevel,
-      coreInfo: null, // Will be filled by background fetch (get_platform_core_info)
-      saveSyncEnabled: cached.save_sync_enabled ?? false,
-      saveStatus,
-      conflicts,
-      error: false,
-      activeTab: "info",
-      raId,
-      slotConfirmed: false,
-      activeSlot: "default",
-      availableSlots: [],
-      slotsLoading: false,
-      regions: cached.regions ?? [],
-      languages: cached.languages ?? [],
-    });
-
-    const binding = bindRom(romId, romIdRef, cancelled, setter);
-
-    if (cached.save_sync_enabled) {
-      refreshSlotState(binding);
-    }
-
-    // Phase 2: Background fetch for data not available in cache
-    await startBackgroundRefreshes(cached, binding);
-  } catch (e) {
-    detach(debugLog(`RomMGameInfoPanel: loadData error: ${e}`));
-    if (!cancelled()) setter((prev) => ({ ...prev, loading: false, error: true }));
-  }
 }
 
 // S3776 is raised on the declaration line, so its NOSONAR must stay there. prettier-ignore stops
@@ -408,8 +97,8 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   // (mirrors romIdRef). bios events fan out to every mounted panel (#1082).
   const platformSlugRef = useRef<string>("");
   // Load-once gate for the lazy-loaded SAVES tab data. A version switch resets it
-  // (in handleVersionSwitched) so the slots re-fetch for the newly-bound rom_id
-  // instead of lingering from the previous version.
+  // (`handleVersionSwitched` in panelEvents.ts) so the slots re-fetch for the
+  // newly-bound rom_id instead of lingering from the previous version.
   const slotsLoadedRef = useRef(false);
   const [migration, setMigration] = useState(getMigrationState());
   const [settingsReset, setSettingsReset] = useState(getSettingsResetState());
@@ -440,258 +129,18 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
 
     detach(loadData(appId, () => cancelled, romIdRef, platformSlugRef, setState));
 
-    /** Bind a read this panel is issuing now for the ROM it currently shows. */
-    const bindCurrentRom = (romId: number): RomBinding => bindRom(romId, romIdRef, () => cancelled, setState);
-
-    // Listen for uninstall events to update state (uses ref to avoid stale closure)
-    const onUninstall = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.rom_id === romIdRef.current) {
-        setState((prev) => ({ ...prev, installed: false, installedRom: null }));
-      }
-    };
-    globalThis.addEventListener("romm_rom_uninstalled", onUninstall);
-
-    // Listen for download completion — the install counterpart to onUninstall.
-    // The "ROM File" section is gated on installed + installedRom; a fresh
-    // download must flip both so the section (with the local path) appears
-    // without a detail-page re-mount (#1340). Decky backend event (@decky/api),
-    // not a DOM CustomEvent — mirrors DiscSelector's download_complete wiring.
-    const onDownloadComplete = addEventListener<[DownloadCompleteEvent]>(
-      "download_complete",
-      (evt: DownloadCompleteEvent) => {
-        if (evt.rom_id !== romIdRef.current) return;
-        // Invalidate the cached detail so a fast re-mount inside the 3s TTL
-        // doesn't briefly re-serve the stale installed:false.
-        invalidateCachedGameDetail(appId);
-        setState((prev) => ({ ...prev, installed: true }));
-        detach(refreshInstalledRomInBackground(bindCurrentRom(evt.rom_id)));
-      },
-    );
-
-    // Per-event-type handlers — each owns one branch of the data-changed dispatch.
-    // Defined inside useEffect to share the cancelled/appId/romIdRef/setState closure.
-    const handleSaveSyncSettingsChange = async (
-      detail: Extract<RommDataChangedDetail, { type: "save_sync_settings" }>,
-    ) => {
-      const enabled = detail.save_sync_enabled;
-      if (!enabled) {
-        setState((prev) => ({ ...prev, saveSyncEnabled: false }));
-        return;
-      }
-      const romId = romIdRef.current;
-      if (!romId) return;
-      const binding = bindCurrentRom(romId);
-      const result = await getSaveStatus(binding.romId).catch(() => null);
-      if (result && isCallableFailure(result)) return;
-      const updatedStatus: SaveStatus | null = result;
-      const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
-      binding.write((prev) => ({
-        ...prev,
-        saveSyncEnabled: true,
-        saveStatus: updatedStatus,
-        conflicts,
-      }));
-    };
-
-    const handleSaveSyncChange = async (detail: Extract<RommDataChangedDetail, { type: "save_sync" }>) => {
-      if (detail.rom_id && detail.rom_id !== romIdRef.current) return;
-      const romId = romIdRef.current;
-      if (!romId) return;
-      const binding = bindCurrentRom(romId);
-      const result = detail.save_status ?? (await getSaveStatus(binding.romId).catch(() => null));
-      if (result && isCallableFailure(result)) return;
-      const updatedStatus: SaveStatus | null = result;
-      const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
-      binding.write((prev) => ({
-        ...prev,
-        saveStatus: updatedStatus,
-        conflicts,
-      }));
-      // Also re-check slot configuration + refresh slot data
-      refreshSlotState(binding);
-    };
-
-    const handleBiosChange = async (detail: Extract<RommDataChangedDetail, { type: "bios" }>) => {
-      // bios events fan out to every mounted panel — ignore platforms other
-      // than this panel's own, both to avoid cross-platform BIOS-list bleed
-      // and to skip the wasted checkPlatformBios fetch (#1082). Read via ref
-      // to avoid a stale closure.
-      if (!detail.platform_slug || detail.platform_slug !== platformSlugRef.current) return;
-      // A rejected check and one that could not determine the requirement are
-      // both "we don't know" — writing either would drop the whole BIOS tab
-      // while the play row above keeps its level (#1693). Only an ANSWER moves
-      // the tab, in either direction.
-      const updated = await checkPlatformBios(detail.platform_slug).catch((): BiosStatus | null => null);
-      if (cancelled || !updated || updated.bios_status_unknown) return;
-      const biosLevel = updated.needs_bios ? (updated.bios_level ?? null) : null;
-      setState((prev) => ({ ...prev, biosStatus: updated.needs_bios ? updated : null, biosLevel }));
-    };
-
-    const handleCoreChange = async (_detail: Extract<RommDataChangedDetail, { type: "core_changed" }>) => {
-      // Re-fetch cached game detail to pick up the new core-aware BIOS status.
-      invalidateCachedGameDetail(appId);
-      const rid = romIdRef.current;
-      if (!rid) return;
-      // Core info comes from its own path (#923), keyed on the rom_id from a ref
-      // to avoid a stale `state` closure. The active core reflects the per-game
-      // DB override (epic #945). BIOS status is re-read from the (now core-free)
-      // cache. Both land in ONE write: two writes would render the previous core
-      // as the highlighted, active one against the new core's requirements.
-      const binding = bindCurrentRom(rid);
-      const [coreInfo, cached] = await Promise.all([
-        getPlatformCoreInfo(binding.romId).catch((): CoreInfo | null => null),
-        getCachedGameDetail(appId),
-      ]);
-      if (cancelled || !cached.found) return;
-      // A detail carrying no BIOS answer leaves the shown status alone — the
-      // core switch invalidated the cached detail, but a cold firmware cache
-      // makes the re-read a non-answer rather than a "needs none" (#1693).
-      const biosFields = biosFieldsFromCache(cached);
-      binding.write((prev) => ({ ...prev, ...biosFields, coreInfo: coreInfo ?? prev.coreInfo }));
-    };
-
-    const handleVersionSwitched = async (detail: Extract<RommDataChangedDetail, { type: "version_switched" }>) => {
-      // A version switch moved the group's binding to a new rom_id. Re-read the
-      // cached detail (invalidated by the picker) so the panel reflects the new
-      // active version — its RomM name (the injected panel title), Region /
-      // Languages rows, and cover — while the Steam hero title stays sticky.
-      //
-      // The per-rom TAB data must follow the new active version too. The SAVES
-      // tab loads once behind slotsLoadedRef and holds per-rom state; without
-      // re-keying it keeps showing the previous version's data. Reset the
-      // load-once gate and re-key the tab state off the fresh cache (mirroring a
-      // fresh mount) so the tab-activation effect re-fetches for the new rom_id —
-      // covering both the sitting-on-a-tab case (romId changes → the effect
-      // re-runs) and the open-a-tab-later case. The ACHIEVEMENTS tab re-keys
-      // itself: its React key is the rom_id, so the new one remounts it.
-      //
-      // BIOS is the third per-rom tab: the requirement is core-dependent and the
-      // core override is keyed on rom_id, so the new version's core may need
-      // different files — or none, which hides the tab (#1681).
-      if (detail.app_id !== appId) return;
-      const cached = await getCachedGameDetail(appId);
-      if (cancelled || !cached.found) return;
-      const newRomId = cached.rom_id ?? romIdRef.current;
-      romIdRef.current = newRomId;
-      slotsLoadedRef.current = false;
-      const saveStatus = newRomId != null ? saveStatusFromCache(newRomId, cached.save_status) : null;
-      // A detail carrying no BIOS answer keeps the shown status: the switched-to
-      // version's requirement is unread, not absent (#1693).
-      const biosFields = biosFieldsFromCache(cached);
-      setState((prev) => {
-        const biosStatus = biosFields ? biosFields.biosStatus : prev.biosStatus;
-        return {
-          ...prev,
-          romId: newRomId,
-          romName: cached.rom_name || prev.romName,
-          installed: cached.installed ?? false,
-          regions: cached.regions ?? [],
-          languages: cached.languages ?? [],
-          // Re-key per-rom tab state so nothing lingers from the previous version.
-          saveSyncEnabled: cached.save_sync_enabled ?? false,
-          saveStatus,
-          conflicts: cached.save_status?.conflicts ?? [],
-          raId: cached.ra_id ?? null,
-          activeSlot: "default",
-          availableSlots: [],
-          slotsLoading: false,
-          ...biosFields,
-          // The BIOS tab's button is gated on `biosStatus`, so clearing it while
-          // the user stands on that tab would hide the button and leave the body
-          // empty with nothing selected. Send them back to the tab every version
-          // has.
-          activeTab: !biosStatus && prev.activeTab === "bios" ? "info" : prev.activeTab,
-        };
-      });
-      // Re-fetch slot configuration (slotConfirmed) + slots for the new rom_id,
-      // mirroring loadData's save-sync branch — this is the authority that keeps
-      // the SlotSetupWizard-vs-SavesTab gate correct across the switch.
-      if (cached.save_sync_enabled && newRomId != null) {
-        refreshSlotState(bindCurrentRom(newRomId));
-      }
-      if (newRomId) {
-        const binding = bindCurrentRom(newRomId);
-        await Promise.all([
-          refreshCoverArtInBackground(binding),
-          // The BIOS tab's "Active Core" row and its per-file core lines come
-          // from the dedicated core-info path (#923), keyed on rom_id so a
-          // per-game override follows the switch. A failed read keeps the
-          // previous reading rather than blanking it.
-          refreshCoreInfoInBackground(binding),
-        ]);
-      }
-    };
-
-    const handleMetadataChange = async (detail: Extract<RommDataChangedDetail, { type: "metadata" }>) => {
-      if (detail.rom_id !== romIdRef.current) return;
-      const romId = romIdRef.current;
-      if (!romId) return;
-      const binding = bindCurrentRom(romId);
-      const meta = await getRomMetadata(binding.romId).catch((): RomMetadata | null => null);
-      binding.write((prev) => ({ ...prev, metadata: meta }));
-    };
-
-    const handleCoverRefreshed = async (detail: Extract<RommDataChangedDetail, { type: "cover_refreshed" }>) => {
-      if (detail.rom_id !== romIdRef.current) return;
-      const romId = romIdRef.current;
-      if (!romId) return;
-      // Re-fetch the cover image. Backend has already patched the registry's
-      // cover_path; getArtworkBase64 will now resolve the freshly-downloaded
-      // file. Catch swallowed because the .then handles the success path —
-      // the rejection branch surfaces via the empty-cover render.
-      await refreshCoverArtInBackground(bindCurrentRom(romId));
-    };
-
-    const onDataChanged = (e: Event) => {
-      detach(
-        (async () => {
-          try {
-            const detail = (e as CustomEvent).detail;
-            if (!romIdRef.current) return;
-            switch (detail?.type) {
-              case "save_sync_settings":
-                await handleSaveSyncSettingsChange(detail);
-                break;
-              case "save_sync":
-                await handleSaveSyncChange(detail);
-                break;
-              case "bios":
-                await handleBiosChange(detail);
-                break;
-              case "core_changed":
-                await handleCoreChange(detail);
-                break;
-              case "metadata":
-                await handleMetadataChange(detail);
-                break;
-              case "cover_refreshed":
-                await handleCoverRefreshed(detail);
-                break;
-              case "version_switched":
-                await handleVersionSwitched(detail);
-                break;
-            }
-          } catch (err) {
-            detach(debugLog(`RomMGameInfoPanel: onDataChanged error: ${err}`));
-          }
-        })(),
-      );
-    };
-    globalThis.addEventListener("romm_data_changed", onDataChanged);
-
-    const onTabSwitch = (e: Event) => {
-      const tab = (e as CustomEvent).detail?.tab;
-      if (tab) setState((prev) => ({ ...prev, activeTab: tab }));
-    };
-    globalThis.addEventListener("romm_tab_switch", onTabSwitch);
+    const unwire = wirePanelEvents({
+      appId,
+      cancelled: () => cancelled,
+      romIdRef,
+      platformSlugRef,
+      slotsLoadedRef,
+      setState,
+    });
 
     return () => {
       cancelled = true;
-      globalThis.removeEventListener("romm_rom_uninstalled", onUninstall);
-      removeEventListener("download_complete", onDownloadComplete);
-      globalThis.removeEventListener("romm_data_changed", onDataChanged);
-      globalThis.removeEventListener("romm_tab_switch", onTabSwitch);
+      unwire();
     };
   }, [appId]);
 

@@ -283,14 +283,15 @@ Format: **invariant** — tier — enforced by.
   through every exact-ID request; a namespace change is uncertainty, never a 404 deletion authority** — test +
   prompt-only — prune service namespace-race tests; new destructive RomM proof paths are prompt-only
 - **Every write into per-rom detail state that crosses an `await` is bound to a rom identity — the store
-  (`src/utils/gameDetailStore.ts`) via `writerForRom`, or the answer's own `rom_id` in `applySaveStatus`; the panel
-  (`src/components/RomMGameInfoPanel.tsx`) via `RomBinding`; the achievements tab (`src/components/AchievementsTab.tsx`)
-  by construction, its React key being the rom id, so its state cannot outlive the identity it was read for. A version
+  (`src/utils/gameDetailStore.ts`) via `writerForRom`, or the answer's own `rom_id` in `applySaveStatus`; the panel's
+  state and event modules (`src/components/panelState.ts`, `src/components/panelEvents.ts` — the panel component itself
+  holds none of these writes) via `RomBinding`; the achievements tab (`src/components/AchievementsTab.tsx`) by
+  construction, its React key being the rom id, so its state cannot outlive the identity it was read for. A version
   switch re-keys without closing, so neither the store's generation counter nor the panel's `[appId]` effect sees this
   class. Four writes are unbound and none of them is safe by construction: the two identity writes install what a
   binding would compare against (`loadDetail` is ordered by `loadSeq`, `loadData` is not — #1717); the store's
-  `cached.bios_status` fold runs in the same synchronous run as its guard; the panel's `handleBiosChange` answers for
-  the platform's default core and can overwrite a rom-keyed answer (#1718). The panel's remaining lazy lane writes
+  `cached.bios_status` fold runs in the same synchronous run as its guard; the event lane's `handleBiosChange` answers
+  for the platform's default core and can overwrite a rom-keyed answer (#1718). The panel's remaining lazy lane writes
   through the raw setter, discarded by its own per-run `cancelled` — with the commit-time window #1717 records. The play
   button is NOT covered (#1714)** — test + prompt-only — the panel's ten bound sites each carry a version-switch test
   (`src/components/RomMGameInfoPanel.test.tsx`); the store side and every new write site on either are prompt-only,
