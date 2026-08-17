@@ -36,7 +36,6 @@ export interface PanelState {
   romId: number | null;
   romName: string;
   platformName: string;
-  platformSlug: string;
   installed: boolean;
   installedRom: InstalledRom | null;
   metadata: RomMetadata | null;
@@ -279,7 +278,6 @@ export async function loadData(
       romId,
       romName,
       platformName,
-      platformSlug,
       installed: cached.installed ?? false,
       installedRom: null, // Will be filled by background fetch if installed
       metadata: cached.metadata as RomMetadata | null,
