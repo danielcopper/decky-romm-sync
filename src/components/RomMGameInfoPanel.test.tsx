@@ -4099,4 +4099,240 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).toContain("RetroArch save sorting changed");
     });
   });
+
+  // ------------------------------------------------------------------
+  // K. Two answers for the SAME rom, ordered by when their reads were issued
+  // ------------------------------------------------------------------
+
+  describe("two answers for the same rom ordered by when their reads were issued (#1717)", () => {
+    /** A read the test answers by hand, so the one issued FIRST can be made to
+     *  land last. Both are about the rom the panel is showing, so the rom
+     *  binding admits both and only the read's own ticket separates them. */
+    function heldRead<T>() {
+      let release!: (value: T) => void;
+      const promise = new Promise<T>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release: (value: T) => release(value) };
+    }
+
+    const detailFor = (
+      romId: number,
+      romName: string,
+      overrides: Partial<CachedGameDetail> = {},
+    ): CachedGameDetail => ({
+      found: true,
+      rom_id: romId,
+      rom_name: romName,
+      platform_slug: "snes",
+      metadata: makeMetadata(),
+      stale_fields: [],
+      ...overrides,
+    });
+
+    const dispatchDataChanged = async (detail: Record<string, unknown>) => {
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail }));
+      });
+    };
+
+    const openSavesTab = async () => {
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
+      });
+      await flushAsync();
+    };
+
+    const statusWithFile = (romId: number, filename: string): SaveStatus => ({
+      rom_id: romId,
+      files: [
+        {
+          filename,
+          status: "skip",
+          local_path: null,
+          local_hash: null,
+          local_mtime: null,
+          local_size: null,
+          server_save_id: null,
+          server_file_name: null,
+          server_emulator: null,
+          server_updated_at: null,
+          server_size: null,
+          last_sync_at: null,
+        },
+      ],
+      playtime: {
+        total_seconds: 0,
+        session_count: 0,
+        last_session_start: null,
+        last_session_duration_sec: null,
+        last_played: null,
+      },
+      device_id: "d",
+      last_sync_check_at: null,
+    });
+
+    /** Run the real slot helpers: the module mock writes nothing, and an
+     *  unordered fold would then look exactly like an ordered one. */
+    const useRealSlotHelpers = async () => {
+      const realSlotState = await vi.importActual<typeof slotState>("../utils/slotState");
+      vi.mocked(slotState.applyRefreshSlotResult).mockImplementation(realSlotState.applyRefreshSlotResult);
+      vi.mocked(slotState.applyLoadSlotsResult).mockImplementation(realSlotState.applyLoadSlotsResult);
+    };
+
+    it("keeps the newest version switch's identity when an earlier switch's read lands last", async () => {
+      // Both switches are for this panel's appId and both install an identity,
+      // so the rom binding admits either — the panel would show whichever cache
+      // read happened to finish last.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, "Game (USA)", { regions: ["USA"] }));
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+
+      const firstSwitch = heldRead<CachedGameDetail>();
+      vi.mocked(cachedStore.getCachedGameDetail).mockImplementationOnce(() => firstSwitch.promise);
+      await dispatchDataChanged({ type: "version_switched", app_id: testAppId, rom_id: 2 });
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        detailFor(3, "Game (Europe)", { regions: ["Europe"] }),
+      );
+      await dispatchDataChanged({ type: "version_switched", app_id: testAppId, rom_id: 3 });
+      await flushAsync();
+      expect(container.textContent).toContain("Game (Europe)");
+
+      await act(async () => {
+        firstSwitch.release(detailFor(2, "Game (Japan)", { regions: ["Japan"] }));
+      });
+      await flushAsync();
+
+      expect(container.textContent).toContain("Game (Europe)");
+      expect(container.textContent).toContain("Europe");
+      expect(container.textContent).not.toContain("Game (Japan)");
+    });
+
+    it("keeps the newest save-status answer when an earlier read lands last", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, "Game", { save_sync_enabled: true }));
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "main" });
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await openSavesTab();
+
+      const firstRead = heldRead<backend.SaveStatusResult>();
+      vi.mocked(backend.getSaveStatus).mockImplementationOnce(() => firstRead.promise);
+      await dispatchDataChanged({ type: "save_sync", rom_id: 1 });
+
+      vi.mocked(backend.getSaveStatus).mockResolvedValue(statusWithFile(1, "SECOND.srm"));
+      await dispatchDataChanged({ type: "save_sync", rom_id: 1 });
+      await flushAsync();
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.saveStatus?.files[0]?.filename).toBe("SECOND.srm");
+
+      await act(async () => {
+        firstRead.release(statusWithFile(1, "FIRST.srm"));
+      });
+      await flushAsync();
+
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.saveStatus?.files[0]?.filename).toBe("SECOND.srm");
+      expect(capturedSavesTab.some((props) => props.saveStatus?.files[0]?.filename === "FIRST.srm")).toBe(false);
+    });
+
+    it("does not let a status read issued before save sync was switched off put the tab back", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, "Game", { save_sync_enabled: false }));
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+
+      const enableRead = heldRead<backend.SaveStatusResult>();
+      vi.mocked(backend.getSaveStatus).mockImplementationOnce(() => enableRead.promise);
+      await dispatchDataChanged({ type: "save_sync_settings", save_sync_enabled: true });
+      await dispatchDataChanged({ type: "save_sync_settings", save_sync_enabled: false });
+
+      await act(async () => {
+        enableRead.release(statusWithFile(1, "ANY.srm"));
+      });
+      await flushAsync();
+
+      expect(container.textContent).not.toContain("SAVES");
+    });
+
+    it("shows the SAVES tab after save sync is switched on even when the status read is overtaken", async () => {
+      // The fence orders the status ANSWER. The setting is not an answer, and
+      // nothing re-issues it — swallowing it here hides the tab until remount.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, "Game", { save_sync_enabled: false }));
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+
+      const enableRead = heldRead<backend.SaveStatusResult>();
+      vi.mocked(backend.getSaveStatus).mockImplementationOnce(() => enableRead.promise);
+      await dispatchDataChanged({ type: "save_sync_settings", save_sync_enabled: true });
+
+      vi.mocked(backend.getSaveStatus).mockResolvedValue(statusWithFile(1, "NEWER.srm"));
+      await dispatchDataChanged({ type: "save_sync", rom_id: 1 });
+      await flushAsync();
+
+      await act(async () => {
+        enableRead.release(statusWithFile(1, "OVERTAKEN.srm"));
+      });
+      await flushAsync();
+
+      expect(container.textContent).toContain("SAVES");
+    });
+
+    it("keeps the newest slot list when the lazy SAVES load's answer lands last", async () => {
+      // The lazy lane writes through the panel's raw setter, and its own
+      // `cancelled` flag is only set at commit time — the ticket it takes when
+      // the read is issued has no such gap.
+      await useRealSlotHelpers();
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, "Game", { save_sync_enabled: true }));
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "main" });
+      vi.mocked(backend.getSaveSlots).mockResolvedValue({ success: true, slots: [], active_slot: "mount" });
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+
+      const laneRead = heldRead<Awaited<ReturnType<typeof backend.getSaveSlots>>>();
+      vi.mocked(backend.getSaveSlots).mockImplementationOnce(() => laneRead.promise);
+      await openSavesTab();
+
+      // A save-sync event re-reads the slots for the same rom while the lane's
+      // read is still open, and answers first.
+      vi.mocked(backend.getSaveSlots).mockResolvedValue({ success: true, slots: [], active_slot: "fresh" });
+      await dispatchDataChanged({ type: "save_sync", rom_id: 1 });
+      await flushAsync();
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.activeSlot).toBe("fresh");
+
+      await act(async () => {
+        laneRead.release({ success: true, slots: [], active_slot: "stale" });
+      });
+      await flushAsync();
+
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.activeSlot).toBe("fresh");
+      expect(capturedSavesTab.some((props) => props.activeSlot === "stale")).toBe(false);
+      // The run that lost the list still clears the spinner it put up — a fence
+      // that swallowed this write would leave "Loading slots…" standing forever.
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.slotsLoading).toBe(false);
+    });
+
+    it("still applies a slot-configuration answer the lazy SAVES load overtook", async () => {
+      // The lane re-reads the slot LIST and nothing else, so its ticket must not
+      // fence the tracking answer that decides wizard-vs-tab — nothing would
+      // re-issue that read.
+      await useRealSlotHelpers();
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, "Game", { save_sync_enabled: true }));
+      const tracking = heldRead<{ configured: boolean; active_slot: string | null }>();
+      vi.mocked(backend.isSaveTrackingConfigured).mockImplementation(() => tracking.promise);
+      vi.mocked(backend.getSaveSlots).mockResolvedValue({ success: true, slots: [], active_slot: "main" });
+      const { queryByTestId } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+
+      // Opening the tab issues the lane's slot-list read; until the tracking
+      // answer lands the setup wizard is what the tab shows.
+      await openSavesTab();
+      expect(queryByTestId("slot-setup-wizard")).not.toBeNull();
+
+      await act(async () => {
+        tracking.release({ configured: true, active_slot: "main" });
+      });
+      await flushAsync();
+
+      expect(queryByTestId("saves-tab")).not.toBeNull();
+      expect(queryByTestId("slot-setup-wizard")).toBeNull();
+    });
+  });
 });

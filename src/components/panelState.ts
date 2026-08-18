@@ -108,13 +108,58 @@ export function bindRom(
   };
 }
 
+/** The panel's read sequences: one counter per set of reads whose answers write
+ *  the same fields.
+ *
+ *  Matching that set is what makes a counter correct. Too wide and a read fences
+ *  answers nobody re-issues — `slots` and `slotTracking` are separate for
+ *  exactly that reason: the lazy SAVES load re-reads the slot list but never the
+ *  tracking flag, so one shared counter would let opening the tab drop a
+ *  `slotConfirmed` answer and leave the setup wizard standing where the tab
+ *  belongs. Too narrow and two answers for one field are unordered again, which
+ *  is the whole point. */
+export interface PanelReadSeqs {
+  /** The cached-detail reads that install the panel's ROM identity. */
+  detail: number;
+  /** `get_save_status`, behind both save-sync events. */
+  saveStatus: number;
+  /** `get_save_slots`, from the slot refresh and the lazy SAVES-tab load. */
+  slots: number;
+  /** `is_save_tracking_configured`, from the slot refresh alone. */
+  slotTracking: number;
+}
+
+/** Take one kind's next ticket for a read being issued now. The returned
+ *  predicate answers true once a later read of that kind has taken one, so an
+ *  older answer folds nothing in when it lands last.
+ *
+ *  The panel's second fence, and it does not replace the first: {@link bindRom}
+ *  separates two ROMs, this separates two reads for the SAME ROM — which a
+ *  binding admits, because the ROM matches (#1717).
+ *
+ *  Where the ticket is taken is the mechanism: at the point the read is ISSUED.
+ *  Taken when the answer lands, every read holds the newest ticket and nothing
+ *  is ordered at all. */
+export function takeReadTicket(seqs: MutableRefObject<PanelReadSeqs>, kind: keyof PanelReadSeqs): () => boolean {
+  const ticket = ++seqs.current[kind];
+  return () => seqs.current[kind] !== ticket;
+}
+
 /** Refresh slot configuration and available slots. */
-export function refreshSlotState(binding: RomBinding): void {
+export function refreshSlotState(binding: RomBinding, readSeqs: MutableRefObject<PanelReadSeqs>): void {
+  const trackingOvertaken = takeReadTicket(readSeqs, "slotTracking");
+  const slotsOvertaken = takeReadTicket(readSeqs, "slots");
   isSaveTrackingConfigured(binding.romId)
-    .then((result) => binding.write((prev) => ({ ...prev, slotConfirmed: result.configured })))
+    .then((result) => {
+      if (trackingOvertaken()) return;
+      binding.write((prev) => ({ ...prev, slotConfirmed: result.configured }));
+    })
     .catch(() => {});
   getSaveSlots(binding.romId)
-    .then((slotResult) => applyRefreshSlotResult<PanelState>(slotResult, binding.write))
+    .then((slotResult) => {
+      if (slotsOvertaken()) return;
+      applyRefreshSlotResult<PanelState>(slotResult, binding.write);
+    })
     .catch(() => {});
 }
 
@@ -244,12 +289,14 @@ export async function loadData(
   cancelled: () => boolean,
   romIdRef: MutableRefObject<number | null>,
   platformSlugRef: MutableRefObject<string>,
+  readSeqs: MutableRefObject<PanelReadSeqs>,
   setter: Dispatch<SetStateAction<PanelState>>,
 ): Promise<void> {
+  const overtaken = takeReadTicket(readSeqs, "detail");
   try {
     // Phase 1: Cache-first — render instantly from cached data
     const cached = await getCachedGameDetail(appId);
-    if (cancelled()) return;
+    if (cancelled() || overtaken()) return;
     if (!cached.found) {
       setter((prev) => ({ ...prev, loading: false, error: true }));
       return;
@@ -271,8 +318,10 @@ export async function loadData(
     const raId = cached.ra_id ?? null;
 
     // Render immediately with cached data (metadata may be null — that's OK).
-    // Unbound by construction: this is the write that INSTALLS the identity every
-    // background fold below compares itself against.
+    // Ordered by this load's ticket and not bound to a ROM: this is the write
+    // that INSTALLS the identity every background fold below compares itself
+    // against, so a binding here would refuse the very switch that re-keys the
+    // panel — `loadDetail` in `utils/gameDetailStore.ts` states the reasoning.
     setter({
       loading: false,
       romId,
@@ -302,13 +351,13 @@ export async function loadData(
     const binding = bindRom(romId, romIdRef, cancelled, setter);
 
     if (cached.save_sync_enabled) {
-      refreshSlotState(binding);
+      refreshSlotState(binding, readSeqs);
     }
 
     // Phase 2: Background fetch for data not available in cache
     await startBackgroundRefreshes(cached, binding);
   } catch (e) {
     detach(debugLog(`RomMGameInfoPanel: loadData error: ${e}`));
-    if (!cancelled()) setter((prev) => ({ ...prev, loading: false, error: true }));
+    if (!cancelled() && !overtaken()) setter((prev) => ({ ...prev, loading: false, error: true }));
   }
 }

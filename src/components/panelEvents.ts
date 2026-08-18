@@ -32,6 +32,8 @@ import {
   refreshInstalledRomInBackground,
   refreshSlotState,
   saveStatusFromCache,
+  takeReadTicket,
+  type PanelReadSeqs,
   type PanelState,
   type RomBinding,
 } from "./panelState";
@@ -49,6 +51,10 @@ export interface PanelEventContext {
   readonly platformSlugRef: MutableRefObject<string>;
   /** Load-once gate for the lazy SAVES tab data — a version switch releases it. */
   readonly slotsLoadedRef: MutableRefObject<boolean>;
+  /** Orders two answers about the same ROM, which the rom binding admits — see
+   *  `takeReadTicket`. Shared with the panel's loads and its slots lane, which
+   *  race these handlers for the same fields. */
+  readonly readSeqs: MutableRefObject<PanelReadSeqs>;
   readonly setState: Dispatch<SetStateAction<PanelState>>;
 }
 
@@ -64,19 +70,30 @@ async function handleSaveSyncSettingsChange(
 ): Promise<void> {
   const enabled = detail.save_sync_enabled;
   if (!enabled) {
+    // Switching save sync off is itself the newest word on it, so it takes the
+    // sequence's next ticket: a status read an earlier event left in flight
+    // would otherwise land afterwards and put the SAVES tab back.
+    takeReadTicket(ctx.readSeqs, "saveStatus");
     ctx.setState((prev) => ({ ...prev, saveSyncEnabled: false }));
     return;
   }
+  // Switching save sync ON is a fact about the setting, not an answer about this
+  // rom, so it lands before the read and outside its fence. Carried along with
+  // the status it would be lost whenever the read is overtaken or fails — and
+  // the SAVES tab, gated on this flag, would stay hidden with nothing left to
+  // re-issue it.
+  ctx.setState((prev) => ({ ...prev, saveSyncEnabled: true }));
   const romId = ctx.romIdRef.current;
   if (!romId) return;
   const binding = bindCurrentRom(ctx, romId);
+  const overtaken = takeReadTicket(ctx.readSeqs, "saveStatus");
   const result = await getSaveStatus(binding.romId).catch(() => null);
   if (result && isCallableFailure(result)) return;
+  if (overtaken()) return;
   const updatedStatus: SaveStatus | null = result;
   const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
   binding.write((prev) => ({
     ...prev,
-    saveSyncEnabled: true,
     saveStatus: updatedStatus,
     conflicts,
   }));
@@ -90,17 +107,26 @@ async function handleSaveSyncChange(
   const romId = ctx.romIdRef.current;
   if (!romId) return;
   const binding = bindCurrentRom(ctx, romId);
+  // A status carried on the event needs no read, but still takes the ticket: it
+  // is the newer answer, so a read an earlier event left open must not land on
+  // top of it.
+  const overtaken = takeReadTicket(ctx.readSeqs, "saveStatus");
   const result = detail.save_status ?? (await getSaveStatus(binding.romId).catch(() => null));
   if (result && isCallableFailure(result)) return;
   const updatedStatus: SaveStatus | null = result;
   const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
-  binding.write((prev) => ({
-    ...prev,
-    saveStatus: updatedStatus,
-    conflicts,
-  }));
+  // Only the status fold is fenced. The slot refresh below issues its own reads
+  // under their own sequences, so an overtaken run still re-checks them rather
+  // than dropping the re-check on the floor.
+  if (!overtaken()) {
+    binding.write((prev) => ({
+      ...prev,
+      saveStatus: updatedStatus,
+      conflicts,
+    }));
+  }
   // Also re-check slot configuration + refresh slot data
-  refreshSlotState(binding);
+  refreshSlotState(binding, ctx.readSeqs);
 }
 
 async function handleBiosChange(
@@ -169,9 +195,13 @@ async function handleVersionSwitched(
   // BIOS is the third per-rom tab: the requirement is core-dependent and the
   // core override is keyed on rom_id, so the new version's core may need
   // different files — or none, which hides the tab (#1681).
+  //
+  // Two switches in quick succession read the cache twice and can finish in
+  // either order, so this read is ordered like the mount load's — see `loadData`.
   if (detail.app_id !== ctx.appId) return;
+  const overtaken = takeReadTicket(ctx.readSeqs, "detail");
   const cached = await getCachedGameDetail(ctx.appId);
-  if (ctx.cancelled() || !cached.found) return;
+  if (ctx.cancelled() || overtaken() || !cached.found) return;
   const newRomId = cached.rom_id ?? ctx.romIdRef.current;
   ctx.romIdRef.current = newRomId;
   ctx.slotsLoadedRef.current = false;
@@ -208,7 +238,7 @@ async function handleVersionSwitched(
   // mirroring loadData's save-sync branch — this is the authority that keeps
   // the SlotSetupWizard-vs-SavesTab gate correct across the switch.
   if (cached.save_sync_enabled && newRomId != null) {
-    refreshSlotState(bindCurrentRom(ctx, newRomId));
+    refreshSlotState(bindCurrentRom(ctx, newRomId), ctx.readSeqs);
   }
   if (newRomId) {
     const binding = bindCurrentRom(ctx, newRomId);

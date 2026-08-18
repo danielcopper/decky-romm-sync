@@ -288,12 +288,13 @@ Format: **invariant** — tier — enforced by.
   holds none of these writes) via `RomBinding`; the achievements tab (`src/components/AchievementsTab.tsx`) by
   construction, its React key being the rom id, so its state cannot outlive the identity it was read for. A version
   switch re-keys without closing, so neither the store's generation counter nor the panel's `[appId]` effect sees this
-  class. Four writes are unbound and none of them is safe by construction: the two identity writes install what a
-  binding would compare against (`loadDetail` is ordered by `loadSeq`, `loadData` is not — #1717); the store's
-  `cached.bios_status` fold runs in the same synchronous run as its guard; the event lane's `handleBiosChange` answers
-  for the platform's default core and can overwrite a rom-keyed answer (#1718). The panel's remaining lazy lane writes
-  through the raw setter, discarded by its own per-run `cancelled` — with the commit-time window #1717 records. The play
-  button is NOT covered (#1714)** — test + prompt-only — the panel's ten bound sites each carry a version-switch test
+  class. Binding answers the wrong-rom question only; two answers for the SAME rom are ordered instead, by a sequence
+  taken when the read is issued — the store's `loadSeq`, the panel's `takeReadTicket` (#1717). Four writes are unbound:
+  the two identity writes install what a binding would compare against, so ordering is all they can have, and both have
+  it. The other two have neither — the store's `cached.bios_status` fold runs in the same synchronous run as its guard,
+  and the event lane's `handleBiosChange` answers for the platform's default core and can overwrite a rom-keyed answer
+  (#1718). The panel's remaining lazy lane writes through the raw setter, ordered by the same ticket. The play button is
+  NOT covered (#1714)** — test + prompt-only — the panel's ten bound sites each carry a version-switch test
   (`src/components/RomMGameInfoPanel.test.tsx`); the store side and every new write site on either are prompt-only,
   because a checker scoped to the store's own function bodies would be green on the case this rule was written for. The
   reasons behind the two writer mechanisms live at `writerForRom` and `RomBinding` — do not restate them here

@@ -23,7 +23,7 @@ import { AchievementsTab } from "./AchievementsTab";
 import { BiosTab } from "./BiosTab";
 import { PanelTabBar } from "./PanelTabBar";
 import { SaveSortWarning } from "./SaveSortWarning";
-import { loadData, type PanelState } from "./panelState";
+import { loadData, type PanelReadSeqs, type PanelState } from "./panelState";
 import { wirePanelEvents } from "./panelEvents";
 import { useSaveSlotsLoad } from "./panelSlotsLoad";
 import { buildTabContent } from "./panelTabContent";
@@ -80,6 +80,10 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
   // Load-once gate for the lazy SAVES tab data; the rule it enforces is stated
   // at `panelSlotsLoad.ts`. It lives here because a version switch resets it.
   const slotsLoadedRef = useRef(false);
+  // Read sequences ordering two answers about the same ROM; the rule they
+  // enforce is stated at `takeReadTicket`. They live here because the loads, the
+  // event lane and the lazy slots lane take tickets from the same counters.
+  const readSeqs = useRef<PanelReadSeqs>({ detail: 0, saveStatus: 0, slots: 0, slotTracking: 0 });
   const [migration, setMigration] = useState(getMigrationState());
   const [settingsReset, setSettingsReset] = useState(getSettingsResetState());
   const [saveSortPending, setSaveSortPending] = useState(getSaveSortMigrationState().pending);
@@ -107,7 +111,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
   useEffect(() => {
     let cancelled = false;
 
-    detach(loadData(appId, () => cancelled, romIdRef, platformSlugRef, setState));
+    detach(loadData(appId, () => cancelled, romIdRef, platformSlugRef, readSeqs, setState));
 
     const unwire = wirePanelEvents({
       appId,
@@ -115,6 +119,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
       romIdRef,
       platformSlugRef,
       slotsLoadedRef,
+      readSeqs,
       setState,
     });
 
@@ -124,7 +129,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     };
   }, [appId]);
 
-  useSaveSlotsLoad(state, slotsLoadedRef, setState);
+  useSaveSlotsLoad(state, slotsLoadedRef, readSeqs, setState);
 
   // --- Version mismatch — replace entire panel with polished error card ---
   if (versionError) {
