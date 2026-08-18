@@ -74,7 +74,15 @@ async function handleSaveSyncSettingsChange(
     // sequence's next ticket: a status read an earlier event left in flight
     // would otherwise land afterwards and put the SAVES tab back.
     takeReadTicket(ctx.readSeqs, "saveStatus");
-    ctx.setState((prev) => ({ ...prev, saveSyncEnabled: false }));
+    ctx.setState((prev) => ({
+      ...prev,
+      saveSyncEnabled: false,
+      // The SAVES tab's button is gated on the same flag, so switching it off
+      // under a user standing on that tab would take the button away and leave
+      // its pane below an unmarked strip. Send them back to the tab every ROM
+      // has — the move `handleVersionSwitched` makes for BIOS.
+      activeTab: prev.activeTab === "saves" ? "info" : prev.activeTab,
+    }));
     return;
   }
   // Switching save sync ON is a fact about the setting, not an answer about this
@@ -209,17 +217,31 @@ async function handleVersionSwitched(
   // A detail carrying no BIOS answer keeps the shown status: the switched-to
   // version's requirement is unread, not absent (#1693).
   const biosFields = biosFieldsFromCache(cached);
+  const saveSyncEnabled = cached.save_sync_enabled ?? false;
   ctx.setState((prev) => {
     const biosStatus = biosFields ? biosFields.biosStatus : prev.biosStatus;
+    // Both gated tabs can lose their button to this switch, and a user standing
+    // on one is then looking at a body with nothing marked in the strip above
+    // it. Asked as one question because the answer is the same either way and
+    // only one tab is active: back to the tab every version has.
+    const activeTabGone =
+      (prev.activeTab === "bios" && !biosStatus) || (prev.activeTab === "saves" && !saveSyncEnabled);
     return {
       ...prev,
       romId: newRomId,
       romName: cached.rom_name || prev.romName,
       installed: cached.installed ?? false,
+      // Cleared rather than overwritten: `refreshInstalledRomInBackground`
+      // writes only on a truthy answer, so a failed or empty read would leave
+      // the previous version's file name standing under this version's
+      // `installed` until a remount. The record describes ONE version, and a
+      // sibling download supersedes the install it names without the panel
+      // hearing about it (#1742). Re-read below.
+      installedRom: null,
       regions: cached.regions ?? [],
       languages: cached.languages ?? [],
       // Re-key per-rom tab state so nothing lingers from the previous version.
-      saveSyncEnabled: cached.save_sync_enabled ?? false,
+      saveSyncEnabled,
       saveStatus,
       conflicts: cached.save_status?.conflicts ?? [],
       raId: cached.ra_id ?? null,
@@ -227,29 +249,30 @@ async function handleVersionSwitched(
       availableSlots: [],
       slotsLoading: false,
       ...biosFields,
-      // The BIOS tab's button is gated on `biosStatus`, so clearing it while
-      // the user stands on that tab would hide the button and leave the body
-      // empty with nothing selected. Send them back to the tab every version
-      // has.
-      activeTab: !biosStatus && prev.activeTab === "bios" ? "info" : prev.activeTab,
+      activeTab: activeTabGone ? "info" : prev.activeTab,
     };
   });
   // Re-fetch slot configuration (slotConfirmed) + slots for the new rom_id,
   // mirroring loadData's save-sync branch — this is the authority that keeps
   // the SlotSetupWizard-vs-SavesTab gate correct across the switch.
-  if (cached.save_sync_enabled && newRomId != null) {
+  if (saveSyncEnabled && newRomId != null) {
     refreshSlotState(bindCurrentRom(ctx, newRomId), ctx.readSeqs);
   }
   if (newRomId) {
     const binding = bindCurrentRom(ctx, newRomId);
-    await Promise.all([
+    const reads = [
       refreshCoverArtInBackground(binding),
       // The BIOS tab's "Active Core" row and its per-file core lines come
       // from the dedicated core-info path (#923), keyed on rom_id so a
       // per-game override follows the switch. A failed read keeps the
       // previous reading rather than blanking it.
       refreshPanelCoreInfo(binding),
-    ]);
+    ];
+    // Read only when this version has an install to describe, mirroring the
+    // mount load — the ROM File row and its launch-target note are hidden
+    // either way, and an uninstalled version has no record to fetch.
+    if (cached.installed) reads.push(refreshInstalledRomInBackground(binding));
+    await Promise.all(reads);
   }
 }
 

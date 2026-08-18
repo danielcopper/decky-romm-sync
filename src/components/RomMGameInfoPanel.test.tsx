@@ -937,6 +937,73 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).not.toContain("SAVES");
     });
 
+    // #1748 — the tab strip asks whether save sync is still on, the pane below
+    // it only asks which tab is active. Switching the setting off under an open
+    // SAVES tab is where the two disagree.
+    it("save_sync_settings enabled=false while the SAVES tab is open → falls back to the info tab (#1748)", async () => {
+      // configured=true so the open tab is SavesTab itself, not the setup wizard.
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({
+        configured: true,
+        active_slot: "main",
+      });
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 55,
+        rom_name: "Game (USA)",
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container, queryByTestId } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
+      });
+      await flushAsync();
+      expect(queryByTestId("saves-tab")).not.toBeNull();
+
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "save_sync_settings", save_sync_enabled: false },
+          }),
+        );
+        await Promise.resolve();
+      });
+
+      // The button went with the setting; the pane must go with the button,
+      // leaving the tab every ROM has — asserted on the info tab's BODY (the
+      // RomM game name), not on its button, which is present either way.
+      expect(container.textContent).not.toContain("SAVES");
+      expect(queryByTestId("saves-tab")).toBeNull();
+      expect(container.textContent).toContain("Game (USA)");
+    });
+
+    it("save_sync_settings enabled=false leaves a user standing on another tab where they are", async () => {
+      // The over-fix this invites: only the SAVES tab loses its button, so
+      // nobody else may be moved.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(biosNeedingDetail());
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+      });
+      await flushAsync();
+      expect(container.textContent).toContain("1/2 files ready");
+
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "save_sync_settings", save_sync_enabled: false },
+          }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).not.toContain("SAVES");
+      expect(container.textContent).toContain("1/2 files ready");
+    });
+
     it("save_sync_settings enabled=true with getSaveStatus rejection → falls back to null updatedStatus (non-vacuous .catch)", async () => {
       // Configure save tracking so SavesTab (not SlotSetupWizard) renders
       // after we switch tabs — gives us a captured-props observable on the
@@ -3528,6 +3595,194 @@ describe("RomMGameInfoPanel", () => {
       await flushAsync();
       expect(vi.mocked(backend.getAchievements)).toHaveBeenCalledWith(2);
       expect(vi.mocked(backend.getAchievementProgress)).toHaveBeenCalledWith(2);
+    });
+
+    // #1742 — the ROM File row and the launch-target note under it are decided
+    // by the installed-rom record, which describes ONE version. The switch
+    // writes `installed` from the fresh detail, so the record has to follow it.
+    describe("ROM File row across a version switch (#1742)", () => {
+      const installedRomFor = (romId: number, fileName: string, launchable = true): InstalledRom => ({
+        rom_id: romId,
+        file_name: fileName,
+        file_path: `/roms/snes/${fileName}`,
+        system: "snes",
+        platform_slug: "snes",
+        installed_at: "2026-01-01",
+        launchable,
+      });
+
+      const detailFor = (romId: number, installed: boolean): CachedGameDetail => ({
+        found: true,
+        rom_id: romId,
+        rom_name: romId === 1 ? "Game (USA)" : "Game (Japan)",
+        platform_slug: "snes",
+        installed,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+
+      const switchToRom2 = async (installed: boolean) => {
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(2, installed));
+        await act(async () => {
+          globalThis.dispatchEvent(
+            new CustomEvent("romm_data_changed", {
+              detail: { type: "version_switched", app_id: testAppId, rom_id: 2 },
+            }),
+          );
+        });
+        await flushAsync();
+      };
+
+      it("shows the switched-to version's ROM File row when it is the installed one", async () => {
+        // The page was opened on a version that is not installed, so there is
+        // no record yet — only the switch can fetch one.
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, false));
+        vi.mocked(backend.getInstalledRom).mockResolvedValue(installedRomFor(2, "Game (Japan).sfc"));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        expect(container.textContent).not.toContain("ROM File");
+
+        await switchToRom2(true);
+
+        expect(vi.mocked(backend.getInstalledRom)).toHaveBeenCalledWith(2);
+        expect(container.textContent).toContain("ROM File");
+        expect(container.textContent).toContain("Game (Japan).sfc");
+      });
+
+      it("decides the launch-target note from the switched-to version's record", async () => {
+        // The version left behind launches; the one switched to is a sealed
+        // package that does not. The previous version's record would withhold
+        // the note that says so.
+        vi.mocked(backend.getInstalledRom).mockImplementation((romId: number) =>
+          Promise.resolve(
+            romId === 1 ? installedRomFor(1, "Game (USA).sfc") : installedRomFor(2, "Game (Japan).pkg", false),
+          ),
+        );
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, true));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        expect(container.textContent).not.toContain("nothing here is a format");
+
+        await switchToRom2(true);
+
+        expect(container.textContent).toContain("nothing here is a format snes can launch");
+      });
+
+      it("issues no installed-rom read when the switched-to version is not installed", async () => {
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, false));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        vi.mocked(backend.getInstalledRom).mockClear();
+
+        await switchToRom2(false);
+
+        expect(vi.mocked(backend.getInstalledRom)).not.toHaveBeenCalled();
+        expect(container.textContent).not.toContain("ROM File");
+      });
+
+      it("drops the previous version's row while the switched-to version's record is in flight", async () => {
+        // Downloading a sibling supersedes the install this record describes and
+        // the panel never hears about it, so the previous version's file name
+        // can stand under a true `installed` for the version that replaced it.
+        let releaseRom2!: (rom: InstalledRom) => void;
+        const heldRom2 = new Promise<InstalledRom>((resolve) => {
+          releaseRom2 = resolve;
+        });
+        vi.mocked(backend.getInstalledRom).mockImplementation((romId: number) =>
+          romId === 2 ? heldRom2 : Promise.resolve(installedRomFor(1, "Game (USA).sfc")),
+        );
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, true));
+        const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        expect(container.textContent).toContain("Game (USA).sfc");
+
+        await switchToRom2(true);
+
+        expect(container.textContent).not.toContain("Game (USA).sfc");
+        expect(container.textContent).not.toContain("ROM File");
+
+        await act(async () => {
+          releaseRom2(installedRomFor(2, "Game (Japan).sfc"));
+        });
+        await flushAsync();
+
+        expect(container.textContent).toContain("Game (Japan).sfc");
+      });
+    });
+
+    // #1748 — the switch writes `saveSyncEnabled` from the fresh detail, so it
+    // can take the SAVES button away exactly as it can the BIOS one. The flag is
+    // global, so this needs the settings event and the switch to disagree: an
+    // event dropped by the load-window guard, with a stale cached detail then
+    // re-showing the button. Rare, but the dead end is the same one.
+    describe("SAVES tab across a version switch (#1748)", () => {
+      const detailFor = (romId: number, saveSyncEnabled: boolean): CachedGameDetail => ({
+        found: true,
+        rom_id: romId,
+        rom_name: romId === 1 ? "Game (USA)" : "Game (Japan)",
+        platform_slug: "snes",
+        save_sync_enabled: saveSyncEnabled,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+
+      const mountOnSavesTab = async (overrides: Partial<CachedGameDetail> = {}) => {
+        // configured=true so the open tab is SavesTab itself, not the wizard.
+        vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({
+          configured: true,
+          active_slot: "main",
+        });
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ ...detailFor(1, true), ...overrides });
+        const view = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        await act(async () => {
+          globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
+        });
+        await flushAsync();
+        expect(view.queryByTestId("saves-tab")).not.toBeNull();
+        return view;
+      };
+
+      const switchToRom2 = async (overrides: Partial<CachedGameDetail> = {}) => {
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ ...detailFor(2, false), ...overrides });
+        await act(async () => {
+          globalThis.dispatchEvent(
+            new CustomEvent("romm_data_changed", {
+              detail: { type: "version_switched", app_id: testAppId, rom_id: 2 },
+            }),
+          );
+        });
+        await flushAsync();
+      };
+
+      it("leaves the SAVES tab for the info tab when the switched-to detail says save sync is off", async () => {
+        const { container, queryByTestId } = await mountOnSavesTab();
+
+        await switchToRom2();
+
+        // Asserted on the info tab's BODY (the new version's RomM name), not on
+        // its button, which is present either way.
+        expect(container.textContent).not.toContain("SAVES");
+        expect(queryByTestId("saves-tab")).toBeNull();
+        expect(container.textContent).toContain("Game (Japan)");
+      });
+
+      it("lands on the info tab when the switch clears the BIOS answer as well", async () => {
+        // Both gated tabs lose their button at once. The user is on SAVES, so
+        // that is the dead end that has to be caught — a fallback that answers
+        // for BIOS first would leave them there.
+        const { container, queryByTestId } = await mountOnSavesTab({
+          bios_status: { platform_slug: "snes", server_count: 2, local_count: 1, all_downloaded: false },
+          bios_level: "partial",
+        });
+        expect(container.textContent).toContain("BIOS");
+
+        await switchToRom2();
+
+        expect(container.textContent).not.toContain("BIOS");
+        expect(queryByTestId("saves-tab")).toBeNull();
+        expect(container.textContent).toContain("Game (Japan)");
+      });
     });
 
     // #1681 — BIOS is the third per-rom tab. The requirement is core-dependent
