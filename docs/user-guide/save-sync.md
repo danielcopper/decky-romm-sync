@@ -189,6 +189,12 @@ names none rather than guessing. Your locally tracked save files are still liste
 and the offline banner at the top of the tab explains why slot switching is unavailable. The slots, and the active one
 among them, reappear as soon as the server is reachable again.
 
+Below those files the tab shows the slots as RomM last reported them, with the one that was active then marked — dimmed,
+not pressable, and introduced by a line saying the save counts and times are from that last contact rather than from
+now. It is there so an offline tab shows what the device knows instead of an empty space; nothing in it can be expanded
+or activated, and creating a slot still needs the server. A game you have never set up a slot for has no such history to
+show, so its tab stays as described above.
+
 "Server offline" is reported **only** for a genuine reachability failure (the server can't be reached or times out). A
 sync that fails for another reason — for example an expired or revoked login token, or an SSL certificate problem —
 shows that specific reason instead (such as "Authentication failed — check your username and password"), so a working

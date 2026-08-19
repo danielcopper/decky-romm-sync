@@ -125,6 +125,18 @@ export interface SaveSlotSummary {
   latest_updated_at: string | null;
 }
 
+/** The slot listing the device kept from the last time RomM answered, handed
+ *  back by a failed `get_save_slots` for a ROM whose slot the user confirmed.
+ *
+ *  A snapshot, not an answer: every count and timestamp in it describes the
+ *  moment it was taken, so it is held apart from the live `activeSlot` /
+ *  `availableSlots` and rendered as history (#1755). */
+export interface LastKnownSlots {
+  slots: SaveSlotSummary[];
+  /** The slot that was active then; `null` is the legacy web-player bucket. */
+  activeSlot: string | null;
+}
+
 export interface SlotSaveFile {
   filename: string;
   id: number;

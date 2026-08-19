@@ -248,6 +248,7 @@ async function handleVersionSwitched(
       activeSlot: "default",
       activeSlotKnown: false,
       availableSlots: [],
+      lastKnownSlots: null,
       slotsLoading: false,
       ...biosFields,
       activeTab: activeTabGone ? "info" : prev.activeTab,

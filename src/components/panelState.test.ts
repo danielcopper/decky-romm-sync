@@ -52,6 +52,7 @@ function basePanelState(): PanelState {
     activeSlot: "default",
     activeSlotKnown: false,
     availableSlots: [],
+    lastKnownSlots: null,
     slotsLoading: false,
     regions: [],
     languages: [],

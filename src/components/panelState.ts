@@ -27,6 +27,7 @@ import type {
   SaveStatus,
   SyncConflict,
   SaveSlotSummary,
+  LastKnownSlots,
 } from "../types";
 import { applyRefreshSlotResult } from "../utils/slotState";
 import { detach } from "../utils/detach";
@@ -70,6 +71,12 @@ export interface PanelState {
   activeSlot: string | null;
   activeSlotKnown: boolean;
   availableSlots: SaveSlotSummary[];
+  // What the device kept from the last time the server answered about this
+  // ROM's slots. Deliberately not folded into the three fields above: those
+  // are live answers, and a snapshot's counts and timestamps are as old as the
+  // last contact (#1755). The SAVES tab shows it only while nothing live has
+  // landed, marked as history.
+  lastKnownSlots: LastKnownSlots | null;
   slotsLoading: boolean;
   // Region / Languages of the ACTIVE version (ADR-0021), rendered as GAME INFO
   // rows; empty arrays hide their row. Refreshed on a version switch.
@@ -351,6 +358,7 @@ export async function loadData(
       activeSlot: "default",
       activeSlotKnown: false,
       availableSlots: [],
+      lastKnownSlots: null,
       slotsLoading: false,
       regions: cached.regions ?? [],
       languages: cached.languages ?? [],

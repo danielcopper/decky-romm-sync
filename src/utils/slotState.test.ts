@@ -28,6 +28,7 @@ const refreshState = (overrides: Partial<RefreshState> = {}): RefreshState => ({
   activeSlot: null,
   activeSlotKnown: false,
   availableSlots: [],
+  lastKnownSlots: null,
   unrelated: 0,
   ...overrides,
 });
@@ -36,6 +37,7 @@ const loadState = (overrides: Partial<LoadState> = {}): LoadState => ({
   activeSlot: null,
   activeSlotKnown: false,
   availableSlots: [],
+  lastKnownSlots: null,
   slotsLoading: false,
   unrelated: "",
   ...overrides,
@@ -78,6 +80,7 @@ describe("applyRefreshSlotResult", () => {
       activeSlot: "a",
       activeSlotKnown: true,
       availableSlots: [slot("a"), slot("b")],
+      lastKnownSlots: null,
       unrelated: 7,
     });
   });
@@ -102,6 +105,35 @@ describe("applyRefreshSlotResult", () => {
     applyRefreshSlotResult<RefreshState>({ success: true, slots: [slot("x")] }, setter);
     const next = lastUpdater(setter)(refreshState({ activeSlot: "a", activeSlotKnown: true }));
     expect(next.activeSlotKnown).toBe(true);
+  });
+
+  it("takes the last-known snapshot off a failure that carries one (#1755)", () => {
+    const setter = makeSetter<RefreshState>();
+    applyRefreshSlotResult<RefreshState>(
+      {
+        success: false,
+        slots: [],
+        reason: "server_unreachable",
+        last_known: { slots: [slot("a")], active_slot: "a" },
+      },
+      setter,
+    );
+    const next = lastUpdater(setter)(refreshState({ activeSlot: "placeholder" }));
+    expect(next.lastKnownSlots).toEqual({
+      slots: [slot("a")],
+      activeSlot: "a",
+    });
+    // A snapshot is not an answer — the live fields stay exactly as they were.
+    expect(next.activeSlot).toBe("placeholder");
+    expect(next.activeSlotKnown).toBe(false);
+    expect(next.availableSlots).toEqual([]);
+  });
+
+  it("drops a stored snapshot once a success answers (#1755)", () => {
+    const setter = makeSetter<RefreshState>();
+    applyRefreshSlotResult<RefreshState>({ success: true, slots: [slot("a")], active_slot: "a" }, setter);
+    const next = lastUpdater(setter)(refreshState({ lastKnownSlots: { slots: [slot("old")], activeSlot: "old" } }));
+    expect(next.lastKnownSlots).toBeNull();
   });
 
   it("treats explicit null active_slot as the new value (does not preserve prev)", () => {
@@ -138,9 +170,52 @@ describe("applyLoadSlotsResult", () => {
       // unanswered as it was (#1747).
       activeSlotKnown: false,
       availableSlots: [slot("keep")],
+      lastKnownSlots: null,
       slotsLoading: false,
       unrelated: "keep",
     });
+  });
+
+  it("on failure: takes the last-known snapshot when the response carries one (#1755)", () => {
+    const setter = makeSetter<LoadState>();
+    applyLoadSlotsResult<LoadState>(
+      {
+        success: false,
+        slots: [],
+        reason: "server_unreachable",
+        last_known: { slots: [slot("a"), slot("b")], active_slot: "b" },
+      },
+      setter,
+      { current: true },
+      vi.fn(),
+    );
+    const next = lastUpdater(setter)(loadState({ activeSlot: "placeholder", slotsLoading: true }));
+    expect(next.lastKnownSlots).toEqual({
+      slots: [slot("a"), slot("b")],
+      activeSlot: "b",
+    });
+    expect(next.activeSlotKnown).toBe(false);
+    expect(next.availableSlots).toEqual([]);
+  });
+
+  it("on failure with no snapshot: keeps the one already held (#1755)", () => {
+    const setter = makeSetter<LoadState>();
+    const held = { slots: [slot("a")], activeSlot: "a" };
+    applyLoadSlotsResult<LoadState>({ success: false, slots: [] }, setter, { current: true }, vi.fn());
+    const next = lastUpdater(setter)(loadState({ lastKnownSlots: held }));
+    expect(next.lastKnownSlots).toBe(held);
+  });
+
+  it("on success: drops a stored snapshot (#1755)", () => {
+    const setter = makeSetter<LoadState>();
+    applyLoadSlotsResult<LoadState>(
+      { success: true, slots: [slot("a")], active_slot: "a" },
+      setter,
+      { current: true },
+      vi.fn(),
+    );
+    const next = lastUpdater(setter)(loadState({ lastKnownSlots: { slots: [slot("old")], activeSlot: "old" } }));
+    expect(next.lastKnownSlots).toBeNull();
   });
 
   it("on failure with no error field: logs 'unknown'", () => {
@@ -172,6 +247,7 @@ describe("applyLoadSlotsResult", () => {
       activeSlot: "a",
       activeSlotKnown: true,
       availableSlots: [slot("a")],
+      lastKnownSlots: null,
       slotsLoading: false,
       unrelated: "x",
     });

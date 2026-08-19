@@ -64,10 +64,15 @@ async function fetchSlots(
     } else if (result.reason === "server_unreachable") {
       reportServerReachable(false);
     }
-    if (result.success && slotsOvertaken()) {
-      // A newer slot read owns the list; this run still owes the spinner it put
-      // up. Only the list is fenced — a failure carries no slot data at all, and
-      // its gate reset is what lets a later tab visit retry.
+    if (slotsOvertaken()) {
+      // A newer slot read owns this lane, so nothing this one answers may land
+      // — a failure included: it carries the ROM's last-known slots (#1755),
+      // and folding those in after a version switch would file one version's
+      // slot names under another. Two things are still owed. The spinner this
+      // run put up, always. And, on a failure, the load-once gate reset that
+      // lets a later tab visit retry — done here because the return below
+      // skips the branch that normally does it.
+      if (!result.success) slotsLoadedRef.current = false;
       setState((prev) => ({ ...prev, slotsLoading: false }));
       return;
     }

@@ -62,6 +62,11 @@ class SlotListing:
         result so local slots survive restarts. Promotes local slots to server
         when they appear on the server. Removes server slots that no longer
         exist on the server (unless they are the active_slot).
+
+        A failed server fetch answers no slots — but carries the persisted
+        listing in its own ``last_known`` field for a ROM whose active slot the
+        user confirmed, so the QAM can show what the last contact left behind
+        (:func:`_last_known_snapshot`).
         """
         rom_id = int(rom_id)
         if not save_sync_enabled(self._settings):
@@ -107,6 +112,7 @@ class SlotListing:
                 "message": str(e),
                 "slots": [],
                 "active_slot": active_slot,
+                "last_known": _last_known_snapshot(rom_state),
             }
         server_slots_list: list[dict[str, Any]] = summary.get("slots", [])
 
@@ -133,18 +139,7 @@ class SlotListing:
         game_entry.refresh_slot_listing(merged)
         await self._loop.run_in_executor(None, self._write_save_state, rom_id, game_entry)
 
-        # Build response list
-        result_slots = [
-            {
-                "slot": name,
-                "source": info.get("source", "server"),
-                "count": info.get("count", 0),
-                "latest_updated_at": info.get("latest_updated_at"),
-            }
-            for name, info in sorted(merged.items())
-        ]
-
-        return {"success": True, "slots": result_slots, "active_slot": active_slot}
+        return {"success": True, "slots": _slot_rows(merged), "active_slot": active_slot}
 
     def _write_save_state(self, rom_id: int, save_state: RomSaveSyncState) -> None:
         with self._uow_factory() as uow:
@@ -223,3 +218,39 @@ class SlotListing:
                 "slot": slot,
                 "saves": [],
             }
+
+
+def _slot_rows(slots: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project a slot map into the response rows, sorted by slot name."""
+    return [
+        {
+            "slot": name,
+            "source": info.get("source", "server"),
+            "count": info.get("count", 0),
+            "latest_updated_at": info.get("latest_updated_at"),
+        }
+        for name, info in sorted(slots.items())
+    ]
+
+
+def _last_known_snapshot(rom_state: RomSaveSyncState | None) -> dict[str, Any] | None:
+    """Project ``rom_state``'s persisted listing into the ``last_known`` payload.
+
+    ``None`` — "the device knows nothing about this ROM's slots", which a
+    caller can never mistake for "this ROM has no slots" — unless the active
+    slot is confirmed. On an unconfirmed row ``active_slot`` is this service's
+    own default fallback rather than anything the server ever said, and handing
+    that out would name a slot the user does not have (#1747).
+
+    Carries no timestamp: the counts and times inside are as of whenever the
+    last successful listing wrote them, and nothing on the aggregate records
+    when that was. ``last_sync_check_at`` is the nearest thing and is not it —
+    a sync or a slot switch advances it while the listing stands still — so
+    sending it would date the snapshot with an unrelated, usually newer moment.
+    """
+    if rom_state is None or not rom_state.slot_confirmed or not rom_state.slots:
+        return None
+    return {
+        "slots": _slot_rows(rom_state.slots),
+        "active_slot": rom_state.active_slot,
+    }

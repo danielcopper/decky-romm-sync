@@ -166,6 +166,38 @@ async def test_get_save_slots_server_failure_shape(harness):
     assert "active_slot" in result
 
 
+async def test_get_save_slots_server_failure_carries_last_known_slots(harness):
+    """Server unreachable + a confirmed ROM → the persisted listing rides along (#1755)."""
+    enable_save_sync(harness)
+    seed_confirmed_slot(harness, 42, slot="main")
+    harness.romm.get_save_summary_side_effect = RommConnectionError("offline")
+    result = await harness.plugin.get_save_slots(42)
+    assert result["success"] is False
+    assert result["slots"] == []
+    assert result["last_known"] == {
+        "slots": [{"slot": "main", "source": "server", "count": 1, "latest_updated_at": "2026-01-01T00:00:00Z"}],
+        "active_slot": "main",
+    }
+
+
+async def test_get_save_slots_server_failure_omits_last_known_slots_when_unconfirmed(harness):
+    """No confirmation → nothing known, never an empty slot list (#1755)."""
+    enable_save_sync(harness)
+    seed_save_state(
+        harness,
+        42,
+        RomSaveSyncState(
+            active_slot="main",
+            slot_confirmed=False,
+            slots={"main": {"source": "server", "count": 1, "latest_updated_at": None}},
+        ),
+    )
+    harness.romm.get_save_summary_side_effect = RommConnectionError("offline")
+    result = await harness.plugin.get_save_slots(42)
+    assert result["success"] is False
+    assert result["last_known"] is None
+
+
 # ── get_slot_saves ───────────────────────────────────────────────────────
 
 

@@ -2370,6 +2370,61 @@ describe("RomMGameInfoPanel", () => {
       expect(latest?.activeSlotKnown).toBe(false);
     });
 
+    it("hands the saves tab a last-known slot snapshot, and drops it on a version switch (#1755)", async () => {
+      // The response→state fold lives in the mocked-out slotState module (its
+      // own tests cover it), so stand in for it here: one read installs a
+      // snapshot, the next answers nothing.
+      const snapshot = {
+        slots: [{ slot: "main", source: "server" as const, count: 2, latest_updated_at: null }],
+        activeSlot: "main",
+      };
+      vi.mocked(slotState.applyRefreshSlotResult).mockImplementation((_result, setter) => {
+        setter((prev) => ({ ...prev, lastKnownSlots: snapshot }));
+      });
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 55,
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "main" });
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      capturedSavesTab.length = 0;
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const latest = capturedSavesTab[capturedSavesTab.length - 1];
+      expect(latest?.lastKnownSlots).toEqual(snapshot);
+      // A snapshot is not an answer — the live pair stays as it was.
+      expect(latest?.activeSlot).toBe("default");
+      expect(latest?.activeSlotKnown).toBe(false);
+
+      // The new version is a different ROM, and this read carries no snapshot
+      // of its own — the previous version's must not stand in for it.
+      vi.mocked(slotState.applyRefreshSlotResult).mockImplementation(() => {});
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 56,
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      capturedSavesTab.length = 0;
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "version_switched", app_id: testAppId, rom_id: 56 },
+          }),
+        );
+      });
+      await flushAsync();
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.lastKnownSlots).toBeNull();
+    });
+
     it("saves tab: a mid-flight offline flip does not wedge the connecting indicator; reconnect reloads (#1345 F2)", async () => {
       // Device sequence (#1345): the saves tab is opened while the server is
       // already down but the store hasn't detected it yet. The slot fetch is in
@@ -4651,6 +4706,55 @@ describe("RomMGameInfoPanel", () => {
       expect(capturedSavesTab.some((props) => props.activeSlot === "stale")).toBe(false);
       // The run that lost the list still clears the spinner it put up — a fence
       // that swallowed this write would leave "Loading slots…" standing forever.
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.slotsLoading).toBe(false);
+    });
+
+    it("folds nothing from a failed lazy SAVES load whose answer lands last (#1755)", async () => {
+      // The twin of the success case above. A failure used to carry no slot data
+      // at all, so fencing successes alone was enough; it now carries the ROM's
+      // last-known slots, and an overtaken run must not put that history back
+      // over the newer read's answer.
+      await useRealSlotHelpers();
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, "Game", { save_sync_enabled: true }));
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "main" });
+      vi.mocked(backend.getSaveSlots).mockResolvedValue({ success: true, slots: [], active_slot: "mount" });
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+
+      const laneRead = heldRead<Awaited<ReturnType<typeof backend.getSaveSlots>>>();
+      vi.mocked(backend.getSaveSlots).mockImplementationOnce(() => laneRead.promise);
+      await openSavesTab();
+
+      // The server comes back while the lane's read is still open: a newer read
+      // answers first, with slots and no history to show.
+      vi.mocked(backend.getSaveSlots).mockResolvedValue({
+        success: true,
+        slots: [{ slot: "fresh", source: "server", count: 1, latest_updated_at: null }],
+        active_slot: "fresh",
+      });
+      await dispatchDataChanged({ type: "save_sync", rom_id: 1 });
+      await flushAsync();
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.activeSlot).toBe("fresh");
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.lastKnownSlots).toBeNull();
+
+      await act(async () => {
+        laneRead.release({
+          success: false,
+          reason: "server_unreachable",
+          slots: [],
+          active_slot: "main",
+          last_known: {
+            slots: [{ slot: "stale", source: "server", count: 4, latest_updated_at: null }],
+            active_slot: "stale",
+          },
+        });
+      });
+      await flushAsync();
+
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.lastKnownSlots).toBeNull();
+      expect(capturedSavesTab.some((props) => props.lastKnownSlots !== null)).toBe(false);
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.availableSlots.map((s) => s.slot)).toEqual(["fresh"]);
+      // The run that lost the lane still clears the spinner it put up.
       expect(capturedSavesTab[capturedSavesTab.length - 1]?.slotsLoading).toBe(false);
     });
 

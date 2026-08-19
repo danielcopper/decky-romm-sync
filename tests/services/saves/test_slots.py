@@ -143,6 +143,109 @@ class TestSaveSlots:
         assert _require_save_state(svc, 123).slots == original_slots
 
     @pytest.mark.asyncio
+    async def test_get_save_slots_failure_carries_the_last_known_listing(self, tmp_path):
+        """A failed fetch hands back the persisted listing under ``last_known_*`` (#1755)."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _seed_save_state(
+            svc,
+            123,
+            RomSaveSyncState(
+                active_slot="default",
+                slot_confirmed=True,
+                slots={
+                    "default": {"source": "server", "count": 2, "latest_updated_at": "2026-04-17T10:00:00"},
+                    "save1": {"source": "local", "count": 0, "latest_updated_at": None},
+                },
+                last_sync_check_at="2026-04-17T11:30:00",
+            ),
+        )
+
+        fake.fail_on_next(ConnectionError("connection refused"))
+
+        result = await svc.get_save_slots(123)
+
+        assert result["success"] is False
+        # The live fields still answer nothing — the snapshot is beside them.
+        assert result["slots"] == []
+        # Exact: the row's own last_sync_check_at is seeded above and stays out
+        # — it tracks syncs and slot switches, not this listing (#1755).
+        assert result["last_known"] == {
+            "slots": [
+                {"slot": "default", "source": "server", "count": 2, "latest_updated_at": "2026-04-17T10:00:00"},
+                {"slot": "save1", "source": "local", "count": 0, "latest_updated_at": None},
+            ],
+            "active_slot": "default",
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_save_slots_failure_withholds_an_unconfirmed_listing(self, tmp_path):
+        """An unconfirmed row carries no snapshot — its active slot is our own fallback (#1747)."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _seed_save_state(
+            svc,
+            123,
+            RomSaveSyncState(
+                active_slot="default",
+                slot_confirmed=False,
+                slots={"default": {"source": "server", "count": 2, "latest_updated_at": "2026-04-17T10:00:00"}},
+            ),
+        )
+
+        fake.fail_on_next(ConnectionError("connection refused"))
+
+        result = await svc.get_save_slots(123)
+
+        assert result["success"] is False
+        assert result["last_known"] is None
+
+    @pytest.mark.asyncio
+    async def test_get_save_slots_failure_withholds_a_snapshot_for_an_untracked_rom(self, tmp_path):
+        """No persisted row at all → nothing known, and it says so."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _seed_rom(svc, 123)
+
+        fake.fail_on_next(ConnectionError("connection refused"))
+
+        result = await svc.get_save_slots(123)
+
+        assert result["success"] is False
+        assert result["last_known"] is None
+
+    @pytest.mark.asyncio
+    async def test_get_save_slots_success_carries_no_snapshot(self, tmp_path):
+        """The success payload is untouched — the snapshot rides the failure branch alone (#1755)."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _seed_save_state(
+            svc,
+            123,
+            RomSaveSyncState(
+                active_slot="default",
+                slot_confirmed=True,
+                slots={"default": {"source": "server", "count": 1, "latest_updated_at": "2026-04-17T10:00:00"}},
+            ),
+        )
+        fake.saves[1] = {
+            "id": 1,
+            "rom_id": 123,
+            "file_name": "a.srm",
+            "updated_at": "2026-04-18T10:00:00",
+            "slot": "default",
+        }
+
+        result = await svc.get_save_slots(123)
+
+        assert result["success"] is True
+        assert set(result.keys()) == {"success", "slots", "active_slot"}
+
+    @pytest.mark.asyncio
     async def test_get_save_slots_404_is_not_found_and_still_preserves_map(self, tmp_path):
         """A 404 is not an outage — and the #625 map-preservation still holds (#1570)."""
         svc, fake = make_service(tmp_path)

@@ -6,7 +6,7 @@ import * as backend from "../api/backend";
 import { showModal } from "@decky/ui";
 import * as connectionState from "../utils/connectionState";
 import { setRommConnectionState } from "../utils/connectionState";
-import type { SaveStatus, SaveSlotSummary, SaveFileStatus, SwitchSlotResponse } from "../types";
+import type { SaveStatus, SaveSlotSummary, SaveFileStatus, SwitchSlotResponse, LastKnownSlots } from "../types";
 // Type-only — vi.mock("./saves/SlotPanel", ...) below replaces the runtime
 // implementation, but the prop interface comes from the real component so
 // captured-prop assertions stay in sync as SlotPanel evolves.
@@ -112,6 +112,7 @@ function defaultProps(
     activeSlot: "default",
     activeSlotKnown: true,
     availableSlots: [],
+    lastKnownSlots: null,
     slotsLoading: false,
     onSlotSwitched: vi.fn(),
     ...overrides,
@@ -431,6 +432,111 @@ describe("SavesTab", () => {
       // the same file twice.
       expect(capturedSlotPanelProps[0]?.saveStatus).toBe(status);
       expect(queryByTestId("save-file-row-zelda.srm")).toBeNull();
+    });
+  });
+
+  describe("last-known slots (#1755)", () => {
+    const lastKnown = (overrides: Partial<LastKnownSlots> = {}): LastKnownSlots => ({
+      slots: [makeSlot({ slot: "main", source: "server", count: 3, latest_updated_at: "2026-04-17T10:00:00" })],
+      activeSlot: "main",
+      ...overrides,
+    });
+
+    it("shows the last contact's slots, marked as from then, while nothing live has landed", () => {
+      setRommConnectionState("offline");
+      const { getByTestId, container } = render(
+        <SavesTab {...defaultProps({ activeSlotKnown: false, availableSlots: [], lastKnownSlots: lastKnown() })} />,
+      );
+      const block = getByTestId("last-known-slots");
+      expect(block.textContent).toContain("main");
+      expect(block.textContent).toContain("3 saves");
+      expect(block.textContent).toContain("counts and times are from that answer, not from now");
+      // The active slot of the snapshot is marked as such, and only there.
+      expect(getByTestId("last-known-slot-main").textContent).toContain("active");
+      // Still no live slot panel and no second word on reachability.
+      expect(capturedSlotPanelProps).toEqual([]);
+      expect(container.textContent).toContain("RomM is offline");
+      expect(container.textContent).not.toContain("Server unreachable");
+    });
+
+    it("marks no slot active when the snapshot's active slot is not among them", () => {
+      const { getByTestId } = render(
+        <SavesTab
+          {...defaultProps({
+            activeSlotKnown: false,
+            lastKnownSlots: lastKnown({
+              slots: [makeSlot({ slot: "alpha" }), makeSlot({ slot: "beta" })],
+              activeSlot: "gone",
+            }),
+          })}
+        />,
+      );
+      expect(getByTestId("last-known-slot-alpha").textContent).not.toContain("active");
+      expect(getByTestId("last-known-slot-beta").textContent).not.toContain("active");
+    });
+
+    it("renders nothing pressable in the stale list", () => {
+      const { getByTestId } = render(
+        <SavesTab {...defaultProps({ activeSlotKnown: false, lastKnownSlots: lastKnown() })} />,
+      );
+      expect(getByTestId("last-known-slots").querySelectorAll("button")).toHaveLength(0);
+    });
+
+    it("keeps the '+ New Slot' affordance exactly as it is without a snapshot", () => {
+      const { getByText } = render(
+        <SavesTab {...defaultProps({ activeSlotKnown: false, lastKnownSlots: lastKnown() })} />,
+      );
+      fireEvent.click(getByText("+ New Slot"));
+      expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
+    });
+
+    it("lists the tracked save files alongside the snapshot, still unfiled (#1747)", () => {
+      const { queryByTestId } = render(
+        <SavesTab
+          {...defaultProps({
+            activeSlotKnown: false,
+            lastKnownSlots: lastKnown(),
+            saveStatus: makeSaveStatus({ files: [makeSaveFile({ filename: "zelda.srm" })] }),
+          })}
+        />,
+      );
+      expect(queryByTestId("save-file-row-zelda.srm")).not.toBeNull();
+      expect(queryByTestId("last-known-slots")).not.toBeNull();
+      expect(capturedSlotPanelProps).toEqual([]);
+    });
+
+    it("falls back to #1747's slot-less view when there is no snapshot", () => {
+      setRommConnectionState("offline");
+      const { queryByTestId, container } = render(
+        <SavesTab {...defaultProps({ activeSlotKnown: false, lastKnownSlots: null })} />,
+      );
+      expect(queryByTestId("last-known-slots")).toBeNull();
+      expect(container.textContent).toContain("No save files tracked yet");
+      expect(capturedSlotPanelProps).toEqual([]);
+    });
+
+    it("shows the live slots and no snapshot once a slot answer has landed", () => {
+      const { queryByTestId } = render(
+        <SavesTab
+          {...defaultProps({
+            activeSlot: "main",
+            activeSlotKnown: true,
+            availableSlots: [makeSlot({ slot: "main" })],
+            lastKnownSlots: lastKnown(),
+          })}
+        />,
+      );
+      expect(queryByTestId("last-known-slots")).toBeNull();
+      expect(capturedSlotPanelProps.map((p) => p.slot.slot)).toEqual(["main"]);
+      expect(capturedSlotPanelProps[0]?.isActive).toBe(true);
+    });
+
+    it("shows no snapshot while the slot fetch is in flight", () => {
+      const { queryByTestId, container } = render(
+        <SavesTab {...defaultProps({ activeSlotKnown: false, lastKnownSlots: lastKnown(), slotsLoading: true })} />,
+      );
+      expect(queryByTestId("last-known-slots")).toBeNull();
+      expect(container.textContent).toContain("Connecting to RomM…");
     });
   });
 

@@ -73,6 +73,7 @@ export function buildTabContent({
     activeSlot: state.activeSlot,
     activeSlotKnown: state.activeSlotKnown,
     availableSlots: state.availableSlots,
+    lastKnownSlots: state.lastKnownSlots,
     slotsLoading: state.slotsLoading,
     onSlotSwitched: (newSlot, newStatus) => {
       setState((prev) => ({

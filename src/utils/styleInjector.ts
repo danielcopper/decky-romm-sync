@@ -395,6 +395,29 @@ export function hideNativePlaySection(playSectionClass: string) {
   font-style: italic;
   padding: 4px 12px 0;
 }
+/* Last-known slot list — a snapshot from the last contact, not a live list:
+   demoted like the legacy bucket and with no pressable header. */
+.romm-slot-stale {
+  opacity: 0.6;
+}
+.romm-slot-stale-note {
+  font-size: 11px;
+  color: #8f98a0;
+  font-style: italic;
+  margin-bottom: 8px;
+}
+.romm-slot-stale-detail {
+  font-size: 11px;
+  color: #8f98a0;
+  padding: 0 12px 8px;
+}
+.romm-slot-header-static {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.03);
+}
 .romm-slot-header {
   display: flex;
   align-items: center;

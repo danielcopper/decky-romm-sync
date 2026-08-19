@@ -955,9 +955,23 @@ export const resolveSyncConflict = callable<
 export const recordSessionStart = callable<[number], { success: boolean }>("record_session_start");
 export const getSaveSyncSettings = callable<[], SaveSyncSettings>("get_save_sync_settings");
 export const updateSaveSyncSettings = callable<[SaveSyncSettings], { success: boolean }>("update_save_sync_settings");
+// `last_known` is present ONLY on the failed-server-fetch branch, and is null
+// there unless the ROM's active slot was confirmed: it is the slot listing the
+// last successful contact left on disk, not an answer about now. `slots` /
+// `active_slot` keep their meaning on every branch (#1755).
 export const getSaveSlots = callable<
   [number],
-  { success: boolean; slots: SaveSlotSummary[]; active_slot: string | null; reason?: string; message?: string }
+  {
+    success: boolean;
+    slots: SaveSlotSummary[];
+    active_slot: string | null;
+    reason?: string;
+    message?: string;
+    last_known?: {
+      slots: SaveSlotSummary[];
+      active_slot: string | null;
+    } | null;
+  }
 >("get_save_slots");
 export const getSlotSaves = callable<[number, string], SlotSavesResponse>("get_slot_saves");
 export const switchSlot = callable<[number, string], SwitchSlotResponse>("switch_slot");
