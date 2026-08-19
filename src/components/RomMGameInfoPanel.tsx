@@ -67,6 +67,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     raId: null,
     slotConfirmed: false,
     activeSlot: "default",
+    activeSlotKnown: false,
     availableSlots: [],
     slotsLoading: false,
     regions: [],

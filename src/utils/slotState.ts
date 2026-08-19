@@ -23,12 +23,16 @@ export interface SlotsResponse {
 
 export interface RefreshSlotFields {
   activeSlot: string | null;
+  /** Whether `activeSlot` is something a response said, or still the caller's
+   *  own initial value. Only a success that CARRIES `active_slot` turns it on:
+   *  a failure says nothing about the slot, and a success that omits the field
+   *  keeps the previous name — so it keeps the previous verdict with it, rather
+   *  than vouching for a value it never mentioned (#1747). */
+  activeSlotKnown: boolean;
   availableSlots: SaveSlotSummary[];
 }
 
-export interface LoadSlotsFields {
-  activeSlot: string | null;
-  availableSlots: SaveSlotSummary[];
+export interface LoadSlotsFields extends RefreshSlotFields {
   slotsLoading: boolean;
 }
 
@@ -43,6 +47,7 @@ export function applyRefreshSlotResult<S extends RefreshSlotFields>(
     ...prev,
     availableSlots: slotResult.slots,
     activeSlot: slotResult.active_slot === undefined ? prev.activeSlot : slotResult.active_slot,
+    activeSlotKnown: slotResult.active_slot !== undefined || prev.activeSlotKnown,
   }));
 }
 
@@ -64,6 +69,7 @@ export function applyLoadSlotsResult<S extends LoadSlotsFields>(
   setter((prev) => ({
     ...prev,
     activeSlot: result.active_slot === undefined ? prev.activeSlot : result.active_slot,
+    activeSlotKnown: result.active_slot !== undefined || prev.activeSlotKnown,
     availableSlots: result.slots,
     slotsLoading: false,
   }));

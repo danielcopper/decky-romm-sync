@@ -61,7 +61,14 @@ export interface PanelState {
   activeTab: string;
   raId: number | null;
   slotConfirmed: boolean;
+  // The slot the saves surfaces attribute this ROM's saves to. `null` is the
+  // legacy web-player bucket — a real answer with its own rendering, never a
+  // stand-in for "we don't know". What carries "we don't know" is the flag
+  // below: until it is set, `activeSlot` holds the placeholder every panel
+  // starts on, and `default` is a real slot name in this system, so a reader
+  // cannot tell the two apart (#1747).
   activeSlot: string | null;
+  activeSlotKnown: boolean;
   availableSlots: SaveSlotSummary[];
   slotsLoading: boolean;
   // Region / Languages of the ACTIVE version (ADR-0021), rendered as GAME INFO
@@ -342,6 +349,7 @@ export async function loadData(
       raId,
       slotConfirmed: false,
       activeSlot: "default",
+      activeSlotKnown: false,
       availableSlots: [],
       slotsLoading: false,
       regions: cached.regions ?? [],

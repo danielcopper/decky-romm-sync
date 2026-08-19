@@ -26,6 +26,7 @@ interface LoadState extends LoadSlotsFields {
 
 const refreshState = (overrides: Partial<RefreshState> = {}): RefreshState => ({
   activeSlot: null,
+  activeSlotKnown: false,
   availableSlots: [],
   unrelated: 0,
   ...overrides,
@@ -33,6 +34,7 @@ const refreshState = (overrides: Partial<RefreshState> = {}): RefreshState => ({
 
 const loadState = (overrides: Partial<LoadState> = {}): LoadState => ({
   activeSlot: null,
+  activeSlotKnown: false,
   availableSlots: [],
   slotsLoading: false,
   unrelated: "",
@@ -74,6 +76,7 @@ describe("applyRefreshSlotResult", () => {
     const next = lastUpdater(setter)(refreshState({ unrelated: 7 }));
     expect(next).toEqual({
       activeSlot: "a",
+      activeSlotKnown: true,
       availableSlots: [slot("a"), slot("b")],
       unrelated: 7,
     });
@@ -87,11 +90,27 @@ describe("applyRefreshSlotResult", () => {
     expect(next.availableSlots).toEqual([slot("x")]);
   });
 
+  it("leaves the active slot unanswered when a success carries no active_slot (#1747)", () => {
+    const setter = makeSetter<RefreshState>();
+    applyRefreshSlotResult<RefreshState>({ success: true, slots: [slot("x")] }, setter);
+    const next = lastUpdater(setter)(refreshState({ activeSlot: "placeholder" }));
+    expect(next.activeSlotKnown).toBe(false);
+  });
+
+  it("keeps an already-answered active slot answered when a success carries no active_slot (#1747)", () => {
+    const setter = makeSetter<RefreshState>();
+    applyRefreshSlotResult<RefreshState>({ success: true, slots: [slot("x")] }, setter);
+    const next = lastUpdater(setter)(refreshState({ activeSlot: "a", activeSlotKnown: true }));
+    expect(next.activeSlotKnown).toBe(true);
+  });
+
   it("treats explicit null active_slot as the new value (does not preserve prev)", () => {
     const setter = makeSetter<RefreshState>();
     applyRefreshSlotResult<RefreshState>({ success: true, slots: [], active_slot: null }, setter);
     const next = lastUpdater(setter)(refreshState({ activeSlot: "previous" }));
     expect(next.activeSlot).toBeNull();
+    // The legacy bucket is an answer like any other name (#1747).
+    expect(next.activeSlotKnown).toBe(true);
   });
 });
 
@@ -115,6 +134,9 @@ describe("applyLoadSlotsResult", () => {
     const next = lastUpdater(setter)(prev);
     expect(next).toEqual({
       activeSlot: "keep",
+      // A failed load answered nothing — the shown active slot stays as
+      // unanswered as it was (#1747).
+      activeSlotKnown: false,
       availableSlots: [slot("keep")],
       slotsLoading: false,
       unrelated: "keep",
@@ -148,6 +170,7 @@ describe("applyLoadSlotsResult", () => {
     const next = lastUpdater(setter)(loadState({ slotsLoading: true, unrelated: "x" }));
     expect(next).toEqual({
       activeSlot: "a",
+      activeSlotKnown: true,
       availableSlots: [slot("a")],
       slotsLoading: false,
       unrelated: "x",
@@ -159,6 +182,20 @@ describe("applyLoadSlotsResult", () => {
     applyLoadSlotsResult<LoadState>({ success: true, slots: [slot("x")] }, setter, { current: true }, vi.fn());
     const next = lastUpdater(setter)(loadState({ activeSlot: "previous" }));
     expect(next.activeSlot).toBe("previous");
+  });
+
+  it("on success with no active_slot: leaves the active slot unanswered (#1747)", () => {
+    const setter = makeSetter<LoadState>();
+    applyLoadSlotsResult<LoadState>({ success: true, slots: [slot("x")] }, setter, { current: true }, vi.fn());
+    const next = lastUpdater(setter)(loadState({ activeSlot: "placeholder" }));
+    expect(next.activeSlotKnown).toBe(false);
+  });
+
+  it("on success with no active_slot: keeps an already-answered active slot answered (#1747)", () => {
+    const setter = makeSetter<LoadState>();
+    applyLoadSlotsResult<LoadState>({ success: true, slots: [slot("x")] }, setter, { current: true }, vi.fn());
+    const next = lastUpdater(setter)(loadState({ activeSlot: "a", activeSlotKnown: true }));
+    expect(next.activeSlotKnown).toBe(true);
   });
 
   it("on success: treats explicit null active_slot as the new value", () => {

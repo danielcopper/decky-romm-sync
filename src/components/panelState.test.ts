@@ -47,7 +47,10 @@ function basePanelState(): PanelState {
     activeTab: "saves",
     raId: null,
     slotConfirmed: false,
-    activeSlot: null,
+    // The pair a freshly-mounted panel holds: the placeholder slot name, and
+    // nothing having answered what the active slot actually is.
+    activeSlot: "default",
+    activeSlotKnown: false,
     availableSlots: [],
     slotsLoading: false,
     regions: [],
@@ -98,6 +101,9 @@ describe("refreshSlotState", () => {
     await flush();
 
     expect(state.activeSlot).toBe("main");
+    // The name arrived with an answer, so it is one — the placeholder it
+    // replaced was not (#1747).
+    expect(state.activeSlotKnown).toBe(true);
     expect(state.availableSlots.map((s) => s.slot)).toEqual(["main"]);
     expect(state.slotConfirmed).toBe(true);
   });

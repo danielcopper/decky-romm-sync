@@ -2323,7 +2323,7 @@ describe("RomMGameInfoPanel", () => {
 
       // Activate the saves tab while offline: the fast path must NOT run the
       // server slot fetch (no "Loading slots…" hang through the retry ladder) and
-      // the SavesTab still renders (its degraded per-slot notices).
+      // the SavesTab still renders its degraded view.
       await act(async () => {
         globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
         await Promise.resolve();
@@ -2339,6 +2339,35 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(backend.getSaveSlots)).toHaveBeenCalledWith(55);
+    });
+
+    it("hands the saves tab an unanswered active slot while no slot answer has landed (#1747)", async () => {
+      // The fast path above skips the fetch, so nothing has answered what the
+      // active slot is. The panel's placeholder is still the shown value — the
+      // tab must be told it is a placeholder, or it renders `default` as a fact.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 55,
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({
+        configured: true,
+        active_slot: "main",
+      });
+      setRommConnectionState("offline");
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      capturedSavesTab.length = 0;
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const latest = capturedSavesTab[capturedSavesTab.length - 1];
+      expect(latest?.activeSlot).toBe("default");
+      expect(latest?.activeSlotKnown).toBe(false);
     });
 
     it("saves tab: a mid-flight offline flip does not wedge the connecting indicator; reconnect reloads (#1345 F2)", async () => {
@@ -3499,6 +3528,67 @@ describe("RomMGameInfoPanel", () => {
       const latest = capturedSavesTab[capturedSavesTab.length - 1];
       expect(latest?.romId).toBe(2);
       expect(latest?.saveStatus?.files[0]?.filename).toBe("NEW_VERSION.srm");
+    });
+
+    it("re-marks the active slot unanswered on a version switch (#1747)", async () => {
+      // The switch re-keys activeSlot back to the placeholder, so whatever
+      // answered for the previous version must not vouch for the new one.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({
+        configured: true,
+        active_slot: "main",
+      });
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
+      });
+      await flushAsync();
+      // A completed slot switch is an answer about rom 1's active slot.
+      await act(async () => {
+        capturedSavesTab[capturedSavesTab.length - 1]?.onSlotSwitched("main", {
+          rom_id: 1,
+          files: [],
+          playtime: {
+            total_seconds: 0,
+            session_count: 0,
+            last_session_start: null,
+            last_session_duration_sec: null,
+            last_played: null,
+          },
+          device_id: "d",
+          last_sync_check_at: null,
+        });
+      });
+      await flushAsync();
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.activeSlotKnown).toBe(true);
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 2,
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      capturedSavesTab.length = 0;
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "version_switched", app_id: testAppId, rom_id: 2 },
+          }),
+        );
+      });
+      await flushAsync();
+      const latest = capturedSavesTab[capturedSavesTab.length - 1];
+      expect(latest?.romId).toBe(2);
+      expect(latest?.activeSlot).toBe("default");
+      expect(latest?.activeSlotKnown).toBe(false);
     });
 
     it("reloads SAVES tab data on the next activation after a switch (slotsLoadedRef reset, #1297)", async () => {

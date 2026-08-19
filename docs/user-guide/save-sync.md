@@ -184,6 +184,11 @@ If the RomM server is unreachable when a sync is attempted:
   outcome — typically pushing your changes once the server is reachable again.
 - No save data is ever lost due to a failed sync.
 
+The slot list comes from the server, so while RomM is unreachable the SAVES tab has no confirmed slot to show — and it
+names none rather than guessing. Your locally tracked save files are still listed, just not filed under a slot panel,
+and the offline banner at the top of the tab explains why slot switching is unavailable. The slots, and the active one
+among them, reappear as soon as the server is reachable again.
+
 "Server offline" is reported **only** for a genuine reachability failure (the server can't be reached or times out). A
 sync that fails for another reason — for example an expired or revoked login token, or an SSL certificate problem —
 shows that specific reason instead (such as "Authentication failed — check your username and password"), so a working

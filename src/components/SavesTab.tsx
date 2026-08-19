@@ -31,6 +31,10 @@ interface SavesTabProps {
   saveStatus: SaveStatus | null;
   conflicts: SyncConflict[];
   activeSlot: string | null;
+  /** Whether `activeSlot` is an answer for this ROM. False while none has
+   *  landed — the panel starts every ROM on a placeholder slot name, and this
+   *  tab is what would otherwise render it as a fact (#1747). */
+  activeSlotKnown: boolean;
   availableSlots: SaveSlotSummary[];
   slotsLoading: boolean;
   onSlotSwitched: (newSlot: string, newStatus: SaveStatus) => void;
@@ -42,6 +46,7 @@ export const SavesTab: FC<SavesTabProps> = ({
   saveStatus,
   conflicts,
   activeSlot,
+  activeSlotKnown,
   availableSlots,
   slotsLoading,
   onSlotSwitched,
@@ -220,9 +225,12 @@ export const SavesTab: FC<SavesTabProps> = ({
     return a.slot.localeCompare(b.slot);
   });
 
-  // If active slot not in list yet, synthesize a placeholder entry
+  // An active slot the list doesn't carry still gets a panel — it is a slot the
+  // user is on. Only for a slot something ANSWERED, though: synthesised off the
+  // panel's placeholder it puts a slot name on screen that nothing ever said
+  // (#1747), and `default` is a real name here, so it reads as a fact.
   const slotInList = sorted.some((s) => s.slot === activeSlot);
-  if (!slotInList && activeSlot) {
+  if (!slotInList && activeSlot && activeSlotKnown) {
     sorted.unshift({ slot: activeSlot, source: "local", count: 0, latest_updated_at: null });
   }
 
@@ -269,20 +277,23 @@ export const SavesTab: FC<SavesTabProps> = ({
     );
   };
 
-  // --- Legacy mode: show save files directly (not in a slot panel) ---
-  let legacyFilesSection: ReturnType<typeof createElement> | null = null;
-  if (activeSlot === null) {
+  // --- Save files with no slot panel to live under ---
+  // Legacy mode has no slot; an unanswered active slot has none this tab may
+  // name (#1747). Either way the locally tracked files are still what the user
+  // has, so they are shown — just not filed under a slot.
+  let unslottedFilesSection: ReturnType<typeof createElement> | null = null;
+  if (activeSlot === null || !activeSlotKnown) {
     if (saveStatus && saveStatus.files.length > 0) {
-      legacyFilesSection = createElement(
+      unslottedFilesSection = createElement(
         "div",
-        { key: "legacy-files", style: { marginBottom: "12px" } },
+        { key: "unslotted-files", style: { marginBottom: "12px" } },
         ...saveStatus.files.map((f) => {
           const conflict = conflicts.find((c) => c.filename === f.filename);
           return renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at);
         }),
       );
     } else {
-      legacyFilesSection = createElement(
+      unslottedFilesSection = createElement(
         "div",
         {
           key: "no-files",
@@ -303,8 +314,8 @@ export const SavesTab: FC<SavesTabProps> = ({
     strandedBanner,
     legacyWarning,
 
-    // Legacy mode: show save files directly above slot panels
-    legacyFilesSection,
+    // Save files that belong to no slot panel — above the panels, if any.
+    unslottedFilesSection,
 
     // Slot panels — skip the "" (legacy) panel when already in legacy mode
     ...sorted

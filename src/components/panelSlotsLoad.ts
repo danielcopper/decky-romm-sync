@@ -121,10 +121,13 @@ export function useSaveSlotsLoad(
 
     // Known-offline fast path (#1345): the server slot fetch runs through the
     // retry+backoff ladder, so on a known-unreachable server it would hang
-    // "Loading slots…" for tens of seconds before the local degraded view (the
-    // per-slot "Server unreachable" notices) renders. Skip the fetch entirely —
-    // slotsLoading is still false here (the slotsLoadedRef guard above means the
-    // connected path never set it), so SavesTab renders the degraded view now.
+    // "Loading slots…" for tens of seconds before the local degraded view
+    // renders. Skip the fetch entirely — slotsLoading is still false here (the
+    // slotsLoadedRef guard above means the connected path never set it), so
+    // SavesTab renders that view now: the slots an earlier answer left behind,
+    // the active one carrying its offline summary — or, with nothing answered
+    // for this ROM yet, the locally tracked save files under no slot at all,
+    // since the only slot name on hand is the panel's placeholder (#1747).
     // slotsLoadedRef stays false, so a flip back to connected re-runs this effect
     // (isOffline dep) and loads.
     if (isOffline) return;

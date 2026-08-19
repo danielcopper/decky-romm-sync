@@ -110,6 +110,7 @@ function defaultProps(
     saveStatus: null,
     conflicts: [],
     activeSlot: "default",
+    activeSlotKnown: true,
     availableSlots: [],
     slotsLoading: false,
     onSlotSwitched: vi.fn(),
@@ -355,6 +356,7 @@ describe("SavesTab", () => {
         <SavesTab
           {...defaultProps({
             activeSlot: "ghost",
+            activeSlotKnown: true,
             availableSlots: [makeSlot({ slot: "alpha" })],
           })}
         />,
@@ -379,6 +381,56 @@ describe("SavesTab", () => {
       );
       const order = capturedSlotPanelProps.map((p) => p.slot.slot);
       expect(order).toEqual(["alpha"]);
+    });
+  });
+
+  describe("unanswered slot list (#1747)", () => {
+    it("names no slot while no slot answer has landed, even with the server unreachable", () => {
+      setRommConnectionState("offline");
+      const { queryByTestId, container } = render(
+        <SavesTab {...defaultProps({ activeSlot: "default", activeSlotKnown: false, availableSlots: [] })} />,
+      );
+      expect(capturedSlotPanelProps).toEqual([]);
+      expect(queryByTestId("slot-panel-default")).toBeNull();
+      // The offline banner is the one and only word on reachability here.
+      expect(container.textContent).toContain("RomM is offline");
+    });
+
+    it("keeps the locally tracked save files on screen while no slot answer has landed", () => {
+      const { queryByTestId } = render(
+        <SavesTab
+          {...defaultProps({
+            activeSlotKnown: false,
+            saveStatus: makeSaveStatus({ files: [makeSaveFile({ filename: "zelda.srm" })] }),
+          })}
+        />,
+      );
+      expect(queryByTestId("save-file-row-zelda.srm")).not.toBeNull();
+      expect(capturedSlotPanelProps).toEqual([]);
+    });
+
+    it("shows the tracked-files empty state without claiming legacy mode", () => {
+      const { container } = render(<SavesTab {...defaultProps({ activeSlotKnown: false, saveStatus: null })} />);
+      expect(container.textContent).toContain("No save files tracked yet");
+      expect(container.textContent).not.toContain("legacy mode");
+    });
+
+    it("files go back under the active slot panel once a slot answer has landed", () => {
+      const status = makeSaveStatus({ files: [makeSaveFile({ filename: "zelda.srm" })] });
+      const { queryByTestId } = render(
+        <SavesTab
+          {...defaultProps({
+            activeSlot: "main",
+            activeSlotKnown: true,
+            availableSlots: [makeSlot({ slot: "main" })],
+            saveStatus: status,
+          })}
+        />,
+      );
+      // Under the panel, and only there — a bare row alongside it would show
+      // the same file twice.
+      expect(capturedSlotPanelProps[0]?.saveStatus).toBe(status);
+      expect(queryByTestId("save-file-row-zelda.srm")).toBeNull();
     });
   });
 

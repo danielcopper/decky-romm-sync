@@ -71,12 +71,17 @@ export function buildTabContent({
     saveStatus: state.saveStatus,
     conflicts: state.conflicts,
     activeSlot: state.activeSlot,
+    activeSlotKnown: state.activeSlotKnown,
     availableSlots: state.availableSlots,
     slotsLoading: state.slotsLoading,
     onSlotSwitched: (newSlot, newStatus) => {
       setState((prev) => ({
         ...prev,
         activeSlot: newSlot === "" ? null : newSlot,
+        // A completed switch is an answer about the active slot in its own
+        // right — the announce below re-reads the list, but the tab must not
+        // fall back to "unknown" for the round trip in between (#1747).
+        activeSlotKnown: true,
         saveStatus: newStatus,
         conflicts: newStatus.conflicts ?? [],
       }));

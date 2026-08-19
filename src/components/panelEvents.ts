@@ -246,6 +246,7 @@ async function handleVersionSwitched(
       conflicts: cached.save_status?.conflicts ?? [],
       raId: cached.ra_id ?? null,
       activeSlot: "default",
+      activeSlotKnown: false,
       availableSlots: [],
       slotsLoading: false,
       ...biosFields,
