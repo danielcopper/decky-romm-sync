@@ -115,13 +115,7 @@ class TestChokePointBypassed:
         source = _CHOKE_POINT + "\n\n_probe = urllib.request.urlopen('http://example.invalid')\n"
         assert len(run_check(source)) == 1
 
-    def test_a_second_function_named_urlopen_does_not_launder_a_call(self, run_check):
-        """Only the choke point's own name is exempt — not a same-named helper elsewhere.
-
-        The check exempts by function NAME, so this pins the intended reading:
-        a nested/renamed wrapper does not get to host its own ``urlopen`` unless
-        it is literally the choke point.
-        """
+    def test_a_call_in_another_class_is_reported(self, run_check):
         source = """
 import urllib.request
 
@@ -130,6 +124,37 @@ class Other:
     def fetch(self, req):
         return urllib.request.urlopen(req)
 """
+        assert len(run_check(source)) == 1
+
+    def test_a_nested_function_named_urlopen_does_not_launder_a_call(self, run_check):
+        """Exemption is the class/method PAIR, not the bare name.
+
+        Matching on the name alone would let any method host a local helper
+        called ``_urlopen`` and exempt its own call — a request path that opens
+        its own connection while reading as if it went through the choke point.
+        """
+        source = (
+            _CHOKE_POINT
+            + """
+    def rogue(self, req):
+        def _urlopen(r):
+            return urllib.request.urlopen(r)
+
+        return _urlopen(req)
+"""
+        )
+        assert len(run_check(source)) == 1
+
+    def test_a_same_named_method_on_another_class_does_not_launder_a_call(self, run_check):
+        source = (
+            _CHOKE_POINT
+            + """
+
+class SgdbAdapter:
+    def _urlopen(self, req):
+        return urllib.request.urlopen(req)
+"""
+        )
         assert len(run_check(source)) == 1
 
 

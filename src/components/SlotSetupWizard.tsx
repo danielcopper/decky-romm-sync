@@ -506,16 +506,16 @@ function useSaveSetupInfo(romId: number, onComplete: () => void) {
         return;
       }
 
-      // Claim the shared retry-progress store before touching it. Without a
-      // claim this lane's clear-on-start wiped a frame the panel's slot lane or
-      // the achievements tab owned, and their settle wiped this one's (#1758) —
-      // the claim is what orders the three.
+      // Three lanes write the one retry-progress store, and only a claim gives
+      // this one a say in it: while it holds the claim an older lane's settle is
+      // refused, and its own settle below can hand the frame back. Unclaimed,
+      // this lane watched the panel's slot lane or the achievements tab settle
+      // its live frame away (#1758). The clear on the next line stays
+      // unconditional — a new load is meant to restart the count.
       const load = beginServerLoad();
       // Clear any stale retry progress from a previous load before starting a
       // fresh one, so ConnectingIndicator shows plain "Connecting to RomM…" and
-      // not a leftover "(attempt N/M)" (#1345 round-2 review). The clear-on-settle
-      // below is the other half, and only the claim makes it safe: it is refused
-      // once a newer load owns the frame.
+      // not a leftover "(attempt N/M)" (#1345 round-2 review).
       setServerRetryProgress(null);
       setLoading(true);
       setError(null);

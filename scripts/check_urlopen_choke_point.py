@@ -15,10 +15,11 @@ other path happens to succeed. That is the regression this gate exists to catch.
 
 It enforces a **structural** rule: inside ``py_modules/adapters/romm/http.py``,
 a call to ``urllib.request.urlopen`` may appear only in the body of
-``_urlopen``. It is an AST check over call sites, NOT dataflow analysis: it
-cannot catch an alias (``opener = urllib.request.urlopen``) or a call reached
-through ``getattr``. It catches the regression that actually happens, which is a
-new request method copying the ``urlopen(...)`` line from a sibling.
+``RommHttpAdapter._urlopen``. It is an AST check over call sites, NOT dataflow
+analysis: it cannot catch an alias (``opener = urllib.request.urlopen``) or a
+call reached through ``getattr``. It catches the regression that actually
+happens, which is a new request method copying the ``urlopen(...)`` line from a
+sibling.
 
 Other modules are out of scope — the rule is about this adapter's own state, and
 another adapter opening a URL says nothing about RomM's reachability.
@@ -37,7 +38,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # The module whose reachability state depends on the choke point.
 TRANSPORT = REPO_ROOT / "py_modules" / "adapters" / "romm" / "http.py"
 
-# The one function allowed to call urlopen — it clears the known-unreachable bit.
+# The one method allowed to call urlopen — it clears the known-unreachable bit.
+# Exemption is bound to the pair, not to the bare name: a helper called
+# ``_urlopen`` nested in some other method would otherwise host its own call and
+# exempt it, which is precisely the laundering this gate exists to refuse.
+CHOKE_POINT_CLASS = "RommHttpAdapter"
 CHOKE_POINT = "_urlopen"
 
 # The dotted call being confined.
@@ -60,21 +65,28 @@ def _urlopen_calls(tree: ast.AST) -> list[ast.Call]:
     return [node for node in ast.walk(tree) if isinstance(node, ast.Call) and _dotted_name(node.func) == URLOPEN]
 
 
+def _choke_point(tree: ast.Module) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """The choke-point method itself — a direct method of the adapter class, or nothing."""
+    for cls in tree.body:
+        if not isinstance(cls, ast.ClassDef) or cls.name != CHOKE_POINT_CLASS:
+            continue
+        for node in cls.body:
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == CHOKE_POINT:
+                return node
+    return None
+
+
 def find_violations(path: Path | None = None) -> list[str]:
     """Return one human-readable line per ``urlopen`` call outside the choke point.
 
     Parses the transport module, collects the call sites inside the choke-point
-    function, and reports every other call site with its line number and a fix
+    method, and reports every other call site with its line number and a fix
     hint.
     """
     path = path or TRANSPORT
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    allowed = {
-        id(call)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == CHOKE_POINT
-        for call in _urlopen_calls(node)
-    }
+    choke = _choke_point(tree)
+    allowed = {id(call) for call in _urlopen_calls(choke)} if choke else set()
     rel = path.relative_to(REPO_ROOT)
     return [
         f"{rel}:{call.lineno}: calls urllib.request.urlopen outside {CHOKE_POINT}() — "
@@ -97,11 +109,11 @@ def main(argv: list[str]) -> int:
         print()
         print(
             f"ERROR: urllib.request.urlopen must be called only from "
-            f"RommHttpAdapter.{CHOKE_POINT}(), the single point that clears the "
+            f"{CHOKE_POINT_CLASS}.{CHOKE_POINT}(), the single point that clears the "
             f"known-unreachable state. See .claude/rules/romm-http.md."
         )
         return 1
-    print(f"OK: urllib.request.urlopen is confined to RommHttpAdapter.{CHOKE_POINT}().")
+    print(f"OK: urllib.request.urlopen is confined to {CHOKE_POINT_CLASS}.{CHOKE_POINT}().")
     return 0
 
 
