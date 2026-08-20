@@ -189,6 +189,11 @@ names none rather than guessing. Your locally tracked save files are still liste
 and the offline banner at the top of the tab explains why slot switching is unavailable. The slots, and the active one
 among them, reappear as soon as the server is reachable again.
 
+The sync status recovers with them. While RomM is unreachable the tab shows "Server unreachable" where the sync state
+would be, and the per-file rows are missing the parts that only the server can answer — when the save was last updated,
+which save is on the server, and which device synced last. Once the server is reachable again the tab re-reads all of it
+and fills those rows in, with the game's page still open. You do not have to leave the page and come back.
+
 Below those files the tab shows the slots as RomM last reported them, with the one that was active then marked — dimmed,
 not pressable, and introduced by a line saying the save counts and times are from that last contact rather than from
 now. It is there so an offline tab shows what the device knows instead of an empty space; nothing in it can be expanded

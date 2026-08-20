@@ -23,7 +23,7 @@ import {
   domListenerCount,
 } from "../test-utils/dom-event-listener-spy";
 import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
-import type { DownloadCompleteEvent } from "../types";
+import type { DownloadCompleteEvent, SaveStatus } from "../types";
 import { stubAppStore } from "../test-utils/steamStubs";
 import * as cachedStore from "../utils/cachedGameDetailStore";
 import * as connectionState from "../utils/connectionState";
@@ -1346,13 +1346,19 @@ describe("RomMPlaySection", () => {
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
 
+      // The mount check really does move the verdict checking -> connected, which
+      // is the transition the reconnect lane below subscribes to. Asserting it
+      // here is what makes the read count a guard on that lane and not just on
+      // the store's fold: a lane that re-read on any reachable verdict rather
+      // than on an unrepaired answer would show up as a second read.
+      expect(connectionState.getRommConnectionState()).toBe("connected");
       // The store's load reads it; the notification this section then sends
       // carries that answer, so the store's own save_sync handler folds it
       // instead of reading a second time.
       expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledExactlyOnceWith(88);
     });
 
-    it("debugLog fires when the save status fetch inside doSaveCheck throws", async () => {
+    it("debugLog fires when the background save-status read throws", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 88,
@@ -1367,6 +1373,139 @@ describe("RomMPlaySection", () => {
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("background save check error"));
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // D2. Save-status repair on reconnect (#1758)
+  // ------------------------------------------------------------------
+
+  // The achievements tab and the panel's slot load both read the connection
+  // verdict, so they repair themselves when the server comes back with the page
+  // still open. The save status had no such reader and nothing dispatches a
+  // save_sync event on reconnect, so its degraded answer — server half nulled,
+  // `server_query_failed` set — stood until the page was closed and reopened.
+  describe("save-status repair on reconnect (#1758)", () => {
+    const makeSaveStatus = (overrides: Partial<SaveStatus> = {}): SaveStatus => ({
+      rom_id: 88,
+      files: [],
+      playtime: {
+        total_seconds: 0,
+        session_count: 0,
+        last_session_start: null,
+        last_session_duration_sec: null,
+        last_played: null,
+      },
+      device_id: "d",
+      last_sync_check_at: null,
+      ...overrides,
+    });
+
+    /** Mount the row on a save-sync ROM and wait for the mount's own
+     *  save-status read to have landed in the store, so every transition driven
+     *  below is judged against a real answer rather than an absent one. */
+    async function mountWithSaveSync(): Promise<void> {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 88,
+        save_sync_enabled: true,
+        save_sync_display: { status: "synced", label: "ok", last_sync_check_at: null },
+      });
+      render(<RomMPlaySection appId={testAppId} />);
+      await waitFor(() => {
+        expect(getGameDetail(testAppId).saveStatus).not.toBeNull();
+      });
+      await flushAsync();
+    }
+
+    async function transitionTo(next: connectionState.RommConnectionState): Promise<void> {
+      act(() => {
+        connectionState.setRommConnectionState(next, "test");
+      });
+      await flushAsync();
+    }
+
+    it("still costs ONE read on a page open whose verdict settles after the status did", async () => {
+      // The page-open guard, in the ordering that can actually expose a second
+      // read: the store's in-flight sharing collapses a duplicate issued while
+      // the mount read is still open, so the verdict is held back until after
+      // that read has settled. A lane keyed on the rendered verdict — the naive
+      // `useRommConnectionState()` in the dep array — re-runs the read here,
+      // which is the duplication ce68b560 removed.
+      vi.mocked(backend.getSaveStatus).mockResolvedValue(makeSaveStatus());
+      const connection = deferredConnection();
+
+      await mountWithSaveSync();
+      expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledExactlyOnceWith(88);
+
+      act(() => {
+        connection.resolve({ success: true, message: "ok" });
+      });
+      await flushAsync();
+
+      expect(connectionState.getRommConnectionState()).toBe("connected");
+      expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledExactlyOnceWith(88);
+    });
+
+    it("re-reads on reconnect when the answer on hand is missing its server half", async () => {
+      const degraded = makeSaveStatus({ server_query_failed: true, server_query_reason: "server_unreachable" });
+      const repaired = makeSaveStatus({ last_sync_check_at: "2026-02-01T10:00:00Z" });
+      vi.mocked(backend.getSaveStatus).mockResolvedValueOnce(degraded).mockResolvedValueOnce(repaired);
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: false, message: "" });
+      const listener = vi.fn();
+      globalThis.addEventListener("romm_data_changed", listener);
+      try {
+        await mountWithSaveSync();
+        expect(connectionState.getRommConnectionState()).toBe("offline");
+        expect(getGameDetail(testAppId).saveStatus).toBe(degraded);
+
+        await transitionTo("connected");
+
+        expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledTimes(2);
+        // The repaired answer travels on the broadcast, so the other save-sync
+        // surfaces fold the server half without a read of their own.
+        const broadcasts = listener.mock.calls
+          .map((c) => c[0] as CustomEvent)
+          .filter((e) => e.detail.type === "save_sync");
+        expect(broadcasts[broadcasts.length - 1]?.detail.save_status).toBe(repaired);
+        expect(getGameDetail(testAppId).saveStatus).toBe(repaired);
+      } finally {
+        globalThis.removeEventListener("romm_data_changed", listener);
+      }
+    });
+
+    it("issues no read on reconnect when the answer on hand already carries its server half", async () => {
+      vi.mocked(backend.getSaveStatus).mockResolvedValue(makeSaveStatus());
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: false, message: "" });
+
+      await mountWithSaveSync();
+      expect(connectionState.getRommConnectionState()).toBe("offline");
+      // Non-vacuous: the transition below really is one into a reachable server,
+      // so the unrepaired-answer predicate is the only thing refusing the read.
+      expect(getGameDetail(testAppId).saveStatus?.server_query_failed).toBeFalsy();
+
+      await transitionTo("connected");
+
+      expect(connectionState.getRommConnectionState()).toBe("connected");
+      expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledTimes(1);
+    });
+
+    it("issues no read when the server goes away", async () => {
+      vi.mocked(backend.getSaveStatus).mockResolvedValue(makeSaveStatus({ server_query_failed: true }));
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: false, message: "" });
+
+      await mountWithSaveSync();
+      await transitionTo("connected");
+      // The reconnect above repaired nothing (the mock still answers degraded),
+      // so the answer on hand is STILL unrepaired — the direction of the
+      // transition below is the only thing left to refuse the read.
+      expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledTimes(2);
+      expect(getGameDetail(testAppId).saveStatus?.server_query_failed).toBe(true);
+
+      await transitionTo("offline");
+
+      expect(connectionState.getRommConnectionState()).toBe("offline");
+      expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledTimes(2);
     });
   });
 

@@ -143,4 +143,32 @@ describe("play row save-sync fan-out (#1758)", () => {
     expect(container.textContent).toContain("Play");
     expect(container.textContent).not.toContain("Resolve Conflict");
   });
+
+  it("repairs the row off a reconnect broadcast when the page opened without a server half", async () => {
+    // Opened while RomM was unreachable: the status carries the local half only,
+    // so nothing on the page knows about the conflict the server holds.
+    vi.mocked(backend.testConnection).mockResolvedValue({ success: false, message: "" });
+    vi.mocked(backend.getSaveStatus)
+      .mockResolvedValueOnce(saveStatus({ server_query_failed: true, conflicts: [] }))
+      .mockResolvedValueOnce(saveStatus({ conflicts: [conflict] }));
+
+    const { container } = render(<RomMPlaySection appId={appId} />);
+    await flushAsync();
+    expect(container.textContent).not.toContain("Resolve Conflict");
+    expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledExactlyOnceWith(88);
+
+    // The server comes back WITHOUT the page being closed — the outage story
+    // this row is about (#1758).
+    act(() => {
+      setRommConnectionState("connected");
+    });
+    await flushAsync();
+
+    // One fresh read for the whole row, and its answer reaches the button
+    // through the same broadcast the mount read uses — the button still
+    // contributes no read of its own.
+    expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(backend.refreshSaveStatus)).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Resolve Conflict");
+  });
 });

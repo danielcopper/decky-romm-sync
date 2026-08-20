@@ -65,6 +65,7 @@ import { formatBytes, formatLastPlayed, formatPlaytime } from "../utils/formatte
 import { biosColorForLevel } from "../utils/biosColor";
 import { timeoutMs } from "../utils/playSection";
 import {
+  getGameDetail,
   noteSaveSyncDisplay,
   refreshBiosStatus,
   refreshCoreAndBios,
@@ -109,6 +110,37 @@ function resolveLastPlayed(restoredIso: string | null, steamUnixSeconds: number)
   return formatLastPlayed(steamUnixSeconds);
 }
 
+/** Read this ROM's save status through the store and tell the other save-sync
+ *  surfaces what came back.
+ *
+ *  The status travels WITH the notification. Every listener for this event — the
+ *  store's fold, the info panel's — answers a payload-less one by reading the
+ *  status itself, so a bare notification costs one more round-trip per listener
+ *  for an answer already in hand (#1758).
+ *
+ *  Both callers reach the dispatch after an await, and a version switch in that
+ *  window re-keys the page to another ROM without tearing either of them down —
+ *  so the answer's own `rom_id` is checked against the identity the read was
+ *  issued for before it is broadcast as this page's. */
+async function readAndBroadcastSaveStatus(appId: number, romId: number, isCancelled: () => boolean): Promise<void> {
+  try {
+    const saveStatus = await refreshSaveStatus(appId);
+    if (isCancelled() || !saveStatus || saveStatus.rom_id !== romId) return;
+    globalThis.dispatchEvent(
+      new CustomEvent("romm_data_changed", {
+        detail: {
+          type: "save_sync",
+          rom_id: romId,
+          save_status: saveStatus,
+          has_conflict: hasAnySaveConflict(saveStatus),
+        },
+      }),
+    );
+  } catch (e) {
+    detach(debugLog(`RomMPlaySection: background save check error: ${e}`));
+  }
+}
+
 interface RomMPlaySectionProps {
   appId: number;
 }
@@ -128,6 +160,7 @@ interface PlaytimeState {
 }
 
 import {
+  onRommConnectionChange,
   setRommConnectionState,
   setVersionError,
   useRommConnectionState,
@@ -314,42 +347,54 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // The read itself and the state it produces belong to the store; what stays
   // here is the conflict notification for the other save-sync surfaces. Keyed on
   // the ROM identity and the save-sync flag, which is all it consumes: it is not
-  // a reader of the connection verdict, and waiting behind one only meant the
-  // read landed after the store's own had settled, costing a second round-trip
-  // for the same answer. Playtime reconcile-on-view is a separate, equally
-  // connectivity-independent effect (#1345).
+  // GATED on the connection verdict, because the read answers with the local half
+  // even while the server is unreachable — that degraded answer is what the saves
+  // surfaces render at all — and waiting behind a verdict only meant the read
+  // landed after the store's own had settled, costing a second round-trip for the
+  // same answer. The reconnect lane below adds a second OCCASION to run this
+  // read; it is not a gate on this one. Playtime reconcile-on-view is a separate,
+  // equally connectivity-independent effect (#1345).
   useEffect(() => {
     const romId = detail.romId;
     if (!romId || !detail.saveSyncEnabled) return;
     let cancelled = false;
-
-    const doSaveCheck = async () => {
-      try {
-        const saveStatus = await refreshSaveStatus(appId);
-        if (cancelled || !saveStatus) return;
-        // The status travels WITH the notification. Every listener for this
-        // event — the store's fold, the info panel's — answers a payload-less one
-        // by reading the status itself, so a bare notification costs one more
-        // round-trip per listener for an answer already in hand (#1758).
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_data_changed", {
-            detail: {
-              type: "save_sync",
-              rom_id: romId,
-              save_status: saveStatus,
-              has_conflict: hasAnySaveConflict(saveStatus),
-            },
-          }),
-        );
-      } catch (e) {
-        detach(debugLog(`RomMPlaySection: background save check error: ${e}`));
-      }
-    };
-    detach(doSaveCheck());
+    detach(readAndBroadcastSaveStatus(appId, romId, () => cancelled));
     return () => {
       cancelled = true;
     };
   }, [appId, detail.romId, detail.saveSyncEnabled]);
+
+  // Reconnect repair (#1758) — the server coming back while this page stays
+  // open. The page's other server-fed lanes read the connection verdict and so
+  // repair themselves (the achievements tab, the panel's slot load); the save
+  // status has no such reader, and nothing else dispatches a save_sync event on
+  // reconnect, so its degraded answer — server half nulled, `server_query_failed`
+  // set — would stand until the page is closed and reopened.
+  //
+  // Subscribing to the transitions rather than depending on the rendered verdict
+  // is what keeps a page open from reading twice: the store starts at "checking"
+  // and this page's own mount check flips it to "connected", so a verdict in the
+  // dep array above would re-run the read on EVERY page open. Here only a change
+  // runs anything, only a change INTO a reachable server, and only when the
+  // answer on hand is missing its server half — a read whose server half already
+  // landed has nothing to repair, and a mount whose read is still in flight has
+  // no answer to judge yet.
+  useEffect(() => {
+    let cancelled = false;
+    const unsubscribe = onRommConnectionChange((next) => {
+      if (next !== "connected") return;
+      // Read the identity and the last answer at TRANSITION time, not at
+      // subscribe time: this callback outlives many renders, and the answer it
+      // has to judge is the one the store holds now.
+      const { romId, saveSyncEnabled, saveStatus } = getGameDetail(appId);
+      if (!romId || !saveSyncEnabled || !saveStatus?.server_query_failed) return;
+      detach(readAndBroadcastSaveStatus(appId, romId, () => cancelled));
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [appId]);
 
   // Reconcile-on-view (#868) — pull-only: folds RomM's play-session history into
   // the local total so a session played on another device shows up the moment the
