@@ -8,7 +8,8 @@
  */
 
 import type { Dispatch, SetStateAction } from "react";
-import { getBiosStatus, getPlatformCoreInfo, getAchievementProgress, debugLog } from "../api/backend";
+import { getBiosStatus, getAchievementProgress, debugLog } from "../api/backend";
+import { getPlatformCoreInfoShared } from "../api/sharedReads";
 import { extractBiosInfo, extractCoreInfo, type BiosInfoFields, type CoreInfoFields } from "./playSection";
 
 interface AchievementFields {
@@ -37,13 +38,16 @@ export function refreshBiosInBackground<S extends BiosInfoFields>(
 
 /** Refresh core-selection state from the dedicated `get_platform_core_info`
  *  path (#923), fully decoupled from BIOS status. Keyed on the rom_id so the
- *  active core reflects a per-game DB override (epic #945) when one is pinned. */
+ *  active core reflects a per-game DB override (epic #945) when one is pinned.
+ *
+ *  Shared with the info panel's load, which reads the same ROM's core info on
+ *  the same page open — see `api/sharedReads.ts`. */
 export function refreshCoreInfoInBackground<S extends CoreInfoFields>(
   romId: number,
   cancelled: () => boolean,
   setter: Dispatch<SetStateAction<S>>,
 ): void {
-  getPlatformCoreInfo(romId)
+  getPlatformCoreInfoShared(romId)
     .then((coreInfo) => {
       if (!cancelled()) {
         setter((prev) => ({

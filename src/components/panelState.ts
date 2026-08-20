@@ -10,15 +10,14 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import {
   getCachedGameDetail,
-  getRomMetadata,
   getInstalledRom,
-  getPlatformCoreInfo,
   getArtworkBase64,
   getSaveSlots,
   isSaveTrackingConfigured,
   debugLog,
 } from "../api/backend";
 import type { BiosAnswer } from "../api/backend";
+import { getPlatformCoreInfoShared, getRomMetadataShared } from "../api/sharedReads";
 import type {
   RomMetadata,
   InstalledRom,
@@ -199,9 +198,10 @@ export function refreshCoverArtInBackground(binding: RomBinding): Promise<void> 
     .catch(() => {});
 }
 
-/** Fire-and-forget metadata fetch. */
+/** Fire-and-forget metadata fetch. Shared with the play row's own load, which
+ *  reads the same ROM's metadata microtasks away — see `api/sharedReads.ts`. */
 function refreshMetadataInBackground(binding: RomBinding): Promise<void> {
-  return getRomMetadata(binding.romId)
+  return getRomMetadataShared(binding.romId)
     .then((meta) => binding.write((prev) => ({ ...prev, metadata: meta })))
     .catch(() => {});
 }
@@ -288,9 +288,14 @@ function startBackgroundRefreshes(
 /** Fetch active-core + available-cores for a ROM from the dedicated
  *  `get_platform_core_info` path (#923) and merge into panel state. Keyed on
  *  rom_id so the active core reflects a per-game DB override (epic #945) when
- *  one is pinned. */
+ *  one is pinned.
+ *
+ *  Shared with the play row's own load, which reads the same ROM's core info
+ *  unconditionally on every page open — see `api/sharedReads.ts`. The
+ *  `core_changed` handler is deliberately NOT routed through it: it re-reads
+ *  because the core just changed, and must not join a read issued before it. */
 export function refreshPanelCoreInfo(binding: RomBinding): Promise<void> {
-  return getPlatformCoreInfo(binding.romId)
+  return getPlatformCoreInfoShared(binding.romId)
     .then((coreInfo) => binding.write((prev) => ({ ...prev, coreInfo })))
     .catch(() => {});
 }

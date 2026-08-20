@@ -1283,6 +1283,75 @@ describe("RomMPlaySection", () => {
       }
     });
 
+    // Every listener for this event answers a payload-less notification by
+    // reading the status itself, so the status travels with it (#1758).
+    it("carries the save status it just read on the notification", async () => {
+      const status = {
+        rom_id: 88,
+        files: [],
+        playtime: {
+          total_seconds: 0,
+          session_count: 0,
+          last_session_start: null,
+          last_session_duration_sec: null,
+          last_played: null,
+        },
+        device_id: "d",
+        last_sync_check_at: null,
+      };
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 88,
+        save_sync_enabled: true,
+        save_sync_display: { status: "synced", label: "ok", last_sync_check_at: null },
+      });
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
+      vi.mocked(backend.getSaveStatus).mockResolvedValue(status);
+      const listener = vi.fn();
+      globalThis.addEventListener("romm_data_changed", listener);
+      try {
+        render(<RomMPlaySection appId={testAppId} />);
+        await flushAsync();
+        const saveSyncEv = listener.mock.calls
+          .map((c) => c[0] as CustomEvent)
+          .find((e) => e.detail.type === "save_sync");
+        expect(saveSyncEv?.detail.save_status).toEqual(status);
+      } finally {
+        globalThis.removeEventListener("romm_data_changed", listener);
+      }
+    });
+
+    it("costs ONE get_save_status read per page open", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 88,
+        save_sync_enabled: true,
+        save_sync_display: { status: "synced", label: "ok", last_sync_check_at: null },
+      });
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
+      vi.mocked(backend.getSaveStatus).mockResolvedValue({
+        rom_id: 88,
+        files: [],
+        playtime: {
+          total_seconds: 0,
+          session_count: 0,
+          last_session_start: null,
+          last_session_duration_sec: null,
+          last_played: null,
+        },
+        device_id: "d",
+        last_sync_check_at: null,
+      });
+
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      // The store's load reads it; the notification this section then sends
+      // carries that answer, so the store's own save_sync handler folds it
+      // instead of reading a second time.
+      expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledExactlyOnceWith(88);
+    });
+
     it("debugLog fires when the save status fetch inside doSaveCheck throws", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,

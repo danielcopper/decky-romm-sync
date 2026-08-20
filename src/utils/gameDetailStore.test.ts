@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import * as backend from "../api/backend";
+import { _resetSharedReadsForTests } from "../api/sharedReads";
 import * as cachedStore from "./cachedGameDetailStore";
 import {
   getGameDetail,
@@ -146,6 +147,14 @@ const biosMissing: BiosStatusResult = {
   bios_label: "0/3",
 };
 
+/** The answer a second BIOS read returns, distinct from {@link biosMissing} so a
+ *  fold of the first read's answer is visible in the shown level. */
+const biosAllPresent: BiosStatusResult = {
+  bios_status: { platform_slug: "snes", server_count: 3, local_count: 3, all_downloaded: true },
+  bios_level: "ok",
+  bios_label: "3/3",
+};
+
 /** The cached detail of the ROM a version switch moves the entry to, carrying a
  *  BIOS level the previous ROM's read would overwrite if it were still folded. */
 const switchedDetail: Partial<CachedGameDetail> = {
@@ -160,6 +169,10 @@ describe("gameDetailStore", () => {
     vi.resetAllMocks();
     nextAppId = ++appIdSeq;
     installDomEventListenerSpy();
+    // The core-info read is shared with the info panel's load, and a shared
+    // request only releases itself by settling — a test that holds one open
+    // would hand it to the next test that reads the same rom.
+    _resetSharedReadsForTests();
 
     vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ found: false });
     vi.mocked(backend.getSaveStatus).mockResolvedValue(saveStatus());
@@ -1039,28 +1052,32 @@ describe("gameDetailStore", () => {
     });
 
     // Same rom throughout, so the rom binding admits the earlier answer — the
-    // load sequence is the only thing that can tell the two apart.
+    // load sequence is the only thing that can tell the two apart. The vehicle is
+    // the BIOS read rather than the core read because the core read is shared
+    // with the info panel's load (`api/sharedReads.ts`): a second load of the
+    // same rom joins the first read instead of issuing one that can answer
+    // differently, so two distinct answers cannot be staged through it.
     it("drops a background answer read under a load a later load overtook", async () => {
-      const overtakenCore = deferred<CoreInfo>();
-      vi.mocked(backend.getPlatformCoreInfo).mockReturnValueOnce(overtakenCore.promise);
-      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: false }));
+      const overtakenBios = deferred<BiosStatusResult>();
+      vi.mocked(backend.getBiosStatus).mockReturnValueOnce(overtakenBios.promise);
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: false, stale_fields: ["bios"] }));
       subscribe(nextAppId);
       await flush();
-      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledExactlyOnceWith(42);
+      expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledExactlyOnceWith(42);
 
-      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(laterCoreInfo);
-      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: true }));
+      vi.mocked(backend.getBiosStatus).mockResolvedValue(biosAllPresent);
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: true, stale_fields: ["bios"] }));
       await act(async () => {
         emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(42));
         await Promise.resolve();
       });
       await flush();
-      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, activeCoreLabel: "Genesis Plus GX" });
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, biosStatus: "ok", biosLabel: "3/3" });
 
-      overtakenCore.resolve(coreInfo);
+      overtakenBios.resolve(biosMissing);
       await flush();
 
-      expect(getGameDetail(nextAppId).activeCoreLabel).toBe("Genesis Plus GX");
+      expect(getGameDetail(nextAppId)).toMatchObject({ biosStatus: "ok", biosLabel: "3/3" });
     });
   });
 

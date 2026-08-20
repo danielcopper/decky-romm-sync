@@ -1,8 +1,18 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { MutableRefObject } from "react";
-import { refreshSlotState, takeReadTicket, type PanelReadSeqs, type PanelState, type RomBinding } from "./panelState";
+import {
+  refreshPanelCoreInfo,
+  refreshSlotState,
+  takeReadTicket,
+  type PanelReadSeqs,
+  type PanelState,
+  type RomBinding,
+} from "./panelState";
 import * as backend from "../api/backend";
-import type { SaveSlotSummary } from "../types";
+import { _resetSharedReadsForTests } from "../api/sharedReads";
+import { refreshCoreInfoInBackground } from "../utils/sectionRefresh";
+import type { CoreInfoFields } from "../utils/playSection";
+import type { CoreInfo, SaveSlotSummary } from "../types";
 
 /** A promise the test resolves by hand, so two reads of the same callable can be
  *  made to answer in the opposite order to the one they were issued in. */
@@ -76,6 +86,71 @@ describe("takeReadTicket", () => {
     takeReadTicket(seqs, "saveStatus");
     takeReadTicket(seqs, "detail");
     expect(slots()).toBe(false);
+  });
+});
+
+// The panel and the play row each read this ROM's core info on every page open,
+// microtasks apart, and neither knows about the other (#1758).
+describe("core info shared with the play row's load", () => {
+  const coreInfo: CoreInfo = {
+    active_core: "snes9x.so",
+    active_core_label: "Snes9x",
+    platform_core_label: null,
+    has_game_override: false,
+    emulator_data_available: true,
+    emulators: [],
+  };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    _resetSharedReadsForTests();
+  });
+
+  it("costs ONE backend call when both lanes read the same ROM at once", async () => {
+    const open = deferred<CoreInfo>();
+    vi.mocked(backend.getPlatformCoreInfo).mockReturnValue(open.promise);
+    let panelState = basePanelState();
+    let playRowState = {} as CoreInfoFields;
+
+    const panelRead = refreshPanelCoreInfo({
+      romId: 7,
+      write: (update) => {
+        panelState = typeof update === "function" ? update(panelState) : update;
+      },
+    });
+    refreshCoreInfoInBackground<CoreInfoFields>(
+      7,
+      () => false,
+      (update) => {
+        playRowState = typeof update === "function" ? update(playRowState) : update;
+      },
+    );
+
+    open.resolve(coreInfo);
+    await panelRead;
+    await flush();
+
+    expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledExactlyOnceWith(7);
+    // Both lanes folded the SAME answer — sharing a request is only correct if
+    // every caller is handed the same one.
+    expect(panelState.coreInfo).toBe(coreInfo);
+    expect(playRowState.activeCoreLabel).toBe("Snes9x");
+  });
+
+  it("reads again once the shared request has settled", async () => {
+    vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(coreInfo);
+    let panelState = basePanelState();
+    const binding: RomBinding = {
+      romId: 7,
+      write: (update) => {
+        panelState = typeof update === "function" ? update(panelState) : update;
+      },
+    };
+
+    await refreshPanelCoreInfo(binding);
+    await refreshPanelCoreInfo(binding);
+
+    expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledTimes(2);
   });
 });
 

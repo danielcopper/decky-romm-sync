@@ -30,12 +30,12 @@ import {
   getBiosStatus,
   getCachedGameDetail,
   getPlatformCoreInfo,
-  getRomMetadata,
   getSaveStatus,
   invalidateCachedGameDetail,
   isCallableFailure,
   logError,
 } from "../api/backend";
+import { getRomMetadataShared } from "../api/sharedReads";
 import type { DownloadCompleteEvent, SaveStatus, SaveSyncDisplay } from "../types";
 import type { RommDataChangedDetail } from "../types/events";
 import { detach } from "./detach";
@@ -312,8 +312,10 @@ async function loadDetail(appId: number, entry: Entry): Promise<void> {
 
     const staleFields = cached.stale_fields ?? [];
 
+    // Shared with the info panel's own metadata read for this ROM — see
+    // `api/sharedReads.ts`.
     if (staleFields.includes("metadata")) {
-      getRomMetadata(romId).catch((e) => debugLog(`Background metadata fetch error: ${e}`));
+      getRomMetadataShared(romId).catch((e) => debugLog(`Background metadata fetch error: ${e}`));
     }
 
     if (cached.ra_id && staleFields.includes("achievements")) {

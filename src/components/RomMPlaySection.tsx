@@ -327,9 +327,18 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       try {
         const saveStatus = await refreshSaveStatus(appId);
         if (cancelled || !saveStatus) return;
+        // The status travels WITH the notification. Every listener for this
+        // event — the store's fold, the info panel's — answers a payload-less one
+        // by reading the status itself, so a bare notification costs one more
+        // round-trip per listener for an answer already in hand (#1758).
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {
-            detail: { type: "save_sync", rom_id: romId, has_conflict: hasAnySaveConflict(saveStatus) },
+            detail: {
+              type: "save_sync",
+              rom_id: romId,
+              save_status: saveStatus,
+              has_conflict: hasAnySaveConflict(saveStatus),
+            },
           }),
         );
       } catch (e) {

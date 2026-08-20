@@ -41,7 +41,6 @@ import {
   checkCoreChange,
   probeReachability,
   checkLocalDrift,
-  refreshSaveStatus,
   stopRunningGame,
 } from "../api/backend";
 import { getRommConnectionState, onRommConnectionChange, reportServerReachable } from "../utils/connectionState";
@@ -298,17 +297,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
             setState("conflict");
           } else {
             detach(debugLog(`CustomPlayButton: -> play`));
+            // The state settled here is the CACHED verdict. The live one arrives
+            // on the `save_sync` broadcast the play section sends once its own
+            // save-status read lands, which flips this button to Resolve Conflict
+            // if a fresh conflict appeared. This button must not trigger that read
+            // itself: the section wraps it and reads under a wider condition, so a
+            // read from here is a second round-trip for a broadcast that already
+            // happens (#1758).
             setState("play");
-            // F7: settling into the playable state is the production trigger for
-            // a background save-status refresh. Fire-and-forget — the resulting
-            // save_status_updated -> romm_data_changed loop updates the open page
-            // (e.g. flips Play -> Resolve Conflict if a fresh conflict appears).
-            // Never block the UI; a failed probe leaves the cached state intact.
-            if (cached.save_sync_enabled) {
-              refreshSaveStatus(rid).catch((e) =>
-                detach(debugLog(`CustomPlayButton: background refreshSaveStatus failed: ${e}`)),
-              );
-            }
           }
         } else {
           detach(debugLog(`CustomPlayButton: -> download`));
