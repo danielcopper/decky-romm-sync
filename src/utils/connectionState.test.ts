@@ -176,3 +176,59 @@ describe("shared server-load generation (#1345 F2)", () => {
     expect(beginServerLoad()).not.toEqual(beginServerLoad());
   });
 });
+
+// One load's frames come from several lanes' ladders writing one slot, so
+// without an order the shown attempt walks backwards mid-load (#1758).
+describe("retry-progress monotonicity within one load (#1758)", () => {
+  beforeEach(() => {
+    setServerRetryProgress(null);
+  });
+
+  it("ignores a frame below the one already shown", () => {
+    beginServerLoad();
+    setServerRetryProgress({ attempt: 3, maxAttempts: 3 });
+    setServerRetryProgress({ attempt: 2, maxAttempts: 3 });
+    expect(getServerRetryProgress()).toEqual({ attempt: 3, maxAttempts: 3 });
+  });
+
+  it("does not notify subscribers about a frame it ignored", () => {
+    beginServerLoad();
+    setServerRetryProgress({ attempt: 3, maxAttempts: 3 });
+    const cb = vi.fn();
+    onServerRetryProgressChange(cb);
+    setServerRetryProgress({ attempt: 1, maxAttempts: 3 });
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("accepts a frame above the one already shown", () => {
+    beginServerLoad();
+    setServerRetryProgress({ attempt: 2, maxAttempts: 3 });
+    setServerRetryProgress({ attempt: 3, maxAttempts: 3 });
+    expect(getServerRetryProgress()).toEqual({ attempt: 3, maxAttempts: 3 });
+  });
+
+  // The climb is per load, not for all time: the next load's ladder starts at
+  // attempt 1 and that 1 is the truth about it.
+  it("starts the climb over on the next load", () => {
+    beginServerLoad();
+    setServerRetryProgress({ attempt: 3, maxAttempts: 3 });
+    beginServerLoad();
+    setServerRetryProgress({ attempt: 1, maxAttempts: 3 });
+    expect(getServerRetryProgress()).toEqual({ attempt: 1, maxAttempts: 3 });
+  });
+
+  it("starts the climb over once the shown frame is cleared", () => {
+    beginServerLoad();
+    setServerRetryProgress({ attempt: 3, maxAttempts: 3 });
+    setServerRetryProgress(null);
+    setServerRetryProgress({ attempt: 1, maxAttempts: 3 });
+    expect(getServerRetryProgress()).toEqual({ attempt: 1, maxAttempts: 3 });
+  });
+
+  it("a settling load clears the frame it holds, however high it climbed", () => {
+    const load = beginServerLoad();
+    setServerRetryProgress({ attempt: 3, maxAttempts: 3 });
+    settleServerLoad(load);
+    expect(getServerRetryProgress()).toBeNull();
+  });
+});

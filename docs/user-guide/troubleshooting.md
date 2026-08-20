@@ -110,7 +110,10 @@ attempts. Playtime keeps showing — it's tracked locally and doesn't depend on 
 While a save load is actually reaching the server, the **Saves** tab and the setup screen show a spinner labelled
 **Connecting to RomM…**. If the server is briefly slow or flaky, the plugin retries a couple of times before giving up,
 and the spinner shows which attempt is in progress — **Connecting to RomM… (attempt 2/3)** — so a slow connection reads
-as busy rather than stuck.
+as busy rather than stuck. Several parts of the page can be waiting on the server at once, so the count follows the
+furthest one along and never walks backwards while a page is loading. Once the plugin already knows the server is
+unreachable it stops retrying — one attempt, then the answer — so the spinner reads plain **Connecting to RomM…** with
+no attempt to count, and the offline state arrives quickly instead of after a full round of retries.
 
 You don't need to do anything: while a game page is open, the plugin checks the server roughly every 30 seconds in both
 directions. If RomM goes away, the **RomM offline** badge appears on its own within that window; the moment RomM is

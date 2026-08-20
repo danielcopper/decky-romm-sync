@@ -80,6 +80,10 @@ export interface ServerRetryProgress {
 }
 
 let _retryProgress: ServerRetryProgress | null = null;
+/** The load {@link beginServerLoad} was on when the shown frame was accepted.
+ *  What makes "within one load" answerable at the moment a frame arrives. */
+let _retryProgressGeneration = 0;
+let _loadGeneration = 0;
 const retryProgressListeners = new Set<(p: ServerRetryProgress | null) => void>();
 
 export function getServerRetryProgress(): ServerRetryProgress | null {
@@ -88,11 +92,25 @@ export function getServerRetryProgress(): ServerRetryProgress | null {
 
 /** Set (or clear, with `null`) the current retry progress and notify
  *  subscribers. A no-op when clearing an already-clear store so a consumer's
- *  post-load reset doesn't churn renders. */
+ *  post-load reset doesn't churn renders.
+ *
+ *  Within one load the shown attempt only ever climbs. Every lane's ladder
+ *  writes this ONE slot and each emits its own frames, so the number on screen is
+ *  otherwise whichever lane wrote last — a user watching a single load sees
+ *  "attempt 3/3" walk back to "2/3" and up again (#1758). A lower frame is
+ *  dropped rather than shown; the next load starts the climb over, which is the
+ *  boundary {@link beginServerLoad} already draws. */
 export function setServerRetryProgress(p: ServerRetryProgress | null): void {
-  if (p === null && _retryProgress === null) return;
-  _retryProgress = p;
-  retryProgressListeners.forEach((l) => l(p));
+  if (p === null) {
+    if (_retryProgress === null) return;
+    _retryProgress = null;
+  } else {
+    const shown = _retryProgress;
+    if (shown !== null && _retryProgressGeneration === _loadGeneration && p.attempt < shown.attempt) return;
+    _retryProgress = p;
+    _retryProgressGeneration = _loadGeneration;
+  }
+  retryProgressListeners.forEach((l) => l(_retryProgress));
 }
 
 export function onServerRetryProgressChange(cb: (p: ServerRetryProgress | null) => void): () => void {
@@ -107,8 +125,6 @@ export function onServerRetryProgressChange(cb: (p: ServerRetryProgress | null) 
 export interface ServerLoadToken {
   readonly generation: number;
 }
-
-let _loadGeneration = 0;
 
 /** Claim the retry-progress store for a load that is starting now.
  *

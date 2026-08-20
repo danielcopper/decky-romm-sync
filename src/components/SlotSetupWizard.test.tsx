@@ -14,10 +14,13 @@ import {
 import type { SaveSetupInfo } from "../types";
 import { detach } from "../utils/detach";
 import {
-  setRommConnectionState,
+  beginServerLoad,
   getRommConnectionState,
+  getServerRetryProgress,
   reportServerReachable,
+  setRommConnectionState,
   setServerRetryProgress,
+  settleServerLoad,
 } from "../utils/connectionState";
 
 // Local @decky/ui re-mock — gives ConfirmModal an inline OK button so RTL can
@@ -1243,6 +1246,75 @@ describe("SlotSetupWizard", () => {
 
       expect(container.textContent).toContain("Connecting to RomM…");
       expect(container.textContent).not.toContain("attempt 2/3");
+    });
+
+    // The wizard shares the retry-progress store with the panel's slot lane and
+    // the achievements tab, and used to touch it without claiming it (#1758).
+    it("claims the store, so an older lane settling cannot wipe its live frame", async () => {
+      setRommConnectionState("connected");
+      const olderLane = beginServerLoad();
+      // Never resolves — the wizard stays in the loading branch showing the frame.
+      vi.mocked(backend.getSaveSetupInfo).mockImplementation(() => new Promise<never>(() => {}));
+      const { container } = render(<SlotSetupWizard {...defaultProps()} />);
+      await flushAsync();
+
+      act(() => setServerRetryProgress({ attempt: 2, maxAttempts: 3 }));
+      act(() => settleServerLoad(olderLane));
+
+      expect(container.textContent).toContain("Connecting to RomM… (attempt 2/3)");
+    });
+
+    it("drops its own retry frame once the load settles", async () => {
+      setRommConnectionState("connected");
+      let landAnswer!: (info: SaveSetupInfo) => void;
+      vi.mocked(backend.getSaveSetupInfo).mockImplementation(
+        () =>
+          new Promise<SaveSetupInfo>((resolve) => {
+            landAnswer = resolve;
+          }),
+      );
+      render(<SlotSetupWizard {...defaultProps()} />);
+      await flushAsync();
+
+      act(() => setServerRetryProgress({ attempt: 2, maxAttempts: 3 }));
+      expect(getServerRetryProgress()).toEqual({ attempt: 2, maxAttempts: 3 });
+
+      await act(async () => {
+        landAnswer(makeSetupInfo());
+        await Promise.resolve();
+      });
+      await flushAsync();
+
+      expect(getServerRetryProgress()).toBeNull();
+    });
+
+    it("manual Retry drops its retry frame once it settles", async () => {
+      setRommConnectionState("checking");
+      vi.mocked(backend.getSaveSetupInfo).mockRejectedValueOnce(new Error("first fail"));
+      const { getByText } = render(<SlotSetupWizard {...defaultProps()} />);
+      await flushAsync();
+
+      let landAnswer!: (info: SaveSetupInfo) => void;
+      vi.mocked(backend.getSaveSetupInfo).mockImplementation(
+        () =>
+          new Promise<SaveSetupInfo>((resolve) => {
+            landAnswer = resolve;
+          }),
+      );
+      await act(async () => {
+        fireEvent.click(getByText("Retry"));
+        await Promise.resolve();
+      });
+      act(() => setServerRetryProgress({ attempt: 2, maxAttempts: 3 }));
+      expect(getServerRetryProgress()).toEqual({ attempt: 2, maxAttempts: 3 });
+
+      await act(async () => {
+        landAnswer(makeSetupInfo());
+        await Promise.resolve();
+      });
+      await flushAsync();
+
+      expect(getServerRetryProgress()).toBeNull();
     });
   });
 });

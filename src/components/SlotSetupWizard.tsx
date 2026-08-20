@@ -15,10 +15,12 @@ import {
   SERVER_UNREACHABLE_WIZARD_MESSAGE,
 } from "../utils/saveSetup";
 import {
+  beginServerLoad,
   getRommConnectionState,
   onRommConnectionChange,
   reportServerReachable,
   setServerRetryProgress,
+  settleServerLoad,
 } from "../utils/connectionState";
 import { formatBytes } from "../utils/formatters";
 import type { SaveSetupInfo, SlotMigrationConflict } from "../types";
@@ -504,10 +506,16 @@ function useSaveSetupInfo(romId: number, onComplete: () => void) {
         return;
       }
 
+      // Claim the shared retry-progress store before touching it. Without a
+      // claim this lane's clear-on-start wiped a frame the panel's slot lane or
+      // the achievements tab owned, and their settle wiped this one's (#1758) —
+      // the claim is what orders the three.
+      const load = beginServerLoad();
       // Clear any stale retry progress from a previous load before starting a
       // fresh one, so ConnectingIndicator shows plain "Connecting to RomM…" and
-      // not a leftover "(attempt N/M)" (#1345 round-2 review). Clear-on-start is
-      // race-free — a clear-on-complete could wipe a still-live retry frame.
+      // not a leftover "(attempt N/M)" (#1345 round-2 review). The clear-on-settle
+      // below is the other half, and only the claim makes it safe: it is refused
+      // once a newer load owns the frame.
       setServerRetryProgress(null);
       setLoading(true);
       setError(null);
@@ -539,6 +547,9 @@ function useSaveSetupInfo(romId: number, onComplete: () => void) {
           logError(`SlotSetupWizard fetch failed: ${e}`);
         }
       } finally {
+        // Settled whether or not this run was torn down: the frame it put up is
+        // shared, so it is owed back to whichever load owns the store now.
+        settleServerLoad(load);
         if (!cancelled) setLoading(false);
       }
     };
@@ -571,23 +582,27 @@ function useSaveSetupInfo(romId: number, onComplete: () => void) {
   const retry = () => {
     setError(null);
     setLoading(true);
-    // Fresh load — drop any stale retry progress (see fetchInfo above).
+    // A fresh load, so it claims the shared store before touching it and hands
+    // it back when it settles — see fetchInfo above for both halves.
+    const load = beginServerLoad();
     setServerRetryProgress(null);
-    getSaveSetupInfo(romId).then(
-      (result) => {
-        // Same conservative feed as the initial load (#1345): the manual
-        // Retry re-probes reachability, so a server_unreachable result
-        // re-arms offline and any other result reports the server back.
-        const reachable = result.recommended_action !== "server_unreachable";
-        reportServerReachable(reachable);
-        offlineHeldRef.current = !reachable;
-        applyWizardRetrySetupResult(result, { setError, setLoading, setInfo });
-      },
-      (e) => {
-        setError(`Failed: ${e}`);
-        setLoading(false);
-      },
-    );
+    getSaveSetupInfo(romId)
+      .then(
+        (result) => {
+          // Same conservative feed as the initial load (#1345): the manual
+          // Retry re-probes reachability, so a server_unreachable result
+          // re-arms offline and any other result reports the server back.
+          const reachable = result.recommended_action !== "server_unreachable";
+          reportServerReachable(reachable);
+          offlineHeldRef.current = !reachable;
+          applyWizardRetrySetupResult(result, { setError, setLoading, setInfo });
+        },
+        (e) => {
+          setError(`Failed: ${e}`);
+          setLoading(false);
+        },
+      )
+      .finally(() => settleServerLoad(load));
   };
 
   return { info, loading, confirming, error, setConfirming, setError, retry };
