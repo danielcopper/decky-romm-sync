@@ -52,17 +52,19 @@ describe("sharedReads (#1758)", () => {
     expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledExactlyOnceWith(42);
   });
 
+  // The two answers below differ, so a second caller that opened its own request
+  // would be visible as a different label rather than only as a second call.
   it("hands both callers the same answer", async () => {
     const open = deferred<CoreInfo>();
-    vi.mocked(backend.getPlatformCoreInfo).mockReturnValue(open.promise);
+    vi.mocked(backend.getPlatformCoreInfo).mockReturnValueOnce(open.promise);
+    vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(coreInfo("Genesis Plus GX"));
 
     const panel = getPlatformCoreInfoShared(42);
     const playRow = getPlatformCoreInfoShared(42);
-    const answer = coreInfo("Snes9x");
-    open.resolve(answer);
+    open.resolve(coreInfo("Snes9x"));
 
-    expect(await panel).toBe(answer);
-    expect(await playRow).toBe(answer);
+    expect((await panel).active_core_label).toBe("Snes9x");
+    expect((await playRow).active_core_label).toBe("Snes9x");
   });
 
   // Sharing collapses concurrent callers; it must not turn into a cache that
@@ -88,9 +90,12 @@ describe("sharedReads (#1758)", () => {
     expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledTimes(2);
   });
 
+  // Same shape as the success case: only a caller that JOINED the failed request
+  // rejects, where one that opened its own would have resolved.
   it("gives every caller of a rejected request the rejection", async () => {
     const open = deferred<CoreInfo>();
-    vi.mocked(backend.getPlatformCoreInfo).mockReturnValue(open.promise);
+    vi.mocked(backend.getPlatformCoreInfo).mockReturnValueOnce(open.promise);
+    vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(coreInfo("Snes9x"));
 
     const panel = getPlatformCoreInfoShared(42);
     const playRow = getPlatformCoreInfoShared(42);
@@ -114,13 +119,18 @@ describe("sharedReads (#1758)", () => {
     expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith(43);
   });
 
+  // Issued together, not one after the other: sharing is keyed on the argument,
+  // so two DIFFERENT reads of the same ROM overlapping is exactly the case where
+  // one key could answer for the other.
   it("shares per read — metadata and core info do not answer for each other", async () => {
     const metadata = romMetadata("Test ROM");
     vi.mocked(backend.getRomMetadata).mockResolvedValue(metadata);
     vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue(coreInfo("Snes9x"));
 
-    expect(await getRomMetadataShared(42)).toBe(metadata);
-    expect(await getPlatformCoreInfoShared(42)).toMatchObject({ active_core_label: "Snes9x" });
+    const [meta, core] = await Promise.all([getRomMetadataShared(42), getPlatformCoreInfoShared(42)]);
+
+    expect(meta).toBe(metadata);
+    expect(core).toMatchObject({ active_core_label: "Snes9x" });
     expect(vi.mocked(backend.getRomMetadata)).toHaveBeenCalledExactlyOnceWith(42);
     expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledExactlyOnceWith(42);
   });
