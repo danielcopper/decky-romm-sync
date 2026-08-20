@@ -370,6 +370,11 @@ export const SavesTab: FC<SavesTabProps> = ({
           noFocusRing: false,
           onFocus: scrollFocusedToCenter,
           onClick: handleNewSlot,
+          // Creating a slot is a server write, so offline it can only end in the
+          // failure the banner above already predicts — after the full retry
+          // ladder. The sibling actions on this tab (slot switch, copy-to-slot)
+          // are disabled the same way.
+          disabled: isOffline,
         },
         "+ New Slot",
       ),

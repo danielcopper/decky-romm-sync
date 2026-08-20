@@ -551,6 +551,17 @@ describe("SavesTab", () => {
       fireEvent.click(getByText("+ New Slot"));
       expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
     });
+
+    it("is disabled while the server is unreachable", () => {
+      // Creating a slot is a server write; offline it can only fail, and the
+      // banner above already says slot switching is off.
+      setRommConnectionState("offline");
+      const { getByText } = render(<SavesTab {...defaultProps()} />);
+      const button = getByText("+ New Slot") as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      fireEvent.click(button);
+      expect(vi.mocked(showModal)).not.toHaveBeenCalled();
+    });
   });
 
   describe("new-slot submit — empty name", () => {
