@@ -1331,7 +1331,8 @@ Adapters own all I/O and implement the Protocols defined in `services/protocols/
 
 | Module                                                                     | Role                                                                                                                                                                                                                                                                                                            |
 | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `romm/http.py`                                                             | `RommHttpAdapter` — HTTP transport: auth, SSL, retry, User-Agent, platform map                                                                                                                                                                                                                                  |
+| `romm/http.py`                                                             | `RommHttpAdapter` — HTTP transport: auth, SSL, User-Agent, platform map, error translation                                                                                                                                                                                                                      |
+| `romm/retry.py`                                                            | `RetryLadder` — the attempt policy behind that transport: retry ladder, backoff, known-unreachable state                                                                                                                                                                                                        |
 | `romm/romm_api.py`                                                         | `RommApiAdapter` — RomM REST surface (saves, ROMs, platforms, firmware, devices, play-sessions) over the HTTP transport                                                                                                                                                                                         |
 | `steam_config.py`                                                          | `SteamConfigAdapter` — Steam VDF read/write, grid dir, shortcut icon write, Steam Input config                                                                                                                                                                                                                  |
 | `steamgriddb.py`                                                           | `SteamGridDbAdapter` — SteamGridDB REST client                                                                                                                                                                                                                                                                  |
@@ -1357,11 +1358,15 @@ Adapters own all I/O and implement the Protocols defined in `services/protocols/
 
 #### RommHttpAdapter notes: one retry ladder per call stack
 
+How often a request is attempted is not the transport's own question: `RetryLadder` (`romm/retry.py`) owns the ladder,
+its re-entrancy scope and the reachability state, and `RommHttpAdapter` holds one and delegates `with_retry` /
+`is_retryable` to it — the two methods that make the adapter a `RetryStrategy`.
+
 `with_retry` runs up to 3 attempts with a `base_delay * 3^attempt` backoff (1s then 3s — a 3-attempt ladder has only two
 gaps) and only retries what `is_retryable` calls transient. It is reached from two levels: most of the adapter's own
 request methods wrap themselves in it, and services wrap adapter calls again through the `RetryStrategy` protocol
 (satisfied by `RommHttpAdapter` itself). **The outermost ladder wins** — a re-entrant call runs its function straight
-through, guarded by a thread-local flag on the adapter, because the blocking work runs one call per executor thread.
+through, guarded by a thread-local flag on the ladder, because the blocking work runs one call per executor thread.
 Without that guard the two levels multiply into 9 HTTP attempts with both backoffs stacked, which is what made a single
 game-detail page take ~30 s to fill in against an unreachable server.
 
@@ -1371,7 +1376,7 @@ deliberately have none (`upload_multipart`, `request_once`, `unauthenticated_pos
 the coarse wraps whose callee paginates or chains several requests — those keep being retried as the whole unit their
 caller meant.
 
-The adapter also remembers one bit of transport state: **the server is known unreachable**. A ladder that gives up on an
+The ladder also remembers one bit of transport state: **the server is known unreachable**. A ladder that gives up on an
 exception that means the server could not be reached sets it; while it is set every ladder shrinks to a single attempt
 with no backoff, and a ladder already sleeping cuts its backoff short (the lanes a game-detail page opens start
 simultaneously, so this is what makes the _first_ load after an outage fast, not only the second). The degraded ladder

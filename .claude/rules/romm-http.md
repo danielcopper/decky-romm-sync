@@ -10,10 +10,11 @@ that exist today, not the one you are about to add. The choke-point rule at the 
 
 ## Every request goes out through `_urlopen` — checked
 
-`RommHttpAdapter` remembers whether the RomM server is known unreachable, and while that bit is set every retry ladder
-runs a single attempt with no backoff. It is cleared in exactly one place — `_urlopen` — so that a response arriving on
-**any** path clears it, including the paths that deliberately skip `with_retry` (the reachability probe and the
-heartbeat both run through `request_once`).
+The `RetryLadder` (`retry.py`) each `RommHttpAdapter` holds remembers whether the RomM server is known unreachable, and
+while that bit is set every retry ladder runs a single attempt with no backoff. It is cleared from exactly one place in
+the transport — `_urlopen`, which calls `self._retry.note_reachable()` — so that a response arriving on **any** path
+clears it, including the paths that deliberately skip `with_retry` (the reachability probe and the heartbeat both run
+through `request_once`).
 
 So a new request method must send its request with `self._urlopen(req, timeout=...)`, never by calling
 `urllib.request.urlopen` itself. Reaching for `urlopen` directly fails silently in the worst way: the call succeeds, the
@@ -24,7 +25,7 @@ alias or a `getattr`).
 Pass `romm_origin=False` when the request does **not** go to the configured RomM server. There is one such caller today,
 `download_external`, which fetches a ROM's `url_cover` from a third-party CDN: a dead CDN must not mark RomM
 unreachable, and reaching the CDN is no evidence that RomM came back. Its ladder is entered through
-`_enter_ladder(..., romm_origin=False)` for the same reason.
+`self._retry.enter(..., romm_origin=False)` for the same reason.
 
 The bit is set only where a ladder gives up, and an error carrying a **4xx status code** never sets it — the server
 answered, whatever it answered. That peel is deliberate and load-bearing: `classify_error` is a user-messaging
