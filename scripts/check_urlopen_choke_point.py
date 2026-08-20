@@ -55,7 +55,7 @@ def _dotted_name(node: ast.expr) -> tuple[str, ...]:
     return tuple(reversed(parts))
 
 
-def _urlopen_calls(tree: ast.Module) -> list[ast.Call]:
+def _urlopen_calls(tree: ast.AST) -> list[ast.Call]:
     """Every ``urllib.request.urlopen(...)`` call site in *tree*."""
     return [node for node in ast.walk(tree) if isinstance(node, ast.Call) and _dotted_name(node.func) == URLOPEN]
 
