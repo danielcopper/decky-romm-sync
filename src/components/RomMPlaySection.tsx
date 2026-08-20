@@ -118,19 +118,23 @@ function resolveLastPlayed(restoredIso: string | null, steamUnixSeconds: number)
  *  status itself, so a bare notification costs one more round-trip per listener
  *  for an answer already in hand (#1758).
  *
- *  Both callers reach the dispatch after an await, and a version switch in that
- *  window re-keys the page to another ROM without tearing either of them down —
- *  so the answer's own `rom_id` is checked against the identity the read was
- *  issued for before it is broadcast as this page's. */
-async function readAndBroadcastSaveStatus(appId: number, romId: number, isCancelled: () => boolean): Promise<void> {
+ *  Both callers reach the dispatch after an await, and `isCancelled` cannot be
+ *  what keeps this page's answer apart from its predecessor's. The reconnect
+ *  caller is keyed on the appId alone, so a version switch never tears it down
+ *  at all; and where a switch DOES re-run a caller, React commits that teardown
+ *  only after the re-render, so an answer arriving before the commit still
+ *  passes (#1717). What decides is the answer's own `rom_id` against the rom
+ *  bound to this appId NOW — the same gate the store's fold applies, which is
+ *  also why the id on the wire is the answer's rather than a captured one. */
+async function readAndBroadcastSaveStatus(appId: number, isCancelled: () => boolean): Promise<void> {
   try {
     const saveStatus = await refreshSaveStatus(appId);
-    if (isCancelled() || !saveStatus || saveStatus.rom_id !== romId) return;
+    if (isCancelled() || !saveStatus || saveStatus.rom_id !== getGameDetail(appId).romId) return;
     globalThis.dispatchEvent(
       new CustomEvent("romm_data_changed", {
         detail: {
           type: "save_sync",
-          rom_id: romId,
+          rom_id: saveStatus.rom_id,
           save_status: saveStatus,
           has_conflict: hasAnySaveConflict(saveStatus),
         },
@@ -358,7 +362,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     const romId = detail.romId;
     if (!romId || !detail.saveSyncEnabled) return;
     let cancelled = false;
-    detach(readAndBroadcastSaveStatus(appId, romId, () => cancelled));
+    detach(readAndBroadcastSaveStatus(appId, () => cancelled));
     return () => {
       cancelled = true;
     };
@@ -388,7 +392,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       // has to judge is the one the store holds now.
       const { romId, saveSyncEnabled, saveStatus } = getGameDetail(appId);
       if (!romId || !saveSyncEnabled || !saveStatus?.server_query_failed) return;
-      detach(readAndBroadcastSaveStatus(appId, romId, () => cancelled));
+      detach(readAndBroadcastSaveStatus(appId, () => cancelled));
     });
     return () => {
       cancelled = true;

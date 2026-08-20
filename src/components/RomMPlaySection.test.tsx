@@ -1346,11 +1346,15 @@ describe("RomMPlaySection", () => {
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
 
-      // The mount check really does move the verdict checking -> connected, which
-      // is the transition the reconnect lane below subscribes to. Asserting it
-      // here is what makes the read count a guard on that lane and not just on
-      // the store's fold: a lane that re-read on any reachable verdict rather
-      // than on an unrepaired answer would show up as a second read.
+      // The mount check really does move the verdict checking -> connected, so
+      // the transition the reconnect lane subscribes to genuinely fires here.
+      // The read count does NOT pin that lane's predicate, though: the verdict
+      // flips in the same tick the mount read is issued, so a predicate-free
+      // lane would be handed the store's in-flight promise and still show one
+      // read. The predicate is pinned by "issues no read on reconnect when the
+      // answer on hand already carries its server half"; the page-open cost of a
+      // verdict-keyed lane, by "still costs ONE read on a page open whose
+      // verdict settles after the status did".
       expect(connectionState.getRommConnectionState()).toBe("connected");
       // The store's load reads it; the notification this section then sends
       // carries that answer, so the store's own save_sync handler folds it
@@ -1506,6 +1510,93 @@ describe("RomMPlaySection", () => {
 
       expect(connectionState.getRommConnectionState()).toBe("offline");
       expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledTimes(2);
+    });
+
+    it("issues no read on reconnect once save sync has been switched off", async () => {
+      vi.mocked(backend.getSaveStatus).mockResolvedValue(makeSaveStatus({ server_query_failed: true }));
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: false, message: "" });
+
+      await mountWithSaveSync();
+
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "save_sync_settings", save_sync_enabled: false },
+          }),
+        );
+        await Promise.resolve();
+      });
+      await flushAsync();
+
+      // Switching sync off clears the shown display but leaves the last status
+      // standing, so the unrepaired-answer predicate on its own still admits a
+      // read here — the save-sync flag is the only thing refusing it.
+      expect(getGameDetail(testAppId).saveSyncEnabled).toBe(false);
+      expect(getGameDetail(testAppId).saveStatus?.server_query_failed).toBe(true);
+
+      await transitionTo("connected");
+
+      expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledTimes(1);
+      // And nothing puts a sync display back on a game whose sync is off.
+      expect(getGameDetail(testAppId).saveSyncStatus).toBeNull();
+    });
+
+    it("suppresses a reconnect broadcast for a ROM the page has switched away from", async () => {
+      const romOldStatus = makeSaveStatus({ server_query_failed: true });
+      vi.mocked(backend.getSaveStatus).mockResolvedValueOnce(romOldStatus);
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: false, message: "" });
+      await mountWithSaveSync();
+
+      // Hold the reconnect read open so the version switch below lands while it
+      // is still in flight. This is the window the reconnect lane cannot close
+      // with `cancelled`: keyed on the appId alone, a switch never tears it down.
+      let settleReconnectRead: (status: SaveStatus) => void = () => {};
+      vi.mocked(backend.getSaveStatus).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            settleReconnectRead = resolve;
+          }),
+      );
+      await transitionTo("connected");
+      expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledTimes(2);
+
+      // The page re-binds to another ROM while that read is open.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 99,
+        save_sync_enabled: true,
+        save_sync_display: { status: "synced", label: "ok", last_sync_check_at: null },
+      });
+      vi.mocked(backend.getSaveStatus).mockResolvedValue(makeSaveStatus({ rom_id: 99 }));
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "version_switched", app_id: testAppId, rom_id: 99 },
+          }),
+        );
+        await Promise.resolve();
+      });
+      await flushAsync();
+      expect(getGameDetail(testAppId).romId).toBe(99);
+
+      const listener = vi.fn();
+      globalThis.addEventListener("romm_data_changed", listener);
+      try {
+        await act(async () => {
+          settleReconnectRead(romOldStatus);
+          await Promise.resolve();
+        });
+        await flushAsync();
+
+        // Broadcasting it would put the ROM the page has left on the page of the
+        // one it moved to — the saves surfaces fold what this event carries.
+        const staleBroadcasts = listener.mock.calls
+          .map((c) => c[0] as CustomEvent)
+          .filter((e) => e.detail.type === "save_sync" && e.detail.rom_id === 88);
+        expect(staleBroadcasts).toHaveLength(0);
+      } finally {
+        globalThis.removeEventListener("romm_data_changed", listener);
+      }
     });
   });
 
