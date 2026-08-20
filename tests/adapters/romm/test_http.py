@@ -277,7 +277,7 @@ class TestWithRetryOnRetryListener:
         # 3 attempts total; the listener fires just before each of the 2 backoff
         # sleeps, naming the retry about to run (attempt 2/3, then 3/3) and its delay.
         assert calls == [(2, 3, 1.0), (3, 3, 3.0)]
-        assert sleep_mock.call_count == 2
+        assert sum(call.args[0] for call in sleep_mock.call_args_list) == pytest.approx(4.0)
         assert tries["n"] == 3
 
     def test_not_fired_when_first_attempt_succeeds(self):
@@ -1347,13 +1347,15 @@ class TestRetryLogic:
         fn.assert_called_once()
 
     def test_retry_delays_exponential(self, plugin):
-        """Delays follow base_delay * 3^attempt pattern."""
+        """Delays follow base_delay * 3^attempt pattern.
+
+        Each gap is spent in polled slices (so a sibling lane can cut it short),
+        so what is pinned is the time actually slept, not the call count.
+        """
         fn = MagicMock(side_effect=[ConnectionError("1"), ConnectionError("2"), "ok"])
         with patch("time.sleep") as mock_sleep:
             plugin._http_adapter.with_retry(fn, max_attempts=3, base_delay=1)
-        assert mock_sleep.call_count == 2
-        mock_sleep.assert_any_call(1)  # 1 * 3^0
-        mock_sleep.assert_any_call(3)  # 1 * 3^1
+        assert sum(call.args[0] for call in mock_sleep.call_args_list) == pytest.approx(4.0)  # 1 * 3^0 + 1 * 3^1
 
     def test_retry_no_retry_on_romm_auth_error(self, plugin):
         """RommAuthError raises immediately without retry."""
@@ -1377,6 +1379,233 @@ class TestRetryLogic:
             result = plugin._http_adapter.with_retry(fn, max_attempts=3, base_delay=0)
         assert result == "ok"
         assert fn.call_count == 2
+
+
+# ============================================================================
+# Retry ladder: re-entrancy and the known-unreachable fast path (#1758)
+# ============================================================================
+
+
+def _ok_response(payload: bytes = b'{"ok": true}') -> MagicMock:
+    """A urlopen return value usable both as a context manager and directly."""
+    resp = MagicMock()
+    resp.status = 200
+    resp.read.return_value = payload
+    resp.__enter__ = MagicMock(return_value=resp)
+    resp.__exit__ = MagicMock(return_value=False)
+    return resp
+
+
+class TestRetryLadderReentrancy:
+    """One ladder per call stack — the OUTERMOST one wins (#1758).
+
+    Services wrap adapter calls through the ``RetryStrategy`` protocol, and most
+    of the adapter methods they wrap already wrap themselves. Without the guard
+    the two levels multiply into 9 HTTP attempts with both backoffs stacked.
+    """
+
+    def _transient(self) -> MagicMock:
+        """A callable failing with a retryable error that is NOT a reachability verdict.
+
+        A bare ``OSError`` is retryable but classifies as ``unknown`` rather than
+        ``server_unreachable``, which isolates the re-entrancy guard from the
+        known-unreachable fast path — that path would otherwise cut the outer
+        ladder short and hide a missing guard.
+        """
+        return MagicMock(side_effect=OSError("transient"))
+
+    def test_a_nested_ladder_does_not_multiply_the_attempts(self, plugin):
+        adapter = plugin._http_adapter
+        inner = self._transient()
+        with patch("time.sleep"), pytest.raises(OSError):
+            adapter.with_retry(lambda: adapter.with_retry(inner))
+        assert inner.call_count == 3  # 3 x 3 without the guard
+
+    def test_only_the_outer_ladder_backs_off(self, plugin):
+        adapter = plugin._http_adapter
+        with patch("time.sleep") as sleep_mock, pytest.raises(OSError):
+            adapter.with_retry(lambda: adapter.with_retry(self._transient()), base_delay=1)
+        # Two gaps, 1s and 3s — not the six a nested ladder would sleep.
+        assert sum(call.args[0] for call in sleep_mock.call_args_list) == pytest.approx(4.0)
+
+    def test_a_service_wrap_over_a_retrying_adapter_method_costs_three_http_attempts(self, plugin):
+        """The #1758 outcome: one game-detail lane against a dead server is 3 HTTP attempts, not 9."""
+        adapter = plugin._http_adapter
+        plugin.settings["romm_url"] = "http://romm.local"
+        with (
+            patch("urllib.request.urlopen", side_effect=ConnectionRefusedError("refused")) as urlopen,
+            patch("time.sleep"),
+            pytest.raises(RommConnectionError),
+        ):
+            adapter.with_retry(lambda: adapter.request("/api/roms"))
+        assert urlopen.call_count == 3
+
+    def test_a_nested_ladder_raises_the_callee_error_unchanged(self, plugin):
+        adapter = plugin._http_adapter
+        inner = MagicMock(side_effect=RommAuthError("401"))
+        with pytest.raises(RommAuthError):
+            adapter.with_retry(lambda: adapter.with_retry(inner))
+        inner.assert_called_once()
+
+    def test_depth_is_released_after_a_raising_ladder(self, plugin):
+        """A ladder that raised must not leave the thread marked as "inside a ladder"."""
+        adapter = plugin._http_adapter
+        with pytest.raises(RommAuthError):
+            adapter.with_retry(MagicMock(side_effect=RommAuthError("401")))
+
+        fn = MagicMock(side_effect=[RommConnectionError("refused"), RommConnectionError("refused"), "ok"])
+        with patch("time.sleep"):
+            assert adapter.with_retry(fn, base_delay=0) == "ok"
+        assert fn.call_count == 3
+
+    def test_each_thread_carries_its_own_depth(self, plugin):
+        """The guard is thread-local: a lane running concurrently still gets its own full ladder."""
+        import threading
+
+        adapter = plugin._http_adapter
+        other_lane_attempts: list[int] = []
+
+        def other_lane() -> None:
+            fn = MagicMock(side_effect=RommServerError("500"))
+            with pytest.raises(RommServerError):
+                adapter.with_retry(fn, base_delay=0)
+            other_lane_attempts.append(fn.call_count)
+
+        def inside_a_ladder() -> str:
+            worker = threading.Thread(target=other_lane)
+            worker.start()
+            worker.join()
+            return "ok"
+
+        with patch("time.sleep"):
+            assert adapter.with_retry(inside_a_ladder) == "ok"
+        assert other_lane_attempts == [3]
+
+
+class TestKnownUnreachableFastPath:
+    """A server already known unreachable costs one attempt, not a full ladder (#1758)."""
+
+    @pytest.fixture(autouse=True)
+    def _reachable_url(self, plugin):
+        plugin.settings["romm_url"] = "http://romm.local"
+
+    def _failing_ladder(self, adapter, exc: Exception) -> None:
+        with patch("time.sleep"), pytest.raises(type(exc)):
+            adapter.with_retry(MagicMock(side_effect=exc), base_delay=0)
+
+    def test_ladder_giving_up_unreachable_shrinks_the_next_ladder_to_one_attempt(self, plugin):
+        adapter = plugin._http_adapter
+        self._failing_ladder(adapter, RommConnectionError("refused"))
+
+        retries: list[tuple[int, int, float]] = []
+        adapter.on_retry = lambda a, m, d: retries.append((a, m, d))
+        fn = MagicMock(side_effect=RommConnectionError("refused"))
+        with patch("time.sleep") as sleep_mock, pytest.raises(RommConnectionError):
+            adapter.with_retry(fn, base_delay=1)
+        fn.assert_called_once()
+        sleep_mock.assert_not_called()
+        # The ladder is one attempt long, so no "connecting… (attempt 2/3)" is
+        # promised to the UI either.
+        assert retries == []
+
+    def test_the_single_attempt_still_really_calls_out(self, plugin):
+        """Self-healing rests on this: the state degrades the ladder, it never skips the call."""
+        adapter = plugin._http_adapter
+        self._failing_ladder(adapter, RommConnectionError("refused"))
+
+        fn = MagicMock(return_value="ok")
+        assert adapter.with_retry(fn) == "ok"
+        fn.assert_called_once()
+
+    def test_a_successful_response_clears_the_state(self, plugin):
+        adapter = plugin._http_adapter
+        self._failing_ladder(adapter, RommConnectionError("refused"))
+
+        with patch("urllib.request.urlopen", return_value=_ok_response()):
+            adapter.request("/api/roms")
+
+        fn = MagicMock(side_effect=RommConnectionError("refused"))
+        with patch("time.sleep"), pytest.raises(RommConnectionError):
+            adapter.with_retry(fn, base_delay=0)
+        assert fn.call_count == 3
+
+    def test_request_once_clears_the_state_although_it_bypasses_the_ladder(self, plugin):
+        """The reachability probe and the 30s heartbeat are the paths that see the server come back."""
+        adapter = plugin._http_adapter
+        self._failing_ladder(adapter, RommConnectionError("refused"))
+
+        with patch("urllib.request.urlopen", return_value=_ok_response()):
+            adapter.request_once("/api/heartbeat", timeout=3)
+
+        fn = MagicMock(side_effect=RommConnectionError("refused"))
+        with patch("time.sleep"), pytest.raises(RommConnectionError):
+            adapter.with_retry(fn, base_delay=0)
+        assert fn.call_count == 3
+
+    def test_upload_multipart_clears_the_state(self, plugin, tmp_path):
+        """The upload path skips the ladder too, so it needs the same choke point."""
+        adapter = plugin._http_adapter
+        self._failing_ladder(adapter, RommConnectionError("refused"))
+        src = tmp_path / "save.srm"
+        src.write_bytes(b"payload")
+
+        with patch("urllib.request.urlopen", return_value=_ok_response()):
+            adapter.upload_multipart("/api/saves", str(src))
+
+        fn = MagicMock(side_effect=RommConnectionError("refused"))
+        with patch("time.sleep"), pytest.raises(RommConnectionError):
+            adapter.with_retry(fn, base_delay=0)
+        assert fn.call_count == 3
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            RommNotFoundError("Rom with id '4375' not found"),
+            RommAuthError("401"),
+            RommForbiddenError("403"),
+        ],
+        ids=["entity-404", "401", "403"],
+    )
+    def test_a_server_answer_never_counts_as_unreachable(self, plugin, exc):
+        """A 404 from RomM's entity layer is deletion authority downstream (#1570) — never a transport verdict."""
+        adapter = plugin._http_adapter
+        self._failing_ladder(adapter, exc)
+
+        fn = MagicMock(side_effect=RommConnectionError("refused"))
+        with patch("time.sleep"), pytest.raises(RommConnectionError):
+            adapter.with_retry(fn, base_delay=0)
+        assert fn.call_count == 3
+
+    def test_an_unproven_404_does_count_as_unreachable(self, plugin):
+        """The other side of the polarity: a 404 nobody can attribute to RomM is a transport verdict.
+
+        It degrades to a plain ``RommApiError``, which is what ``classify_error``
+        already maps to ``server_unreachable`` everywhere else — the same
+        fail-open reading that denies it deletion authority.
+        """
+        adapter = plugin._http_adapter
+        degraded = adapter.translate_http_error(_http_error(404, "Not Found"), "http://romm.local/api/roms/4375")
+        assert not isinstance(degraded, RommNotFoundError)
+        assert classify_error(degraded)[0] == ErrorCode.SERVER_UNREACHABLE.value
+        self._failing_ladder(adapter, degraded)
+
+        fn = MagicMock(side_effect=RommConnectionError("refused"))
+        with patch("time.sleep"), pytest.raises(RommConnectionError):
+            adapter.with_retry(fn, base_delay=0)
+        fn.assert_called_once()
+
+    def test_a_sleeping_ladder_gives_up_once_another_lane_reports_unreachable(self, plugin):
+        """The eight lanes a game-detail page opens start together — this is what makes the FIRST load fast."""
+        adapter = plugin._http_adapter
+        fn = MagicMock(side_effect=RommConnectionError("refused"))
+
+        def other_lane_gives_up(_seconds):
+            adapter._note_unreachable(RommConnectionError("refused"))
+
+        with patch("time.sleep", side_effect=other_lane_gives_up), pytest.raises(RommConnectionError):
+            adapter.with_retry(fn, base_delay=1)
+        # Attempt 1 failed, the backoff was cut short, attempt 2 never ran.
+        fn.assert_called_once()
 
 
 # ============================================================================

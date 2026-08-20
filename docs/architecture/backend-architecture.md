@@ -1355,6 +1355,38 @@ Adapters own all I/O and implement the Protocols defined in `services/protocols/
 | `renderer_rss.py` / `renderer_gc.py`                                       | `RendererRssFn` — max `steamwebhelper` `VmRSS` from `/proc`; `RendererGcFn` (`HeapProfiler.collectGarbage`) over the CEF debugger. The session-budget measure + settle seams (ADR-0024). The "free memory" action is a frontend `SteamClient.User.StartRestart`, not a backend adapter                          |
 | `game_process.py`                                                          | `GameProcessControl` — resolves a flatpak app's live instances via the per-user registry (`info` / `bwrapinfo.json`) plus the `/proc` child walk, reporting each tree's PIDs and argv separately, and signals them. Direct reads + `os.kill`, no subprocess; fail-soft on every read                            |
 
+#### RommHttpAdapter notes: one retry ladder per call stack
+
+`with_retry` runs up to 3 attempts with a `base_delay * 3^attempt` backoff (1s then 3s — a 3-attempt ladder has only two
+gaps) and only retries what `is_retryable` calls transient. It is reached from two levels: most of the adapter's own
+request methods wrap themselves in it, and services wrap adapter calls again through the `RetryStrategy` protocol
+(satisfied by `RommHttpAdapter` itself). **The outermost ladder wins** — a re-entrant call runs its function straight
+through, guarded by a thread-local flag on the adapter, because the blocking work runs one call per executor thread.
+Without that guard the two levels multiply into 9 HTTP attempts with both backoffs stacked, which is what made a single
+game-detail page take ~30 s to fill in against an unreachable server.
+
+The guard lives in `with_retry` rather than in the ~20 service call sites so that a twenty-first site cannot
+re-introduce the nesting, and because the service-level wrap is the **only** ladder for the adapter methods that
+deliberately have none (`upload_multipart`, `request_once`, `unauthenticated_post_json`, `basic_auth_request`) and for
+the coarse wraps whose callee paginates or chains several requests — those keep being retried as the whole unit their
+caller meant.
+
+The adapter also remembers one bit of transport state: **the server is known unreachable**. A ladder that gives up on an
+exception `classify_error` maps to `server_unreachable` sets it; while it is set every ladder shrinks to a single
+attempt with no backoff, and a ladder already sleeping cuts its backoff short (the lanes a game-detail page opens start
+simultaneously, so this is what makes the _first_ load after an outage fast, not only the second). The degraded ladder
+still really performs its call — it is never skipped — which is what makes the state self-healing and what makes the
+UI's Retry button work with no path of its own. Any successful response clears it, including on the ladder-bypassing
+paths, because every request funnels through one `_urlopen` choke point; the reachability probe and the 30 s heartbeat
+therefore clear it for free. An `HTTPError` deliberately does not clear it: a 5xx answered by a proxy in front of a dead
+origin is one of the shapes `classify_error` calls unreachable.
+
+Neither `RommNotFoundError` nor the auth errors ever set it — those mean the server answered, and a 404 that means that
+is deletion authority downstream (next section). An **unproven** 404 does set it, because it degrades to a plain
+`RommApiError` and `classify_error` already reads that as `server_unreachable` everywhere else — the same fail-open
+reading that denies it deletion authority. Nothing is lost either way: the degraded ladder still makes the call, and the
+first response to come back restores the full one.
+
 #### RommHttpAdapter notes: what makes a 404 an entity verdict
 
 `RommNotFoundError` means "RomM's entity layer says this entity does not exist", and downstream that reading is

@@ -10,6 +10,7 @@ import logging
 import os
 import socket
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -34,7 +35,9 @@ from lib.errors import (
     RommTimeoutError,
     RommUnprocessableEntityError,
     TokenHostMismatchError,
+    classify_error,
 )
+from lib.list_result import ErrorCode
 from lib.url_host import same_origin
 
 _CONTENT_TYPE_JSON = "application/json"
@@ -76,6 +79,7 @@ class RommHttpAdapter:
     _CONNECT_TIMEOUT = 30
     _READ_TIMEOUT = 60
     _DOWNLOAD_BLOCK_SIZE = 65536
+    _BACKOFF_POLL_INTERVAL = 0.25
 
     def __init__(
         self,
@@ -90,6 +94,15 @@ class RommHttpAdapter:
         self._logger = logger
         self._user_agent = user_agent
         self.on_retry = on_retry
+        # Per-thread "a ladder is already running below me" flag. The blocking
+        # work runs in the loop's default ThreadPoolExecutor, one worker per
+        # concurrent call, so a thread is exactly one call stack.
+        self._ladder = threading.local()
+        # Shared across every lane: this adapter is a single process-wide
+        # instance handed by reference to all services. Written from executor
+        # threads and read by all of them — a bare bool assignment is atomic,
+        # and a stale read only ever costs one extra attempt.
+        self._server_unreachable = False
 
     # ------------------------------------------------------------------
     # Platform map
@@ -380,23 +393,77 @@ class RommHttpAdapter:
     def with_retry(self, fn, *args, max_attempts: int = 3, base_delay: int = 1, **kwargs):
         """Call fn(*args, **kwargs) with exponential backoff retry.
 
-        Delays: base_delay * 3^attempt (1s, 3s, 9s for defaults).
-        Only retries on transient errors (see is_retryable).
+        Delays: base_delay * 3^attempt — 1s then 3s for the 3-attempt default,
+        which has only two gaps. Only retries on transient errors (see
+        is_retryable).
+
+        The OUTERMOST ladder wins, always. Services wrap adapter calls through
+        the ``RetryStrategy`` protocol and most of those adapter methods already
+        wrap themselves, so a nested ladder would run 3x3 attempts with both
+        backoffs stacked; a nested call therefore runs *fn* straight through.
+        The service-level wrap stays the ONLY ladder for the adapter methods
+        that deliberately have none (``upload_multipart``, ``request_once``,
+        ``unauthenticated_post_json``, ``basic_auth_request``), and for the
+        coarse wraps whose callee paginates or chains several requests — those
+        are then retried as the whole unit their caller meant.
+
+        While the server is known unreachable the ladder shrinks to one attempt
+        with no backoff. The call is still really made: that is what makes the
+        state self-healing and what makes the UI's Retry button work with no
+        path of its own.
         """
-        last_exc = None
-        for attempt in range(max_attempts):
+        if getattr(self._ladder, "active", False):
+            return fn(*args, **kwargs)
+        self._ladder.active = True
+        try:
+            return self._run_ladder(fn, args, kwargs, max_attempts, base_delay)
+        finally:
+            self._ladder.active = False
+
+    def _run_ladder(self, fn, args, kwargs, max_attempts: int, base_delay: int):
+        """Run the attempt ladder for *fn* — :meth:`with_retry`'s body, once re-entrancy is ruled out."""
+        attempts = 1 if self._server_unreachable else max_attempts
+        for attempt in range(attempts):
             try:
                 return fn(*args, **kwargs)
             except Exception as exc:
-                last_exc = exc
-                if attempt < max_attempts - 1 and self.is_retryable(exc):
-                    delay = base_delay * (3**attempt)
-                    self._logger.info(f"Retry {attempt + 1}/{max_attempts} after {delay}s: {exc}")
-                    self._notify_retry(attempt + 2, max_attempts, float(delay))
-                    time.sleep(delay)
-                else:
+                if attempt == attempts - 1 or not self.is_retryable(exc):
+                    self._note_unreachable(exc)
                     raise
-        raise last_exc  # type: ignore[misc]  # pragma: no cover
+                delay = base_delay * (3**attempt)
+                self._logger.info(f"Retry {attempt + 1}/{attempts} after {delay}s: {exc}")
+                self._notify_retry(attempt + 2, attempts, float(delay))
+                if not self._backoff(float(delay)):
+                    raise
+        raise AssertionError("attempt ladder ran zero attempts")  # pragma: no cover
+
+    def _note_unreachable(self, exc: Exception) -> None:
+        """Record that the ladder gave up because the server could not be reached.
+
+        The verdict comes from ``classify_error`` so there is one definition of
+        "unreachable" in the codebase rather than a second, coarser one here. A
+        :class:`RommNotFoundError` is deliberately not one of them — it means
+        RomM's entity layer ANSWERED, and downstream that reading is deletion
+        authority (see ``.claude/rules/romm-http.md``); so are the auth errors.
+        """
+        reason, _message = classify_error(exc)
+        if reason == ErrorCode.SERVER_UNREACHABLE.value:
+            self._server_unreachable = True
+
+    def _backoff(self, delay: float) -> bool:
+        """Sleep *delay* seconds, returning ``False`` if the server went unreachable meanwhile.
+
+        Polled rather than slept in one go because a game-detail page opens all
+        of its lanes at once: the first lane to give up has to be able to cut
+        the backoff of the ones already sleeping short, or only the SECOND page
+        load after an outage is fast.
+        """
+        remaining = delay
+        while remaining > 0 and not self._server_unreachable:
+            slice_s = min(self._BACKOFF_POLL_INTERVAL, remaining)
+            time.sleep(slice_s)
+            remaining -= slice_s
+        return not self._server_unreachable
 
     def _notify_retry(self, attempt: int, max_attempts: int, delay_s: float) -> None:
         """Fire the optional retry listener, swallowing any listener failure.
@@ -415,6 +482,21 @@ class RommHttpAdapter:
     # ------------------------------------------------------------------
     # HTTP request methods
     # ------------------------------------------------------------------
+
+    def _urlopen(self, req: urllib.request.Request, *, timeout: int):
+        """Send *req* and clear the known-unreachable state the moment a response arrives.
+
+        The one choke point every request path passes through, the ones that
+        deliberately skip :meth:`with_retry` included — the reachability probe
+        and the 30s heartbeat both run through ``request_once``, so a server
+        that came back clears the state without needing a path of its own.
+        An ``HTTPError`` deliberately does NOT clear it: a 5xx answered by a
+        proxy in front of a dead origin is one of the things ``classify_error``
+        calls unreachable in the first place.
+        """
+        resp = urllib.request.urlopen(req, context=self.ssl_context(), timeout=timeout)
+        self._server_unreachable = False
+        return resp
 
     def request(self, path: str):
         """GET a JSON resource from the RomM API (with retry)."""
@@ -438,7 +520,7 @@ class RommHttpAdapter:
             req = urllib.request.Request(url, method="GET")
             self._apply_default_headers(req)
             try:
-                with urllib.request.urlopen(req, context=self.ssl_context(), timeout=timeout) as resp:
+                with self._urlopen(req, timeout=timeout) as resp:
                     return json.loads(resp.read().decode())
             except RommApiError:
                 raise
@@ -574,9 +656,8 @@ class RommHttpAdapter:
             existing_size = dest_path.stat().st_size if (resume and dest_path.exists()) else 0
             if existing_size > 0:
                 req.add_header("Range", f"bytes={existing_size}-")
-            ctx = self.ssl_context()
             try:
-                with urllib.request.urlopen(req, context=ctx, timeout=self._CONNECT_TIMEOUT) as resp:
+                with self._urlopen(req, timeout=self._CONNECT_TIMEOUT) as resp:
                     raw_sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
                     if raw_sock is not None:
                         raw_sock.settimeout(self._READ_TIMEOUT)
@@ -640,7 +721,7 @@ class RommHttpAdapter:
             elif last_modified:
                 req.add_header("If-Modified-Since", last_modified)
             try:
-                with urllib.request.urlopen(req, context=self.ssl_context(), timeout=self._CONNECT_TIMEOUT) as resp:
+                with self._urlopen(req, timeout=self._CONNECT_TIMEOUT) as resp:
                     raw_sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
                     if raw_sock is not None:
                         raw_sock.settimeout(self._READ_TIMEOUT)
@@ -708,7 +789,7 @@ class RommHttpAdapter:
             req = urllib.request.Request(encoded_url, method="GET")
             req.add_header("User-Agent", self._user_agent)
             try:
-                with urllib.request.urlopen(req, context=self.ssl_context(), timeout=self._CONNECT_TIMEOUT) as resp:
+                with self._urlopen(req, timeout=self._CONNECT_TIMEOUT) as resp:
                     raw_sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
                     if raw_sock is not None:
                         raw_sock.settimeout(self._READ_TIMEOUT)
@@ -767,7 +848,7 @@ class RommHttpAdapter:
             req.add_header("Content-Type", _CONTENT_TYPE_JSON)
             self._apply_default_headers(req)
             try:
-                with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
+                with self._urlopen(req, timeout=30) as resp:
                     return json.loads(resp.read().decode())
             except RommApiError:
                 raise
@@ -812,7 +893,7 @@ class RommHttpAdapter:
         req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
         self._apply_default_headers(req)
         try:
-            with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
+            with self._urlopen(req, timeout=30) as resp:
                 return json.loads(resp.read().decode())
         except RommApiError:
             raise
@@ -838,7 +919,7 @@ class RommHttpAdapter:
         req.add_header("Content-Type", _CONTENT_TYPE_JSON)
         req.add_header("User-Agent", self._user_agent)
         try:
-            with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
+            with self._urlopen(req, timeout=30) as resp:
                 if resp.status == 204:
                     return {}
                 raw = resp.read().decode()
@@ -876,7 +957,7 @@ class RommHttpAdapter:
         req.add_header("Authorization", self._basic_auth_header(username, password))
         req.add_header("User-Agent", self._user_agent)
         try:
-            with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
+            with self._urlopen(req, timeout=30) as resp:
                 if resp.status == 204:
                     return {}
                 raw = resp.read().decode()
