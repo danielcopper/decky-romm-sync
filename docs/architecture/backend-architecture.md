@@ -1372,20 +1372,31 @@ the coarse wraps whose callee paginates or chains several requests — those kee
 caller meant.
 
 The adapter also remembers one bit of transport state: **the server is known unreachable**. A ladder that gives up on an
-exception `classify_error` maps to `server_unreachable` sets it; while it is set every ladder shrinks to a single
-attempt with no backoff, and a ladder already sleeping cuts its backoff short (the lanes a game-detail page opens start
+exception that means the server could not be reached sets it; while it is set every ladder shrinks to a single attempt
+with no backoff, and a ladder already sleeping cuts its backoff short (the lanes a game-detail page opens start
 simultaneously, so this is what makes the _first_ load after an outage fast, not only the second). The degraded ladder
 still really performs its call — it is never skipped — which is what makes the state self-healing and what makes the
 UI's Retry button work with no path of its own. Any successful response clears it, including on the ladder-bypassing
 paths, because every request funnels through one `_urlopen` choke point; the reachability probe and the 30 s heartbeat
-therefore clear it for free. An `HTTPError` deliberately does not clear it: a 5xx answered by a proxy in front of a dead
-origin is one of the shapes `classify_error` calls unreachable.
+therefore clear it for free. A new request method that opens its own connection would silently stop clearing it and
+leave the plugin degraded, so `scripts/check_urlopen_choke_point.py` confines `urllib.request.urlopen` to `_urlopen`. An
+`HTTPError` deliberately does not clear it either: a 5xx answered by a proxy in front of a dead origin is one of the
+shapes that counts as unreachable in the first place.
 
-Neither `RommNotFoundError` nor the auth errors ever set it — those mean the server answered, and a 404 that means that
-is deletion authority downstream (next section). An **unproven** 404 does set it, because it degrades to a plain
-`RommApiError` and `classify_error` already reads that as `server_unreachable` everywhere else — the same fail-open
-reading that denies it deletion authority. Nothing is lost either way: the degraded ladder still makes the call, and the
-first response to come back restores the full one.
+**An error carrying a 4xx status code never sets it** — the server answered, whatever it answered. That peel runs before
+`classify_error`, which cannot draw the line itself: it is a _user-messaging_ classifier that folds every unbranched
+`RommApiError` onto `server_unreachable` so a display string always exists, and reusing it raw as a _transport_ verdict
+would import that coarseness. The 409 is the case that makes this load-bearing rather than tidy — every automatic save
+upload POSTs `overwrite=false` precisely so RomM can reject a stale head with one, and that upload runs inside a ladder,
+so a routine conflict would otherwise mark the whole server unreachable. The 404 is peeled for the same reason and
+matters for a second one: it is deletion authority downstream (next section). An **unproven** 404 does still set it,
+because it degrades to a plain `RommApiError` carrying no status code — nothing proved RomM answered, which is the same
+fail-open reading that denies it deletion authority.
+
+The state is about the configured RomM server only. `download_external` fetches a ROM's `url_cover` from a third-party
+metadata CDN, so its ladder is entered with `romm_origin=False` and takes no part in either direction: a dead cover CDN
+must not degrade every RomM call, and reaching the CDN is no evidence that RomM came back. It also keeps its full ladder
+while RomM is down, because it is a different host.
 
 #### RommHttpAdapter notes: what makes a 404 an entity verdict
 

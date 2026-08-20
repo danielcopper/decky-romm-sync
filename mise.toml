@@ -57,6 +57,7 @@ run = [
     "python scripts/check_uow_seam_nesting.py",
     "python scripts/check_failure_shape.py --check",
     "python scripts/check_404_not_unreachable.py --check",
+    "python scripts/check_urlopen_choke_point.py",
     "bash scripts/check_no_bare_ignores.sh",
     "python scripts/check_event_parity.py",
     "python scripts/check_settings_owner.py",

@@ -175,7 +175,22 @@ class AdoptionCandidateProbeFn(Protocol):
 
 
 class RetryStrategy(Protocol):
-    """HTTP retry wrapper pair consumed by SaveService and PlaytimeService."""
+    """HTTP retry wrapper pair consumed by SaveService and PlaytimeService.
+
+    ``with_retry`` promises that *fn* is called at least once and that a
+    transient failure may be retried — not a fixed attempt count. Two things
+    shrink the ladder, both invisible from the call site:
+
+    - **Nesting collapses.** The implementation runs one ladder per call stack,
+      so wrapping a callee that already retries internally adds no attempts and
+      no backoff; the outermost wrap is the only ladder. Wrap at the level whose
+      failure you want retried as a unit — a wrap around a paginating or
+      multi-request callee re-runs the whole unit, which is usually the point.
+    - **A server known unreachable costs one attempt with no backoff**, and a
+      ladder already sleeping gives up as soon as another caller discovers the
+      server is down. The call still really goes out every time, so nothing has
+      to reset that state for the next attempt to succeed.
+    """
 
     def is_retryable(self, exc: Exception) -> bool: ...
 

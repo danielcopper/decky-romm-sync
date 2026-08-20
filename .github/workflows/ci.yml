@@ -152,6 +152,9 @@ jobs:
       - name: Check 404-vs-unreachable classification gate
         run: python scripts/check_404_not_unreachable.py --check
 
+      - name: Check urlopen choke-point confinement
+        run: python scripts/check_urlopen_choke_point.py
+
       - name: Check no bare ignores
         run: bash scripts/check_no_bare_ignores.sh
 

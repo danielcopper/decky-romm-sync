@@ -1429,7 +1429,13 @@ class TestRetryLadderReentrancy:
         assert sum(call.args[0] for call in sleep_mock.call_args_list) == pytest.approx(4.0)
 
     def test_a_service_wrap_over_a_retrying_adapter_method_costs_three_http_attempts(self, plugin):
-        """The #1758 outcome: one game-detail lane against a dead server is 3 HTTP attempts, not 9."""
+        """The #1758 outcome: one game-detail lane against a dead server is 3 HTTP attempts, not 9.
+
+        A combined-outcome test, NOT guard coverage: remove only the re-entrancy
+        guard and this still passes, because the inner ladder's give-up marks
+        the server unreachable and the outer ``_backoff`` then aborts. The two
+        tests above are the ones that isolate the guard.
+        """
         adapter = plugin._http_adapter
         plugin.settings["romm_url"] = "http://romm.local"
         with (
@@ -1560,14 +1566,24 @@ class TestKnownUnreachableFastPath:
     @pytest.mark.parametrize(
         "exc",
         [
-            RommNotFoundError("Rom with id '4375' not found"),
             RommAuthError("401"),
             RommForbiddenError("403"),
+            RommNotFoundError("Rom with id '4375' not found"),
+            RommConflictError("409"),
+            RommUnprocessableEntityError("422"),
+            RommServerError("rate limited", status_code=429),
         ],
-        ids=["entity-404", "401", "403"],
+        ids=["401", "403", "entity-404", "409", "422", "429"],
     )
     def test_a_server_answer_never_counts_as_unreachable(self, plugin, exc):
-        """A 404 from RomM's entity layer is deletion authority downstream (#1570) — never a transport verdict."""
+        """Any 4xx means the server answered, whatever it answered.
+
+        The 404 case is deletion authority downstream (#1570). The 409 is the
+        one that bites in normal operation: every automatic save upload POSTs
+        ``overwrite=false`` precisely so RomM rejects a stale head with one, and
+        that upload runs inside a ladder — so folding it into a transport
+        verdict would mark the server unreachable on a routine conflict.
+        """
         adapter = plugin._http_adapter
         self._failing_ladder(adapter, exc)
 
@@ -1575,6 +1591,47 @@ class TestKnownUnreachableFastPath:
         with patch("time.sleep"), pytest.raises(RommConnectionError):
             adapter.with_retry(fn, base_delay=0)
         assert fn.call_count == 3
+
+    def test_a_dead_cover_cdn_never_marks_romm_unreachable(self, plugin, tmp_path):
+        """``download_external`` fetches ``url_cover`` from a third-party CDN, not from RomM."""
+        adapter = plugin._http_adapter
+        with (
+            patch("urllib.request.urlopen", side_effect=ConnectionRefusedError("cdn down")),
+            patch("time.sleep"),
+            pytest.raises(RommConnectionError),
+        ):
+            adapter.download_external("https://cdn.invalid/cover.png", str(tmp_path / "cover.png"))
+
+        fn = MagicMock(side_effect=RommConnectionError("refused"))
+        with patch("time.sleep"), pytest.raises(RommConnectionError):
+            adapter.with_retry(fn, base_delay=0)
+        assert fn.call_count == 3
+
+    def test_reaching_the_cover_cdn_never_clears_the_romm_state(self, plugin, tmp_path):
+        """The CDN answering proves nothing about RomM, so it must not restore the full ladder."""
+        adapter = plugin._http_adapter
+        self._failing_ladder(adapter, RommConnectionError("refused"))
+
+        with patch("urllib.request.urlopen", return_value=_make_resp(200, {"Content-Length": "3"}, b"PNG")):
+            adapter.download_external("https://cdn.invalid/cover.png", str(tmp_path / "cover.png"))
+
+        fn = MagicMock(side_effect=RommConnectionError("refused"))
+        with patch("time.sleep"), pytest.raises(RommConnectionError):
+            adapter.with_retry(fn, base_delay=0)
+        fn.assert_called_once()
+
+    def test_the_cover_cdn_keeps_its_full_ladder_while_romm_is_down(self, plugin, tmp_path):
+        """RomM being unreachable is no reason to give the CDN one shot — it is a different host."""
+        adapter = plugin._http_adapter
+        self._failing_ladder(adapter, RommConnectionError("refused"))
+
+        with (
+            patch("urllib.request.urlopen", side_effect=ConnectionRefusedError("cdn down")) as urlopen,
+            patch("time.sleep"),
+            pytest.raises(RommConnectionError),
+        ):
+            adapter.download_external("https://cdn.invalid/cover.png", str(tmp_path / "cover.png"))
+        assert urlopen.call_count == 3
 
     def test_an_unproven_404_does_count_as_unreachable(self, plugin):
         """The other side of the polarity: a 404 nobody can attribute to RomM is a transport verdict.

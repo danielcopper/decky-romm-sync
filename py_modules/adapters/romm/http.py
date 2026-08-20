@@ -412,58 +412,80 @@ class RommHttpAdapter:
         state self-healing and what makes the UI's Retry button work with no
         path of its own.
         """
+        return self._enter_ladder(fn, args, kwargs, max_attempts, base_delay, romm_origin=True)
+
+    def _enter_ladder(self, fn, args, kwargs, max_attempts: int = 3, base_delay: int = 1, *, romm_origin: bool):
+        """Run *fn* through one ladder, or straight through when one is already active on this thread.
+
+        *romm_origin* says whether the request this ladder wraps talks to the
+        configured RomM server. Only such a ladder takes part in the
+        known-unreachable state — :meth:`download_external` reaches a
+        third-party cover CDN, whose failure says nothing about RomM and whose
+        success proves nothing about it either.
+        """
         if getattr(self._ladder, "active", False):
             return fn(*args, **kwargs)
         self._ladder.active = True
         try:
-            return self._run_ladder(fn, args, kwargs, max_attempts, base_delay)
+            return self._run_ladder(fn, args, kwargs, max_attempts, base_delay, romm_origin=romm_origin)
         finally:
             self._ladder.active = False
 
-    def _run_ladder(self, fn, args, kwargs, max_attempts: int, base_delay: int):
-        """Run the attempt ladder for *fn* — :meth:`with_retry`'s body, once re-entrancy is ruled out."""
-        attempts = 1 if self._server_unreachable else max_attempts
+    def _run_ladder(self, fn, args, kwargs, max_attempts: int, base_delay: int, *, romm_origin: bool):
+        """Run the attempt ladder for *fn* — :meth:`_enter_ladder`'s body, once re-entrancy is ruled out."""
+        attempts = 1 if (romm_origin and self._server_unreachable) else max_attempts
         for attempt in range(attempts):
             try:
                 return fn(*args, **kwargs)
             except Exception as exc:
                 if attempt == attempts - 1 or not self.is_retryable(exc):
-                    self._note_unreachable(exc)
+                    if romm_origin:
+                        self._note_unreachable(exc)
                     raise
                 delay = base_delay * (3**attempt)
                 self._logger.info(f"Retry {attempt + 1}/{attempts} after {delay}s: {exc}")
                 self._notify_retry(attempt + 2, attempts, float(delay))
-                if not self._backoff(float(delay)):
+                if not self._backoff(float(delay), romm_origin=romm_origin):
                     raise
         raise AssertionError("attempt ladder ran zero attempts")  # pragma: no cover
 
     def _note_unreachable(self, exc: Exception) -> None:
         """Record that the ladder gave up because the server could not be reached.
 
-        The verdict comes from ``classify_error`` so there is one definition of
-        "unreachable" in the codebase rather than a second, coarser one here. A
-        :class:`RommNotFoundError` is deliberately not one of them — it means
-        RomM's entity layer ANSWERED, and downstream that reading is deletion
-        authority (see ``.claude/rules/romm-http.md``); so are the auth errors.
+        An error carrying a **4xx status code** is peeled off first: the server
+        answered, whatever it answered. ``classify_error`` cannot draw that line
+        on its own — it is a user-messaging classifier that folds every
+        unbranched ``RommApiError`` onto ``server_unreachable`` so a display
+        string always exists, which would sweep in the routine 409 that every
+        ``overwrite=false`` save upload is designed to provoke, and the 422 and
+        429 alongside it. Past the peel, ``classify_error`` stays the single
+        definition of unreachable rather than a second, coarser one here.
+
+        A 404 that arrives as a plain ``RommApiError`` carries no status code
+        and therefore still counts: nothing proved RomM answered it, which is
+        the same fail-open reading that denies it deletion authority
+        (``.claude/rules/romm-http.md``).
         """
-        reason, _message = classify_error(exc)
-        if reason == ErrorCode.SERVER_UNREACHABLE.value:
+        status = exc.status_code if isinstance(exc, RommApiError) else None
+        if status is not None and 400 <= status < 500:
+            return
+        if classify_error(exc)[0] == ErrorCode.SERVER_UNREACHABLE.value:
             self._server_unreachable = True
 
-    def _backoff(self, delay: float) -> bool:
+    def _backoff(self, delay: float, *, romm_origin: bool) -> bool:
         """Sleep *delay* seconds, returning ``False`` if the server went unreachable meanwhile.
 
         Polled rather than slept in one go because a game-detail page opens all
         of its lanes at once: the first lane to give up has to be able to cut
         the backoff of the ones already sleeping short, or only the SECOND page
-        load after an outage is fast.
+        load after an outage is fast. A non-RomM ladder sleeps the gap out.
         """
         remaining = delay
-        while remaining > 0 and not self._server_unreachable:
+        while remaining > 0 and not (romm_origin and self._server_unreachable):
             slice_s = min(self._BACKOFF_POLL_INTERVAL, remaining)
             time.sleep(slice_s)
             remaining -= slice_s
-        return not self._server_unreachable
+        return not (romm_origin and self._server_unreachable)
 
     def _notify_retry(self, attempt: int, max_attempts: int, delay_s: float) -> None:
         """Fire the optional retry listener, swallowing any listener failure.
@@ -483,19 +505,24 @@ class RommHttpAdapter:
     # HTTP request methods
     # ------------------------------------------------------------------
 
-    def _urlopen(self, req: urllib.request.Request, *, timeout: int):
-        """Send *req* and clear the known-unreachable state the moment a response arrives.
+    def _urlopen(self, req: urllib.request.Request, *, timeout: int, romm_origin: bool = True):
+        """Send *req*, clearing the known-unreachable state the moment RomM answers.
 
-        The one choke point every request path passes through, the ones that
-        deliberately skip :meth:`with_retry` included — the reachability probe
-        and the 30s heartbeat both run through ``request_once``, so a server
-        that came back clears the state without needing a path of its own.
-        An ``HTTPError`` deliberately does NOT clear it: a 5xx answered by a
-        proxy in front of a dead origin is one of the things ``classify_error``
-        calls unreachable in the first place.
+        Every request path in this class goes out through here — the ones that
+        deliberately skip :meth:`with_retry` included, so the reachability probe
+        and the 30s heartbeat clear the state without needing a path of their
+        own. Adding a request method that calls ``urlopen`` itself would
+        silently stop clearing it (``.claude/rules/romm-http.md``,
+        ``scripts/check_urlopen_choke_point.py``).
+
+        *romm_origin* is ``False`` for the third-party cover CDN, whose reply
+        proves nothing about RomM. An ``HTTPError`` clears nothing either: a 5xx
+        answered by a proxy in front of a dead origin is one of the things
+        ``classify_error`` calls unreachable in the first place.
         """
         resp = urllib.request.urlopen(req, context=self.ssl_context(), timeout=timeout)
-        self._server_unreachable = False
+        if romm_origin:
+            self._server_unreachable = False
         return resp
 
     def request(self, path: str):
@@ -775,8 +802,11 @@ class RommHttpAdapter:
         non-http(s) scheme is rejected with a :class:`RommApiError` before any
         request. Spaces in *url* are URL-encoded (RomM cover URLs carry them
         raw). Single-shot streaming — no ``Range``/resume, covers are small;
-        transient errors retry through :meth:`with_retry` like every other
-        download, a 404 raises ``RommNotFoundError`` without retry.
+        transient errors retry on the same 3-attempt ladder as every other
+        download, a 404 raises ``RommNotFoundError`` without retry. That ladder
+        stays out of the known-unreachable state in both directions: a dead
+        cover CDN must not degrade every RomM call, and reaching the CDN is no
+        evidence that RomM came back.
         """
         scheme = urllib.parse.urlsplit(url).scheme.lower()
         if scheme not in self._EXTERNAL_URL_SCHEMES:
@@ -789,7 +819,7 @@ class RommHttpAdapter:
             req = urllib.request.Request(encoded_url, method="GET")
             req.add_header("User-Agent", self._user_agent)
             try:
-                with self._urlopen(req, timeout=self._CONNECT_TIMEOUT) as resp:
+                with self._urlopen(req, timeout=self._CONNECT_TIMEOUT, romm_origin=False) as resp:
                     raw_sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
                     if raw_sock is not None:
                         raw_sock.settimeout(self._READ_TIMEOUT)
@@ -809,7 +839,7 @@ class RommHttpAdapter:
                 # status mapping. Do not unify it with the API routes.
                 raise self.translate_http_error(exc, encoded_url, "GET", asset_route=True) from exc
 
-        return self.with_retry(_do_download)
+        return self._enter_ladder(_do_download, (), {}, romm_origin=False)
 
     def _resume_branch(self, resp, status: int, existing_size: int) -> tuple[str, int, int]:
         """Decide ``(open_mode, seed_bytes, total)`` from the live response.

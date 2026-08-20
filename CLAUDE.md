@@ -58,7 +58,8 @@ new code in it.
   (`adopt_baseline`, not `update_baseline`). The field-assignment ban is checked; the naming is not.
 - `romm-http.md` — an unproven 404 must never become `RommNotFoundError`, which is deletion authority downstream: the
   entity proof is the default and only the three byte-stream fetches opt out. Tests pin both directions; nothing else
-  does.
+  does. Also owns the transport's reachability state: a new request method sends through `_urlopen` (checked) and passes
+  `romm_origin=False` if it does not talk to RomM (not checked).
 - `bootstrap-wiring.md` — the `main.py` / `bootstrap/` split, and which half of `bootstrap/` new wiring belongs in.
 - `callables.md` — the `{success, reason, message}` failure shape and its two carve-outs. Checked.
 - `vendored-assets.md` — `_vendor/`, `native/`, `defaults/` are checksum-pinned verbatim copies. The checksums are
@@ -172,6 +173,12 @@ Format: **invariant** — tier — enforced by.
   byte-stream fetches opt out** — test + prompt-only — `TestNotFoundDiscrimination` plus the per-call-site
   `test_generic_route_404_still_raises_not_found` trio in `tests/adapters/romm/test_http.py`; a fourth byte-stream
   fetch's opt-out is prompt-only — `.claude/rules/romm-http.md`
+- **Every RomM request goes out through `RommHttpAdapter._urlopen`, the single point that clears the known-unreachable
+  state — a request method calling `urllib.request.urlopen` itself leaves every retry ladder degraded to one attempt
+  until an unrelated path happens to succeed, and nothing else fails** — check — `scripts/check_urlopen_choke_point.py`
+  (structural, AST call sites — an alias or a `getattr` would slip past it. Which requests may skip the ladder, and
+  which pass `romm_origin=False` because they do not talk to RomM at all, stays prompt-only in
+  `.claude/rules/romm-http.md`)
 - **Frontend↔backend callable parity (names + arity)** — check — `scripts/check_callable_manifest.py`
 - **Every backend `emit` event name has a frontend listener, and vice versa** — check — `scripts/check_event_parity.py`
 - **`settings.json` is written only by its owner (`adapters/persistence.py`)** — check —

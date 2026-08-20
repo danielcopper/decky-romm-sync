@@ -5,8 +5,33 @@ paths:
 
 # RomM HTTP error translation `[ours]`
 
-No mechanical check exists for any of this — only the tests named at the bottom, and they pin the call sites that exist
-today, not the one you are about to add.
+No mechanical check exists for the 404 rules below — only the tests named at the bottom, and they pin the call sites
+that exist today, not the one you are about to add. The choke-point rule at the end is the one exception: it is checked.
+
+## Every request goes out through `_urlopen` — checked
+
+`RommHttpAdapter` remembers whether the RomM server is known unreachable, and while that bit is set every retry ladder
+runs a single attempt with no backoff. It is cleared in exactly one place — `_urlopen` — so that a response arriving on
+**any** path clears it, including the paths that deliberately skip `with_retry` (the reachability probe and the
+heartbeat both run through `request_once`).
+
+So a new request method must send its request with `self._urlopen(req, timeout=...)`, never by calling
+`urllib.request.urlopen` itself. Reaching for `urlopen` directly fails silently in the worst way: the call succeeds, the
+tests pass, and the plugin just stays in degraded single-attempt mode until some unrelated path happens to succeed.
+`scripts/check_urlopen_choke_point.py` enforces this structurally (AST call sites, not dataflow — it would not see an
+alias or a `getattr`).
+
+Pass `romm_origin=False` when the request does **not** go to the configured RomM server. There is one such caller today,
+`download_external`, which fetches a ROM's `url_cover` from a third-party CDN: a dead CDN must not mark RomM
+unreachable, and reaching the CDN is no evidence that RomM came back. Its ladder is entered through
+`_enter_ladder(..., romm_origin=False)` for the same reason.
+
+The bit is set only where a ladder gives up, and an error carrying a **4xx status code** never sets it — the server
+answered, whatever it answered. That peel is deliberate and load-bearing: `classify_error` is a user-messaging
+classifier that folds every unbranched `RommApiError` onto `server_unreachable` so a display string always exists, which
+would otherwise sweep in the routine 409 that every `overwrite=false` save upload is designed to provoke. A 404 that
+arrives as a plain `RommApiError` carries no status code and does still set it — nothing proved RomM answered it, the
+same fail-open reading described below.
 
 `RommNotFoundError` does not mean "the server said 404". It means **RomM's entity layer said this entity does not
 exist**, and downstream that reading is authority: the removed-game cleanup deletes on it, the version picker marks a
