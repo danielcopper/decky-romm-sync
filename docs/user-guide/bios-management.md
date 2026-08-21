@@ -39,9 +39,10 @@ than reporting "no BIOS needed". So a check that could not be completed never qu
 lets the game launch without its files; it leaves the warning where it was.
 
 It does not leave it there indefinitely, though: whenever the game detail page is shown a BIOS state it could not work
-out — on opening the page, after switching the emulator core, after switching to another version of the game — it goes
-back for a real answer in the background. The BIOS tab catches up on its own within a moment, so you do not have to
-leave the page and come back to see the state after a download or a delete.
+out — when the page opens, after switching the emulator core, after switching to another version of the game — it asks
+again in the background and fills the answer in a moment later. Opening a game while the requirement is unread used to
+show no BIOS tab at all until something else refreshed it, and switching core or version used to leave the previous
+core's or the previous version's readiness on screen.
 
 An unreachable RomM server usually does **not** put the plugin in that position: it falls back to its built-in registry
 of known BIOS files and still tells you what the platform needs. Only a platform that registry does not cover depends

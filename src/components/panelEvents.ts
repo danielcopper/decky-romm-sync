@@ -175,7 +175,15 @@ async function handleCoreChange(
     getPlatformCoreInfo(binding.romId).catch((): CoreInfo | null => null),
     getCachedGameDetail(ctx.appId),
   ]);
-  if (ctx.cancelled() || !cached.found) return;
+  // A version switch landing inside the two reads above re-keys the panel, and
+  // everything this handler still has to say is then about the ROM it moved off.
+  // The rom binding already refuses the write, but it cannot give back the
+  // sequence ticket the re-read below would claim on the previous version's
+  // behalf — and that ticket would fence the switch's OWN re-read, dropping the
+  // answer the new version's requirement depends on with nothing left to
+  // re-issue it. `cancelled` does not cover this: a switch re-keys the rom
+  // without changing the appId (#1713).
+  if (ctx.cancelled() || ctx.romIdRef.current !== rid || !cached.found) return;
   // A detail carrying no BIOS answer leaves the shown status alone — the
   // core switch invalidated the cached detail, but a cold firmware cache
   // makes the re-read a non-answer rather than a "needs none" (#1693).

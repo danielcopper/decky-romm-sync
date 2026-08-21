@@ -17,6 +17,7 @@ import { RomMGameInfoPanel } from "./RomMGameInfoPanel";
 import * as backend from "../api/backend";
 import type { CachedGameDetail } from "../api/backend";
 import * as cachedStore from "../utils/cachedGameDetailStore";
+import { _resetSharedReadsForTests } from "../api/sharedReads";
 import * as slotState from "../utils/slotState";
 import {
   installDomEventListenerSpy,
@@ -221,6 +222,9 @@ describe("RomMGameInfoPanel", () => {
     currentSaveSortState = { pending: false };
     testAppId++;
     installDomEventListenerSpy();
+    // A shared read releases itself only by settling, so a test that leaves one
+    // pending would hand it to the next test reading the same ROM.
+    _resetSharedReadsForTests();
 
     // Reset the real connection store so each test starts connected (#1345).
     setRommConnectionState("connected");
@@ -3295,6 +3299,16 @@ describe("RomMGameInfoPanel", () => {
       await flushAsync();
     };
 
+    /** An answer the test hands over by hand, so a read can still be open while
+     *  the next event runs. */
+    function heldAnswer<T>() {
+      let release!: (value: T) => void;
+      const promise = new Promise<T>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release: (value: T) => release(value) };
+    }
+
     it("re-reads on mount when the cached detail carries no answer, and the live one brings the tab back", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(staleDetail({ bios_status_unknown: true }));
       vi.mocked(backend.getBiosStatus).mockResolvedValue(biosAnswer(1));
@@ -3410,6 +3424,60 @@ describe("RomMGameInfoPanel", () => {
 
       expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledWith(61);
       expect(container.textContent).toContain("All ready (3/3)");
+    });
+
+    it("keeps the re-read a version switch issues when a core change is re-keyed under it", async () => {
+      // The core change captures its identity before its two reads, so a switch
+      // landing in that window leaves it answering for the version the panel
+      // moved off. The rom binding refuses its write either way; the ticket its
+      // re-read would claim is what has to be withheld, because it would fence
+      // the switch's own re-read and nothing would re-issue that answer.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(staleDetail({ ...biosAnswer(1), stale_fields: [] }));
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await openBiosTab();
+      expect(container.textContent).toContain("1/3 files ready");
+
+      // The core change's cache read stays open...
+      const coreChangeDetail = heldAnswer<CachedGameDetail>();
+      vi.mocked(cachedStore.getCachedGameDetail).mockImplementationOnce(() => coreChangeDetail.promise);
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: "snes" } }),
+        );
+      });
+
+      // ...while a version switch re-keys the panel to rom 61 and issues the
+      // re-read its own unreadable detail needs.
+      const switchedBios = heldAnswer<backend.BiosAnswer>();
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        staleDetail({ rom_id: 61, bios_status_unknown: true }),
+      );
+      vi.mocked(backend.getBiosStatus).mockImplementation((romId: number) =>
+        romId === 61 ? switchedBios.promise : Promise.resolve({ bios_status_unknown: true }),
+      );
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "version_switched", app_id: testAppId, rom_id: 61 },
+          }),
+        );
+      });
+      await flushAsync();
+
+      await act(async () => {
+        coreChangeDetail.release(staleDetail({ bios_status_unknown: true }));
+      });
+      await flushAsync();
+
+      await act(async () => {
+        switchedBios.release(biosAnswer(3));
+      });
+      await flushAsync();
+
+      expect(container.textContent).toContain("All ready (3/3)");
+      // The re-keyed core change reads nothing for the version the panel left.
+      expect(vi.mocked(backend.getBiosStatus)).not.toHaveBeenCalledWith(60);
     });
   });
 
@@ -4436,10 +4504,13 @@ describe("RomMGameInfoPanel", () => {
         expect(container.textContent).not.toContain("Snes9x");
       });
 
-      it("does not fold a BIOS answer read for the previous version into the switched-to version", async () => {
-        // The live re-read the stale mark triggers (#1752) is the newest bound
-        // site: both versions need BIOS, so the tab stays across the switch and
-        // the previous version's readiness has somewhere to land.
+      it("refuses a BIOS answer read for the previous version — by the binding and the switch's ticket alike", async () => {
+        // The one site in this block where the two fences overlap: the switch's
+        // own fold claims the `bios` ticket whether or not it re-reads, so
+        // either fence refuses the held rom-1 answer on its own. Named for the
+        // combined refusal because no arrangement of this test can isolate the
+        // binding here. Both versions need BIOS, so the tab stays across the
+        // switch and the previous version's readiness has somewhere to land.
         const bios = holdReadFor<backend.BiosAnswer>(1, {
           bios_status: { platform_slug: "snes", server_count: 3, local_count: 3, all_downloaded: true },
           bios_level: "ok",
@@ -4866,19 +4937,22 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).not.toContain("Game (Japan)");
     });
 
+    /** A BIOS answer — cached or live, one shape — with `localCount` of 3 files
+     *  present. */
+    const biosStatusFor = (localCount: number) => ({
+      bios_status: {
+        platform_slug: "snes",
+        server_count: 3,
+        local_count: localCount,
+        all_downloaded: localCount === 3,
+      },
+      bios_level: localCount === 3 ? ("ok" as const) : ("partial" as const),
+    });
+
     it("keeps the newest BIOS answer when an earlier read lands last", async () => {
       // Two live re-reads for the same rom: the mount load's, and the one the
       // core change issues because the requirement is computed against the core
       // it just switched (#1752). The rom binding admits both.
-      const biosStatusFor = (localCount: number) => ({
-        bios_status: {
-          platform_slug: "snes",
-          server_count: 3,
-          local_count: localCount,
-          all_downloaded: localCount === 3,
-        },
-        bios_level: localCount === 3 ? ("ok" as const) : ("partial" as const),
-      });
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
         detailFor(1, "Game", { bios_status_unknown: true, stale_fields: ["bios"] }),
       );
@@ -4895,6 +4969,38 @@ describe("RomMGameInfoPanel", () => {
 
       await act(async () => {
         firstRead.release(biosStatusFor(1));
+      });
+      await flushAsync();
+
+      expect(container.textContent).toContain("All ready (3/3)");
+      expect(container.textContent).not.toContain("1/3 files ready");
+    });
+
+    it("does not let a BIOS read issued before a core change land on the core change's own answer", async () => {
+      // The core change's detail ANSWERS, so it issues no re-read of its own and
+      // the mount's older read is the only one still open. What holds it off is
+      // the ticket the fold claims whether or not it reads — the answer it
+      // carries is about the core the user just switched away from.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        detailFor(1, "Game", { bios_status_unknown: true, stale_fields: ["bios"] }),
+      );
+      const mountRead = heldRead<backend.BiosAnswer>();
+      vi.mocked(backend.getBiosStatus).mockImplementationOnce(() => mountRead.promise);
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        detailFor(1, "Game", { ...biosStatusFor(3), stale_fields: [] }),
+      );
+      await dispatchDataChanged({ type: "core_changed", platform_slug: "snes" });
+      await flushAsync();
+      await openBiosTab();
+      expect(container.textContent).toContain("All ready (3/3)");
+      // The fold answered from the cache — no second read was issued.
+      expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        mountRead.release(biosStatusFor(1));
       });
       await flushAsync();
 
