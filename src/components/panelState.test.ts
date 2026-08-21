@@ -28,7 +28,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 const seqsRef = (): MutableRefObject<PanelReadSeqs> => ({
-  current: { detail: 0, saveStatus: 0, slots: 0, slotTracking: 0 },
+  current: { detail: 0, saveStatus: 0, slots: 0, slotTracking: 0, bios: 0 },
 });
 
 const slot = (name: string): SaveSlotSummary => ({

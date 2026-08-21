@@ -12,6 +12,7 @@ import {
   getCachedGameDetail,
   getInstalledRom,
   getArtworkBase64,
+  getBiosStatus,
   getSaveSlots,
   isSaveTrackingConfigured,
   debugLog,
@@ -173,6 +174,13 @@ export interface PanelReadSeqs {
   slots: number;
   /** `is_save_tracking_configured`, from the slot refresh alone. */
   slotTracking: number;
+  /** `get_bios_status`, from the live re-read every cached-detail fold issues
+   *  when the backend marked its BIOS answer stale — and claimed by the fold
+   *  itself, see {@link refreshBiosIfStale}. The `bios` event's own check is
+   *  deliberately outside it: it answers for the platform's default core rather
+   *  than this ROM's, so ordering it against a rom-keyed answer would settle the
+   *  wrong question (#1718). */
+  bios: number;
 }
 
 /** Take one kind's next ticket for a read being issued now. The returned
@@ -239,11 +247,12 @@ function refreshMetadataInBackground(binding: RomBinding): Promise<void> {
     .catch(() => {});
 }
 
-/** The panel's two BIOS fields as a cached game detail answers them, or `null`
- *  when the payload carries no BIOS answer — a detail derived while the firmware
- *  cache was cold, which every BIOS download and delete makes it. The caller then
- *  leaves the shown status standing instead of hiding the BIOS tab on a
- *  non-answer (#1693).
+/** The panel's two BIOS fields as a BIOS answer carries them — a cached game
+ *  detail or the live `get_bios_status` read below, which ship the identical
+ *  shape — or `null` when the payload carries no BIOS answer at all: a detail
+ *  derived while the firmware cache was cold, which every BIOS download and
+ *  delete makes it. The caller then leaves the shown status standing instead of
+ *  hiding the BIOS tab on a non-answer (#1693).
  *
  *  `bios_level` is computed by the backend (`compute_bios_level`) and threaded
  *  straight through, never re-derived; it is null whenever there is no
@@ -255,6 +264,36 @@ export function biosFieldsFromCache(cached: BiosAnswer): Pick<PanelState, "biosS
     biosStatus: { needs_bios: true, ...cached.bios_status },
     biosLevel: cached.bios_level ?? null,
   };
+}
+
+/** Go back for the BIOS answer the cached detail could not give, and fold it in.
+ *
+ *  Every fold of {@link biosFieldsFromCache} leaves the shown status standing on
+ *  a non-answer (#1693), and nothing else re-reads it — so a panel opened while
+ *  the firmware cache was cold showed the previous answer, or no BIOS tab at
+ *  all, until an unrelated event moved it (#1752). The backend marks exactly
+ *  that payload's `bios` field stale, which is what turns "we don't know" into a
+ *  read; a payload with no stale list at all is one nobody marked, so it is left
+ *  alone rather than re-read on every fold.
+ *
+ *  The ticket is taken whether or not the read is issued: the caller has just
+ *  folded the newest cached answer for these two fields, so a live read left
+ *  open by an earlier fold must not land on top of it. */
+export function refreshBiosIfStale(
+  cached: Awaited<ReturnType<typeof getCachedGameDetail>>,
+  binding: RomBinding,
+  readSeqs: MutableRefObject<PanelReadSeqs>,
+): Promise<void> {
+  const overtaken = takeReadTicket(readSeqs, "bios");
+  if (!(cached.stale_fields ?? []).includes("bios")) return Promise.resolve();
+  return getBiosStatus(binding.romId)
+    .then((answer) => {
+      if (overtaken()) return;
+      const biosFields = biosFieldsFromCache(answer);
+      if (!biosFields) return;
+      binding.write((prev) => ({ ...prev, ...biosFields }));
+    })
+    .catch((e) => detach(debugLog(`RomMGameInfoPanel: BIOS status refresh error: ${e}`)));
 }
 
 /** Build a `SaveStatus` from a cached game detail's `save_status` field. */
@@ -292,12 +331,14 @@ export function saveStatusFromCache(
 }
 
 /** Kick off background fetches that fill in fields not present in the cache:
- *  installed-rom details, cover art, and fresh metadata (if stale or missing). */
+ *  installed-rom details, cover art, fresh metadata (if stale or missing), and a
+ *  live BIOS answer (if the cached one was marked stale). */
 function startBackgroundRefreshes(
   cached: Awaited<ReturnType<typeof getCachedGameDetail>>,
   binding: RomBinding,
+  readSeqs: MutableRefObject<PanelReadSeqs>,
 ): Promise<void[]> {
-  const bgPromises: Promise<void>[] = [];
+  const bgPromises: Promise<void>[] = [refreshBiosIfStale(cached, binding, readSeqs)];
 
   if (cached.installed) {
     bgPromises.push(refreshInstalledRomInBackground(binding));
@@ -409,7 +450,7 @@ export async function loadData(
     }
 
     // Phase 2: Background fetch for data not available in cache
-    await startBackgroundRefreshes(cached, binding);
+    await startBackgroundRefreshes(cached, binding, readSeqs);
   } catch (e) {
     detach(debugLog(`RomMGameInfoPanel: loadData error: ${e}`));
     if (!cancelled() && !overtaken()) setter((prev) => ({ ...prev, loading: false, error: true }));

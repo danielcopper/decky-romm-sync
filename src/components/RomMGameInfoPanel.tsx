@@ -85,7 +85,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
   // Read sequences ordering two answers about the same ROM; the rule they
   // enforce is stated at `takeReadTicket`. They live here because the loads, the
   // event lane and the lazy slots lane take tickets from the same counters.
-  const readSeqs = useRef<PanelReadSeqs>({ detail: 0, saveStatus: 0, slots: 0, slotTracking: 0 });
+  const readSeqs = useRef<PanelReadSeqs>({ detail: 0, saveStatus: 0, slots: 0, slotTracking: 0, bios: 0 });
   const [migration, setMigration] = useState(getMigrationState());
   const [settingsReset, setSettingsReset] = useState(getSettingsResetState());
   const [saveSortPending, setSaveSortPending] = useState(getSaveSortMigrationState().pending);

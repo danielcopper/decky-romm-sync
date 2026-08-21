@@ -27,6 +27,7 @@ import { detach } from "../utils/detach";
 import {
   bindRom,
   biosFieldsFromCache,
+  refreshBiosIfStale,
   refreshPanelCoreInfo,
   refreshCoverArtInBackground,
   refreshInstalledRomInBackground,
@@ -180,6 +181,11 @@ async function handleCoreChange(
   // makes the re-read a non-answer rather than a "needs none" (#1693).
   const biosFields = biosFieldsFromCache(cached);
   binding.write((prev) => ({ ...prev, ...biosFields, coreInfo: coreInfo ?? prev.coreInfo }));
+  // The core the requirement is computed against just changed, so a re-read that
+  // could not answer leaves the PREVIOUS core's requirement on the page. Going
+  // back for it is what keeps that from standing until the next page open
+  // (#1752).
+  await refreshBiosIfStale(cached, binding, ctx.readSeqs);
 }
 
 async function handleVersionSwitched(
@@ -263,6 +269,10 @@ async function handleVersionSwitched(
   if (newRomId) {
     const binding = bindCurrentRom(ctx, newRomId);
     const reads = [
+      // The switched-to version's requirement is its own, so a detail that could
+      // not answer leaves the PREVIOUS version's on the page — the one case
+      // where keeping the shown status is showing another ROM's (#1752).
+      refreshBiosIfStale(cached, binding, ctx.readSeqs),
       refreshCoverArtInBackground(binding),
       // The BIOS tab's "Active Core" row and its per-file core lines come
       // from the dedicated core-info path (#923), keyed on rom_id so a
