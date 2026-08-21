@@ -281,9 +281,15 @@ async function handleVersionSwitched(
     const reads = [
       // The switched-to version's requirement is its own, so a detail that could
       // not answer leaves the PREVIOUS version's on the page — the one case
-      // where keeping the shown status is showing another ROM's (#1752). Read
-      // directly: the switched-to version is a rom_id no other lane is reading,
-      // so there is nothing to join and a join could only be the wrong ROM's.
+      // where keeping the shown status is showing another ROM's (#1752).
+      //
+      // Read directly even though the store's own `version_switched` load reads
+      // this same new rom_id microtasks away, which a join would collapse: a
+      // switch to a version the page showed earlier can join the request opened
+      // back then, and a BIOS download or a core pin since has made that answer
+      // wrong. Both page-open lanes take that residual (`api/sharedReads.ts`
+      // documents it) because they pay a duplicate on every open; one switch is
+      // the cheaper side of the same trade.
       refreshBiosIfStale(cached, binding, ctx.readSeqs, getBiosStatus),
       refreshCoverArtInBackground(binding),
       // The BIOS tab's "Active Core" row and its per-file core lines come

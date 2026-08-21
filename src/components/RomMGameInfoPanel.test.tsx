@@ -162,6 +162,17 @@ const flushAsync = () =>
     await Promise.resolve();
   });
 
+/** A read the test answers by hand, so it can still be open while the next event
+ *  runs — which is what lets one read be made to land after another, or a
+ *  request be left open for a later caller to join. */
+function heldRead<T>() {
+  let release!: (value: T) => void;
+  const promise = new Promise<T>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release: (value: T) => release(value) };
+}
+
 let testAppId = 5000;
 
 // Complete RomMetadata fixture. The backend always serializes every field
@@ -3299,16 +3310,6 @@ describe("RomMGameInfoPanel", () => {
       await flushAsync();
     };
 
-    /** An answer the test hands over by hand, so a read can still be open while
-     *  the next event runs. */
-    function heldAnswer<T>() {
-      let release!: (value: T) => void;
-      const promise = new Promise<T>((resolve) => {
-        release = resolve;
-      });
-      return { promise, release: (value: T) => release(value) };
-    }
-
     it("re-reads on mount when the cached detail carries no answer, and the live one brings the tab back", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(staleDetail({ bios_status_unknown: true }));
       vi.mocked(backend.getBiosStatus).mockResolvedValue(biosAnswer(1));
@@ -3430,7 +3431,7 @@ describe("RomMGameInfoPanel", () => {
       // Both lanes reach this read off the same stale mark on the same cached
       // detail, microtasks apart, on every page open. Standing in for the play
       // row's load here is a direct call to the shared seam both go through.
-      const open = heldAnswer<backend.BiosAnswer>();
+      const open = heldRead<backend.BiosAnswer>();
       vi.mocked(backend.getBiosStatus).mockReturnValue(open.promise);
       const playRow = getBiosStatusShared(60);
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(staleDetail({ bios_status_unknown: true }));
@@ -3450,6 +3451,45 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).toContain("All ready (3/3)");
     });
 
+    it("reads the switched-to version directly rather than joining an open read for it", async () => {
+      // A request for the version being switched TO can already be open — the
+      // page showed it earlier — and joining it would hand the switch an answer
+      // read before whatever has changed since. The store's own switch load
+      // reads the same rom_id microtasks away, so there is a real request here
+      // to join; staying direct is the choice, not the absence of one.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(staleDetail({ ...biosAnswer(1), stale_fields: [] }));
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await openBiosTab();
+      expect(container.textContent).toContain("1/3 files ready");
+
+      // Left open across the switch: a join lands on this and never answers.
+      const openForNewVersion = heldRead<backend.BiosAnswer>();
+      vi.mocked(backend.getBiosStatus).mockReturnValueOnce(openForNewVersion.promise);
+      const joinable = getBiosStatusShared(61);
+
+      vi.mocked(backend.getBiosStatus).mockResolvedValue(biosAnswer(3));
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        staleDetail({ rom_id: 61, bios_status_unknown: true }),
+      );
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "version_switched", app_id: testAppId, rom_id: 61 },
+          }),
+        );
+      });
+      await flushAsync();
+
+      expect(container.textContent).toContain("All ready (3/3)");
+
+      // Settle the seeded request rather than carrying it out of the test.
+      await act(async () => {
+        openForNewVersion.release({ bios_status_unknown: true });
+        await joinable;
+      });
+    });
+
     it("keeps the re-read a version switch issues when a core change is re-keyed under it", async () => {
       // The core change captures its identity before its two reads, so a switch
       // landing in that window leaves it answering for the version the panel
@@ -3463,7 +3503,7 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).toContain("1/3 files ready");
 
       // The core change's cache read stays open...
-      const coreChangeDetail = heldAnswer<CachedGameDetail>();
+      const coreChangeDetail = heldRead<CachedGameDetail>();
       vi.mocked(cachedStore.getCachedGameDetail).mockImplementationOnce(() => coreChangeDetail.promise);
       await act(async () => {
         globalThis.dispatchEvent(
@@ -3473,7 +3513,7 @@ describe("RomMGameInfoPanel", () => {
 
       // ...while a version switch re-keys the panel to rom 61 and issues the
       // re-read its own unreadable detail needs.
-      const switchedBios = heldAnswer<backend.BiosAnswer>();
+      const switchedBios = heldRead<backend.BiosAnswer>();
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
         staleDetail({ rom_id: 61, bios_status_unknown: true }),
       );
@@ -4850,16 +4890,9 @@ describe("RomMGameInfoPanel", () => {
   // ------------------------------------------------------------------
 
   describe("two answers for the same rom ordered by when their reads were issued (#1717)", () => {
-    /** A read the test answers by hand, so the one issued FIRST can be made to
-     *  land last. Both are about the rom the panel is showing, so the rom
-     *  binding admits both and only the read's own ticket separates them. */
-    function heldRead<T>() {
-      let release!: (value: T) => void;
-      const promise = new Promise<T>((resolve) => {
-        release = resolve;
-      });
-      return { promise, release: (value: T) => release(value) };
-    }
+    // Every read held open in this block is about the rom the panel is showing,
+    // so the rom binding admits both answers and only the read's own ticket
+    // separates them.
 
     const detailFor = (
       romId: number,

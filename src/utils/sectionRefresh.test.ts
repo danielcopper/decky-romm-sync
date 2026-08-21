@@ -6,6 +6,7 @@ import {
   refreshAchievementsInBackground,
 } from "./sectionRefresh";
 import * as backend from "../api/backend";
+import { _resetSharedReadsForTests } from "../api/sharedReads";
 import { libretroEmu } from "../test-utils/coreFixtures";
 import type { EmulatorOption } from "../types";
 
@@ -50,6 +51,11 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reje
   });
   return { promise, resolve, reject };
 }
+
+// The BIOS and core-info helpers read through the shared seam, and a shared
+// request releases itself only by settling — a test that left one open would
+// hand it to the next test reading the same rom.
+beforeEach(() => _resetSharedReadsForTests());
 
 describe("refreshBiosInBackground", () => {
   beforeEach(() => vi.restoreAllMocks());

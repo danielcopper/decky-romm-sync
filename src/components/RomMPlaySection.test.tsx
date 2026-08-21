@@ -15,6 +15,7 @@ import { render, act, waitFor } from "@testing-library/react";
 import { createElement, type ComponentProps, type ReactElement } from "react";
 import { RomMPlaySection } from "./RomMPlaySection";
 import * as backend from "../api/backend";
+import { _resetSharedReadsForTests } from "../api/sharedReads";
 import { showContextMenu, showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
 import {
@@ -284,6 +285,10 @@ describe("RomMPlaySection", () => {
     capturedPlayButton.length = 0;
     testAppId++;
     installDomEventListenerSpy();
+    // The load lane's BIOS and core-info reads go through the shared seam, and a
+    // shared request releases itself only by settling — a test that left one
+    // open would hand it to the next test reading the same rom.
+    _resetSharedReadsForTests();
 
     // Reset the shared connection store (real module) so each test starts from a
     // neutral verdict and no version error leaks across tests (#1345).
