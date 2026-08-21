@@ -27,15 +27,35 @@
  *   never join a pre-mutation one, so these two are absent from this module
  *   entirely and their duplicate on page open stands.
  *
- * What the rule admits, for the two reads below: both load lanes read them at
+ * What the rule admits, for the three reads below: both load lanes read them at
  * page open, and the only other paths that re-issue them are the two
  * `reloadDetail` triggers — `download_complete` and `rom_adopted`. Neither can
- * change a ROM's metadata or its active core, so the answer they would join is
- * the answer they would get. A version switch re-keys to a different rom_id,
- * which is a different key here and so never shares at all.
+ * change a ROM's metadata, its active core, or which firmware files are on disk,
+ * so the answer they would join is the answer they would get. A version switch
+ * re-keys to a different rom_id, which is a different key here and so never
+ * shares at all.
+ *
+ * `get_bios_status` needs that argument made twice over, because a BIOS answer
+ * is the one of the three that a user action moves within a single page's
+ * lifetime: a firmware download or delete empties the firmware cache, and the
+ * next read answers differently. What admits it anyway is that no such action
+ * ever leads to a read through this module. Every re-read that follows one is
+ * change-driven and calls `api/backend` directly — the play row's post-download
+ * `refreshBiosStatus`, the `bios` event's own `check_platform_bios`, both
+ * stores' core-change handlers, and the info panel's version-switch re-read —
+ * and neither store re-runs a LOAD on a `bios` event, so a shared read is never
+ * issued after a firmware mutation.
+ *
+ * The bound on all three: a request is joinable only while it is open, so what
+ * a joiner can be handed is an answer read at most one open request ago. That is
+ * the page-open pair for the reads below, whose two calls are issued microtasks
+ * apart with no await a user action could land in. A read left hanging long
+ * enough to span one — an unresponsive server — can still be joined by the next
+ * load of the same ROM, which is the residual every entry here carries and the
+ * thing to weigh before adding a fourth.
  */
 
-import { getPlatformCoreInfo, getRomMetadata } from "./backend";
+import { getBiosStatus, getPlatformCoreInfo, getRomMetadata } from "./backend";
 
 /** Every wrapped read's open-request map, so the test reset below can reach all
  *  of them without each read having to register itself. */
@@ -71,6 +91,13 @@ export const getRomMetadataShared = shareInFlight(getRomMetadata);
  *  lanes. Both issue it unconditionally on every page open, so this is the one
  *  read that doubled on every single one. */
 export const getPlatformCoreInfoShared = shareInFlight(getPlatformCoreInfo);
+
+/** `get_bios_status` for one ROM, shared across the page's two load lanes. Both
+ *  issue it off the same `bios` stale mark on the same cached detail, and the
+ *  backend sets that mark whenever the detail carries no BIOS answer — which
+ *  includes every platform whose active core needs none, so the pair of them
+ *  made this read on nearly every page open. */
+export const getBiosStatusShared = shareInFlight(getBiosStatus);
 
 /** Test-only: forget every open request. A request only ever releases itself by
  *  settling, so a test that leaves one pending would otherwise hand it to the

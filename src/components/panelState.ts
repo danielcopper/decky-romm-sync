@@ -12,13 +12,12 @@ import {
   getCachedGameDetail,
   getInstalledRom,
   getArtworkBase64,
-  getBiosStatus,
   getSaveSlots,
   isSaveTrackingConfigured,
   debugLog,
 } from "../api/backend";
 import type { BiosAnswer } from "../api/backend";
-import { getPlatformCoreInfoShared, getRomMetadataShared } from "../api/sharedReads";
+import { getBiosStatusShared, getPlatformCoreInfoShared, getRomMetadataShared } from "../api/sharedReads";
 import type {
   RomMetadata,
   InstalledRom,
@@ -278,15 +277,23 @@ export function biosFieldsFromCache(cached: BiosAnswer): Pick<PanelState, "biosS
  *
  *  The ticket is taken whether or not the read is issued: the caller has just
  *  folded the newest cached answer for these two fields, so a live read left
- *  open by an earlier fold must not land on top of it. */
+ *  open by an earlier fold must not land on top of it.
+ *
+ *  `read` is each caller's own claim about joining. The mount load passes
+ *  `getBiosStatusShared`: the play row reads the same ROM's BIOS status off the
+ *  same stale mark microtasks away, and nothing can change the answer in
+ *  between. A caller that re-reads BECAUSE the requirement may have just changed
+ *  passes the direct `getBiosStatus` — joining would hand it the pre-change
+ *  answer. The admission rule both claims answer to is in `api/sharedReads.ts`. */
 export function refreshBiosIfStale(
   cached: Awaited<ReturnType<typeof getCachedGameDetail>>,
   binding: RomBinding,
   readSeqs: MutableRefObject<PanelReadSeqs>,
+  read: (romId: number) => Promise<BiosAnswer>,
 ): Promise<void> {
   const overtaken = takeReadTicket(readSeqs, "bios");
   if (!(cached.stale_fields ?? []).includes("bios")) return Promise.resolve();
-  return getBiosStatus(binding.romId)
+  return read(binding.romId)
     .then((answer) => {
       if (overtaken()) return;
       const biosFields = biosFieldsFromCache(answer);
@@ -338,7 +345,7 @@ function startBackgroundRefreshes(
   binding: RomBinding,
   readSeqs: MutableRefObject<PanelReadSeqs>,
 ): Promise<void[]> {
-  const bgPromises: Promise<void>[] = [refreshBiosIfStale(cached, binding, readSeqs)];
+  const bgPromises: Promise<void>[] = [refreshBiosIfStale(cached, binding, readSeqs, getBiosStatusShared)];
 
   if (cached.installed) {
     bgPromises.push(refreshInstalledRomInBackground(binding));

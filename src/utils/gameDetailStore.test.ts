@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import * as backend from "../api/backend";
-import { _resetSharedReadsForTests } from "../api/sharedReads";
+import { getBiosStatusShared, _resetSharedReadsForTests } from "../api/sharedReads";
 import * as cachedStore from "./cachedGameDetailStore";
 import {
   getGameDetail,
@@ -141,18 +141,20 @@ const laterCoreInfo: CoreInfo = {
 
 const achievementSummary = (earned: number, total: number) => ({ earned, total, earned_hardcore: 0 });
 
+/** A live `get_achievement_progress` answer. Two calls with different counts are
+ *  distinguishable in the shown state, which is what lets a test stage one
+ *  read's answer against another's. */
+const progress = (earned: number, total: number): AchievementProgressResult => ({
+  success: true,
+  earned,
+  total,
+  earned_achievements: [],
+});
+
 const biosMissing: BiosStatusResult = {
   bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
   bios_level: "missing",
   bios_label: "0/3",
-};
-
-/** The answer a second BIOS read returns, distinct from {@link biosMissing} so a
- *  fold of the first read's answer is visible in the shown level. */
-const biosAllPresent: BiosStatusResult = {
-  bios_status: { platform_slug: "snes", server_count: 3, local_count: 3, all_downloaded: true },
-  bios_level: "ok",
-  bios_label: "3/3",
 };
 
 /** The cached detail of the ROM a version switch moves the entry to, carrying a
@@ -231,6 +233,27 @@ describe("gameDetailStore", () => {
         achievementEarned: 3,
         achievementTotal: 50,
       });
+    });
+
+    it("joins the info panel's open BIOS read rather than opening a second round trip", async () => {
+      // The panel's load reaches this read off the same stale mark on the same
+      // cached detail, microtasks away, on every page open. Standing in for it
+      // here is a direct call to the shared seam both lanes go through.
+      const open = deferred<BiosStatusResult>();
+      vi.mocked(backend.getBiosStatus).mockReturnValue(open.promise);
+      const panelLoad = getBiosStatusShared(42);
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ stale_fields: ["bios"] }));
+
+      subscribe(nextAppId);
+      await flush();
+      open.resolve(biosMissing);
+      await panelLoad;
+      await flush();
+
+      expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledExactlyOnceWith(42);
+      // Non-vacuous in the other direction: the JOINED answer is the one folded,
+      // so this is sharing rather than the load having skipped the read.
+      expect(getGameDetail(nextAppId)).toMatchObject({ biosStatus: "missing", biosLabel: "0/3" });
     });
 
     it("serves a second subscriber from the same entry — one cached-detail read, both notified", async () => {
@@ -1052,32 +1075,41 @@ describe("gameDetailStore", () => {
     });
 
     // Same rom throughout, so the rom binding admits the earlier answer — the
-    // load sequence is the only thing that can tell the two apart. The vehicle is
-    // the BIOS read rather than the core read because the core read is shared
-    // with the info panel's load (`api/sharedReads.ts`): a second load of the
-    // same rom joins the first read instead of issuing one that can answer
-    // differently, so two distinct answers cannot be staged through it.
+    // load sequence is the only thing that can tell the two apart. That fence is
+    // what this test pins; the READ it pins it through is incidental, and it has
+    // now moved twice. It drove `get_platform_core_info` until #1758 shared that
+    // read with the info panel's load, and `get_bios_status` until #1752 shared
+    // that one too: a second load of the same rom joins the first read instead of
+    // issuing one that can answer differently, so two distinct answers cannot be
+    // staged through a shared read at all. `get_achievement_progress` is the last
+    // stale-driven read that is not shared — there is no fourth vehicle behind
+    // it. Whoever shares it next should re-shape this test so it stops depending
+    // on a per-read vehicle, not hunt for another one.
     it("drops a background answer read under a load a later load overtook", async () => {
-      const overtakenBios = deferred<BiosStatusResult>();
-      vi.mocked(backend.getBiosStatus).mockReturnValueOnce(overtakenBios.promise);
-      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: false, stale_fields: ["bios"] }));
+      const overtakenProgress = deferred<AchievementProgressResult>();
+      vi.mocked(backend.getAchievementProgress).mockReturnValueOnce(overtakenProgress.promise);
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({ installed: false, ra_id: 7, stale_fields: ["achievements"] }),
+      );
       subscribe(nextAppId);
       await flush();
-      expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledExactlyOnceWith(42);
+      expect(vi.mocked(backend.getAchievementProgress)).toHaveBeenCalledExactlyOnceWith(42);
 
-      vi.mocked(backend.getBiosStatus).mockResolvedValue(biosAllPresent);
-      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: true, stale_fields: ["bios"] }));
+      vi.mocked(backend.getAchievementProgress).mockResolvedValue(progress(30, 50));
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
+        found({ installed: true, ra_id: 7, stale_fields: ["achievements"] }),
+      );
       await act(async () => {
         emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(42));
         await Promise.resolve();
       });
       await flush();
-      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, biosStatus: "ok", biosLabel: "3/3" });
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, achievementEarned: 30, achievementTotal: 50 });
 
-      overtakenBios.resolve(biosMissing);
+      overtakenProgress.resolve(progress(3, 50));
       await flush();
 
-      expect(getGameDetail(nextAppId)).toMatchObject({ biosStatus: "ok", biosLabel: "3/3" });
+      expect(getGameDetail(nextAppId)).toMatchObject({ achievementEarned: 30, achievementTotal: 50 });
     });
   });
 

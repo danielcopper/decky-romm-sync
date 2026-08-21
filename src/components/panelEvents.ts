@@ -16,6 +16,7 @@ import {
   getCachedGameDetail,
   getRomMetadata,
   checkPlatformBios,
+  getBiosStatus,
   getPlatformCoreInfo,
   getSaveStatus,
   isCallableFailure,
@@ -192,8 +193,9 @@ async function handleCoreChange(
   // The core the requirement is computed against just changed, so a re-read that
   // could not answer leaves the PREVIOUS core's requirement on the page. Going
   // back for it is what keeps that from standing until the next page open
-  // (#1752).
-  await refreshBiosIfStale(cached, binding, ctx.readSeqs);
+  // (#1752). Read directly: this handler runs because the requirement may have
+  // just changed, so it must not join a read issued before the change.
+  await refreshBiosIfStale(cached, binding, ctx.readSeqs, getBiosStatus);
 }
 
 async function handleVersionSwitched(
@@ -279,8 +281,10 @@ async function handleVersionSwitched(
     const reads = [
       // The switched-to version's requirement is its own, so a detail that could
       // not answer leaves the PREVIOUS version's on the page — the one case
-      // where keeping the shown status is showing another ROM's (#1752).
-      refreshBiosIfStale(cached, binding, ctx.readSeqs),
+      // where keeping the shown status is showing another ROM's (#1752). Read
+      // directly: the switched-to version is a rom_id no other lane is reading,
+      // so there is nothing to join and a join could only be the wrong ROM's.
+      refreshBiosIfStale(cached, binding, ctx.readSeqs, getBiosStatus),
       refreshCoverArtInBackground(binding),
       // The BIOS tab's "Active Core" row and its per-file core lines come
       // from the dedicated core-info path (#923), keyed on rom_id so a

@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as backend from "./backend";
-import { getPlatformCoreInfoShared, getRomMetadataShared, _resetSharedReadsForTests } from "./sharedReads";
+import {
+  getBiosStatusShared,
+  getPlatformCoreInfoShared,
+  getRomMetadataShared,
+  _resetSharedReadsForTests,
+} from "./sharedReads";
+import type { BiosAnswer } from "./backend";
 import type { CoreInfo, RomMetadata } from "../types";
 
 /** A read a test can hold open across a second caller's arrival. */
@@ -133,6 +139,20 @@ describe("sharedReads (#1758)", () => {
     expect(core).toMatchObject({ active_core_label: "Snes9x" });
     expect(vi.mocked(backend.getRomMetadata)).toHaveBeenCalledExactlyOnceWith(42);
     expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledExactlyOnceWith(42);
+  });
+
+  it("collapses two overlapping BIOS callers into ONE backend call", async () => {
+    const open = deferred<BiosAnswer>();
+    vi.mocked(backend.getBiosStatus).mockReturnValue(open.promise);
+
+    const panel = getBiosStatusShared(42);
+    const playRow = getBiosStatusShared(42);
+    const answer: BiosAnswer = { bios_level: "missing" };
+    open.resolve(answer);
+
+    expect(await panel).toBe(answer);
+    expect(await playRow).toBe(answer);
+    expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledExactlyOnceWith(42);
   });
 
   it("collapses two overlapping metadata callers into ONE backend call", async () => {

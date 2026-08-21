@@ -8,8 +8,8 @@
  */
 
 import type { Dispatch, SetStateAction } from "react";
-import { getBiosStatus, getAchievementProgress, debugLog } from "../api/backend";
-import { getPlatformCoreInfoShared } from "../api/sharedReads";
+import { getAchievementProgress, debugLog } from "../api/backend";
+import { getBiosStatusShared, getPlatformCoreInfoShared } from "../api/sharedReads";
 import { extractBiosInfo, extractCoreInfo, type BiosInfoFields, type CoreInfoFields } from "./playSection";
 
 interface AchievementFields {
@@ -20,13 +20,19 @@ interface AchievementFields {
 /** Re-read this ROM's BIOS status and fold the answer in — including an answer
  *  reporting no requirement, which clears the shown one (#1690). Nothing is
  *  written when the read fails or comes back carrying no answer, so the shown
- *  level stands: neither is "no BIOS need", both are "we don't know" (#1693). */
+ *  level stands: neither is "no BIOS need", both are "we don't know" (#1693).
+ *
+ *  Its one caller is the load lane, reaching it off the cached detail's `bios`
+ *  stale mark — the same mark the info panel's load reads microtasks away, so
+ *  the two share one request (`api/sharedReads.ts`). A caller that re-reads
+ *  BECAUSE the BIOS state just changed does not belong here: it would join the
+ *  pre-change answer. */
 export function refreshBiosInBackground<S extends BiosInfoFields>(
   romId: number,
   cancelled: () => boolean,
   setter: Dispatch<SetStateAction<S>>,
 ): void {
-  getBiosStatus(romId)
+  getBiosStatusShared(romId)
     .then((result) => {
       if (cancelled()) return;
       const biosInfo = extractBiosInfo(result);

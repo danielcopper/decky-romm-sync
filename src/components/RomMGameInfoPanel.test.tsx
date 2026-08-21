@@ -17,7 +17,7 @@ import { RomMGameInfoPanel } from "./RomMGameInfoPanel";
 import * as backend from "../api/backend";
 import type { CachedGameDetail } from "../api/backend";
 import * as cachedStore from "../utils/cachedGameDetailStore";
-import { _resetSharedReadsForTests } from "../api/sharedReads";
+import { getBiosStatusShared, _resetSharedReadsForTests } from "../api/sharedReads";
 import * as slotState from "../utils/slotState";
 import {
   installDomEventListenerSpy,
@@ -3423,6 +3423,30 @@ describe("RomMGameInfoPanel", () => {
       await flushAsync();
 
       expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledWith(61);
+      expect(container.textContent).toContain("All ready (3/3)");
+    });
+
+    it("joins the play row's open read rather than opening a second round trip", async () => {
+      // Both lanes reach this read off the same stale mark on the same cached
+      // detail, microtasks apart, on every page open. Standing in for the play
+      // row's load here is a direct call to the shared seam both go through.
+      const open = heldAnswer<backend.BiosAnswer>();
+      vi.mocked(backend.getBiosStatus).mockReturnValue(open.promise);
+      const playRow = getBiosStatusShared(60);
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(staleDetail({ bios_status_unknown: true }));
+
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        open.release(biosAnswer(3));
+        await playRow;
+      });
+      await flushAsync();
+      await openBiosTab();
+
+      expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledExactlyOnceWith(60);
+      // Non-vacuous in the other direction: the JOINED answer is the one folded,
+      // so this is sharing rather than the panel having skipped the read.
       expect(container.textContent).toContain("All ready (3/3)");
     });
 
