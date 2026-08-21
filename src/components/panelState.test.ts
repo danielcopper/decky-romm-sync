@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { MutableRefObject } from "react";
+import type { MutableRefObject, SetStateAction } from "react";
 import {
+  bindRomInState,
   refreshPanelCoreInfo,
   refreshSlotState,
   takeReadTicket,
@@ -86,6 +87,42 @@ describe("takeReadTicket", () => {
     takeReadTicket(seqs, "saveStatus");
     takeReadTicket(seqs, "detail");
     expect(slots()).toBe(false);
+  });
+});
+
+describe("bindRomInState", () => {
+  /** A `useState` setter over a plain value, so a binding's writes can be
+   *  applied and read back without mounting the panel. */
+  function stateSetter(initial: PanelState) {
+    let state = initial;
+    return {
+      setter: (update: SetStateAction<PanelState>) => {
+        state = typeof update === "function" ? update(state) : update;
+      },
+      get current(): PanelState {
+        return state;
+      },
+    };
+  }
+
+  it("folds an answer in while the state still names the bound rom", () => {
+    const store = stateSetter(basePanelState());
+    bindRomInState(7, store.setter).write((prev) => ({ ...prev, activeSlot: "main", activeSlotKnown: true }));
+    expect(store.current.activeSlot).toBe("main");
+    expect(store.current.activeSlotKnown).toBe(true);
+  });
+
+  it("drops an answer for a rom the state has moved off", () => {
+    const store = stateSetter({ ...basePanelState(), romId: 8 });
+    bindRomInState(7, store.setter).write((prev) => ({ ...prev, activeSlot: "main", activeSlotKnown: true }));
+    expect(store.current.activeSlot).toBe("default");
+    expect(store.current.activeSlotKnown).toBe(false);
+  });
+
+  it("takes a whole-state action as well as an updater — the writer's published shape", () => {
+    const store = stateSetter(basePanelState());
+    bindRomInState(7, store.setter).write({ ...basePanelState(), activeSlot: "main" });
+    expect(store.current.activeSlot).toBe("main");
   });
 });
 

@@ -4460,6 +4460,38 @@ describe("RomMGameInfoPanel", () => {
         expect(container.textContent).toContain("MOUNTED SUMMARY");
         expect(container.textContent).not.toContain("USA SUMMARY");
       });
+
+      it("does not fold a slot switch started on the previous version into the switched-to version", async () => {
+        // The one write here that is not a background read: the SAVES pane hands
+        // this callback to `SavesTab`, which calls it after awaiting the switch.
+        // The tab gets no React key, so it survives the version switch holding
+        // the callback it was rendered with — which still answers for the
+        // previous version's rom (#1754).
+        vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "main" });
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, { save_sync_enabled: true }));
+        render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        await openSavesTab();
+
+        // The switch the user started while the previous version was showing.
+        const switchedOnRom1 = capturedSavesTab[capturedSavesTab.length - 1]?.onSlotSwitched;
+        expect(switchedOnRom1).toBeDefined();
+
+        await switchToRom2({ save_sync_enabled: true });
+
+        await act(async () => {
+          switchedOnRom1!("japan-only", emptySaveStatus(1));
+        });
+        await flushAsync();
+
+        const latest = capturedSavesTab[capturedSavesTab.length - 1];
+        expect(latest?.activeSlot).toBe("default");
+        // The field the stale write does the most damage to: it is what tells
+        // the tab the slot name above is a fact rather than the placeholder.
+        expect(latest?.activeSlotKnown).toBe(false);
+        expect(latest?.saveStatus).toBeNull();
+        expect(capturedSavesTab.some((props) => props.activeSlot === "japan-only")).toBe(false);
+      });
     });
   });
 

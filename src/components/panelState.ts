@@ -121,6 +121,33 @@ export function bindRom(
   };
 }
 
+/** Bind a write to `romId` against the identity carried by the state it
+ *  updates — the binding for a writer built during RENDER, which is what the
+ *  active tab's panes get handed.
+ *
+ *  Neither of {@link bindRom}'s two ends is reachable from there, each for its
+ *  own reason. `romIdRef` cannot be passed to a callee during render at all
+ *  (`react-hooks/refs`), and `prev.romId` is the same answer: the panel installs
+ *  it and re-points it in the same synchronous block as the ref, so the two can
+ *  only disagree inside that block — never across the await a stale answer
+ *  arrives from. `cancelled` belongs to a single run of the `[appId]` effect,
+ *  and a render-scoped writer could only reach it through a ref that every new
+ *  run resets — which would answer false again for the PREVIOUS run's load and
+ *  event lane, letting back in exactly the writes `bindRom` exists to refuse.
+ *  What its absence leaves uncovered is the window between an appId change and
+ *  the new load installing its ROM: the state still names the old ROM there, so
+ *  a write lands — into state that same load then replaces whole. */
+export function bindRomInState(romId: number, setter: Dispatch<SetStateAction<PanelState>>): RomBinding {
+  return {
+    romId,
+    write: (update) =>
+      setter((prev) => {
+        if (prev.romId !== romId) return prev;
+        return typeof update === "function" ? update(prev) : update;
+      }),
+  };
+}
+
 /** The panel's read sequences: one counter per set of reads whose answers write
  *  the same fields.
  *

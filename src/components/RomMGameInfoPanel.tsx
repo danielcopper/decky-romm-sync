@@ -23,7 +23,7 @@ import { AchievementsTab } from "./AchievementsTab";
 import { BiosTab } from "./BiosTab";
 import { PanelTabBar } from "./PanelTabBar";
 import { SaveSortWarning } from "./SaveSortWarning";
-import { loadData, type PanelReadSeqs, type PanelState } from "./panelState";
+import { bindRomInState, loadData, type PanelReadSeqs, type PanelState } from "./panelState";
 import { wirePanelEvents } from "./panelEvents";
 import { useSaveSlotsLoad } from "./panelSlotsLoad";
 import { buildTabContent } from "./panelTabContent";
@@ -192,7 +192,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
         className: "romm-tab-content",
         style: { paddingBottom: "48px" },
       },
-      buildTabContent({ appId, romId, state, setState }),
+      buildTabContent({ appId, binding: bindRomInState(romId, setState), state, setState }),
       // Mounted for every ROM and rendering nothing until their tab is active.
       // For achievements that is load-bearing: the list is fetched by the tab
       // itself, and unmounting it on a tab switch would re-fetch (and re-spinner)

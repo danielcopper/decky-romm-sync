@@ -14,11 +14,11 @@ import type { Dispatch, SetStateAction } from "react";
 import { GameInfoTab } from "./GameInfoTab";
 import { SavesTab } from "./SavesTab";
 import { SlotSetupWizard } from "./SlotSetupWizard";
-import type { PanelState } from "./panelState";
+import type { PanelState, RomBinding } from "./panelState";
 
 interface TabContentContext {
   readonly appId: number;
-  readonly romId: number;
+  readonly binding: RomBinding;
   readonly state: PanelState;
   readonly setState: Dispatch<SetStateAction<PanelState>>;
 }
@@ -35,10 +35,12 @@ function announceSaveSyncChange(romId: number): void {
 /** Build the pane for the active tab, or null when the active tab builds none. */
 export function buildTabContent({
   appId,
-  romId,
+  binding,
   state,
   setState,
 }: TabContentContext): ReturnType<typeof createElement> | null {
+  const romId = binding.romId;
+
   if (state.activeTab === "info") {
     return createElement(GameInfoTab, {
       key: "tab-info",
@@ -76,7 +78,12 @@ export function buildTabContent({
     lastKnownSlots: state.lastKnownSlots,
     slotsLoading: state.slotsLoading,
     onSlotSwitched: (newSlot, newStatus) => {
-      setState((prev) => ({
+      // `SavesTab` calls this after awaiting the switch, and gets no React key
+      // of its own: it survives the version switch that re-points the panel to
+      // another rom_id under the same appId, still holding the callback it was
+      // rendered with. Only the ROM this pane was built for separates that
+      // answer from one about the version now showing (#1754).
+      binding.write((prev) => ({
         ...prev,
         activeSlot: newSlot === "" ? null : newSlot,
         // A completed switch is an answer about the active slot in its own
