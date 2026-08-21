@@ -86,11 +86,17 @@ export interface PanelState {
 /** A ROM identity paired with the only writer allowed to fold an answer read for
  *  it into panel state.
  *
- *  `write` drops the update when the panel that issued the read is gone, and
- *  when the panel has been re-bound to a different ROM since. Those are two
- *  separate ends, and neither covers the other: a version switch re-binds the
- *  shortcut to a new rom_id without changing the appId, so the `[appId]` effect
- *  never re-runs and its `cancelled` flag never fires for it (#1713).
+ *  What the TYPE promises is one end: `write` drops the update once the panel
+ *  has been re-bound to a different ROM. That is the end a version switch needs,
+ *  because it re-binds the shortcut to a new rom_id without changing the appId,
+ *  so the `[appId]` effect never re-runs and its `cancelled` flag never fires
+ *  for it (#1713).
+ *
+ *  Whether a binding ALSO drops the update once the panel that issued the read
+ *  is gone is the constructor's to decide, and the two ends do not cover each
+ *  other. A read that outlives its effect run needs both, so hand it a
+ *  {@link bindRom} binding — a {@link bindRomInState} one carries the rom end
+ *  alone and would let that run's answer land.
  *
  *  Carrying the ROM alongside its writer is what keeps the two from drifting
  *  apart — a read issued off `binding.romId` cannot be folded in through a

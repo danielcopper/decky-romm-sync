@@ -294,16 +294,16 @@ Format: **invariant** — tier — enforced by.
   state, event and tab-content modules (`src/components/panelState.ts`, `src/components/panelEvents.ts`,
   `src/components/panelTabContent.ts` — the panel component itself holds none of these writes) via `RomBinding`, built
   by `bindRom` for a read a run of the `[appId]` effect issued and by `bindRomInState` for the active tab's panes, whose
-  writer is built during render where a ref cannot reach; the achievements tab (`src/components/AchievementsTab.tsx`) by
-  construction, its React key being the rom id, so its state cannot outlive the identity it was read for. A version
-  switch re-keys without closing, so neither the store's generation counter nor the panel's `[appId]` effect sees this
-  class. Binding answers the wrong-rom question only; two answers for the SAME rom are ordered instead, by a sequence
-  taken when the read is issued — the store's `loadSeq`, the panel's `takeReadTicket` (#1717). Four writes are unbound:
-  the two identity writes install what a binding would compare against, so ordering is all they can have, and both have
-  it. The other two have neither — the store's `cached.bios_status` fold runs in the same synchronous run as its guard,
-  and the event lane's `handleBiosChange` answers for the platform's default core and can overwrite a rom-keyed answer
-  (#1718). The panel's remaining lazy lane writes through the raw setter, ordered by the same ticket. The play button is
-  NOT covered (#1714)** — test + prompt-only — the panel's twelve bound sites each carry a version-switch test
+  writer is built during render; the achievements tab (`src/components/AchievementsTab.tsx`) by construction, its React
+  key being the rom id, so its state cannot outlive the identity it was read for. A version switch re-keys without
+  closing, so neither the store's generation counter nor the panel's `[appId]` effect sees this class. Binding answers
+  the wrong-rom question only; two answers for the SAME rom are ordered instead, by a sequence taken when the read is
+  issued — the store's `loadSeq`, the panel's `takeReadTicket` (#1717). Four writes are unbound: the two identity writes
+  install what a binding would compare against, so ordering is all they can have, and both have it. The other two have
+  neither — the store's `cached.bios_status` fold runs in the same synchronous run as its guard, and the event lane's
+  `handleBiosChange` answers for the platform's default core and can overwrite a rom-keyed answer (#1718). The panel's
+  remaining lazy lane writes through the raw setter, ordered by the same ticket. The play button is NOT covered
+  (#1714)** — test + prompt-only — the panel's twelve bound sites each carry a version-switch test
   (`src/components/RomMGameInfoPanel.test.tsx`); the store side and every new write site on either are prompt-only,
   because a checker scoped to the store's own function bodies would be green on the case this rule was written for. The
   reasons behind the two writer mechanisms live at `writerForRom` and `RomBinding` — do not restate them here
