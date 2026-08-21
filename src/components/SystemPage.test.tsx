@@ -97,6 +97,15 @@ function lastConfirmModalProps(): ConfirmModalProps | null {
   return el?.props ?? null;
 }
 
+// The `romm_data_changed` events SystemPage put on the window during the test,
+// in dispatch order — `fireEvent` and React put unrelated events through the
+// same spy.
+function rommDataChangedEvents(spy: { mock: { calls: unknown[][] } }): CustomEvent[] {
+  return spy.mock.calls
+    .map((c) => c[0])
+    .filter((e): e is CustomEvent => e instanceof CustomEvent && e.type === "romm_data_changed");
+}
+
 // Flush mount-time + chained promise resolutions.
 const flushAsync = () =>
   act(async () => {
@@ -410,6 +419,100 @@ describe("SystemPage", () => {
       // CATCH-REJECTION assert: status string rendered
       expect(container.textContent).toContain("Download failed: Error: io");
     });
+
+    it("dispatches a romm_data_changed {type:'bios', platform_slug} event when files were downloaded", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithMissingOptional()],
+      });
+      vi.mocked(backend.downloadAllFirmware).mockResolvedValue({
+        success: true,
+        downloaded: 2,
+      });
+      const dispatchSpy = vi.spyOn(globalThis, "dispatchEvent");
+      const { getByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Download All"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const events = rommDataChangedEvents(dispatchSpy);
+      expect(events).toHaveLength(1);
+      expect(events[0]!.detail).toEqual({ type: "bios", platform_slug: "snes" });
+      dispatchSpy.mockRestore();
+    });
+
+    it("does NOT dispatch romm_data_changed when the download succeeded but moved no files", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithMissingOptional()],
+      });
+      vi.mocked(backend.downloadAllFirmware).mockResolvedValue({
+        success: true,
+        message: "Downloaded 0 firmware files (1 failed: boot.rom)",
+        downloaded: 0,
+      });
+      const dispatchSpy = vi.spyOn(globalThis, "dispatchEvent");
+      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Download All"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // The run still reports itself — it just changed no firmware.
+      expect(container.textContent).toContain("Downloaded 0 firmware files (1 failed: boot.rom)");
+      expect(rommDataChangedEvents(dispatchSpy)).toHaveLength(0);
+      dispatchSpy.mockRestore();
+    });
+
+    it("does NOT dispatch romm_data_changed when downloadAllFirmware reports success=false", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithMissingOptional()],
+      });
+      vi.mocked(backend.downloadAllFirmware).mockResolvedValue({
+        success: false,
+        message: "Server unreachable",
+        downloaded: 0,
+      });
+      const dispatchSpy = vi.spyOn(globalThis, "dispatchEvent");
+      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Download All"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("Server unreachable");
+      expect(rommDataChangedEvents(dispatchSpy)).toHaveLength(0);
+      dispatchSpy.mockRestore();
+    });
+
+    it("does NOT dispatch romm_data_changed when downloadAllFirmware throws", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithMissingOptional()],
+      });
+      vi.mocked(backend.downloadAllFirmware).mockRejectedValue(new Error("io"));
+      const dispatchSpy = vi.spyOn(globalThis, "dispatchEvent");
+      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Download All"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // CATCH-REJECTION assert: status string rendered, and the catch announces nothing.
+      expect(container.textContent).toContain("Download failed: Error: io");
+      expect(rommDataChangedEvents(dispatchSpy)).toHaveLength(0);
+      dispatchSpy.mockRestore();
+    });
   });
 
   // ------------------------------------------------------------------
@@ -491,6 +594,99 @@ describe("SystemPage", () => {
         await Promise.resolve();
       });
       expect(container.textContent).toContain("Download failed");
+    });
+
+    it("dispatches a romm_data_changed {type:'bios', platform_slug} event when files were downloaded", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithMissingRequired()],
+      });
+      vi.mocked(backend.downloadRequiredFirmware).mockResolvedValue({
+        success: true,
+        downloaded: 1,
+      });
+      const dispatchSpy = vi.spyOn(globalThis, "dispatchEvent");
+      const { getByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Download Required"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const events = rommDataChangedEvents(dispatchSpy);
+      expect(events).toHaveLength(1);
+      expect(events[0]!.detail).toEqual({ type: "bios", platform_slug: "snes" });
+      dispatchSpy.mockRestore();
+    });
+
+    it("does NOT dispatch romm_data_changed when the download succeeded but moved no files", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithMissingRequired()],
+      });
+      vi.mocked(backend.downloadRequiredFirmware).mockResolvedValue({
+        success: true,
+        message: "Downloaded 0 required firmware files (1 failed: bios.rom)",
+        downloaded: 0,
+      });
+      const dispatchSpy = vi.spyOn(globalThis, "dispatchEvent");
+      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Download Required"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("Downloaded 0 required firmware files (1 failed: bios.rom)");
+      expect(rommDataChangedEvents(dispatchSpy)).toHaveLength(0);
+      dispatchSpy.mockRestore();
+    });
+
+    it("does NOT dispatch romm_data_changed when downloadRequiredFirmware reports success=false", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithMissingRequired()],
+      });
+      vi.mocked(backend.downloadRequiredFirmware).mockResolvedValue({
+        success: false,
+        message: "Server unreachable",
+        downloaded: 0,
+      });
+      const dispatchSpy = vi.spyOn(globalThis, "dispatchEvent");
+      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Download Required"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("Server unreachable");
+      expect(rommDataChangedEvents(dispatchSpy)).toHaveLength(0);
+      dispatchSpy.mockRestore();
+    });
+
+    it("does NOT dispatch romm_data_changed when downloadRequiredFirmware throws", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithMissingRequired()],
+      });
+      vi.mocked(backend.downloadRequiredFirmware).mockRejectedValue(new Error("io"));
+      const dispatchSpy = vi.spyOn(globalThis, "dispatchEvent");
+      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Download Required"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // CATCH-REJECTION assert: status string rendered, and the catch announces nothing.
+      expect(container.textContent).toContain("Download failed: Error: io");
+      expect(rommDataChangedEvents(dispatchSpy)).toHaveLength(0);
+      dispatchSpy.mockRestore();
     });
   });
 
@@ -1600,9 +1796,7 @@ describe("SystemPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      const biosEvents = dispatchSpy.mock.calls
-        .map((c) => c[0])
-        .filter((e): e is CustomEvent => e instanceof CustomEvent && e.type === "romm_data_changed");
+      const biosEvents = rommDataChangedEvents(dispatchSpy);
       expect(biosEvents).toHaveLength(1);
       expect(biosEvents[0]!.detail).toEqual({ type: "bios", platform_slug: "ps1" });
       dispatchSpy.mockRestore();
@@ -1628,10 +1822,7 @@ describe("SystemPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      const biosEvents = dispatchSpy.mock.calls
-        .map((c) => c[0])
-        .filter((e): e is CustomEvent => e instanceof CustomEvent && e.type === "romm_data_changed");
-      expect(biosEvents).toHaveLength(0);
+      expect(rommDataChangedEvents(dispatchSpy)).toHaveLength(0);
       dispatchSpy.mockRestore();
     });
   });

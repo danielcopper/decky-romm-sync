@@ -67,6 +67,23 @@ function getBiosSummary(
   };
 }
 
+/**
+ * Tell an open game-detail page that this platform's firmware changed, so it
+ * re-reads its BIOS requirement instead of leaving the pre-change one standing
+ * (#939). Every download and delete on this page is such a change; nothing else
+ * on the page is.
+ *
+ * Call it only when firmware actually changed. The event fans out to every
+ * mounted panel and each one that matches the slug pays a live
+ * `check_platform_bios` for it (#1082), so a run that moved no files must stay
+ * silent rather than send an event no panel can act on.
+ */
+function announceBiosChange(platformSlug: string) {
+  globalThis.dispatchEvent(
+    new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: platformSlug } }),
+  );
+}
+
 function hashIndicator(hv: boolean | null): string {
   if (hv === true) return " ✓";
   if (hv === false) return " ⚠";
@@ -146,6 +163,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
       if (result.success) {
         setBiosStatus(result.message || `Downloaded ${result.downloaded} files`);
         await refreshSystem();
+        if ((result.downloaded ?? 0) > 0) announceBiosChange(platformSlug);
       } else {
         setBiosStatus(result.message || "Download failed");
       }
@@ -163,6 +181,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
       if (result.success) {
         setBiosStatus(result.message || `Downloaded ${result.downloaded} required files`);
         await refreshSystem();
+        if ((result.downloaded ?? 0) > 0) announceBiosChange(platformSlug);
       } else {
         setBiosStatus(result.message || "Download failed");
       }
@@ -183,11 +202,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
       setBiosStatus(result.message);
       if (result.success) {
         await refreshSystem();
-        // Notify an open game-detail page so it re-checks BIOS status (#939).
-        // Mirrors the download-path emit in RomMPlaySection.
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: platformSlug } }),
-        );
+        announceBiosChange(platformSlug);
       }
     } catch (e) {
       setBiosStatus(`Failed to delete BIOS files: ${e}`);
