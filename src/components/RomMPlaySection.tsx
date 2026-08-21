@@ -129,7 +129,7 @@ function resolveLastPlayed(restoredIso: string | null, steamUnixSeconds: number)
 async function readAndBroadcastSaveStatus(appId: number, isCancelled: () => boolean): Promise<void> {
   try {
     const saveStatus = await refreshSaveStatus(appId);
-    if (isCancelled() || !saveStatus || saveStatus.rom_id !== getGameDetail(appId).romId) return;
+    if (isCancelled() || saveStatus?.rom_id !== getGameDetail(appId).romId) return;
     globalThis.dispatchEvent(
       new CustomEvent("romm_data_changed", {
         detail: {

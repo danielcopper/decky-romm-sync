@@ -123,16 +123,30 @@ class RetryLadder:
             try:
                 return fn(*args, **kwargs)
             except Exception as exc:
-                if attempt == attempts - 1 or not self.is_retryable(exc):
-                    if romm_origin:
-                        self._note_unreachable(exc)
-                    raise
+                self._give_up_unless_worth_another_attempt(exc, attempt, attempts, romm_origin=romm_origin)
                 delay = base_delay * (3**attempt)
                 self._logger.info(f"Retry {attempt + 1}/{attempts} after {delay}s: {exc}")
                 self._notify_retry(attempt + 2, attempts, float(delay))
                 if not self._backoff(float(delay), romm_origin=romm_origin):
                     raise
         raise AssertionError("attempt ladder ran zero attempts")  # pragma: no cover
+
+    def _give_up_unless_worth_another_attempt(
+        self, exc: Exception, attempt: int, attempts: int, *, romm_origin: bool
+    ) -> None:
+        """Re-raise *exc* unless another attempt on the ladder is worth making.
+
+        Another one is worth making only while the ladder has an attempt left
+        AND the failure is transient (:meth:`is_retryable`). Otherwise this is
+        where the ladder gives up, and a RomM-origin ladder records the
+        reachability verdict on its way out — a give-up is the only place that
+        bit is ever set.
+        """
+        if attempt < attempts - 1 and self.is_retryable(exc):
+            return
+        if romm_origin:
+            self._note_unreachable(exc)
+        raise exc
 
     def note_reachable(self) -> None:
         """Record that the RomM server answered, restoring the full ladder.

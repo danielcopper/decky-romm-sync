@@ -213,8 +213,9 @@ class TestRetryLadderReentrancy:
 
     def test_depth_is_released_after_a_raising_ladder(self, adapter):
         """A ladder that raised must not leave the thread marked as "inside a ladder"."""
+        raising = MagicMock(side_effect=RommAuthError("401"))
         with pytest.raises(RommAuthError):
-            adapter.with_retry(MagicMock(side_effect=RommAuthError("401")))
+            adapter.with_retry(raising)
 
         fn = MagicMock(side_effect=[RommConnectionError("refused"), RommConnectionError("refused"), "ok"])
         with patch("time.sleep"):
@@ -248,8 +249,9 @@ class TestKnownUnreachableFastPath:
     """A server already known unreachable costs one attempt, not a full ladder (#1758)."""
 
     def _failing_ladder(self, adapter, exc: Exception) -> None:
+        fn = MagicMock(side_effect=exc)
         with patch("time.sleep"), pytest.raises(type(exc)):
-            adapter.with_retry(MagicMock(side_effect=exc), base_delay=0)
+            adapter.with_retry(fn, base_delay=0)
 
     def test_ladder_giving_up_unreachable_shrinks_the_next_ladder_to_one_attempt(self, adapter):
         self._failing_ladder(adapter, RommConnectionError("refused"))
