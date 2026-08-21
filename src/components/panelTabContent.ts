@@ -10,7 +10,6 @@
  */
 
 import { createElement } from "react";
-import type { Dispatch, SetStateAction } from "react";
 import { GameInfoTab } from "./GameInfoTab";
 import { SavesTab } from "./SavesTab";
 import { SlotSetupWizard } from "./SlotSetupWizard";
@@ -20,7 +19,6 @@ interface TabContentContext {
   readonly appId: number;
   readonly binding: RomBinding;
   readonly state: PanelState;
-  readonly setState: Dispatch<SetStateAction<PanelState>>;
 }
 
 /** Tell every surface showing this ROM that its save-sync facts moved. */
@@ -33,12 +31,7 @@ function announceSaveSyncChange(romId: number): void {
 }
 
 /** Build the pane for the active tab, or null when the active tab builds none. */
-export function buildTabContent({
-  appId,
-  binding,
-  state,
-  setState,
-}: TabContentContext): ReturnType<typeof createElement> | null {
+export function buildTabContent({ appId, binding, state }: TabContentContext): ReturnType<typeof createElement> | null {
   const romId = binding.romId;
 
   if (state.activeTab === "info") {
@@ -61,7 +54,12 @@ export function buildTabContent({
     return createElement(SlotSetupWizard, {
       romId,
       onComplete: () => {
-        setState((prev) => ({ ...prev, slotConfirmed: true }));
+        // Bound for the same reason the slot switch below is: the wizard calls
+        // this after awaiting the confirm, and it is unkeyed too. `slotConfirmed`
+        // is the gate deciding which of the two panes this function builds, so a
+        // stale `true` puts a saves tab in front of a version whose tracking is
+        // not configured (#1754).
+        binding.write((prev) => ({ ...prev, slotConfirmed: true }));
         announceSaveSyncChange(romId);
       },
     });

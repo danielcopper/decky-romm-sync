@@ -192,7 +192,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
         className: "romm-tab-content",
         style: { paddingBottom: "48px" },
       },
-      buildTabContent({ appId, binding: bindRomInState(romId, setState), state, setState }),
+      buildTabContent({ appId, binding: bindRomInState(romId, setState), state }),
       // Mounted for every ROM and rendering nothing until their tab is active.
       // For achievements that is load-bearing: the list is fetched by the tab
       // itself, and unmounting it on a tab switch would re-fetch (and re-spinner)

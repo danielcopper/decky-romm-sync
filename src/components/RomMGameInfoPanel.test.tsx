@@ -4492,6 +4492,36 @@ describe("RomMGameInfoPanel", () => {
         expect(latest?.saveStatus).toBeNull();
         expect(capturedSavesTab.some((props) => props.activeSlot === "japan-only")).toBe(false);
       });
+
+      it("does not fold a slot confirmation started on the previous version into the switched-to version", async () => {
+        // The pane's other render-scoped write. Its sibling above holds the
+        // previous version's `isSaveTrackingConfigured` READ open; this one lets
+        // the read answer normally and fires the wizard callback instead, which
+        // is the write that reaches `slotConfirmed` without going near a fence.
+        vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: false, active_slot: null });
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailFor(1, { save_sync_enabled: true }));
+        const { queryByTestId } = render(<RomMGameInfoPanel appId={testAppId} />);
+        await flushAsync();
+        await openSavesTab();
+        expect(queryByTestId("slot-setup-wizard")).not.toBeNull();
+
+        // The confirm the user started while the previous version was showing.
+        const confirmedOnRom1 = capturedSlotSetupWizard[capturedSlotSetupWizard.length - 1]?.onComplete;
+        expect(confirmedOnRom1).toBeDefined();
+
+        await switchToRom2({ save_sync_enabled: true });
+
+        await act(async () => {
+          confirmedOnRom1!();
+        });
+        await flushAsync();
+
+        // `slotConfirmed` is the gate between the two panes, so the refused
+        // write is the whole difference between the switched-to version's own
+        // wizard and a saves tab it has no configured tracking for.
+        expect(queryByTestId("slot-setup-wizard")).not.toBeNull();
+        expect(queryByTestId("saves-tab")).toBeNull();
+      });
     });
   });
 
