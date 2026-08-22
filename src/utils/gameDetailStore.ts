@@ -603,25 +603,30 @@ async function handleCoreChange(entry: Entry): Promise<void> {
   }));
 }
 
-/** How long a failed load waits before its one retry. Long enough for a backend
- *  that was reloading or still starting when the read went out — the failure
- *  this recovers — to have come up, and short enough that a user watching the
- *  page reads the repair as the page still loading. */
-const FAILED_LOAD_RETRY_MS = 2000;
+/** How long a failed load waits before its one retry. The plugin's own
+ *  backend-readiness ladders — `RETRY_DELAYS` in index.tsx (#1203) and
+ *  `CONNECTION_RETRY_DELAYS` in utils/connectionProbe.ts (#1045) — both go 2000,
+ *  5000, so 2000 is the interval this project has already recorded as regularly
+ *  too early. This lane has one attempt to spend rather than five, and a row
+ *  still filling after five seconds reads no more broken than after two. */
+const FAILED_LOAD_RETRY_MS = 5000;
 
 /**
  * Schedule the one timed re-derive of an entry whose load threw.
  *
  * The second occasion on {@link Entry.loadFailed}, next to the install-state
- * triggers below. It exists because those triggers miss the likeliest case: a
- * read throws when the backend is reloading or still starting, and a user
- * looking at a game page and doing nothing else produces no download, no
- * uninstall and no adoption for the entry to take its cue from.
+ * triggers below. It exists because those triggers miss the case that produces
+ * the failure: the bridge rejects the read — plugin_loader restarting under the
+ * page, a closed WebSocket — while a user looking at a game page and doing
+ * nothing else produces no download, no uninstall and no adoption for the entry
+ * to take its cue from.
  *
- * Exactly one, for the entry's whole lifetime — {@link Entry.timedRetryUsed} is
- * spent where the retry is scheduled, so a retry that throws too schedules
- * nothing further. The read behind it is local and network-free: one that fails
- * twice is a backend defect, which no amount of waiting longer answers.
+ * One TIMER, for the entry's whole lifetime — {@link Entry.timedRetryUsed} is
+ * spent where it is scheduled, so a retry that throws too schedules nothing
+ * further, and a timer already pending when the event lane re-derives is not
+ * withdrawn (that entry can see both). One rather than a ladder because the
+ * plugin runs a readiness ladder at init already; a per-page lane that grew one
+ * of its own would be racing it, page by page.
  *
  * Inert unless the entry is still the one this was scheduled for and is still
  * failed. The flag is cleared where a load is ISSUED, so an entry the event lane
@@ -654,10 +659,14 @@ function scheduleFailedLoadRetry(appId: number, entry: Entry): void {
  *
  * This lane is unbounded in time and bounded per event; {@link
  * scheduleFailedLoadRetry} is the other way round, and covers the page where the
- * user does nothing at all. What neither covers is a failure that outlives the
- * one timed retry on a page nothing then happens on: the timed lane is spent and
- * no event arrives, so the entry stays on the neutral default until a version
- * switch or the next page visit.
+ * user does nothing at all. Two things neither covers. A failure that outlives
+ * the one timed retry on a page nothing then happens on: the timed lane is spent
+ * and no event arrives, so the entry stays on the neutral default until a
+ * version switch or the next page visit. And a read that HANGS rather than
+ * rejects: `callable()` carries no timeout of its own — which is why index.tsx
+ * and utils/connectionProbe.ts race every attempt against `CALLABLE_TIMEOUT` —
+ * and this load awaits it bare, so the catch never runs, the flag both lanes
+ * read is never set, and neither fires.
  */
 function reloadTriggeredBy(entry: Entry, eventRomId: number | undefined): boolean {
   if (entry.state.romId !== null) return eventRomId === entry.state.romId;

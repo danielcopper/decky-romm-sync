@@ -1312,7 +1312,7 @@ describe("gameDetailStore", () => {
     it("retries the read once after a delay, on a page where nothing else happens", async () => {
       vi.useFakeTimers();
       try {
-        vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValueOnce(new Error("backend reloading"));
+        vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValueOnce(new Error("bridge rejected"));
         subscribe(nextAppId);
         await flush();
         expect(getGameDetail(nextAppId).romId).toBeNull();
@@ -1326,6 +1326,9 @@ describe("gameDetailStore", () => {
         await flush();
 
         expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, installed: true, fsSizeBytes: 4096 });
+        // The entry's one attempt goes to the backend rather than to whatever
+        // the shared TTL cache is holding by then.
+        expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledExactlyOnceWith(nextAppId);
       } finally {
         vi.useRealTimers();
       }
@@ -1345,8 +1348,8 @@ describe("gameDetailStore", () => {
         await flush();
         expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(2);
 
-        // A local read that fails the same way twice is a backend defect, and
-        // the one thing this must not turn into is a spin: the retry having
+        // The one thing this must not turn into is a spin, or a second
+        // backend-readiness ladder next to the plugin's own: the retry having
         // failed too is not itself a reason to read again — not now, and not
         // five minutes from now either.
         await act(async () => {
