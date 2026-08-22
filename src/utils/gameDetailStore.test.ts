@@ -1282,10 +1282,15 @@ describe("gameDetailStore", () => {
     });
   });
 
-  // The first load is what installs the identity the three triggers above are
-  // gated on, so a first load that threw leaves them nothing to match and the
-  // entry stuck on the neutral default for the whole page visit (#1676).
+  // The first load is what installs the identity the three install-state
+  // triggers above are gated on, so a first load that threw leaves them nothing
+  // to match — and the likeliest cause of a throw, a backend still starting, is
+  // also the situation in which none of those events ever arrives (#1676).
   describe("a load whose read threw", () => {
+    // Comfortably past the store's retry delay. These tests pin that the one
+    // retry happens, and that it happens once — not what the delay is.
+    const PAST_RETRY_DELAY_MS = 60_000;
+
     it("re-derives the entry on the next install-state event, having no identity to match it against", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("bridge down"));
       subscribe(nextAppId);
@@ -1304,10 +1309,29 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, installed: true, fsSizeBytes: 4096 });
     });
 
-    it("costs one read per event and schedules no retry of its own", async () => {
-      // On fake timers: microtask flushes alone cannot tell a store that
-      // schedules nothing apart from one that schedules a delayed retry, so a
-      // setTimeout-driven spin would pass this test's name unnoticed.
+    it("retries the read once after a delay, on a page where nothing else happens", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValueOnce(new Error("backend reloading"));
+        subscribe(nextAppId);
+        await flush();
+        expect(getGameDetail(nextAppId).romId).toBeNull();
+
+        // No download, no uninstall, no adoption — the user is looking at the
+        // game page, which is exactly the situation that produces this failure.
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: true, fs_size_bytes: 4096 }));
+        await act(async () => {
+          vi.advanceTimersByTime(PAST_RETRY_DELAY_MS);
+        });
+        await flush();
+
+        expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, installed: true, fsSizeBytes: 4096 });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("retries once and no more, when the retry throws too", async () => {
       vi.useFakeTimers();
       try {
         vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("backend defect"));
@@ -1316,20 +1340,103 @@ describe("gameDetailStore", () => {
         expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(1);
 
         await act(async () => {
-          emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(999));
-          await Promise.resolve();
+          vi.advanceTimersByTime(PAST_RETRY_DELAY_MS);
         });
         await flush();
+        expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(2);
+
+        // A local read that fails the same way twice is a backend defect, and
+        // the one thing this must not turn into is a spin: the retry having
+        // failed too is not itself a reason to read again — not now, and not
+        // five minutes from now either.
         await act(async () => {
           vi.advanceTimersByTime(5 * 60_000);
         });
         await flush();
-
-        // A read that fails the same way every time is a backend defect, and the
-        // one thing this must not turn into is a spin: the retry that failed too
-        // is not itself a reason to read again — not now, and not five minutes
-        // from now either.
         expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not retry behind an install-state event that recovered the entry first", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValueOnce(new Error("bridge down"));
+        subscribe(nextAppId);
+        await flush();
+
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: true }));
+        await act(async () => {
+          emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(999));
+          await Promise.resolve();
+        });
+        await flush();
+        expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, installed: true });
+
+        await act(async () => {
+          vi.advanceTimersByTime(PAST_RETRY_DELAY_MS);
+        });
+        await flush();
+
+        // Two reads, not three: the event's load answered, so the pending retry
+        // finds nothing left to recover.
+        expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("reads nothing when the page was closed before the retry fell due", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("bridge down"));
+        const unsubscribe = subscribe(nextAppId);
+        await flush();
+        expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(1);
+
+        unsubscribe();
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: true }));
+        await act(async () => {
+          vi.advanceTimersByTime(PAST_RETRY_DELAY_MS);
+        });
+        await flush();
+
+        expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(1);
+        expect(getGameDetail(nextAppId)).toMatchObject({ romId: null, installed: false });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("takes a sequence number like any other load, so a newer load refuses its answer", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValueOnce(new Error("bridge down"));
+        subscribe(nextAppId);
+        await flush();
+
+        const retryRead = deferred<CachedGameDetail>();
+        vi.mocked(cachedStore.getCachedGameDetail).mockReturnValueOnce(retryRead.promise);
+        await act(async () => {
+          vi.advanceTimersByTime(PAST_RETRY_DELAY_MS);
+        });
+        await flush();
+
+        // A version switch re-derives the entry while the retry's read is still
+        // open, and answers first.
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found(switchedDetail));
+        await act(async () => {
+          dispatchVersionSwitch(nextAppId);
+          await Promise.resolve();
+        });
+        await flush();
+        expect(getGameDetail(nextAppId).romId).toBe(43);
+
+        retryRead.resolve(found({ installed: true }));
+        await flush();
+
+        expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, installed: false });
       } finally {
         vi.useRealTimers();
       }

@@ -148,8 +148,14 @@ interface Entry {
    *  is issued, so it is never set while one is in flight to answer the question.
    *  It is the only thing that tells an entry whose read failed apart from one
    *  that has no identity to install (an appId RomM does not know) or has not
-   *  resolved one yet — the shown state is the same in all three. */
+   *  resolved one yet — the shown state is the same in all three. Both recovery
+   *  lanes hang on it: {@link scheduleFailedLoadRetry} and {@link
+   *  reloadTriggeredBy}. */
   loadFailed: boolean;
+  /** Whether the one timed retry has been scheduled. Spent for the entry's
+   *  lifetime at the moment it is scheduled, whatever that retry then answers —
+   *  see {@link scheduleFailedLoadRetry}. */
+  timedRetryUsed: boolean;
   saveStatusInFlight: InFlightSaveStatus | null;
   detachListeners: () => void;
 }
@@ -197,6 +203,7 @@ function openEntry(appId: number): Entry {
     generation: 0,
     loadSeq: 0,
     loadFailed: false,
+    timedRetryUsed: false,
     saveStatusInFlight: null,
     detachListeners: () => {},
   };
@@ -360,7 +367,10 @@ async function loadDetail(appId: number, entry: Entry): Promise<void> {
     // sequence — and bound to no rom: the read threw, so there is no rom this
     // failure is about. A load a later one has moved past says nothing about
     // whether the entry can load; the newer load's own outcome does.
-    if (!cancelled()) entry.loadFailed = true;
+    if (!cancelled()) {
+      entry.loadFailed = true;
+      scheduleFailedLoadRetry(appId, entry);
+    }
   }
 }
 
@@ -593,26 +603,61 @@ async function handleCoreChange(entry: Entry): Promise<void> {
   }));
 }
 
+/** How long a failed load waits before its one retry. Long enough for a backend
+ *  that was reloading or still starting when the read went out — the failure
+ *  this recovers — to have come up, and short enough that a user watching the
+ *  page reads the repair as the page still loading. */
+const FAILED_LOAD_RETRY_MS = 2000;
+
+/**
+ * Schedule the one timed re-derive of an entry whose load threw.
+ *
+ * The second occasion on {@link Entry.loadFailed}, next to the install-state
+ * triggers below. It exists because those triggers miss the likeliest case: a
+ * read throws when the backend is reloading or still starting, and a user
+ * looking at a game page and doing nothing else produces no download, no
+ * uninstall and no adoption for the entry to take its cue from.
+ *
+ * Exactly one, for the entry's whole lifetime — {@link Entry.timedRetryUsed} is
+ * spent where the retry is scheduled, so a retry that throws too schedules
+ * nothing further. The read behind it is local and network-free: one that fails
+ * twice is a backend defect, which no amount of waiting longer answers.
+ *
+ * Inert unless the entry is still the one this was scheduled for and is still
+ * failed. The flag is cleared where a load is ISSUED, so an entry the event lane
+ * has already recovered — or is mid-recovery on — reads nothing here; and the
+ * generation covers the page closed in the meantime, so a retry falling due
+ * after `closeEntry` finds a generation the entry has moved past.
+ */
+function scheduleFailedLoadRetry(appId: number, entry: Entry): void {
+  if (entry.timedRetryUsed) return;
+  entry.timedRetryUsed = true;
+  const generation = entry.generation;
+  setTimeout(() => {
+    if (entry.generation !== generation || !entry.loadFailed) return;
+    detach(reloadDetail(appId, entry));
+  }, FAILED_LOAD_RETRY_MS);
+}
+
 /**
  * Whether an install-state event about `eventRomId` re-derives this entry.
  *
  * Normally that is the entry's own ROM and nothing else. The second arm is for
  * the entry that has no identity to match against because its load threw: the
- * first load installs the identity all three triggers are gated on, so a first
- * load that failed is otherwise terminal — the entry stays on the neutral
- * default for the whole page visit, and only a version switch or leaving the
- * page can load it again (#1676).
+ * first load installs the identity all three triggers are gated on, so without
+ * this arm a first load that failed would leave them nothing to match (#1676).
  *
  * With no identity the entry cannot tell whether the event is about its game, so
  * it re-reads on any of them. The cost is bounded by what a user can do: one
- * network-free `get_cached_game_detail` per install-state event, never a retry
- * this store schedules itself, and none at all while a load is in flight or once
- * one has answered.
+ * network-free `get_cached_game_detail` per install-state event, and none at all
+ * while a load is in flight or once one has answered.
  *
- * The residual is the other side of that bound: an entry whose first load threw
- * and which then sees none of the three events stays on the neutral default for
- * the whole page visit, exactly as before. Recovery here is something a user
- * action triggers, not something time does.
+ * This lane is unbounded in time and bounded per event; {@link
+ * scheduleFailedLoadRetry} is the other way round, and covers the page where the
+ * user does nothing at all. What neither covers is a failure that outlives the
+ * one timed retry on a page nothing then happens on: the timed lane is spent and
+ * no event arrives, so the entry stays on the neutral default until a version
+ * switch or the next page visit.
  */
 function reloadTriggeredBy(entry: Entry, eventRomId: number | undefined): boolean {
   if (entry.state.romId !== null) return eventRomId === entry.state.romId;
