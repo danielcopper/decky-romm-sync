@@ -82,6 +82,14 @@ const discDefaultSelection: DiscSelection = {
   default: { kind: "disc", label: "Disc 1", filename: "game (Disc 1).chd" },
 };
 
+// Settles the mount-time init chain (getCachedGameDetail → getDiscSelection). A
+// test that returns before it resolves leaves its state writes to land outside
+// act — including on the paths that bail out before the second fetch.
+const flushAsync = () =>
+  act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
 /** Render, wait for the trigger, click it, and render the captured menu. */
 async function renderAndOpen(appId = 100) {
   const r = render(<DiscSelector appId={appId} />);
@@ -117,7 +125,7 @@ describe("DiscSelector — render gate", () => {
 
     const { container } = render(<DiscSelector appId={100} />);
 
-    await Promise.resolve();
+    await flushAsync();
     expect(vi.mocked(backend.getDiscSelection)).not.toHaveBeenCalled();
     expect(container.querySelector('[data-testid="disc-btn"]')).toBeNull();
   });
@@ -127,8 +135,7 @@ describe("DiscSelector — render gate", () => {
 
     const { container } = render(<DiscSelector appId={100} />);
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushAsync();
     expect(vi.mocked(backend.getDiscSelection)).not.toHaveBeenCalled();
     expect(container.querySelector('[data-testid="disc-btn"]')).toBeNull();
   });
