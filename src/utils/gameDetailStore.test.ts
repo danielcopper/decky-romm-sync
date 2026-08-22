@@ -1305,22 +1305,54 @@ describe("gameDetailStore", () => {
     });
 
     it("costs one read per event and schedules no retry of its own", async () => {
-      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("backend defect"));
+      // On fake timers: microtask flushes alone cannot tell a store that
+      // schedules nothing apart from one that schedules a delayed retry, so a
+      // setTimeout-driven spin would pass this test's name unnoticed.
+      vi.useFakeTimers();
+      try {
+        vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("backend defect"));
+        subscribe(nextAppId);
+        await flush();
+        expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+          emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(999));
+          await Promise.resolve();
+        });
+        await flush();
+        await act(async () => {
+          vi.advanceTimersByTime(5 * 60_000);
+        });
+        await flush();
+
+        // A read that fails the same way every time is a backend defect, and the
+        // one thing this must not turn into is a spin: the retry that failed too
+        // is not itself a reason to read again — not now, and not five minutes
+        // from now either.
+        expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("issues one read for two install-state events in the same tick", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("bridge down"));
       subscribe(nextAppId);
       await flush();
-      expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(1);
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: true }));
+      vi.mocked(cachedStore.getCachedGameDetail).mockClear();
 
       await act(async () => {
         emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(999));
+        globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: 998 } }));
         await Promise.resolve();
       });
       await flush();
-      await flush();
 
-      // A read that fails the same way every time is a backend defect, and the
-      // one thing this must not turn into is a spin: the retry that failed too
-      // is not itself a reason to read again.
-      expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(2);
+      // The second event finds the retry already issued: the record is cleared
+      // where the read is ISSUED, not where it answers, so one read serves both.
+      expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(1);
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, installed: true });
     });
 
     it("stops re-deriving once a read answered, even when the answer carries no identity", async () => {

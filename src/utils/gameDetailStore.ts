@@ -143,8 +143,9 @@ interface Entry {
    *  and can finish in either order, so a load that no longer holds this number
    *  has been overtaken and writes nothing. */
   loadSeq: number;
-  /** Whether the last load to settle threw. Cleared the moment the next load is
-   *  issued, so it is never set while one is in flight to answer the question.
+  /** Whether the newest load settled by throwing — a load a later one overtook
+   *  answers for nothing, however it settled. Cleared the moment the next load
+   *  is issued, so it is never set while one is in flight to answer the question.
    *  It is the only thing that tells an entry whose read failed apart from one
    *  that has no identity to install (an appId RomM does not know) or has not
    *  resolved one yet — the shown state is the same in all three. */
@@ -607,6 +608,11 @@ async function handleCoreChange(entry: Entry): Promise<void> {
  * network-free `get_cached_game_detail` per install-state event, never a retry
  * this store schedules itself, and none at all while a load is in flight or once
  * one has answered.
+ *
+ * The residual is the other side of that bound: an entry whose first load threw
+ * and which then sees none of the three events stays on the neutral default for
+ * the whole page visit, exactly as before. Recovery here is something a user
+ * action triggers, not something time does.
  */
 function reloadTriggeredBy(entry: Entry, eventRomId: number | undefined): boolean {
   if (entry.state.romId !== null) return eventRomId === entry.state.romId;
