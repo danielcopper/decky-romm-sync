@@ -154,31 +154,35 @@ describe("SavesTab", () => {
   });
 
   describe("loading state", () => {
-    it("renders the connecting spinner when slotsLoading is true", () => {
+    it("renders the connecting spinner when slotsLoading is true", async () => {
       const { container, queryByTestId } = render(<SavesTab {...defaultProps({ slotsLoading: true })} />);
       expect(container.textContent).toContain("Connecting to RomM…");
       expect(container.querySelector(".romm-throbber")).not.toBeNull();
       expect(queryByTestId("slot-panel-default")).toBeNull();
+      await flushAsync();
     });
 
-    it("still renders the offline banner alongside the connecting spinner", () => {
+    it("still renders the offline banner alongside the connecting spinner", async () => {
       setRommConnectionState("offline");
       const { container } = render(<SavesTab {...defaultProps({ slotsLoading: true })} />);
       expect(container.textContent).toContain("Connecting to RomM…");
       expect(container.textContent).toContain("RomM is offline");
+      await flushAsync();
     });
   });
 
   describe("offline banner", () => {
-    it("does not render when connection state is 'connected'", () => {
+    it("does not render when connection state is 'connected'", async () => {
       const { container } = render(<SavesTab {...defaultProps()} />);
       expect(container.textContent).not.toContain("RomM is offline");
+      await flushAsync();
     });
 
-    it("renders when the store is 'offline' at mount", () => {
+    it("renders when the store is 'offline' at mount", async () => {
       setRommConnectionState("offline");
       const { container } = render(<SavesTab {...defaultProps()} />);
       expect(container.textContent).toContain("RomM is offline");
+      await flushAsync();
     });
 
     it("appears live when the store flips to offline (no remount)", async () => {
@@ -211,7 +215,7 @@ describe("SavesTab", () => {
       expect(unsub).toHaveBeenCalledTimes(1);
     });
 
-    it("forwards isOffline down to SlotPanel children", () => {
+    it("forwards isOffline down to SlotPanel children", async () => {
       setRommConnectionState("offline");
       render(
         <SavesTab
@@ -221,30 +225,34 @@ describe("SavesTab", () => {
         />,
       );
       expect(capturedSlotPanelProps[0]?.isOffline).toBe(true);
+      await flushAsync();
     });
   });
 
   describe("legacy-mode warning + files section", () => {
-    it("renders the legacy warning when activeSlot is null", () => {
+    it("renders the legacy warning when activeSlot is null", async () => {
       const { container } = render(<SavesTab {...defaultProps({ activeSlot: null })} />);
       expect(container.textContent).toContain("This game uses legacy mode");
+      await flushAsync();
     });
 
-    it("does NOT render the legacy warning when activeSlot is a real slot", () => {
+    it("does NOT render the legacy warning when activeSlot is a real slot", async () => {
       const { container } = render(<SavesTab {...defaultProps()} />);
       expect(container.textContent).not.toContain("This game uses legacy mode");
+      await flushAsync();
     });
 
-    it("renders legacy save-file rows when activeSlot is null and saveStatus has files", () => {
+    it("renders legacy save-file rows when activeSlot is null and saveStatus has files", async () => {
       const status = makeSaveStatus({
         files: [makeSaveFile({ filename: "a.srm" }), makeSaveFile({ filename: "b.srm" })],
       });
       const { queryByTestId } = render(<SavesTab {...defaultProps({ activeSlot: null, saveStatus: status })} />);
       expect(queryByTestId("save-file-row-a.srm")).not.toBeNull();
       expect(queryByTestId("save-file-row-b.srm")).not.toBeNull();
+      await flushAsync();
     });
 
-    it("renders the 'No save files tracked yet' empty state when activeSlot is null and no files", () => {
+    it("renders the 'No save files tracked yet' empty state when activeSlot is null and no files", async () => {
       const { container } = render(
         <SavesTab
           {...defaultProps({
@@ -254,14 +262,16 @@ describe("SavesTab", () => {
         />,
       );
       expect(container.textContent).toContain("No save files tracked yet");
+      await flushAsync();
     });
 
-    it("renders the empty state when activeSlot is null and saveStatus is null", () => {
+    it("renders the empty state when activeSlot is null and saveStatus is null", async () => {
       const { container } = render(<SavesTab {...defaultProps({ activeSlot: null, saveStatus: null })} />);
       expect(container.textContent).toContain("No save files tracked yet");
+      await flushAsync();
     });
 
-    it("hides the legacy '' slot panel when activeSlot is null", () => {
+    it("hides the legacy '' slot panel when activeSlot is null", async () => {
       // availableSlots may carry a legacy "" entry — SavesTab filters it out
       // when activeSlot is already null (the legacy-files section above
       // replaces it).
@@ -275,11 +285,12 @@ describe("SavesTab", () => {
       );
       expect(queryByTestId("slot-panel-legacy")).toBeNull();
       expect(queryByTestId("slot-panel-alpha")).not.toBeNull();
+      await flushAsync();
     });
   });
 
   describe("slot sorting + active-slot synthesis", () => {
-    it("sorts active slot first, then alphabetically", () => {
+    it("sorts active slot first, then alphabetically", async () => {
       render(
         <SavesTab
           {...defaultProps({
@@ -290,9 +301,10 @@ describe("SavesTab", () => {
       );
       const order = capturedSlotPanelProps.map((p) => p.slot.slot);
       expect(order).toEqual(["b", "a", "c"]);
+      await flushAsync();
     });
 
-    it("sorts the legacy '' bucket last, below every named slot (#1478)", () => {
+    it("sorts the legacy '' bucket last, below every named slot (#1478)", async () => {
       render(
         <SavesTab
           {...defaultProps({
@@ -309,9 +321,10 @@ describe("SavesTab", () => {
       const order = capturedSlotPanelProps.map((p) => p.slot.slot);
       // active first, then named alphabetically, legacy "" demoted to the end.
       expect(order).toEqual(["b", "a", "c", ""]);
+      await flushAsync();
     });
 
-    it("marks the active slot with isActive=true and forwards saveStatus/conflicts only to it", () => {
+    it("marks the active slot with isActive=true and forwards saveStatus/conflicts only to it", async () => {
       const status = makeSaveStatus();
       const conflicts = [
         {
@@ -350,9 +363,10 @@ describe("SavesTab", () => {
       expect(inactive?.conflicts).toEqual([]);
       expect(inactive?.defaultExpanded).toBe(false);
       expect(inactive?.romId).toBe(1);
+      await flushAsync();
     });
 
-    it("synthesizes a placeholder for an active slot missing from availableSlots", () => {
+    it("synthesizes a placeholder for an active slot missing from availableSlots", async () => {
       render(
         <SavesTab
           {...defaultProps({
@@ -369,9 +383,10 @@ describe("SavesTab", () => {
       expect(ghost?.slot.count).toBe(0);
       expect(ghost?.slot.latest_updated_at).toBeNull();
       expect(ghost?.isActive).toBe(true);
+      await flushAsync();
     });
 
-    it("does NOT synthesize a placeholder when activeSlot is null", () => {
+    it("does NOT synthesize a placeholder when activeSlot is null", async () => {
       render(
         <SavesTab
           {...defaultProps({
@@ -382,11 +397,12 @@ describe("SavesTab", () => {
       );
       const order = capturedSlotPanelProps.map((p) => p.slot.slot);
       expect(order).toEqual(["alpha"]);
+      await flushAsync();
     });
   });
 
   describe("unanswered slot list (#1747)", () => {
-    it("names no slot while no slot answer has landed, even with the server unreachable", () => {
+    it("names no slot while no slot answer has landed, even with the server unreachable", async () => {
       setRommConnectionState("offline");
       const { queryByTestId, container } = render(
         <SavesTab {...defaultProps({ activeSlot: "default", activeSlotKnown: false, availableSlots: [] })} />,
@@ -395,9 +411,10 @@ describe("SavesTab", () => {
       expect(queryByTestId("slot-panel-default")).toBeNull();
       // The offline banner is the one and only word on reachability here.
       expect(container.textContent).toContain("RomM is offline");
+      await flushAsync();
     });
 
-    it("keeps the locally tracked save files on screen while no slot answer has landed", () => {
+    it("keeps the locally tracked save files on screen while no slot answer has landed", async () => {
       const { queryByTestId } = render(
         <SavesTab
           {...defaultProps({
@@ -408,15 +425,17 @@ describe("SavesTab", () => {
       );
       expect(queryByTestId("save-file-row-zelda.srm")).not.toBeNull();
       expect(capturedSlotPanelProps).toEqual([]);
+      await flushAsync();
     });
 
-    it("shows the tracked-files empty state without claiming legacy mode", () => {
+    it("shows the tracked-files empty state without claiming legacy mode", async () => {
       const { container } = render(<SavesTab {...defaultProps({ activeSlotKnown: false, saveStatus: null })} />);
       expect(container.textContent).toContain("No save files tracked yet");
       expect(container.textContent).not.toContain("legacy mode");
+      await flushAsync();
     });
 
-    it("files go back under the active slot panel once a slot answer has landed", () => {
+    it("files go back under the active slot panel once a slot answer has landed", async () => {
       const status = makeSaveStatus({ files: [makeSaveFile({ filename: "zelda.srm" })] });
       const { queryByTestId } = render(
         <SavesTab
@@ -432,6 +451,7 @@ describe("SavesTab", () => {
       // the same file twice.
       expect(capturedSlotPanelProps[0]?.saveStatus).toBe(status);
       expect(queryByTestId("save-file-row-zelda.srm")).toBeNull();
+      await flushAsync();
     });
   });
 
@@ -442,7 +462,7 @@ describe("SavesTab", () => {
       ...overrides,
     });
 
-    it("shows the last contact's slots, marked as from then, while nothing live has landed", () => {
+    it("shows the last contact's slots, marked as from then, while nothing live has landed", async () => {
       setRommConnectionState("offline");
       const { getByTestId, container } = render(
         <SavesTab {...defaultProps({ activeSlotKnown: false, availableSlots: [], lastKnownSlots: lastKnown() })} />,
@@ -457,9 +477,10 @@ describe("SavesTab", () => {
       expect(capturedSlotPanelProps).toEqual([]);
       expect(container.textContent).toContain("RomM is offline");
       expect(container.textContent).not.toContain("Server unreachable");
+      await flushAsync();
     });
 
-    it("marks no slot active when the snapshot's active slot is not among them", () => {
+    it("marks no slot active when the snapshot's active slot is not among them", async () => {
       const { getByTestId } = render(
         <SavesTab
           {...defaultProps({
@@ -473,24 +494,27 @@ describe("SavesTab", () => {
       );
       expect(getByTestId("last-known-slot-alpha").textContent).not.toContain("active");
       expect(getByTestId("last-known-slot-beta").textContent).not.toContain("active");
+      await flushAsync();
     });
 
-    it("renders nothing pressable in the stale list", () => {
+    it("renders nothing pressable in the stale list", async () => {
       const { getByTestId } = render(
         <SavesTab {...defaultProps({ activeSlotKnown: false, lastKnownSlots: lastKnown() })} />,
       );
       expect(getByTestId("last-known-slots").querySelectorAll("button")).toHaveLength(0);
+      await flushAsync();
     });
 
-    it("keeps the '+ New Slot' affordance exactly as it is without a snapshot", () => {
+    it("keeps the '+ New Slot' affordance exactly as it is without a snapshot", async () => {
       const { getByText } = render(
         <SavesTab {...defaultProps({ activeSlotKnown: false, lastKnownSlots: lastKnown() })} />,
       );
       fireEvent.click(getByText("+ New Slot"));
       expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
+      await flushAsync();
     });
 
-    it("lists the tracked save files alongside the snapshot, still unfiled (#1747)", () => {
+    it("lists the tracked save files alongside the snapshot, still unfiled (#1747)", async () => {
       const { queryByTestId } = render(
         <SavesTab
           {...defaultProps({
@@ -503,9 +527,10 @@ describe("SavesTab", () => {
       expect(queryByTestId("save-file-row-zelda.srm")).not.toBeNull();
       expect(queryByTestId("last-known-slots")).not.toBeNull();
       expect(capturedSlotPanelProps).toEqual([]);
+      await flushAsync();
     });
 
-    it("falls back to #1747's slot-less view when there is no snapshot", () => {
+    it("falls back to #1747's slot-less view when there is no snapshot", async () => {
       setRommConnectionState("offline");
       const { queryByTestId, container } = render(
         <SavesTab {...defaultProps({ activeSlotKnown: false, lastKnownSlots: null })} />,
@@ -513,9 +538,10 @@ describe("SavesTab", () => {
       expect(queryByTestId("last-known-slots")).toBeNull();
       expect(container.textContent).toContain("No save files tracked yet");
       expect(capturedSlotPanelProps).toEqual([]);
+      await flushAsync();
     });
 
-    it("shows the live slots and no snapshot once a slot answer has landed", () => {
+    it("shows the live slots and no snapshot once a slot answer has landed", async () => {
       const { queryByTestId } = render(
         <SavesTab
           {...defaultProps({
@@ -529,30 +555,34 @@ describe("SavesTab", () => {
       expect(queryByTestId("last-known-slots")).toBeNull();
       expect(capturedSlotPanelProps.map((p) => p.slot.slot)).toEqual(["main"]);
       expect(capturedSlotPanelProps[0]?.isActive).toBe(true);
+      await flushAsync();
     });
 
-    it("shows no snapshot while the slot fetch is in flight", () => {
+    it("shows no snapshot while the slot fetch is in flight", async () => {
       const { queryByTestId, container } = render(
         <SavesTab {...defaultProps({ activeSlotKnown: false, lastKnownSlots: lastKnown(), slotsLoading: true })} />,
       );
       expect(queryByTestId("last-known-slots")).toBeNull();
       expect(container.textContent).toContain("Connecting to RomM…");
+      await flushAsync();
     });
   });
 
   describe("new-slot button", () => {
-    it("renders the '+ New Slot' button", () => {
+    it("renders the '+ New Slot' button", async () => {
       const { getByText } = render(<SavesTab {...defaultProps()} />);
       expect(getByText("+ New Slot")).not.toBeNull();
+      await flushAsync();
     });
 
-    it("opens the NewSlotModal when clicked", () => {
+    it("opens the NewSlotModal when clicked", async () => {
       const { getByText } = render(<SavesTab {...defaultProps()} />);
       fireEvent.click(getByText("+ New Slot"));
       expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
+      await flushAsync();
     });
 
-    it("is disabled while the server is unreachable", () => {
+    it("is disabled while the server is unreachable", async () => {
       // Creating a slot is a server write; offline it can only fail, and the
       // banner above already says slot switching is off.
       setRommConnectionState("offline");
@@ -561,6 +591,7 @@ describe("SavesTab", () => {
       expect(button.disabled).toBe(true);
       fireEvent.click(button);
       expect(vi.mocked(showModal)).not.toHaveBeenCalled();
+      await flushAsync();
     });
   });
 
@@ -806,7 +837,7 @@ describe("SavesTab", () => {
       }
     });
 
-    it("forwards the parent's onSlotSwitched through to the SlotPanel", () => {
+    it("forwards the parent's onSlotSwitched through to the SlotPanel", async () => {
       const onSlotSwitched = vi.fn();
       render(
         <SavesTab
@@ -817,6 +848,7 @@ describe("SavesTab", () => {
         />,
       );
       expect(capturedSlotPanelProps[0]?.onSlotSwitched).toBe(onSlotSwitched);
+      await flushAsync();
     });
   });
 
