@@ -143,6 +143,12 @@ interface Entry {
    *  and can finish in either order, so a load that no longer holds this number
    *  has been overtaken and writes nothing. */
   loadSeq: number;
+  /** Whether the last load to settle threw. Cleared the moment the next load is
+   *  issued, so it is never set while one is in flight to answer the question.
+   *  It is the only thing that tells an entry whose read failed apart from one
+   *  that has no identity to install (an appId RomM does not know) or has not
+   *  resolved one yet — the shown state is the same in all three. */
+  loadFailed: boolean;
   saveStatusInFlight: InFlightSaveStatus | null;
   detachListeners: () => void;
 }
@@ -189,6 +195,7 @@ function openEntry(appId: number): Entry {
     listeners: new Set(),
     generation: 0,
     loadSeq: 0,
+    loadFailed: false,
     saveStatusInFlight: null,
     detachListeners: () => {},
   };
@@ -256,6 +263,10 @@ function writerForRom(entry: Entry, generation: number, romId: number): Dispatch
 async function loadDetail(appId: number, entry: Entry): Promise<void> {
   const generation = entry.generation;
   const loadSeq = ++entry.loadSeq;
+  // Ordered by taking the sequence number rather than by a fence: the load
+  // clearing this is the newest one there is, so a load in flight is never
+  // recorded as a failure a trigger below would retry.
+  entry.loadFailed = false;
   // Two separate ends: the generation covers an entry nobody is showing any
   // more, the sequence a load a later one has moved past.
   const cancelled = () => entry.generation !== generation || entry.loadSeq !== loadSeq;
@@ -344,6 +355,11 @@ async function loadDetail(appId: number, entry: Entry): Promise<void> {
     // load leaves every subscribed surface stale either way, so surface at warn
     // level (debugLog is dropped at the default log level).
     logError(`gameDetailStore: load error: ${e}`);
+    // Fenced like every write above — this entry's generation and this load's
+    // sequence — and bound to no rom: the read threw, so there is no rom this
+    // failure is about. A load a later one has moved past says nothing about
+    // whether the entry can load; the newer load's own outcome does.
+    if (!cancelled()) entry.loadFailed = true;
   }
 }
 
@@ -576,6 +592,27 @@ async function handleCoreChange(entry: Entry): Promise<void> {
   }));
 }
 
+/**
+ * Whether an install-state event about `eventRomId` re-derives this entry.
+ *
+ * Normally that is the entry's own ROM and nothing else. The second arm is for
+ * the entry that has no identity to match against because its load threw: the
+ * first load installs the identity all three triggers are gated on, so a first
+ * load that failed is otherwise terminal — the entry stays on the neutral
+ * default for the whole page visit, and only a version switch or leaving the
+ * page can load it again (#1676).
+ *
+ * With no identity the entry cannot tell whether the event is about its game, so
+ * it re-reads on any of them. The cost is bounded by what a user can do: one
+ * network-free `get_cached_game_detail` per install-state event, never a retry
+ * this store schedules itself, and none at all while a load is in flight or once
+ * one has answered.
+ */
+function reloadTriggeredBy(entry: Entry, eventRomId: number | undefined): boolean {
+  if (entry.state.romId !== null) return eventRomId === entry.state.romId;
+  return entry.loadFailed;
+}
+
 function attachListeners(appId: number, entry: Entry): () => void {
   const onDataChanged = (e: Event) => {
     detach(
@@ -602,7 +639,7 @@ function attachListeners(appId: number, entry: Entry): () => void {
               // Adoption writes an install record without a download, so no
               // `download_complete` fires — but `installed` and `fs_size_bytes`
               // changed just the same and the cached detail must be dropped.
-              if (detail.rom_id === entry.state.romId) await reloadDetail(appId, entry);
+              if (reloadTriggeredBy(entry, detail.rom_id)) await reloadDetail(appId, entry);
               break;
           }
         } catch (err) {
@@ -618,13 +655,13 @@ function attachListeners(appId: number, entry: Entry): () => void {
   // whole entry re-derived — reading it back inside the 3s TTL would return the
   // pre-change state.
   const onDownloadComplete = addEventListener<[DownloadCompleteEvent]>("download_complete", (evt) => {
-    if (evt.rom_id !== entry.state.romId) return;
+    if (!reloadTriggeredBy(entry, evt.rom_id)) return;
     detach(reloadDetail(appId, entry));
   });
 
   const onUninstalled = (e: Event) => {
     const romId = (e as CustomEvent).detail?.rom_id;
-    if (romId !== entry.state.romId) return;
+    if (!reloadTriggeredBy(entry, romId)) return;
     detach(reloadDetail(appId, entry));
   };
   globalThis.addEventListener("romm_rom_uninstalled", onUninstalled);

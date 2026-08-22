@@ -1282,6 +1282,154 @@ describe("gameDetailStore", () => {
     });
   });
 
+  // The first load is what installs the identity the three triggers above are
+  // gated on, so a first load that threw leaves them nothing to match and the
+  // entry stuck on the neutral default for the whole page visit (#1676).
+  describe("a load whose read threw", () => {
+    it("re-derives the entry on the next install-state event, having no identity to match it against", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("bridge down"));
+      subscribe(nextAppId);
+      await flush();
+      expect(getGameDetail(nextAppId).romId).toBeNull();
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: true, fs_size_bytes: 4096 }));
+      await act(async () => {
+        // Another game's download: with no identity the entry cannot tell whose
+        // event this is, and the read it needs is about its own appId either way.
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(999));
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 42, installed: true, fsSizeBytes: 4096 });
+    });
+
+    it("costs one read per event and schedules no retry of its own", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("backend defect"));
+      subscribe(nextAppId);
+      await flush();
+      expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(999));
+        await Promise.resolve();
+      });
+      await flush();
+      await flush();
+
+      // A read that fails the same way every time is a backend defect, and the
+      // one thing this must not turn into is a spin: the retry that failed too
+      // is not itself a reason to read again.
+      expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledTimes(2);
+    });
+
+    it("stops re-deriving once a read answered, even when the answer carries no identity", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("bridge down"));
+      subscribe(nextAppId);
+      await flush();
+
+      // The retry lands: no ROM maps to this appId. That is an answer rather
+      // than a failure, so the events go back to being gated on an identity —
+      // and this entry has none to install.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ found: false });
+      await act(async () => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(999));
+        await Promise.resolve();
+      });
+      await flush();
+      vi.mocked(cachedStore.getCachedGameDetail).mockClear();
+
+      await act(async () => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(999));
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(vi.mocked(cachedStore.getCachedGameDetail)).not.toHaveBeenCalled();
+    });
+
+    it("keeps the identity the triggers are gated on when it is a re-read that throws", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: false }));
+      subscribe(nextAppId);
+      await flush();
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValueOnce(new Error("bridge down"));
+      await act(async () => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(42));
+        await Promise.resolve();
+      });
+      await flush();
+      expect(getGameDetail(nextAppId).romId).toBe(42);
+
+      // And still gated on it: another game's event is not this entry's
+      // business, failed re-read or not.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ installed: true }));
+      vi.mocked(cachedStore.getCachedGameDetail).mockClear();
+      await act(async () => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(999));
+        await Promise.resolve();
+      });
+      await flush();
+      expect(vi.mocked(cachedStore.getCachedGameDetail)).not.toHaveBeenCalled();
+
+      await act(async () => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(42));
+        await Promise.resolve();
+      });
+      await flush();
+      expect(getGameDetail(nextAppId).installed).toBe(true);
+    });
+
+    it("still consumes a sequence number, so the older load it overtook writes nothing", async () => {
+      const mountLoad = deferred<CachedGameDetail>();
+      vi.mocked(cachedStore.getCachedGameDetail).mockReturnValueOnce(mountLoad.promise);
+      subscribe(nextAppId);
+      await flush();
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("bridge down"));
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+
+      mountLoad.resolve(found({ installed: true }));
+      await flush();
+
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: null, installed: false });
+    });
+
+    it("does not mark an entry whose newer load answered", async () => {
+      const mountLoad = deferred<CachedGameDetail>();
+      vi.mocked(cachedStore.getCachedGameDetail).mockReturnValueOnce(mountLoad.promise);
+      subscribe(nextAppId);
+      await flush();
+
+      // The switch's re-derive answers first — nothing maps to this appId — and
+      // the mount load it overtook fails afterwards.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ found: false });
+      await act(async () => {
+        dispatchVersionSwitch(nextAppId);
+        await Promise.resolve();
+      });
+      await flush();
+
+      mountLoad.reject(new Error("bridge down"));
+      await flush();
+      vi.mocked(cachedStore.getCachedGameDetail).mockClear();
+
+      await act(async () => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(999));
+        await Promise.resolve();
+      });
+      await flush();
+
+      // An overtaken load's failure is not the entry's state: the newer load
+      // answered, and its answer is that there is nothing here to re-derive.
+      expect(vi.mocked(cachedStore.getCachedGameDetail)).not.toHaveBeenCalled();
+    });
+  });
+
   describe("explicit refreshes", () => {
     beforeEach(() => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found());
