@@ -82,9 +82,11 @@ const discDefaultSelection: DiscSelection = {
   default: { kind: "disc", label: "Disc 1", filename: "game (Disc 1).chd" },
 };
 
-// Settles the mount-time init chain (getCachedGameDetail → getDiscSelection). A
-// test that returns before it resolves leaves its state writes to land outside
-// act — including on the paths that bail out before the second fetch.
+// Settles the mount-time init chain (getCachedGameDetail → getDiscSelection).
+// Its two callers below take the paths that bail out before the second fetch,
+// and those write no state today — the effect returns before reaching any
+// setter — so nothing escapes act as the code stands. The flush is what keeps
+// those blocks proof against a settle point being added on either path.
 const flushAsync = () =>
   act(async () => {
     await new Promise((r) => setTimeout(r, 0));
