@@ -471,13 +471,18 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       const announced: PlayButtonState = detail.has_conflict ? "conflict" : "play";
       lastAnnouncedState = { romId: romIdRef.current, state: announced };
       setState((prev) => {
-        // Both completion flashes hold the button until their own timer ends it,
-        // and each already has the right answer for what to land on: the
-        // download's applies `announced`, the uninstall's drops to Download.
-        // Applying it here instead would put Play on a ROM that has just been
-        // removed — a conflict about content that is gone is not a state this
-        // button can offer.
-        if (prev === "dl_complete" || prev === "uninstalling") return prev;
+        // The removal lane owns the button from the press until the pulse ends —
+        // `uninstall_pending` for however long the backend takes, `uninstalling`
+        // for the pulse. Neither verdict is a state this button can offer there:
+        // `announced` renders a PRESSABLE Play (or Resolve Conflict) over a
+        // disabled "Uninstalling...", for content that is on its way out or
+        // already gone. Nothing is deferred out of this lane either — the
+        // resting state is Download on success, and on a failed removal
+        // `handleUninstall` restores the state it captured at the press.
+        if (prev === "uninstall_pending" || prev === "uninstalling") return prev;
+        // The download flash holds the button for its own 1100ms and applies
+        // `announced` from `lastAnnouncedState` when it ends.
+        if (prev === "dl_complete") return prev;
         if (prev === "syncing" || prev === "launching" || prev === "download") return prev;
         return announced;
       });

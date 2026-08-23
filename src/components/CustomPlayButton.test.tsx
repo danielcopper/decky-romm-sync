@@ -1420,6 +1420,56 @@ describe("CustomPlayButton — completion flashes (#1677)", () => {
     }
   });
 
+  it("keeps the removal-in-progress button unpressable while a save-status broadcast lands", async () => {
+    mockCachedDetail({ rom_id: 42, installed: true });
+    // Hold the removal open so the button stays in the state between the press
+    // and the pulse. That window is the backend's to close — seconds for a
+    // multi-file ROM — where the two flashes are bounded by their own timers.
+    let finishRemoval!: () => void;
+    vi.mocked(backend.removeRom).mockReturnValue(
+      new Promise((resolve) => {
+        finishRemoval = () => resolve({ success: true, message: "" });
+      }),
+    );
+    const { container, findByText, getByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    const pressUninstall = await openUninstallMenu(container, PULSE_FLUSHES);
+
+    vi.useFakeTimers();
+    try {
+      await pressUninstall();
+      expect(getByText("Uninstalling...")).toBeInTheDocument();
+
+      for (const hasConflict of [false, true]) {
+        act(() => {
+          announceConflict(hasConflict);
+        });
+        // Absence is the whole assertion: `uninstallPendingRef` blocks a second
+        // uninstall, not a launch, so a Play rendered here is one the user can
+        // press while the removal is still running.
+        expect(getByText("Uninstalling...")).toBeInTheDocument();
+        expect(queryByText("Play")).toBeNull();
+        expect(queryByText("Resolve Conflict")).toBeNull();
+      }
+
+      await act(async () => {
+        finishRemoval();
+        for (let index = 0; index < PULSE_FLUSHES; index++) await Promise.resolve();
+      });
+      expect(getByText("Uninstalled")).toBeInTheDocument();
+
+      // Neither verdict was deferred into the resting state either.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(getByText("Download")).toBeInTheDocument();
+      expect(queryByText("Play")).toBeNull();
+      expect(queryByText("Resolve Conflict")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not let a verdict announced before the download decide the flash", async () => {
     mockCachedDetail({ rom_id: 42, installed: false });
     const { findByText, getByText, queryByText } = render(<CustomPlayButton appId={100} />);
