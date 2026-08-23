@@ -1210,6 +1210,20 @@ describe("CustomPlayButton — completion flashes (#1677)", () => {
    */
   const PULSE_FLUSHES = 12;
 
+  /**
+   * The save-status broadcast RomMPlaySection sends once its own read lands —
+   * on page open, and on every reconnect to the server (#1758). It is the one
+   * `has_conflict` announcement that can arrive with no user action behind it,
+   * so it is the one that can fall inside a completion flash.
+   */
+  const announceConflict = (hasConflict: boolean): void => {
+    globalThis.dispatchEvent(
+      new CustomEvent("romm_data_changed", {
+        detail: { type: "save_sync", rom_id: 42, has_conflict: hasConflict },
+      }),
+    );
+  };
+
   it("holds 'Ready!' for the whole flash before the button becomes Play", async () => {
     mockCachedDetail({ rom_id: 42, installed: false });
     const { findByText, getByText, queryByText } = render(<CustomPlayButton appId={100} />);
@@ -1324,6 +1338,145 @@ describe("CustomPlayButton — completion flashes (#1677)", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2000);
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds 'Ready!' through a conflict announced inside the flash, then lands on Resolve Conflict", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const { findByText, getByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Download");
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", completeEvent());
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+
+      act(() => {
+        announceConflict(true);
+      });
+      expect(getByText("Ready!")).toBeInTheDocument();
+      expect(queryByText("Resolve Conflict")).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(699);
+      });
+      expect(getByText("Ready!")).toBeInTheDocument();
+
+      // The flash ran its full 1100ms AND the conflict it held back is what it
+      // resolves to. Dropping the broadcast instead would leave Play standing
+      // for a ROM whose conflict nothing re-announces while the page is open.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(getByText("Resolve Conflict")).toBeInTheDocument();
+      expect(queryByText("Play")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never offers Play or Resolve Conflict while the uninstall pulse is running", async () => {
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { container, findByText, getByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    const pressUninstall = await openUninstallMenu(container, PULSE_FLUSHES);
+
+    vi.useFakeTimers();
+    try {
+      await pressUninstall();
+      expect(getByText("Uninstalled")).toBeInTheDocument();
+
+      // Both verdicts, because each has its own wrong answer for a ROM that has
+      // just been removed: a conflict-free one reads as Play for content that is
+      // gone, a conflicted one offers to resolve a conflict about it.
+      for (const hasConflict of [false, true]) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(150);
+        });
+        act(() => {
+          announceConflict(hasConflict);
+        });
+        expect(getByText("Uninstalled")).toBeInTheDocument();
+        expect(queryByText("Play")).toBeNull();
+        expect(queryByText("Resolve Conflict")).toBeNull();
+      }
+
+      // And the pulse still ends where an uninstall has to end — neither verdict
+      // was deferred into the resting state either.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(getByText("Download")).toBeInTheDocument();
+      expect(queryByText("Play")).toBeNull();
+      expect(queryByText("Resolve Conflict")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let a verdict announced before the download decide the flash", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const { findByText, getByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Download");
+
+    // Announced while the ROM was not installed. The Download state swallows it
+    // as it always has, and it says nothing about the content that just landed.
+    await act(async () => {
+      announceConflict(true);
+    });
+    expect(getByText("Download")).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", completeEvent());
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1100);
+      });
+      expect(getByText("Play")).toBeInTheDocument();
+      expect(queryByText("Resolve Conflict")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards a deferred verdict when a version switch rebinds the button inside the flash", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const { findByText, getByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Download");
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", completeEvent());
+      });
+      act(() => {
+        announceConflict(true);
+      });
+
+      // The picker rebinds this appId to another version mid-flash. The held
+      // verdict is about rom 42; rom 43's own status is what decides its button.
+      mockCachedDetail({ rom_id: 43, installed: true });
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", { detail: { type: "version_switched", app_id: 100 } }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1100);
+      });
+      expect(getByText("Play")).toBeInTheDocument();
+      expect(queryByText("Resolve Conflict")).toBeNull();
     } finally {
       vi.useRealTimers();
     }
