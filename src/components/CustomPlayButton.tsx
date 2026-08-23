@@ -391,11 +391,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       const romId = (e as CustomEvent).detail?.rom_id;
       if (romId !== romIdRef.current) return;
       // The one site that cannot go through `enterDownloadState`: the transition
-      // is conditional, so as not to override the uninstalling animation when we
-      // triggered the removal ourselves. Clearing the flags is unconditional
-      // either way — the uninstall deleted exactly the content the stat found,
-      // and the candidate answer was read at page-open against a folder this
-      // removal has just changed.
+      // is conditional, so a LATER announcement of the same removal — any other
+      // writer reloading off this event — cannot replace the pulse this button
+      // is already showing. Not this component's own dispatch: `handleUninstall`
+      // dispatches before it sets `uninstalling`, so both land in one React
+      // batch and the pulse wins on ordering, guard or no guard. Clearing the
+      // flags is unconditional either way — the uninstall deleted exactly the
+      // content the stat found, and the candidate answer was read at page-open
+      // against a folder this removal has just changed.
       setState((prev) => (prev === "uninstalling" ? prev : "download"));
       setActionPending(false);
       setTargetOccupied(false);

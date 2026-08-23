@@ -137,6 +137,35 @@ function mockCachedDetail(overrides: Partial<CachedGameDetail> = {}): void {
   });
 }
 
+/**
+ * Open the play-state "RomM Actions" menu (the chevron next to Play) and return
+ * a press of its Uninstall item.
+ *
+ * The open and the press are separate steps so a caller can install fake timers
+ * between them — RTL's findBy* deadlocks once timers are faked, and the pulse
+ * that a press schedules can only be observed under fake ones.
+ *
+ * `flushes` is how many microtask turns the press drains after the click: enough
+ * to carry `handleUninstall` to whatever the caller asserts on.
+ */
+async function openUninstallMenu(container: HTMLElement, flushes: number): Promise<() => Promise<void>> {
+  const chevron = container.querySelector(".romm-btn-dropdown") as HTMLElement | null;
+  if (!chevron) throw new Error("dropdown chevron not rendered");
+  act(() => {
+    chevron.click();
+  });
+  const calls = vi.mocked(showContextMenu).mock.calls;
+  const menu = calls[calls.length - 1]![0] as ReactElement;
+  const { findByText } = render(menu);
+  const uninstallItem = await findByText("Uninstall");
+  return async () => {
+    await act(async () => {
+      uninstallItem.click();
+      for (let index = 0; index < flushes; index++) await Promise.resolve();
+    });
+  };
+}
+
 // Reset the shared connection store before every test (module-level state that
 // persists across tests) so the default render path is "connected" (#1345).
 beforeEach(() => {
@@ -980,25 +1009,9 @@ describe("CustomPlayButton — uninstall resets launch_options (#1051)", () => {
     vi.mocked(backend.removeRom).mockResolvedValue({ success: true, message: "" });
   });
 
-  // Open the play-state "RomM Actions" menu (the chevron next to Play) and click
-  // its Uninstall item — mirrors the download-actions menu-driving pattern above.
-  async function clickUninstall(container: HTMLElement): Promise<void> {
-    const chevron = container.querySelector(".romm-btn-dropdown") as HTMLElement | null;
-    if (!chevron) throw new Error("dropdown chevron not rendered");
-    act(() => {
-      chevron.click();
-    });
-    const calls = vi.mocked(showContextMenu).mock.calls;
-    const menu = calls[calls.length - 1]![0] as ReactElement;
-    const { findByText } = render(menu);
-    const uninstallItem = await findByText("Uninstall");
-    await act(async () => {
-      uninstallItem.click();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-  }
+  // Three microtask turns carry the removal to its launch-options reset, which
+  // is all these two assert on.
+  const clickUninstall = async (container: HTMLElement): Promise<void> => (await openUninstallMenu(container, 3))();
 
   it("clears the shortcut launch command to the uninstalled placeholder on a successful uninstall", async () => {
     mockCachedDetail({ rom_id: 42, installed: true });
@@ -1037,24 +1050,9 @@ describe("CustomPlayButton — uninstall is visible and single-shot (#1664)", ()
     vi.mocked(backend.removeRom).mockReset();
   });
 
-  /** Open the play-state menu once and return a click-the-Uninstall-item function. */
-  async function openUninstallMenu(container: HTMLElement): Promise<() => Promise<void>> {
-    const chevron = container.querySelector(".romm-btn-dropdown") as HTMLElement | null;
-    if (!chevron) throw new Error("dropdown chevron not rendered");
-    act(() => {
-      chevron.click();
-    });
-    const calls = vi.mocked(showContextMenu).mock.calls;
-    const menu = calls[calls.length - 1]![0] as ReactElement;
-    const { findByText } = render(menu);
-    const uninstallItem = await findByText("Uninstall");
-    return async () => {
-      await act(async () => {
-        uninstallItem.click();
-        await Promise.resolve();
-      });
-    };
-  }
+  // One microtask turn is all the presses below drain: each test asserts on the
+  // pending state the removal claims before its first await, and lets whatever
+  // follows arrive through a `pendingRemoveRom` release or a findBy* wait.
 
   /** A removeRom that stays in flight until the test releases it. */
   function pendingRemoveRom(): (result?: backend.BackendResult) => Promise<void> {
@@ -1080,7 +1078,7 @@ describe("CustomPlayButton — uninstall is visible and single-shot (#1664)", ()
     const { container, findByText } = render(<CustomPlayButton appId={100} />);
     await findByText("Play");
 
-    const pressUninstall = await openUninstallMenu(container);
+    const pressUninstall = await openUninstallMenu(container, 1);
     await pressUninstall();
 
     // The pending state is set before the await, so a removal that takes minutes
@@ -1094,7 +1092,7 @@ describe("CustomPlayButton — uninstall is visible and single-shot (#1664)", ()
     mockCachedDetail({ rom_id: 42, installed: true });
     const { container, findByText } = render(<CustomPlayButton appId={100} />);
     await findByText("Play");
-    const pressUninstall = await openUninstallMenu(container);
+    const pressUninstall = await openUninstallMenu(container, 1);
     await pressUninstall();
 
     act(() => {
@@ -1110,7 +1108,7 @@ describe("CustomPlayButton — uninstall is visible and single-shot (#1664)", ()
     mockCachedDetail({ rom_id: 42, installed: true });
     const { container, findByText } = render(<CustomPlayButton appId={100} />);
     await findByText("Play");
-    const pressUninstall = await openUninstallMenu(container);
+    const pressUninstall = await openUninstallMenu(container, 1);
     await pressUninstall();
 
     act(() => {
@@ -1127,7 +1125,7 @@ describe("CustomPlayButton — uninstall is visible and single-shot (#1664)", ()
     mockCachedDetail({ rom_id: 42, installed: true });
     const { container, findByText } = render(<CustomPlayButton appId={100} />);
     await findByText("Play");
-    const pressUninstall = await openUninstallMenu(container);
+    const pressUninstall = await openUninstallMenu(container, 1);
 
     await pressUninstall();
     await pressUninstall();
@@ -1142,7 +1140,7 @@ describe("CustomPlayButton — uninstall is visible and single-shot (#1664)", ()
     mockCachedDetail({ rom_id: 42, installed: true });
     const { container, findByText } = render(<CustomPlayButton appId={100} />);
     await findByText("Play");
-    const pressUninstall = await openUninstallMenu(container);
+    const pressUninstall = await openUninstallMenu(container, 1);
 
     await pressUninstall();
     await findByText("Play");
@@ -1160,7 +1158,7 @@ describe("CustomPlayButton — uninstall is visible and single-shot (#1664)", ()
     mockCachedDetail({ rom_id: 42, installed: true });
     const { container, findByText } = render(<CustomPlayButton appId={100} />);
     await findByText("Play");
-    const pressUninstall = await openUninstallMenu(container);
+    const pressUninstall = await openUninstallMenu(container, 1);
 
     await pressUninstall();
 
@@ -1204,29 +1202,13 @@ describe("CustomPlayButton — completion flashes (#1677)", () => {
   });
 
   /**
-   * Open the play-state menu and return a press of its Uninstall item. The menu
-   * is opened here because RTL's findBy* deadlocks under fake timers; the
-   * returned press runs under whichever timers the caller has installed.
+   * Microtask turns a press must drain to reach the pulse: `removeRom`, the
+   * `withPruneLease` continuation and its bounded race, and the launch-options
+   * reset — roughly ten, taken with headroom. Nothing in that chain schedules a
+   * timer today; if one ever does, these tests fail on the missing "Uninstalled"
+   * label rather than passing on a pulse that never started.
    */
-  async function armUninstall(container: HTMLElement): Promise<() => Promise<void>> {
-    const chevron = container.querySelector(".romm-btn-dropdown") as HTMLElement | null;
-    if (!chevron) throw new Error("dropdown chevron not rendered");
-    act(() => {
-      chevron.click();
-    });
-    const calls = vi.mocked(showContextMenu).mock.calls;
-    const menu = calls[calls.length - 1]![0] as ReactElement;
-    const { findByText } = render(menu);
-    const uninstallItem = await findByText("Uninstall");
-    return async () => {
-      await act(async () => {
-        uninstallItem.click();
-        // The removal awaits removeRom, the lease continuation and the
-        // launch-options reset before it schedules the pulse timer.
-        for (let index = 0; index < 12; index++) await Promise.resolve();
-      });
-    };
-  }
+  const PULSE_FLUSHES = 12;
 
   it("holds 'Ready!' for the whole flash before the button becomes Play", async () => {
     mockCachedDetail({ rom_id: 42, installed: false });
@@ -1263,7 +1245,7 @@ describe("CustomPlayButton — completion flashes (#1677)", () => {
     mockCachedDetail({ rom_id: 42, installed: true });
     const { container, findByText, getByText, queryByText } = render(<CustomPlayButton appId={100} />);
     await findByText("Play");
-    const pressUninstall = await armUninstall(container);
+    const pressUninstall = await openUninstallMenu(container, PULSE_FLUSHES);
 
     vi.useFakeTimers();
     try {
@@ -1291,7 +1273,7 @@ describe("CustomPlayButton — completion flashes (#1677)", () => {
     mockCachedDetail({ rom_id: 42, installed: true });
     const { container, findByText, getByText, queryByText } = render(<CustomPlayButton appId={100} />);
     await findByText("Play");
-    const pressUninstall = await armUninstall(container);
+    const pressUninstall = await openUninstallMenu(container, PULSE_FLUSHES);
 
     vi.useFakeTimers();
     try {
