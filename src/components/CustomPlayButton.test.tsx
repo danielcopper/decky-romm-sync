@@ -23,7 +23,7 @@ import { CustomPlayButton } from "./CustomPlayButton";
 import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
 import * as backend from "../api/backend";
 import type { CachedGameDetail } from "../api/backend";
-import type { DownloadFailedEvent, DownloadProgressEvent } from "../types";
+import type { DownloadCompleteEvent, DownloadFailedEvent, DownloadProgressEvent } from "../types";
 
 // Stub the cached-detail store: synchronous Promise.resolve so the initial
 // useEffect settles within a single waitFor tick. The default test-setup
@@ -1180,6 +1180,171 @@ describe("CustomPlayButton — uninstall is visible and single-shot (#1664)", ()
     unmount();
 
     expect(deckyEventListenerCount("uninstall_progress")).toBe(0);
+  });
+});
+
+describe("CustomPlayButton — completion flashes (#1677)", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(toaster.toast).mockReset();
+    vi.mocked(showContextMenu).mockReset();
+    vi.mocked(setLaunchOptionsConfirmed).mockReset();
+    vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(true);
+    vi.mocked(backend.removeRom).mockReset();
+    vi.mocked(backend.removeRom).mockResolvedValue({ success: true, message: "" });
+  });
+
+  const completeEvent = (): DownloadCompleteEvent => ({
+    rom_id: 42,
+    rom_name: "Test ROM",
+    platform_name: "PSX",
+    file_path: "/roms/psx/game.chd",
+    app_id: 100,
+    launch_options: "run game",
+  });
+
+  /**
+   * Open the play-state menu and return a press of its Uninstall item. The menu
+   * is opened here because RTL's findBy* deadlocks under fake timers; the
+   * returned press runs under whichever timers the caller has installed.
+   */
+  async function armUninstall(container: HTMLElement): Promise<() => Promise<void>> {
+    const chevron = container.querySelector(".romm-btn-dropdown") as HTMLElement | null;
+    if (!chevron) throw new Error("dropdown chevron not rendered");
+    act(() => {
+      chevron.click();
+    });
+    const calls = vi.mocked(showContextMenu).mock.calls;
+    const menu = calls[calls.length - 1]![0] as ReactElement;
+    const { findByText } = render(menu);
+    const uninstallItem = await findByText("Uninstall");
+    return async () => {
+      await act(async () => {
+        uninstallItem.click();
+        // The removal awaits removeRom, the lease continuation and the
+        // launch-options reset before it schedules the pulse timer.
+        for (let index = 0; index < 12; index++) await Promise.resolve();
+      });
+    };
+  }
+
+  it("holds 'Ready!' for the whole flash before the button becomes Play", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const { findByText, getByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Download");
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", completeEvent());
+      });
+      expect(getByText("Ready!")).toBeInTheDocument();
+
+      // One tick short of the flash's 1100ms. The assertion that matters is this
+      // one, not the arrival at Play: anything that ends the flash early — a
+      // shorter timer, or a second writer landing inside the window — fails here.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1099);
+      });
+      expect(getByText("Ready!")).toBeInTheDocument();
+      expect(queryByText("Play")).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(getByText("Play")).toBeInTheDocument();
+      expect(queryByText("Ready!")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds 'Uninstalled' for the whole pulse before the button becomes Download", async () => {
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { container, findByText, getByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    const pressUninstall = await armUninstall(container);
+
+    vi.useFakeTimers();
+    try {
+      await pressUninstall();
+      expect(getByText("Uninstalled")).toBeInTheDocument();
+
+      // One tick short of the pulse's 500ms — same reason as the Ready! flash.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(499);
+      });
+      expect(getByText("Uninstalled")).toBeInTheDocument();
+      expect(queryByText("Download")).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(getByText("Download")).toBeInTheDocument();
+      expect(queryByText("Uninstalled")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps its own pulse running when a romm_rom_uninstalled event lands inside it", async () => {
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { container, findByText, getByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    const pressUninstall = await armUninstall(container);
+
+    vi.useFakeTimers();
+    try {
+      await pressUninstall();
+      expect(getByText("Uninstalled")).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+
+      // Another path announcing the same removal — the panel, or any writer that
+      // reloads off this event. The handler's conditional transition is the only
+      // thing keeping it from replacing the pulse this button started itself.
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: 42 } }));
+        await Promise.resolve();
+      });
+      expect(getByText("Uninstalled")).toBeInTheDocument();
+      expect(queryByText("Download")).toBeNull();
+
+      // The pulse still ends on its own timer, not on the event.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(getByText("Download")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops the pending flash timer when the button unmounts mid-animation", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const { findByText, getByText, unmount } = render(<CustomPlayButton appId={100} />);
+    await findByText("Download");
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", completeEvent());
+      });
+      expect(getByText("Ready!")).toBeInTheDocument();
+      expect(vi.getTimerCount()).toBe(1);
+
+      unmount();
+
+      // Gone from the queue, rather than merely harmless when it fires: nothing
+      // is left to run a transition into an unmounted tree.
+      expect(vi.getTimerCount()).toBe(0);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
