@@ -8,7 +8,7 @@
  * reachability (#1755).
  */
 
-import { createElement } from "react";
+import type { ReactElement } from "react";
 import type { LastKnownSlots, SaveSlotSummary } from "../../types";
 import { formatTimestamp } from "../../utils/formatters";
 import { displaySlot } from "./helpers";
@@ -19,59 +19,51 @@ import { displaySlot } from "./helpers";
  *  would date these numbers with a moment that is usually much newer. */
 const STALE_NOTE = "Slots as RomM last reported them — counts and times are from that answer, not from now.";
 
-function renderSlotRow(slot: SaveSlotSummary, isActive: boolean): ReturnType<typeof createElement> {
+function renderSlotRow(slot: SaveSlotSummary, isActive: boolean): ReactElement {
   const badges = [
-    isActive
-      ? createElement("span", { key: "active", className: "romm-slot-badge romm-slot-badge-active" }, "active")
-      : null,
-    createElement("span", { key: "src", className: `romm-slot-badge romm-slot-badge-${slot.source}` }, slot.source),
+    isActive ? (
+      <span key="active" className="romm-slot-badge romm-slot-badge-active">
+        active
+      </span>
+    ) : null,
+    <span key="src" className={`romm-slot-badge romm-slot-badge-${slot.source}`}>
+      {slot.source}
+    </span>,
   ];
 
-  return createElement(
-    "div",
-    {
-      key: `last-known-${slot.slot}`,
-      "data-testid": `last-known-slot-${slot.slot || "legacy"}`,
-      className: "romm-slot-panel",
-    },
-    createElement(
-      "div",
-      { className: "romm-slot-header-static" },
-      createElement(
-        "div",
-        { className: "romm-slot-header-left" },
-        createElement("span", { className: "romm-slot-name" }, displaySlot(slot.slot)),
-        ...badges,
-      ),
-      createElement(
-        "div",
-        { className: "romm-slot-header-right" },
-        createElement("span", { className: "romm-slot-count" }, `${slot.count} save${slot.count === 1 ? "" : "s"}`),
-      ),
-    ),
-    slot.latest_updated_at
-      ? createElement(
-          "div",
-          { className: "romm-slot-stale-detail" },
-          `Newest save: ${formatTimestamp(slot.latest_updated_at)}`,
-        )
-      : null,
+  return (
+    <div
+      key={`last-known-${slot.slot}`}
+      data-testid={`last-known-slot-${slot.slot || "legacy"}`}
+      className="romm-slot-panel"
+    >
+      <div className="romm-slot-header-static">
+        <div className="romm-slot-header-left">
+          <span className="romm-slot-name">{displaySlot(slot.slot)}</span>
+          {badges}
+        </div>
+        <div className="romm-slot-header-right">
+          <span className="romm-slot-count">{`${slot.count} save${slot.count === 1 ? "" : "s"}`}</span>
+        </div>
+      </div>
+      {slot.latest_updated_at ? (
+        <div className="romm-slot-stale-detail">{`Newest save: ${formatTimestamp(slot.latest_updated_at)}`}</div>
+      ) : null}
+    </div>
   );
 }
 
 /** Render the last-known slots, the one that was active among them marked. */
-export function renderLastKnownSlots(lastKnown: LastKnownSlots): ReturnType<typeof createElement> {
+export function renderLastKnownSlots(lastKnown: LastKnownSlots): ReactElement {
   // The legacy bucket is keyed "" in the persisted map, which is what a null
   // active slot means there — compare in that key space, not against null.
   const activeKey = lastKnown.activeSlot ?? "";
-  return createElement(
-    "div",
-    { key: "last-known-slots", "data-testid": "last-known-slots" },
-    createElement("div", { className: "romm-slot-stale-note" }, STALE_NOTE),
-    createElement(
-      "div",
-      { className: "romm-slot-stale" },
-      ...lastKnown.slots.map((slot) => renderSlotRow(slot, slot.slot === activeKey)),
-    ),
+  return (
+    <div key="last-known-slots" data-testid="last-known-slots">
+      <div className="romm-slot-stale-note">{STALE_NOTE}</div>
+      <div className="romm-slot-stale">
+        {lastKnown.slots.map((slot) => renderSlotRow(slot, slot.slot === activeKey))}
+      </div>
+    </div>
   );
 }

@@ -4,7 +4,7 @@
  * slot-creation side effects belong in the parent.
  */
 
-import { useState, createElement, FC, ChangeEvent, KeyboardEvent } from "react";
+import { useState, FC, ChangeEvent, KeyboardEvent } from "react";
 import { ConfirmModal, TextField } from "@decky/ui";
 
 export const NewSlotModal: FC<{
@@ -12,32 +12,32 @@ export const NewSlotModal: FC<{
   onSubmit: (name: string) => void;
 }> = ({ closeModal, onSubmit }) => {
   const [value, setValue] = useState("");
-  return createElement(
-    ConfirmModal,
-    {
-      ...(closeModal !== undefined ? { closeModal } : {}),
-      onOK: () => {
+  return (
+    <ConfirmModal
+      {...(closeModal !== undefined ? { closeModal } : {})}
+      onOK={() => {
         onSubmit(value.trim());
-      },
-      strTitle: "New Save Slot",
-      bDisableBackgroundDismiss: true,
+      }}
+      strTitle="New Save Slot"
+      bDisableBackgroundDismiss={true}
       // Disable confirm on an empty/whitespace name (parent's no-op is the backstop).
-      bOKDisabled: value.trim() === "",
-    },
-    createElement(TextField, {
-      focusOnMount: true,
-      label: "Slot Name",
-      value,
-      onChange: (e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value),
-      // Enter (the on-screen keyboard's "Eingabe" key) confirms, same as the OK
-      // button — which is disabled while blank, so guard identically: a blank
-      // Enter is a no-op. ConfirmModal doesn't auto-close this manual path.
-      onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === "Enter" && value.trim() !== "") {
-          onSubmit(value.trim());
-          closeModal?.();
-        }
-      },
-    }),
+      bOKDisabled={value.trim() === ""}
+    >
+      <TextField
+        focusOnMount={true}
+        label="Slot Name"
+        value={value}
+        onChange={(e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value)}
+        // Enter (the on-screen keyboard's "Eingabe" key) confirms, same as the OK
+        // button — which is disabled while blank, so guard identically: a blank
+        // Enter is a no-op. ConfirmModal doesn't auto-close this manual path.
+        onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+          if (e.key === "Enter" && value.trim() !== "") {
+            onSubmit(value.trim());
+            closeModal?.();
+          }
+        }}
+      />
+    </ConfirmModal>
   );
 };

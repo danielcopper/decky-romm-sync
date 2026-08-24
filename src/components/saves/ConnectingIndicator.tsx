@@ -9,7 +9,7 @@
  * into the game-detail popup window, so it spins wherever the saves UI renders.
  */
 
-import { createElement, FC } from "react";
+import { FC } from "react";
 import { useServerRetryProgress } from "../../utils/connectionState";
 import { MUTED_COLOR } from "./helpers";
 
@@ -21,13 +21,10 @@ interface ConnectingIndicatorProps {
 export const ConnectingIndicator: FC<ConnectingIndicatorProps> = ({ label = "Connecting to RomM" }) => {
   const progress = useServerRetryProgress();
   const text = progress ? `${label}… (attempt ${progress.attempt}/${progress.maxAttempts})` : `${label}…`;
-  return createElement(
-    "div",
-    { style: { display: "flex", alignItems: "center", gap: "8px", padding: "8px 0" } },
-    createElement("span", {
-      className: "romm-throbber",
-      style: { width: "14px", height: "14px" },
-    }),
-    createElement("span", { style: { fontSize: "13px", color: MUTED_COLOR } }, text),
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 0" }}>
+      <span className="romm-throbber" style={{ width: "14px", height: "14px" }} />
+      <span style={{ fontSize: "13px", color: MUTED_COLOR }}>{text}</span>
+    </div>
   );
 };

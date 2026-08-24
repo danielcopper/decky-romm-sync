@@ -7,9 +7,8 @@ import { toaster } from "@decky/api";
 import { showModal } from "@decky/ui";
 import type { SaveStatus, SaveSlotSummary, SlotSaveFile } from "../../types";
 
-// showModal in the @decky/ui mock receives a React element created by
-// createElement(ConfirmModal, props). We capture that element so tests can
-// read `.props.onOK`, `.props.strDescription`, etc.
+// showModal in the @decky/ui mock receives the <ConfirmModal> element. We
+// capture it so tests can read `.props.onOK`, `.props.strDescription`, etc.
 type AnyProps = Record<string, unknown> & { children?: unknown };
 interface ConfirmModalProps {
   onOK?: () => void | Promise<void>;

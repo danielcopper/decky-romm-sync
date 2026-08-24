@@ -7,7 +7,7 @@
  * VersionHistoryPanel does); `target_slot_busy` and each refusal toast.
  */
 
-import { useCallback, createElement } from "react";
+import { useCallback } from "react";
 import { showModal } from "@decky/ui";
 import { showToast } from "../../utils/toast";
 import { copySaveToSlot, debugLog } from "../../api/backend";
@@ -101,13 +101,13 @@ export function useCopyToSlot(romId: number, availableSlots: SaveSlotSummary[]):
         }
       };
       showModal(
-        createElement(CopyToSlotModal, {
-          availableSlots,
-          sourceSlot,
-          onSubmit: (target: string) => {
+        <CopyToSlotModal
+          availableSlots={availableSlots}
+          sourceSlot={sourceSlot}
+          onSubmit={(target: string) => {
             detach(runCopy(target));
-          },
-        }),
+          }}
+        />,
       );
     },
     [romId, availableSlots],

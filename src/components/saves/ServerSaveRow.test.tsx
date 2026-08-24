@@ -97,9 +97,9 @@ describe("renderServerSaveRow", () => {
   it("uses a unique key per save id so list reconciliation stays stable", () => {
     const f1 = makeFile({ id: 1, filename: "a.srm" });
     const f2 = makeFile({ id: 2, filename: "b.srm" });
-    // The key is set on the row's outer div via createElement; we can't read
-    // React keys from the DOM, but we can assert no duplicates by checking
-    // both rows render side-by-side without crashing.
+    // The key is set on the row's outer div; we can't read React keys from the
+    // DOM, but we can assert no duplicates by checking both rows render
+    // side-by-side without crashing.
     const { container } = render(
       <div>
         {renderServerSaveRow(f1)}

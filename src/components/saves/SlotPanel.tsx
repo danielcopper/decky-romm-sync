@@ -4,7 +4,7 @@
  * flows; the parent SavesTab handles slot creation and the offline banner.
  */
 
-import { useState, useRef, useEffect, createElement, FC } from "react";
+import { useState, useRef, useEffect, FC, type ReactElement } from "react";
 import { ConfirmModal, DialogButton, showModal } from "@decky/ui";
 import { showToast } from "../../utils/toast";
 import { getSlotSaves, switchSlot, debugLog, getSlotDeleteInfo, deleteSlot } from "../../api/backend";
@@ -30,40 +30,29 @@ import { detach } from "../../utils/detach";
  * rollback UI for a save that spans more than one file. Lists the N component
  * filenames and explains that per-version rollback isn't available yet.
  */
-function renderMultiFileNote(componentFiles: string[]): ReturnType<typeof createElement> {
+function renderMultiFileNote(componentFiles: string[]): ReactElement {
   const n = componentFiles.length;
-  return createElement(
-    "div",
-    {
-      key: "multi-file-note",
-      style: { marginTop: "6px", marginLeft: "8px" },
-    },
-    createElement(
-      "div",
-      { style: { fontSize: "11px", color: "#8f98a0", fontWeight: 600 } },
-      `Files in this save (${n})`,
-    ),
-    ...componentFiles.map((fn) =>
-      createElement(
-        "div",
-        {
-          key: `comp-${fn}`,
-          style: {
+  return (
+    <div key="multi-file-note" style={{ marginTop: "6px", marginLeft: "8px" }}>
+      <div style={{ fontSize: "11px", color: "#8f98a0", fontWeight: 600 }}>{`Files in this save (${n})`}</div>
+      {componentFiles.map((fn) => (
+        <div
+          key={`comp-${fn}`}
+          style={{
             fontSize: "11px",
             color: "#8f98a0",
             fontFamily: "monospace",
             wordBreak: "break-all" as const,
             marginTop: "1px",
-          },
-        },
-        fn,
-      ),
-    ),
-    createElement(
-      "div",
-      { style: { fontSize: "11px", color: MUTED_COLOR, fontStyle: "italic" as const, marginTop: "4px" } },
-      `This save spans ${n} files. Per-version rollback isn't available for multi-file saves yet.`,
-    ),
+          }}
+        >
+          {fn}
+        </div>
+      ))}
+      <div style={{ fontSize: "11px", color: MUTED_COLOR, fontStyle: "italic" as const, marginTop: "4px" }}>
+        {`This save spans ${n} files. Per-version rollback isn't available for multi-file saves yet.`}
+      </div>
+    </div>
   );
 }
 
@@ -75,7 +64,7 @@ function renderActiveSlotBody(
   isOffline: boolean,
   onVersionRestored: () => void,
   onCopy: CopyToSlotHandler,
-): (ReturnType<typeof createElement> | null)[] {
+): (ReactElement | null)[] {
   if (saveStatus && saveStatus.files.length > 0) {
     // Multi-file save (#908 guard): the slot's current save is one game state
     // spread across N files. The siblings are components, not prior versions,
@@ -87,56 +76,48 @@ function renderActiveSlotBody(
       return [
         ...saveStatus.files.map((f) => {
           const conflict = conflicts.find((c) => c.filename === f.filename);
-          return createElement(
-            "div",
-            { key: f.filename },
-            renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at),
-          );
+          return <div key={f.filename}>{renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at)}</div>;
         }),
         renderMultiFileNote(componentFiles),
       ];
     }
     return saveStatus.files.map((f) => {
       const conflict = conflicts.find((c) => c.filename === f.filename);
-      return createElement(
-        "div",
-        { key: f.filename },
-        renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at),
-        // Copy-to-slot on the active slot's current save (source = this slot).
-        // Rendered as a sibling of the save-file row (never nested in its
-        // DialogButton) so Deck focus stays flat. Only when it has a server save.
-        f.server_save_id != null
-          ? createElement(
-              "div",
-              {
-                key: `copy-active-${f.filename}`,
-                style: { display: "flex", justifyContent: "flex-end" as const, marginTop: "4px" },
-              },
-              renderCopyToSlotButton(`copy-active-${f.filename}`, f.server_save_id, {
+      return (
+        <div key={f.filename}>
+          {renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at)}
+          {/* Copy-to-slot on the active slot's current save (source = this slot).
+              Rendered as a sibling of the save-file row (never nested in its
+              DialogButton) so Deck focus stays flat. Only when it has a server save. */}
+          {f.server_save_id != null ? (
+            <div
+              key={`copy-active-${f.filename}`}
+              style={{ display: "flex", justifyContent: "flex-end" as const, marginTop: "4px" }}
+            >
+              {renderCopyToSlotButton(`copy-active-${f.filename}`, f.server_save_id, {
                 onCopy,
                 sourceSlot: slot,
                 isOffline,
-              }),
-            )
-          : null,
-        createElement(VersionHistoryPanel, {
-          key: `vhp-${f.filename}`,
-          romId,
-          slot,
-          filename: f.filename,
-          isOffline,
-          onRestored: onVersionRestored,
-          onCopy,
-        }),
+              })}
+            </div>
+          ) : null}
+          <VersionHistoryPanel
+            key={`vhp-${f.filename}`}
+            romId={romId}
+            slot={slot}
+            filename={f.filename}
+            isOffline={isOffline}
+            onRestored={onVersionRestored}
+            onCopy={onCopy}
+          />
+        </div>
       );
     });
   }
   return [
-    createElement(
-      "div",
-      { key: "no-files", style: { fontSize: "13px", color: MUTED_COLOR, fontStyle: "italic" } },
-      "No save files tracked yet",
-    ),
+    <div key="no-files" style={{ fontSize: "13px", color: MUTED_COLOR, fontStyle: "italic" }}>
+      No save files tracked yet
+    </div>,
   ];
 }
 
@@ -263,12 +244,12 @@ export const SlotPanel: FC<SlotPanelProps> = ({
       lines.push("This cannot be undone.");
 
       showModal(
-        createElement(ConfirmModal, {
-          strTitle: "Delete Slot",
-          strDescription: lines.join("\n\n"),
-          strOKButtonText: "Delete",
-          strCancelButtonText: "Cancel",
-          onOK: () => {
+        <ConfirmModal
+          strTitle="Delete Slot"
+          strDescription={lines.join("\n\n")}
+          strOKButtonText="Delete"
+          strCancelButtonText="Cancel"
+          onOK={() => {
             detach(
               (async () => {
                 try {
@@ -285,8 +266,8 @@ export const SlotPanel: FC<SlotPanelProps> = ({
                 }
               })(),
             );
-          },
-        }),
+          }}
+        />,
       );
     } catch (e) {
       detach(debugLog(`SavesTab: getSlotDeleteInfo error: ${e}`));
@@ -320,17 +301,22 @@ export const SlotPanel: FC<SlotPanelProps> = ({
 
   // --- Source badge ---
   const sourceBadge =
-    slot.source === "local"
-      ? createElement("span", { key: "src", className: "romm-slot-badge romm-slot-badge-local" }, "local")
-      : createElement("span", { key: "src", className: "romm-slot-badge romm-slot-badge-server" }, "server");
+    slot.source === "local" ? (
+      <span key="src" className="romm-slot-badge romm-slot-badge-local">
+        local
+      </span>
+    ) : (
+      <span key="src" className="romm-slot-badge romm-slot-badge-server">
+        server
+      </span>
+    );
 
   // --- Slot header ---
-  const headerEl = createElement(
-    DialogButton,
-    {
-      key: "header",
-      className: "romm-slot-header",
-      style: {
+  const headerEl = (
+    <DialogButton
+      key="header"
+      className="romm-slot-header"
+      style={{
         background: "transparent",
         border: "none",
         padding: "10px 12px",
@@ -340,97 +326,84 @@ export const SlotPanel: FC<SlotPanelProps> = ({
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-      },
-      noFocusRing: false,
-      onFocus: scrollFocusedToCenter,
-      onClick: () => {
+      }}
+      noFocusRing={false}
+      onFocus={scrollFocusedToCenter}
+      onClick={() => {
         detach(handleToggle());
-      },
-    },
-    // Left: slot name + badges
-    createElement(
-      "div",
-      { className: "romm-slot-header-left" },
-      createElement("span", { className: "romm-slot-name" }, displaySlot(slotName)),
-      isActive
-        ? createElement("span", { key: "active", className: "romm-slot-badge romm-slot-badge-active" }, "active")
-        : null,
-      sourceBadge,
-    ),
-    // Right: file count + chevron
-    createElement(
-      "div",
-      { className: "romm-slot-header-right" },
-      createElement("span", { className: "romm-slot-count" }, `${fileCount} save${fileCount === 1 ? "" : "s"}`),
-      createElement("span", { className: "romm-slot-chevron" }, expanded ? "▾" : "▸"),
-    ),
+      }}
+    >
+      {/* Left: slot name + badges */}
+      <div className="romm-slot-header-left">
+        <span className="romm-slot-name">{displaySlot(slotName)}</span>
+        {isActive ? (
+          <span key="active" className="romm-slot-badge romm-slot-badge-active">
+            active
+          </span>
+        ) : null}
+        {sourceBadge}
+      </div>
+      {/* Right: file count + chevron */}
+      <div className="romm-slot-header-right">
+        <span className="romm-slot-count">{`${fileCount} save${fileCount === 1 ? "" : "s"}`}</span>
+        <span className="romm-slot-chevron">{expanded ? "▾" : "▸"}</span>
+      </div>
+    </DialogButton>
   );
 
   // --- Sync summary line (active slot only) ---
   const syncSummaryEl =
-    isActive && syncSummaryText
-      ? createElement(
-          "div",
-          {
-            key: "sync-summary",
-            className: "romm-slot-sync-summary",
-            style: { color: syncSummaryColor },
-          },
-          syncSummaryText,
-        )
-      : null;
+    isActive && syncSummaryText ? (
+      <div key="sync-summary" className="romm-slot-sync-summary" style={{ color: syncSummaryColor }}>
+        {syncSummaryText}
+      </div>
+    ) : null;
 
   // --- Read-only note (legacy bucket only, always visible) ---
-  const legacyNoteEl = isLegacy
-    ? createElement(
-        "div",
-        {
-          key: "legacy-note",
-          className: "romm-slot-legacy-note",
-        },
-        "Used by the RomM web player. Read-only here — manage in the RomM web app.",
-      )
-    : null;
+  const legacyNoteEl = isLegacy ? (
+    <div key="legacy-note" className="romm-slot-legacy-note">
+      Used by the RomM web player. Read-only here — manage in the RomM web app.
+    </div>
+  ) : null;
 
   // --- Slot body ---
-  let bodyEl: ReturnType<typeof createElement> | null = null;
+  let bodyEl: ReactElement | null = null;
   if (expanded) {
-    bodyEl = isActive
-      ? createElement(
-          "div",
-          { key: "body", className: "romm-slot-body" },
-          ...renderActiveSlotBody(saveStatus, conflicts, romId, slotName, isOffline, onVersionRestored, onCopy).filter(
-            Boolean,
-          ),
-        )
-      : // eslint-disable-next-line react-hooks/refs -- createElement of an FC in a ternary branch trips the new react-hooks/refs rule; the component itself takes no ref.
-        createElement(InactiveSlotBody, {
-          key: "body",
-          loadingSlot,
-          slotFiles,
-          switching,
-          switchError,
-          isOffline,
-          // Legacy bucket is read-only (#1276 / #1478) — no Activate/Delete.
-          isLegacy,
-          deleting,
-          handleActivate: () => {
-            detach(handleActivate());
-          },
-          handleDelete: () => {
-            detach(handleDelete());
-          },
-          // Copy source = this (inactive/legacy) slot; the picker excludes it as a target.
-          copy: { onCopy, sourceSlot: slotName, isOffline },
-        });
+    bodyEl = isActive ? (
+      <div key="body" className="romm-slot-body">
+        {renderActiveSlotBody(saveStatus, conflicts, romId, slotName, isOffline, onVersionRestored, onCopy).filter(
+          Boolean,
+        )}
+      </div>
+    ) : (
+      <InactiveSlotBody
+        key="body"
+        loadingSlot={loadingSlot}
+        slotFiles={slotFiles}
+        switching={switching}
+        switchError={switchError}
+        isOffline={isOffline}
+        // Legacy bucket is read-only (#1276 / #1478) — no Activate/Delete.
+        isLegacy={isLegacy}
+        deleting={deleting}
+        handleActivate={() => {
+          detach(handleActivate());
+        }}
+        handleDelete={() => {
+          detach(handleDelete());
+        }}
+        // Copy source = this (inactive/legacy) slot; the picker excludes it as a target.
+        copy={{ onCopy, sourceSlot: slotName, isOffline }}
+      />
+    );
   }
 
-  return createElement(
-    "div",
-    { key: `slot-${slotName}`, className: panelClasses },
-    headerEl,
-    syncSummaryEl,
-    legacyNoteEl,
-    bodyEl,
+  return (
+    <div key={`slot-${slotName}`} className={panelClasses}>
+      {headerEl}
+      {syncSummaryEl}
+      {legacyNoteEl}
+      {bodyEl}
+    </div>
   );
 };
