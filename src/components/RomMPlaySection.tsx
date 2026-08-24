@@ -10,7 +10,7 @@
  * Save Sync and BIOS items only appear when relevant.
  */
 
-import { useState, useEffect, FC, Fragment, createElement } from "react";
+import { useState, useEffect, FC, Fragment, type ReactElement } from "react";
 import { showToast } from "../utils/toast";
 import {
   ConfirmModal,
@@ -474,16 +474,12 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   }, [appId]);
 
   // Helper: create an info item with header and value (Steam's two-line pattern)
-  const infoItem = (key: string, header: string, value: string, extraClass?: string) =>
-    createElement(
-      "div",
-      {
-        key,
-        className: `romm-info-item ${extraClass || ""}`.trim(),
-      },
-      createElement("div", { className: "romm-info-header" }, header),
-      createElement("div", { className: "romm-info-value" }, value),
-    );
+  const infoItem = (key: string, header: string, value: string, extraClass?: string) => (
+    <div key={key} className={`romm-info-item ${extraClass || ""}`.trim()}>
+      <div className="romm-info-header">{header}</div>
+      <div className="romm-info-value">{value}</div>
+    </div>
+  );
 
   // --- Gear button action handlers ---
 
@@ -545,13 +541,13 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         }
         case "needs_pick":
           showModal(
-            createElement(SgdbGamePickerModalContent, {
-              romId,
-              appId,
-              romName: detail.romName,
-              candidates: resolution.candidates,
-              onApplied: () => {},
-            }),
+            <SgdbGamePickerModalContent
+              romId={romId}
+              appId={appId}
+              romName={detail.romName}
+              candidates={resolution.candidates}
+              onApplied={() => {}}
+            />,
           );
           break;
       }
@@ -686,13 +682,12 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     if (actionPending || !detail.romId) return;
     const romId = detail.romId;
     showModal(
-      createElement(ConfirmModal, {
-        strTitle: "Delete Local Saves",
-        strDescription:
-          "This will delete local save files for this game. Make sure saves are synced to RomM first — the next sync will re-download them from the server.",
-        strOKButtonText: "Delete",
-        strCancelButtonText: "Cancel",
-        onOK: () => {
+      <ConfirmModal
+        strTitle="Delete Local Saves"
+        strDescription="This will delete local save files for this game. Make sure saves are synced to RomM first — the next sync will re-download them from the server."
+        strOKButtonText="Delete"
+        strCancelButtonText="Cancel"
+        onOK={() => {
           detach(
             (async () => {
               setActionPending("deletesaves");
@@ -715,8 +710,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
               }
             })(),
           );
-        },
-      }),
+        }}
+      />,
     );
   };
 
@@ -832,87 +827,69 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
   const showRomMMenu = (e: Event) => {
     showContextMenu(
-      createElement(
-        Menu,
-        { label: "RomM Actions" },
-        createElement(
-          MenuItem,
-          {
-            key: "refresh-artwork",
-            onClick: () => {
-              detach(handleRefreshArtwork());
-            },
-          },
-          "Refresh Artwork",
-        ),
-        createElement(
-          MenuItem,
-          {
-            key: "refresh-metadata",
-            onClick: () => {
-              detach(handleRefreshMetadata());
-            },
-          },
-          "Refresh Metadata",
-        ),
-        createElement(
-          MenuItem,
-          {
-            key: "sync-saves",
-            onClick: () => {
-              detach(handleSyncSaves());
-            },
-          },
-          "Sync Save Files",
-        ),
-        createElement(
-          MenuItem,
-          {
-            key: "download-bios",
-            onClick: () => {
-              detach(handleDownloadBios());
-            },
-          },
-          "Download BIOS",
-        ),
-        createElement(MenuSeparator, { key: "sep" }),
-        createElement(
-          MenuItem,
-          { key: "delete-saves", tone: "destructive", onClick: handleDeleteSaves },
-          "Delete Local Saves",
-        ),
-        createElement(
-          MenuItem,
-          {
-            key: "uninstall",
-            tone: "destructive",
-            onClick: () => {
-              detach(handleUninstall());
-            },
-          },
-          "Uninstall",
-        ),
-      ),
+      <Menu label="RomM Actions">
+        <MenuItem
+          key="refresh-artwork"
+          onClick={() => {
+            detach(handleRefreshArtwork());
+          }}
+        >
+          Refresh Artwork
+        </MenuItem>
+        <MenuItem
+          key="refresh-metadata"
+          onClick={() => {
+            detach(handleRefreshMetadata());
+          }}
+        >
+          Refresh Metadata
+        </MenuItem>
+        <MenuItem
+          key="sync-saves"
+          onClick={() => {
+            detach(handleSyncSaves());
+          }}
+        >
+          Sync Save Files
+        </MenuItem>
+        <MenuItem
+          key="download-bios"
+          onClick={() => {
+            detach(handleDownloadBios());
+          }}
+        >
+          Download BIOS
+        </MenuItem>
+        <MenuSeparator key="sep" />
+        <MenuItem key="delete-saves" tone="destructive" onClick={handleDeleteSaves}>
+          Delete Local Saves
+        </MenuItem>
+        <MenuItem
+          key="uninstall"
+          tone="destructive"
+          onClick={() => {
+            detach(handleUninstall());
+          }}
+        >
+          Uninstall
+        </MenuItem>
+      </Menu>,
       getEventTarget(e),
     );
   };
 
   const showSteamMenu = (e: Event) => {
     showContextMenu(
-      createElement(
-        Menu,
-        { label: "Steam" },
-        createElement(
-          MenuItem,
-          {
-            key: "properties",
-            onClick: () => {
-              SteamClient.Apps.OpenAppSettingsDialog(appId, "general");
-            },
-          },
-          "Properties",
-        ),
-      ),
+      <Menu label="Steam">
+        <MenuItem
+          key="properties"
+          onClick={() => {
+            SteamClient.Apps.OpenAppSettingsDialog(appId, "general");
+          }}
+        >
+          Properties
+        </MenuItem>
+      </Menu>,
       getEventTarget(e),
     );
   };
@@ -928,31 +905,19 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   }
 
   // Build info items array
-  const infoItems: ReturnType<typeof createElement>[] = [];
+  const infoItems: ReactElement[] = [];
 
   // Offline indicator (first — most prominent)
   if (connectionState === "offline") {
     infoItems.push(
-      createElement(
-        "div",
-        {
-          key: "offline-indicator",
-          className: "romm-info-item",
-        },
-        createElement(
-          "div",
-          { className: "romm-info-header" },
-          createElement(FaExclamationTriangle, { size: 12, color: "#ff8800" }),
-        ),
-        createElement(
-          "div",
-          {
-            className: "romm-info-value",
-            style: { color: "#ff8800" },
-          },
-          "RomM offline",
-        ),
-      ),
+      <div key="offline-indicator" className="romm-info-item">
+        <div className="romm-info-header">
+          <FaExclamationTriangle size={12} color="#ff8800" />
+        </div>
+        <div className="romm-info-value" style={{ color: "#ff8800" }}>
+          RomM offline
+        </div>
+      </div>,
     );
   }
 
@@ -994,73 +959,49 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     const sparkleDurs = [2.4, 3.5, 2.8, 3.8, 3.1];
     const sparkleDelays = [0, 0.9, 0.3, 1.6, 1.1];
     const sparkleDots = hasEarned
-      ? sparklePositions.map((pos, i) =>
-          createElement("span", {
-            key: `sparkle-${pos.top}-${pos.left}`,
-            className: "romm-sparkle-dot",
-            style: {
-              "--romm-sparkle-top": pos.top,
-              "--romm-sparkle-left": pos.left,
-              "--romm-sparkle-delay": `${sparkleDelays[i]}s`,
-              "--romm-sparkle-dur": `${sparkleDurs[i]}s`,
-            } satisfies CSSPropertiesWithVars,
-          }),
-        )
+      ? sparklePositions.map((pos, i) => {
+          // Hoisted and annotated, not inlined into `style={{...}}`: an inline
+          // literal is excess-property checked against React's own
+          // CSSProperties, which rejects the `--*` keys outright.
+          const dotStyle: CSSPropertiesWithVars = {
+            "--romm-sparkle-top": pos.top,
+            "--romm-sparkle-left": pos.left,
+            "--romm-sparkle-delay": `${sparkleDelays[i]}s`,
+            "--romm-sparkle-dur": `${sparkleDurs[i]}s`,
+          };
+          return <span key={`sparkle-${pos.top}-${pos.left}`} className="romm-sparkle-dot" style={dotStyle} />;
+        })
       : [];
 
     infoItems.push(
-      createElement(
-        "div",
-        {
-          key: "achievements",
-          className: "romm-info-item romm-cheevo-badge",
-          onClick: () => {
-            globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "achievements" } }));
-          },
-        },
-        createElement("div", { className: "romm-info-header" }, "ACHIEVEMENTS"),
-        createElement(
-          "div",
-          {
-            className: "romm-cheevo-badge-sparkle",
-          },
-          // Trophy icon with sparkle container
-          createElement(
-            "span",
-            { style: { position: "relative", display: "inline-block" } },
-            createElement(
-              "span",
-              {
-                className: hasEarned ? "romm-cheevo-trophy" : "romm-cheevo-trophy-none",
-              },
-              "\uD83C\uDFC6",
-            ),
-            hasEarned ? createElement("span", { className: "romm-sparkle-container" }, ...sparkleDots) : null,
-          ),
-          createElement("span", { className: "romm-cheevo-count" }, countLabel),
-        ),
-      ),
+      // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- pointer-only shortcut into the ACHIEVEMENTS tab, which the tab bar's DialogButton already reaches from the focus ring; a role/tabIndex here would add a gamepad focus stop to the play row.
+      <div
+        key="achievements"
+        className="romm-info-item romm-cheevo-badge"
+        onClick={() => {
+          globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "achievements" } }));
+        }}
+      >
+        <div className="romm-info-header">ACHIEVEMENTS</div>
+        <div className="romm-cheevo-badge-sparkle">
+          {/* Trophy icon with sparkle container */}
+          <span style={{ position: "relative", display: "inline-block" }}>
+            <span className={hasEarned ? "romm-cheevo-trophy" : "romm-cheevo-trophy-none"}>{"\uD83C\uDFC6"}</span>
+            {hasEarned ? <span className="romm-sparkle-container">{sparkleDots}</span> : null}
+          </span>
+          <span className="romm-cheevo-count">{countLabel}</span>
+        </div>
+      </div>,
     );
   }
 
   // Save Sync moved to dedicated tab — show legacy slot warning only
   if (detail.activeSlot == null && detail.saveSyncEnabled) {
     infoItems.push(
-      createElement(
-        "div",
-        {
-          key: "legacy-slot-warning",
-          className: "romm-info-item",
-        },
-        createElement("div", { className: "romm-info-header" }, "SAVE SYNC"),
-        createElement(
-          "div",
-          {
-            style: { fontSize: "11px", color: "#ff8800", marginTop: "4px" },
-          },
-          "\u26A0 Legacy save slot",
-        ),
-      ),
+      <div key="legacy-slot-warning" className="romm-info-item">
+        <div className="romm-info-header">SAVE SYNC</div>
+        <div style={{ fontSize: "11px", color: "#ff8800", marginTop: "4px" }}>{"\u26A0 Legacy save slot"}</div>
+      </div>,
     );
   }
 
@@ -1069,121 +1010,90 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   if (detail.biosNeeded && detail.biosStatus && detail.biosStatus !== "ok" && detail.biosStatus !== "unmanaged") {
     const biosColor = biosColorForLevel(detail.biosStatus);
     infoItems.push(
-      createElement(
-        "div",
-        {
-          key: "bios",
-          className: "romm-info-item",
-          onClick: () => {
-            globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
-          },
-          style: { cursor: "pointer" },
-        },
-        createElement("div", { className: "romm-info-header" }, "BIOS"),
-        createElement(
-          "div",
-          {
-            className: "romm-info-value",
-            style: { display: "flex", alignItems: "center", gap: "6px" },
-          },
-          createElement("span", {
-            className: "romm-status-dot",
-            style: { backgroundColor: biosColor },
-          }),
-          detail.biosLabel,
-        ),
-      ),
+      // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- pointer-only shortcut into the BIOS tab, which the tab bar's DialogButton already reaches from the focus ring; a role/tabIndex here would add a gamepad focus stop to the play row.
+      <div
+        key="bios"
+        className="romm-info-item"
+        onClick={() => {
+          globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        }}
+        style={{ cursor: "pointer" }}
+      >
+        <div className="romm-info-header">BIOS</div>
+        <div className="romm-info-value" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span className="romm-status-dot" style={{ backgroundColor: biosColor }} />
+          {detail.biosLabel}
+        </div>
+      </div>,
     );
   }
 
-  const playSectionRow = createElement(
-    Focusable,
-    {
-      key: "play-row",
-      "data-romm": "true",
-      className: `romm-play-section-row ${basicAppDetailsSectionStylerClasses?.PlaySection || ""}`.trim(),
-      "flow-children": "right",
-      style: {
+  const playSectionRow = (
+    <Focusable
+      key="play-row"
+      data-romm="true"
+      className={`romm-play-section-row ${basicAppDetailsSectionStylerClasses?.PlaySection || ""}`.trim()}
+      flow-children="right"
+      style={{
         display: "flex",
         alignItems: "center",
         gap: "20px",
         padding: "16px 2.8vw",
         background: "rgba(14, 20, 27, 0.33)",
         boxSizing: "border-box",
-      },
-    },
-    // Play button on the left
-    createElement(CustomPlayButton, { appId }),
-    // Disc picker for multi-disc ROMs — renders nothing otherwise (#865)
-    createElement(DiscSelector, { appId }),
-    // Version picker for multi-version sibling groups — renders nothing otherwise (#1297)
-    createElement(VersionPicker, { appId }),
-    // Info items row
-    createElement(
-      "div",
-      {
-        className: "romm-info-items",
-        style: {
+      }}
+    >
+      {/* Play button on the left */}
+      <CustomPlayButton appId={appId} />
+      {/* Disc picker for multi-disc ROMs — renders nothing otherwise (#865) */}
+      <DiscSelector appId={appId} />
+      {/* Version picker for multi-version sibling groups — renders nothing otherwise (#1297) */}
+      <VersionPicker appId={appId} />
+      {/* Info items row */}
+      <div
+        className="romm-info-items"
+        style={{
           display: "flex",
           alignItems: "center",
           gap: "20px",
           flexWrap: "nowrap",
           overflow: "hidden",
-        },
-      },
-      ...infoItems,
-    ),
-    // Gear icon buttons pushed to the far right
-    createElement(
-      "div",
-      {
-        style: {
+        }}
+      >
+        {infoItems}
+      </div>
+      {/* Gear icon buttons pushed to the far right */}
+      <div
+        style={{
           marginLeft: "auto",
           display: "flex",
           alignItems: "center",
           gap: "8px",
           flexShrink: 0,
-        },
-      },
-      // RomM actions button
-      createElement(
-        DialogButton,
-        {
-          className: "romm-gear-btn",
-          onClick: showRomMMenu,
-          onFocus: scrollToTop,
-          title: "RomM Actions",
-        },
-        createElement(FaGamepad, { size: 18, color: "#553e98" }),
-      ),
-      // Core selection button (only when multiple emulators to choose between)
-      ...(detail.emulators.length > 1
-        ? [
-            createElement(
-              DialogButton,
-              {
-                key: "core-btn",
-                className: "romm-gear-btn",
-                onClick: showCoreMenu,
-                onFocus: scrollToTop,
-                title: "Emulator Core",
-              },
-              createElement(FaMicrochip, { size: 18, color: detail.activeCoreIsDefault ? "#8f98a0" : "#d4a72c" }),
-            ),
-          ]
-        : []),
-      // Steam properties button
-      createElement(
-        DialogButton,
-        {
-          className: "romm-gear-btn",
-          onClick: showSteamMenu,
-          onFocus: scrollToTop,
-          title: "Steam Properties",
-        },
-        createElement(FaCog, { size: 18, color: "#8f98a0" }),
-      ),
-    ),
+        }}
+      >
+        {/* RomM actions button */}
+        <DialogButton className="romm-gear-btn" onClick={showRomMMenu} onFocus={scrollToTop} title="RomM Actions">
+          <FaGamepad size={18} color="#553e98" />
+        </DialogButton>
+        {/* Core selection button (only when multiple emulators to choose between) */}
+        {detail.emulators.length > 1 ? (
+          <DialogButton
+            key="core-btn"
+            className="romm-gear-btn"
+            onClick={showCoreMenu}
+            onFocus={scrollToTop}
+            title="Emulator Core"
+          >
+            <FaMicrochip size={18} color={detail.activeCoreIsDefault ? "#8f98a0" : "#d4a72c"} />
+          </DialogButton>
+        ) : null}
+        {/* Steam properties button */}
+        <DialogButton className="romm-gear-btn" onClick={showSteamMenu} onFocus={scrollToTop} title="Steam Properties">
+          <FaCog size={18} color="#8f98a0" />
+        </DialogButton>
+      </div>
+    </Focusable>
   );
 
   // Content-dir warning (#239) — prominent banner above the play row when
@@ -1199,17 +1109,16 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // root whose element type changes makes React unmount the whole row — the play
   // button drops back to "loading" and re-runs its init (#1682). A Fragment adds
   // no DOM node, so the row stays a direct child of the injected panel either way.
-  return createElement(
-    Fragment,
-    null,
-    detail.savefilesInContentDir && detail.saveSyncEnabled
-      ? createElement(WarningCard, {
-          key: "savefiles-content-dir-warning",
-          title: "Save sync off",
-          message:
-            "RetroArch's 'Write Saves to Content Directory' is enabled, so saves go next to the ROM and can't be synced. Turn it off in RetroArch → Settings → Saving to re-enable save sync.",
-        })
-      : null,
-    playSectionRow,
+  return (
+    <Fragment>
+      {detail.savefilesInContentDir && detail.saveSyncEnabled ? (
+        <WarningCard
+          key="savefiles-content-dir-warning"
+          title="Save sync off"
+          message="RetroArch's 'Write Saves to Content Directory' is enabled, so saves go next to the ROM and can't be synced. Turn it off in RetroArch → Settings → Saving to re-enable save sync."
+        />
+      ) : null}
+      {playSectionRow}
+    </Fragment>
   );
 };
