@@ -292,7 +292,7 @@ Format: **invariant** — tier — enforced by.
 - **Every write into per-rom detail state that crosses an `await` is bound to a rom identity — the store
   (`src/utils/gameDetailStore.ts`) via `writerForRom`, or the answer's own `rom_id` in `applySaveStatus`; the panel's
   state, event and tab-content modules (`src/components/panelState.ts`, `src/components/panelEvents.ts`,
-  `src/components/panelTabContent.ts` — the panel component itself holds none of these writes) via `RomBinding`, built
+  `src/components/panelTabContent.tsx` — the panel component itself holds none of these writes) via `RomBinding`, built
   by `bindRom` for a read a run of the `[appId]` effect issued and by `bindRomInState` for the active tab's panes, whose
   writer is built during render; the achievements tab (`src/components/AchievementsTab.tsx`) by construction, its React
   key being the rom id, so its state cannot outlive the identity it was read for. A version switch re-keys without

@@ -22,12 +22,6 @@ declare module "@decky/ui" {
   }
 
   interface FocusableProps {
-    /**
-     * Upstream declares `children: ReactNode` as required, but `createElement`
-     * passes children positionally — so the props object never carries them
-     * and the required marker fires a false positive. Widen to optional.
-     */
-    children?: import("react").ReactNode;
     /** Native HTML data-* attribute used as a marker for our patched panels. */
     "data-romm"?: string;
   }
