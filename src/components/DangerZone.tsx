@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, FC, ReactNode, createElement } from "react";
+import { useState, useEffect, useMemo, FC, ReactNode } from "react";
 import {
   PanelSection,
   PanelSectionRow,
@@ -256,13 +256,12 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
   const handleDeleteSaves = (p: RegistryPlatform) => {
     const platformName = p.name || p.slug;
     showModal(
-      createElement(ConfirmModal, {
-        strTitle: `Delete all save files for ${platformName}?`,
-        strDescription:
-          "This will delete every local save file for ROMs on this platform. Any local changes that haven't been uploaded to RomM yet will be lost permanently. Make sure saves are synced first.",
-        strOKButtonText: "Delete Save Files",
-        strCancelButtonText: "Cancel",
-        onOK: () => {
+      <ConfirmModal
+        strTitle={`Delete all save files for ${platformName}?`}
+        strDescription="This will delete every local save file for ROMs on this platform. Any local changes that haven't been uploaded to RomM yet will be lost permanently. Make sure saves are synced first."
+        strOKButtonText="Delete Save Files"
+        strCancelButtonText="Cancel"
+        onOK={() => {
           detach(
             (async () => {
               setActionStatus(`Deleting ${p.name} saves...`);
@@ -275,8 +274,8 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
               }
             })(),
           );
-        },
-      }),
+        }}
+      />,
     );
   };
 

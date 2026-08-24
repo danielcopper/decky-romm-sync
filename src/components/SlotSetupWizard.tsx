@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, FC, createElement, ChangeEvent, KeyboardEvent } from "react";
+import { useState, useEffect, useRef, FC, ChangeEvent, KeyboardEvent } from "react";
 import { showToast } from "../utils/toast";
 import { DialogButton, ConfirmModal, ModalRoot, TextField, showModal } from "@decky/ui";
 import { getSaveSetupInfo, confirmSlotChoice, logError } from "../api/backend";
@@ -78,32 +78,32 @@ const CustomSlotModal: FC<{
   onSubmit: (name: string) => void;
 }> = ({ closeModal, onSubmit }) => {
   const [value, setValue] = useState("");
-  return createElement(
-    ConfirmModal,
-    {
-      ...(closeModal !== undefined ? { closeModal } : {}),
-      strTitle: "Custom Slot Name",
-      bDisableBackgroundDismiss: true,
-      onOK: () => {
+  return (
+    <ConfirmModal
+      {...(closeModal !== undefined ? { closeModal } : {})}
+      strTitle="Custom Slot Name"
+      bDisableBackgroundDismiss={true}
+      onOK={() => {
         onSubmit(value.trim());
-      },
-    },
-    createElement(TextField, {
-      focusOnMount: true,
-      label: "Slot Name",
-      value,
-      onChange: (e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value),
-      // Enter (the on-screen keyboard's "Eingabe" key) confirms, same as the OK
-      // button. Guard empty so a blank Enter is a no-op (the button itself
-      // doesn't guard, but a blank confirm must not fire). ConfirmModal doesn't
-      // auto-close this manual path.
-      onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === "Enter" && value.trim() !== "") {
-          onSubmit(value.trim());
-          closeModal?.();
-        }
-      },
-    }),
+      }}
+    >
+      <TextField
+        focusOnMount={true}
+        label="Slot Name"
+        value={value}
+        onChange={(e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value)}
+        // Enter (the on-screen keyboard's "Eingabe" key) confirms, same as the OK
+        // button. Guard empty so a blank Enter is a no-op (the button itself
+        // doesn't guard, but a blank confirm must not fire). ConfirmModal doesn't
+        // auto-close this manual path.
+        onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+          if (e.key === "Enter" && value.trim() !== "") {
+            onSubmit(value.trim());
+            closeModal?.();
+          }
+        }}
+      />
+    </ConfirmModal>
   );
 };
 
@@ -241,11 +241,11 @@ function createConfirmHandler({ romId, setConfirming, setError, onComplete }: Co
       if (result.needs_conflict_resolution) {
         setConfirming(false);
         showModal(
-          createElement(LegacyMigrationConflictModal, {
-            conflicts: result.conflicts ?? [],
-            slot,
-            onConfirm: () => detach(handleConfirm(slot, true, migrateFrom, true)),
-          }),
+          <LegacyMigrationConflictModal
+            conflicts={result.conflicts ?? []}
+            slot={slot}
+            onConfirm={() => detach(handleConfirm(slot, true, migrateFrom, true))}
+          />,
         );
         return;
       }
@@ -353,13 +353,13 @@ function buildSlotRow(
             // the retired legacy mode. A differing local save is asked about
             // by the backend after OK (#1498).
             showModal(
-              createElement(ConfirmModal, {
-                strTitle: "Migrate Legacy Saves?",
-                strDescription: legacyMigrateConfirmDescription(defaultSlot),
-                onOK: () => {
+              <ConfirmModal
+                strTitle="Migrate Legacy Saves?"
+                strDescription={legacyMigrateConfirmDescription(defaultSlot)}
+                onOK={() => {
                   detach(handleConfirm(defaultSlot, true, null));
-                },
-              }),
+                }}
+              />,
             );
           } else {
             detach(handleConfirm(s.slot as string));
@@ -438,14 +438,14 @@ function buildServerSlotsColumn(
         onFocus={scrollFocusedToCenter}
         onClick={() => {
           showModal(
-            createElement(CustomSlotModal, {
-              onSubmit: (trimmed: string) => {
+            <CustomSlotModal
+              onSubmit={(trimmed: string) => {
                 // An empty custom name is rejected by the backend's
                 // invalid_slot_name guard — never reinterpret it as the retired
                 // legacy no-slot mode (#1276).
                 detach(handleConfirm(trimmed));
-              },
-            }),
+              }}
+            />,
           );
         }}
       >

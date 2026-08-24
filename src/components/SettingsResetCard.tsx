@@ -1,4 +1,4 @@
-import { FC, createElement } from "react";
+import { FC } from "react";
 import { WarningCard } from "./WarningCard";
 import { SETTINGS_RESET_TITLE, settingsResetCardMessage } from "./SettingsResetBanner";
 
@@ -14,9 +14,6 @@ interface SettingsResetCardProps {
  * QAM banner; this card clears reactively when the shared store flips to
  * not-pending after the QAM ack.
  */
-export const SettingsResetCard: FC<SettingsResetCardProps> = ({ backedUpTo, compact = false }) =>
-  createElement(WarningCard, {
-    title: SETTINGS_RESET_TITLE,
-    message: settingsResetCardMessage(backedUpTo),
-    compact,
-  });
+export const SettingsResetCard: FC<SettingsResetCardProps> = ({ backedUpTo, compact = false }) => (
+  <WarningCard title={SETTINGS_RESET_TITLE} message={settingsResetCardMessage(backedUpTo)} compact={compact} />
+);

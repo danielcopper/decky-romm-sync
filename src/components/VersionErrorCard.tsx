@@ -1,4 +1,4 @@
-import { FC, createElement, useEffect, useState } from "react";
+import { FC, useEffect, useState } from "react";
 import { getVersionError, onVersionErrorChange } from "../utils/connectionState";
 import { WarningCard } from "./WarningCard";
 
@@ -19,5 +19,6 @@ interface VersionErrorCardProps {
 }
 
 /** Polished error card shown when server version is below plugin minimum. */
-export const VersionErrorCard: FC<VersionErrorCardProps> = ({ message, compact = false }) =>
-  createElement(WarningCard, { title: "RomM Server Update Required", message, compact });
+export const VersionErrorCard: FC<VersionErrorCardProps> = ({ message, compact = false }) => (
+  <WarningCard title="RomM Server Update Required" message={message} compact={compact} />
+);

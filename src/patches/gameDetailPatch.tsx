@@ -7,7 +7,6 @@
  * so the file is exempt from `@typescript-eslint/no-explicit-any`.
  */
 
-import { createElement } from "react";
 import { routerHook } from "@decky/api";
 import { afterPatch, findInReactTree, createReactTreePatcher } from "@decky/ui";
 import { appDetailsClasses, playSectionClasses, basicAppDetailsSectionStylerClasses } from "../utils/deckyUiInternals";
@@ -226,28 +225,22 @@ export function registerGameDetailPatch() {
               if (!alreadyHasPlayBtn) {
                 const nativeOverviewIdx = findNativeOverviewIndex(children);
 
-                const rommPlaySection = createElement(RomMPlaySection, {
-                  key: "romm-play-section",
-                  appId,
-                });
+                const rommPlaySection = <RomMPlaySection key="romm-play-section" appId={appId} />;
 
-                const rommInfoPanel = createElement(RomMGameInfoPanel, {
-                  key: "romm-info-panel",
-                  appId,
-                });
+                const rommInfoPanel = <RomMGameInfoPanel key="romm-info-panel" appId={appId} />;
 
                 // Wrap in a container with the native AppDetailsOverviewPanel
                 // CSS class so it participates in InnerContainer's flex layout
                 // and scroll system the same way the native panel does.
-                const rommWrapper = createElement(
-                  "div",
-                  {
-                    key: "romm-play-section",
-                    className: appDetailsClasses?.AppDetailsOverviewPanel || "",
-                    "data-romm": "true",
-                  },
-                  rommPlaySection,
-                  rommInfoPanel,
+                const rommWrapper = (
+                  <div
+                    key="romm-play-section"
+                    className={appDetailsClasses?.AppDetailsOverviewPanel || ""}
+                    data-romm="true"
+                  >
+                    {rommPlaySection}
+                    {rommInfoPanel}
+                  </div>
                 );
 
                 if (nativeOverviewIdx >= 0) {
