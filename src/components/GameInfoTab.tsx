@@ -6,11 +6,11 @@
  * its background reads land, so this pane is routinely open before the cover,
  * the installed-rom record and a stale metadata refresh arrive.
  *
- * Uses createElement (no JSX) to match the panel. CSS classes prefixed with
- * `romm-panel-` are injected separately by styleInjector.
+ * CSS classes prefixed with `romm-panel-` are injected separately by
+ * styleInjector.
  */
 
-import { FC, createElement } from "react";
+import { FC, type ReactElement } from "react";
 import type { InstalledRom, RomMetadata } from "../types";
 import { infoRow, section } from "./panelSection";
 
@@ -36,11 +36,15 @@ function formatReleaseDate(timestamp: number | null): string | null {
 }
 
 /** The rows a RomM metadata record contributes, in display order. */
-function metadataRows(meta: RomMetadata, platformName: string): ReturnType<typeof createElement>[] {
-  const rows: ReturnType<typeof createElement>[] = [];
+function metadataRows(meta: RomMetadata, platformName: string): ReactElement[] {
+  const rows: ReactElement[] = [];
 
   if (meta.summary) {
-    rows.push(createElement("div", { key: "summary", className: "romm-panel-summary" }, meta.summary));
+    rows.push(
+      <div key="summary" className="romm-panel-summary">
+        {meta.summary}
+      </div>,
+    );
   }
 
   if (platformName) {
@@ -53,16 +57,16 @@ function metadataRows(meta: RomMetadata, platformName: string): ReturnType<typeo
 
   if (meta.genres.length > 0) {
     rows.push(
-      createElement(
-        "div",
-        { key: "genres", className: "romm-panel-info-row" },
-        createElement("span", { className: "romm-panel-label" }, "Genres"),
-        createElement(
-          "div",
-          { className: "romm-panel-tags" },
-          ...meta.genres.map((g) => createElement("span", { key: g, className: "romm-panel-tag" }, g)),
-        ),
-      ),
+      <div key="genres" className="romm-panel-info-row">
+        <span className="romm-panel-label">Genres</span>
+        <div className="romm-panel-tags">
+          {meta.genres.map((g) => (
+            <span key={g} className="romm-panel-tag">
+              {g}
+            </span>
+          ))}
+        </div>
+      </div>,
     );
   }
 
@@ -87,11 +91,15 @@ function metadataRows(meta: RomMetadata, platformName: string): ReturnType<typeo
 }
 
 /** Every descriptive row the pane shows, in display order. */
-function gameInfoRows(props: GameInfoTabProps): ReturnType<typeof createElement>[] {
-  const rows: ReturnType<typeof createElement>[] = [];
+function gameInfoRows(props: GameInfoTabProps): ReactElement[] {
+  const rows: ReactElement[] = [];
 
   if (props.romName) {
-    rows.push(createElement("div", { key: "rom-name", className: "romm-panel-rom-name" }, props.romName));
+    rows.push(
+      <div key="rom-name" className="romm-panel-rom-name">
+        {props.romName}
+      </div>,
+    );
   }
 
   if (props.regions.length > 0) {
@@ -111,30 +119,29 @@ function gameInfoRows(props: GameInfoTabProps): ReturnType<typeof createElement>
   // "No metadata available" fires only when NO descriptive row was added (name,
   // region/languages, metadata, or platform) — a plain count of the rows above.
   if (rows.length === 0) {
-    rows.push(createElement("div", { key: "no-meta", className: "romm-panel-muted" }, "No metadata available"));
+    rows.push(
+      <div key="no-meta" className="romm-panel-muted">
+        No metadata available
+      </div>,
+    );
   }
 
   return rows;
 }
 
 /** The ROM File section — present only once the ROM is on disk. */
-function romFileSection(
-  installed: boolean,
-  installedRom: InstalledRom | null,
-): ReturnType<typeof createElement> | null {
+function romFileSection(installed: boolean, installedRom: InstalledRom | null): ReactElement | null {
   if (!installed || !installedRom) return null;
 
   // A downloaded ROM the system cannot launch keeps its files and its row; only
   // the shortcut's launch command is withheld. This is the one place that says
   // so — without it the game simply never starts and nothing explains why.
-  const noLaunchTargetNote = installedRom.launchable
-    ? null
-    : createElement(
-        "div",
-        { key: "no-launch-target", className: "romm-panel-muted", style: { marginTop: "4px" } },
-        `Downloaded, but nothing here is a format ${installedRom.system} can launch — no launch ` +
-          `command was set. The files are on disk; install them in the emulator to play.`,
-      );
+  const noLaunchTargetNote = installedRom.launchable ? null : (
+    <div key="no-launch-target" className="romm-panel-muted" style={{ marginTop: "4px" }}>
+      {`Downloaded, but nothing here is a format ${installedRom.system} can launch — no launch ` +
+        `command was set. The files are on disk; install them in the emulator to play.`}
+    </div>
+  );
 
   return section("rom-file", "ROM File", infoRow("filename", "Filename", installedRom.file_name), noLaunchTargetNote);
 }
@@ -146,21 +153,24 @@ export const GameInfoTab: FC<GameInfoTabProps> = (props) => {
     ? section(
         "game-info",
         null,
-        createElement(
-          "div",
-          {
-            key: "game-info-row",
-            style: { display: "flex", gap: "16px", alignItems: "flex-start" },
-          },
-          createElement("img", {
-            key: "cover",
-            src: `data:image/png;base64,${props.coverBase64}`,
-            style: { width: "120px", borderRadius: "4px", flexShrink: 0, objectFit: "cover" as const },
-          }),
-          createElement("div", { key: "details", style: { flex: 1 } }, ...rows),
-        ),
+        <div key="game-info-row" style={{ display: "flex", gap: "16px", alignItems: "flex-start" }}>
+          <img
+            alt=""
+            key="cover"
+            src={`data:image/png;base64,${props.coverBase64}`}
+            style={{ width: "120px", borderRadius: "4px", flexShrink: 0, objectFit: "cover" as const }}
+          />
+          <div key="details" style={{ flex: 1 }}>
+            {rows}
+          </div>
+        </div>,
       )
     : section("game-info", null, ...rows);
 
-  return createElement("div", null, gameInfoSection, romFileSection(props.installed, props.installedRom));
+  return (
+    <div>
+      {gameInfoSection}
+      {romFileSection(props.installed, props.installedRom)}
+    </div>
+  );
 };

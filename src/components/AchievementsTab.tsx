@@ -8,11 +8,11 @@
  * Stays mounted while another tab is showing (rendering nothing) so a loaded
  * list survives a tab switch instead of re-fetching on every visit.
  *
- * Uses createElement (no JSX) to match the panel. CSS classes prefixed with
- * `romm-cheevo-` are injected separately by styleInjector.
+ * CSS classes prefixed with `romm-cheevo-` are injected separately by
+ * styleInjector.
  */
 
-import { useState, useEffect, useRef, FC, createElement } from "react";
+import { useState, useEffect, useRef, FC, type ReactElement } from "react";
 import { DialogButton } from "@decky/ui";
 import { getAchievements, getAchievementProgress, debugLog } from "../api/backend";
 import type { Achievement, AchievementProgress, EarnedAchievement } from "../types";
@@ -67,65 +67,64 @@ function renderCheevoRow(a: Achievement, earnedMap: Map<string, EarnedAchievemen
   const imgClasses = ["romm-cheevo-badge-img", isHardcore ? "romm-cheevo-badge-img-hc" : ""].filter(Boolean).join(" ");
 
   // Date column for earned achievements — show both normal and HC dates
-  const dateChildren: ReturnType<typeof createElement>[] = [];
+  const dateChildren: ReactElement[] = [];
   if (earnedData?.date) {
     dateChildren.push(
-      createElement("span", { key: "date", className: "romm-cheevo-date" }, formatCheevoDate(earnedData.date)),
+      <span key="date" className="romm-cheevo-date">
+        {formatCheevoDate(earnedData.date)}
+      </span>,
     );
   }
   if (isHardcore && earnedData.date_hardcore) {
     dateChildren.push(
-      createElement(
-        "span",
-        {
-          key: "hc-row",
-          style: { display: "inline-flex", alignItems: "center", gap: "4px" },
-        },
-        createElement("span", { className: "romm-cheevo-hc-badge" }, "HC"),
-        createElement("span", { className: "romm-cheevo-date" }, formatCheevoDate(earnedData.date_hardcore)),
-      ),
+      <span key="hc-row" style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+        <span className="romm-cheevo-hc-badge">HC</span>
+        <span className="romm-cheevo-date">{formatCheevoDate(earnedData.date_hardcore)}</span>
+      </span>,
     );
   }
 
   // Badge image — wrapped with sparkle container for HC achievements
-  const imgEl = createElement("img", {
-    className: imgClasses,
-    src: isEarned ? a.badge_url : a.badge_url_lock || a.badge_url,
-    style: isEarned ? {} : { filter: "grayscale(0.7) opacity(0.6)" },
-  });
+  const imgEl = (
+    <img
+      alt=""
+      className={imgClasses}
+      src={isEarned ? a.badge_url : a.badge_url_lock || a.badge_url}
+      style={isEarned ? {} : { filter: "grayscale(0.7) opacity(0.6)" }}
+    />
+  );
 
-  const badgeElement = isHardcore
-    ? createElement(
-        "div",
-        { className: "romm-cheevo-img-wrap" },
-        imgEl,
-        createElement(
-          "span",
-          { className: "romm-cheevo-img-sparkles" },
-          ...makeHcSparkles(a.ra_id).map((sp) =>
-            createElement("span", {
-              key: `hc-sp-${sp.top}-${sp.left}`,
-              className: "romm-cheevo-img-sparkle-dot",
-              style: {
-                "--romm-sparkle-top": sp.top,
-                "--romm-sparkle-left": sp.left,
-                "--romm-sparkle-delay": `${sp.delay.toFixed(1)}s`,
-                "--romm-sparkle-dur": `${sp.dur.toFixed(1)}s`,
-              } satisfies CSSPropertiesWithVars,
-            }),
-          ),
-        ),
-      )
-    : imgEl;
+  const badgeElement = isHardcore ? (
+    <div className="romm-cheevo-img-wrap">
+      {imgEl}
+      <span className="romm-cheevo-img-sparkles">
+        {makeHcSparkles(a.ra_id).map((sp) => {
+          // Hoisted and annotated, not inlined into `style={{...}}`: an inline
+          // literal is excess-property checked against React's own
+          // CSSProperties, which rejects the `--*` keys outright.
+          const sparkleStyle: CSSPropertiesWithVars = {
+            "--romm-sparkle-top": sp.top,
+            "--romm-sparkle-left": sp.left,
+            "--romm-sparkle-delay": `${sp.delay.toFixed(1)}s`,
+            "--romm-sparkle-dur": `${sp.dur.toFixed(1)}s`,
+          };
+          return (
+            <span key={`hc-sp-${sp.top}-${sp.left}`} className="romm-cheevo-img-sparkle-dot" style={sparkleStyle} />
+          );
+        })}
+      </span>
+    </div>
+  ) : (
+    imgEl
+  );
 
-  return createElement(
-    DialogButton,
-    {
-      key: `cheevo-${a.ra_id}`,
-      className: rowClasses,
-      noFocusRing: false,
-      onFocus: scrollFocusedToCenter,
-      style: {
+  return (
+    <DialogButton
+      key={`cheevo-${a.ra_id}`}
+      className={rowClasses}
+      noFocusRing={false}
+      onFocus={scrollFocusedToCenter}
+      style={{
         background: "transparent",
         border: "none",
         padding: 0,
@@ -134,35 +133,23 @@ function renderCheevoRow(a: Achievement, earnedMap: Map<string, EarnedAchievemen
         display: "flex",
         alignItems: "center",
         gap: "12px",
-      },
-    },
-    badgeElement,
-    createElement(
-      "div",
-      { className: "romm-cheevo-details" },
-      createElement("div", { className: "romm-cheevo-title" }, a.title),
-      createElement("div", { className: "romm-cheevo-desc" }, a.description),
-      a.num_awarded > 0
-        ? createElement("div", { className: "romm-cheevo-rarity" }, `${a.num_awarded} players earned this`)
-        : null,
-    ),
-    dateChildren.length > 0 ? createElement("div", { className: "romm-cheevo-dates" }, ...dateChildren) : null,
-    createElement(
-      "div",
-      {
-        className: `romm-cheevo-points ${isEarned ? "" : "romm-cheevo-points-locked"}`,
-      },
-      `${a.points} pts`,
-    ),
+      }}
+    >
+      {badgeElement}
+      <div className="romm-cheevo-details">
+        <div className="romm-cheevo-title">{a.title}</div>
+        <div className="romm-cheevo-desc">{a.description}</div>
+        {a.num_awarded > 0 ? <div className="romm-cheevo-rarity">{`${a.num_awarded} players earned this`}</div> : null}
+      </div>
+      {dateChildren.length > 0 ? <div className="romm-cheevo-dates">{dateChildren}</div> : null}
+      <div className={`romm-cheevo-points ${isEarned ? "" : "romm-cheevo-points-locked"}`}>{`${a.points} pts`}</div>
+    </DialogButton>
   );
 }
 
 /** The list body: summary bar, progress bar, then the earned and locked rows —
  *  earned first, each group in display order. */
-function renderCheevoList(
-  achievements: Achievement[],
-  progress: AchievementProgress | null,
-): ReturnType<typeof createElement> {
+function renderCheevoList(achievements: Achievement[], progress: AchievementProgress | null): ReactElement {
   const earned = progress?.earned ?? 0;
   const total = progress?.total ?? achievements.length;
 
@@ -183,51 +170,36 @@ function renderCheevoList(
   const earnedList = sorted.filter((a) => earnedMap.has(a.badge_id));
   const lockedList = sorted.filter((a) => !earnedMap.has(a.badge_id));
 
-  const cheevoChildren: ReturnType<typeof createElement>[] = [];
+  const cheevoChildren: ReactElement[] = [];
 
   // Summary bar
   cheevoChildren.push(
-    createElement(
-      "div",
-      { key: "summary", className: "romm-cheevo-summary" },
-      createElement("span", { className: "romm-cheevo-summary-text" }, `${earned} / ${total} Achievements`),
-      progress?.earned_hardcore
-        ? createElement("span", { className: "romm-cheevo-summary-sub" }, `${progress.earned_hardcore} hardcore`)
-        : null,
-    ),
+    <div key="summary" className="romm-cheevo-summary">
+      <span className="romm-cheevo-summary-text">{`${earned} / ${total} Achievements`}</span>
+      {progress?.earned_hardcore ? (
+        <span className="romm-cheevo-summary-sub">{`${progress.earned_hardcore} hardcore`}</span>
+      ) : null}
+    </div>,
   );
 
   // Progress bar
   const pct = total > 0 ? (earned / total) * 100 : 0;
   cheevoChildren.push(
-    createElement(
-      "div",
-      { key: "progress-bar", className: "romm-cheevo-progress-bar" },
-      createElement("div", {
-        className: "romm-cheevo-progress-fill",
-        style: { width: `${pct}%` },
-      }),
-    ),
+    <div key="progress-bar" className="romm-cheevo-progress-bar">
+      <div className="romm-cheevo-progress-fill" style={{ width: `${pct}%` }} />
+    </div>,
   );
 
   if (earnedList.length > 0) {
     cheevoChildren.push(
-      createElement(
-        "div",
-        { key: "earned-title", className: "romm-cheevo-section-title" },
-        `Earned (${earnedList.length})`,
-      ),
+      <div key="earned-title" className="romm-cheevo-section-title">{`Earned (${earnedList.length})`}</div>,
     );
     earnedList.forEach((a) => cheevoChildren.push(renderCheevoRow(a, earnedMap)));
   }
 
   if (lockedList.length > 0) {
     cheevoChildren.push(
-      createElement(
-        "div",
-        { key: "locked-title", className: "romm-cheevo-section-title" },
-        `Locked (${lockedList.length})`,
-      ),
+      <div key="locked-title" className="romm-cheevo-section-title">{`Locked (${lockedList.length})`}</div>,
     );
     lockedList.forEach((a) => cheevoChildren.push(renderCheevoRow(a, earnedMap)));
   }
@@ -235,7 +207,7 @@ function renderCheevoList(
   // Not wrapped in a section() — that would make the whole list ONE giant
   // focusable element. The individual rows are DialogButtons instead, which is
   // what gives the pane focus-driven scrolling.
-  return createElement("div", { className: "romm-cheevo-list" }, ...cheevoChildren);
+  return <div className="romm-cheevo-list">{cheevoChildren}</div>;
 }
 
 export const AchievementsTab: FC<AchievementsTabProps> = ({ romId, raId, isActive }) => {
@@ -328,17 +300,17 @@ export const AchievementsTab: FC<AchievementsTabProps> = ({ romId, raId, isActiv
     // The load pays the backend retry ladder — surface the shared
     // ConnectingIndicator (with live "(attempt N/M)" progress) instead of
     // frozen "Loading…" text (#1345).
-    return createElement(ConnectingIndicator, { label: "Loading achievements" });
+    return <ConnectingIndicator label="Loading achievements" />;
   }
 
   if (achievements.length === 0) {
     // No cached list to fall back on. When the server is known-offline this is
     // the degraded state for the fast path (no ladder hang); otherwise it's the
     // genuine "this game has none" case (#1345).
-    return createElement(
-      "div",
-      { className: "romm-panel-muted" },
-      isOffline ? "RomM offline — achievements unavailable." : "No achievements found for this game",
+    return (
+      <div className="romm-panel-muted">
+        {isOffline ? "RomM offline — achievements unavailable." : "No achievements found for this game"}
+      </div>
     );
   }
 

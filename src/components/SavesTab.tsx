@@ -10,7 +10,7 @@
  * - New-slot modal opens inline (same as old NewSlotModal in parent).
  */
 
-import { useState, useEffect, useRef, createElement, FC } from "react";
+import { useState, useEffect, useRef, FC, type ReactElement } from "react";
 import { DialogButton, Focusable, showModal } from "@decky/ui";
 import { switchSlot, getVersionList, checkLocalDrift, debugLog, logWarn } from "../api/backend";
 import { getRommConnectionState, onRommConnectionChange, reportServerReachable } from "../utils/connectionState";
@@ -144,77 +144,71 @@ export const SavesTab: FC<SavesTabProps> = ({
   const openCopyModal = useCopyToSlot(romId, availableSlots);
 
   // --- Offline banner ---
-  const offlineBanner = isOffline
-    ? createElement(
-        "div",
-        {
-          key: "offline-banner",
-          style: {
-            padding: "8px",
-            background: "rgba(217, 65, 38, 0.15)",
-            borderRadius: "4px",
-            border: "1px solid rgba(217, 65, 38, 0.4)",
-            marginBottom: "12px",
-            fontSize: "12px",
-            color: "#d94126",
-          },
-        },
-        "RomM is offline — slot switching is disabled until the server is reachable. This prevents save sync conflicts.",
-      )
-    : null;
+  const offlineBanner = isOffline ? (
+    <div
+      key="offline-banner"
+      style={{
+        padding: "8px",
+        background: "rgba(217, 65, 38, 0.15)",
+        borderRadius: "4px",
+        border: "1px solid rgba(217, 65, 38, 0.4)",
+        marginBottom: "12px",
+        fontSize: "12px",
+        color: "#d94126",
+      }}
+    >
+      {"RomM is offline — slot switching is disabled until the server is reachable. This prevents save sync conflicts."}
+    </div>
+  ) : null;
 
   // --- Stranded-version reminder banner (#1298) ---
-  const strandedBanner = strandedVersion
-    ? createElement(
-        "div",
-        {
-          key: "stranded-banner",
-          style: {
-            padding: "8px",
-            background: "rgba(255, 136, 0, 0.15)",
-            borderRadius: "4px",
-            border: "1px solid rgba(255, 136, 0, 0.3)",
-            marginBottom: "12px",
-            fontSize: "12px",
-            color: "#ff8800",
-          },
-        },
-        `Version "${strandedVersion}" has saves that were never uploaded — switch back to sync them.`,
-      )
-    : null;
+  const strandedBanner = strandedVersion ? (
+    <div
+      key="stranded-banner"
+      style={{
+        padding: "8px",
+        background: "rgba(255, 136, 0, 0.15)",
+        borderRadius: "4px",
+        border: "1px solid rgba(255, 136, 0, 0.3)",
+        marginBottom: "12px",
+        fontSize: "12px",
+        color: "#ff8800",
+      }}
+    >
+      {`Version "${strandedVersion}" has saves that were never uploaded — switch back to sync them.`}
+    </div>
+  ) : null;
 
   // --- Legacy mode warning ---
   const legacyWarning =
-    activeSlot === null
-      ? createElement(
-          "div",
-          {
-            key: "legacy-warning",
-            style: {
-              padding: "8px",
-              background: "rgba(255, 136, 0, 0.15)",
-              borderRadius: "4px",
-              border: "1px solid rgba(255, 136, 0, 0.3)",
-              marginBottom: "12px",
-              fontSize: "12px",
-              color: "#ff8800",
-            },
-          },
-          "This game uses legacy mode (no slot). Only one save version per game is supported.",
-        )
-      : null;
+    activeSlot === null ? (
+      <div
+        key="legacy-warning"
+        style={{
+          padding: "8px",
+          background: "rgba(255, 136, 0, 0.15)",
+          borderRadius: "4px",
+          border: "1px solid rgba(255, 136, 0, 0.3)",
+          marginBottom: "12px",
+          fontSize: "12px",
+          color: "#ff8800",
+        }}
+      >
+        This game uses legacy mode (no slot). Only one save version per game is supported.
+      </div>
+    ) : null;
 
   // --- Loading state ---
   // A spinner + live retry progress (#1345) instead of bare italic text — the
   // slot fetch pays the backend retry ladder, so surface "Connecting to RomM…
   // (attempt N/M)" while it is in flight.
   if (slotsLoading) {
-    return createElement(
-      Focusable,
-      { noFocusRing: true },
-      offlineBanner,
-      strandedBanner,
-      createElement(ConnectingIndicator, { key: "connecting" }),
+    return (
+      <Focusable noFocusRing={true}>
+        {offlineBanner}
+        {strandedBanner}
+        <ConnectingIndicator key="connecting" />
+      </Focusable>
     );
   }
 
@@ -242,8 +236,8 @@ export const SavesTab: FC<SavesTabProps> = ({
   // --- New Slot button handler ---
   const handleNewSlot = () => {
     showModal(
-      createElement(NewSlotModal, {
-        onSubmit: (name: string) => {
+      <NewSlotModal
+        onSubmit={(name: string) => {
           // Switching into the slot-less legacy bucket is retired (#1276): an
           // empty name is not a valid slot target, so ignore it rather than
           // offering legacy mode. Legacy saves stay viewable in their own panel.
@@ -277,8 +271,8 @@ export const SavesTab: FC<SavesTabProps> = ({
               }
             })(),
           );
-        },
-      }),
+        }}
+      />,
     );
   };
 
@@ -292,102 +286,88 @@ export const SavesTab: FC<SavesTabProps> = ({
   // Legacy mode has no slot; an unanswered active slot has none this tab may
   // name (#1747). Either way the locally tracked files are still what the user
   // has, so they are shown — just not filed under a slot.
-  let unslottedFilesSection: ReturnType<typeof createElement> | null = null;
+  let unslottedFilesSection: ReactElement | null = null;
   if (activeSlot === null || !activeSlotKnown) {
     if (saveStatus && saveStatus.files.length > 0) {
-      unslottedFilesSection = createElement(
-        "div",
-        { key: "unslotted-files", style: { marginBottom: "12px" } },
-        ...saveStatus.files.map((f) => {
-          const conflict = conflicts.find((c) => c.filename === f.filename);
-          return renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at);
-        }),
+      unslottedFilesSection = (
+        <div key="unslotted-files" style={{ marginBottom: "12px" }}>
+          {saveStatus.files.map((f) => {
+            const conflict = conflicts.find((c) => c.filename === f.filename);
+            return renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at);
+          })}
+        </div>
       );
     } else {
-      unslottedFilesSection = createElement(
-        "div",
-        {
-          key: "no-files",
-          style: { fontSize: "13px", color: MUTED_COLOR, fontStyle: "italic", marginBottom: "12px" },
-        },
-        "No save files tracked yet",
+      unslottedFilesSection = (
+        <div key="no-files" style={{ fontSize: "13px", color: MUTED_COLOR, fontStyle: "italic", marginBottom: "12px" }}>
+          No save files tracked yet
+        </div>
       );
     }
   }
 
-  return createElement(
-    Focusable,
-    {
-      noFocusRing: true,
-      style: { display: "flex", flexDirection: "column" as const, gap: "0" },
-    },
-    offlineBanner,
-    strandedBanner,
-    legacyWarning,
+  return (
+    <Focusable noFocusRing={true} style={{ display: "flex", flexDirection: "column" as const, gap: "0" }}>
+      {offlineBanner}
+      {strandedBanner}
+      {legacyWarning}
 
-    // Save files that belong to no slot panel — above the panels, if any.
-    unslottedFilesSection,
+      {/* Save files that belong to no slot panel — above the panels, if any. */}
+      {unslottedFilesSection}
 
-    // The last contact's slots, where there are no live panels to show.
-    lastKnownSection,
+      {/* The last contact's slots, where there are no live panels to show. */}
+      {lastKnownSection}
 
-    // Slot panels — skip the "" (legacy) panel when already in legacy mode
-    ...sorted
-      .filter((s) => activeSlot !== null || s.slot !== "")
-      .map((slot) => {
-        const isActive = activeSlot !== null && slot.slot === activeSlot;
-        return createElement(SlotPanel, {
-          key: `panel-${slot.slot}-${versionHistoryKey}`,
-          romId,
-          slot,
-          isActive,
-          defaultExpanded: isActive,
-          saveStatus: isActive ? saveStatus : null,
-          conflicts: isActive ? conflicts : [],
-          isOffline,
-          onSlotSwitched,
-          onVersionRestored: handleVersionRestored,
-          onSlotDeleted: handleSlotDeleted,
-          onCopy: openCopyModal,
-        });
-      }),
+      {/* Slot panels — skip the "" (legacy) panel when already in legacy mode */}
+      {sorted
+        .filter((s) => activeSlot !== null || s.slot !== "")
+        .map((slot) => {
+          const isActive = activeSlot !== null && slot.slot === activeSlot;
+          return (
+            <SlotPanel
+              key={`panel-${slot.slot}-${versionHistoryKey}`}
+              romId={romId}
+              slot={slot}
+              isActive={isActive}
+              defaultExpanded={isActive}
+              saveStatus={isActive ? saveStatus : null}
+              conflicts={isActive ? conflicts : []}
+              isOffline={isOffline}
+              onSlotSwitched={onSlotSwitched}
+              onVersionRestored={handleVersionRestored}
+              onSlotDeleted={handleSlotDeleted}
+              onCopy={openCopyModal}
+            />
+          );
+        })}
 
-    // New Slot button + error feedback
-    createElement(
-      "div",
-      { key: "new-slot-area", style: { marginTop: "10px" } },
-      createElement(
-        DialogButton,
-        // eslint-disable-next-line react-hooks/refs -- react-hooks/refs flags createElement of forwardRef components in ternary/conditional positions; @decky/ui's DialogButton extends RefAttributes via DialogCommonProps. Module-augmentation in src/types/decky-ui-augmentation.d.ts eliminated the `as any` cast but the refs rule fires independently.
-        {
-          key: "new-slot-btn",
-          style: {
+      {/* New Slot button + error feedback */}
+      <div key="new-slot-area" style={{ marginTop: "10px" }}>
+        <DialogButton
+          key="new-slot-btn"
+          style={{
             padding: "6px 12px",
             minWidth: "auto",
             fontSize: "12px",
             width: "auto",
-          },
-          noFocusRing: false,
-          onFocus: scrollFocusedToCenter,
-          onClick: handleNewSlot,
+          }}
+          noFocusRing={false}
+          onFocus={scrollFocusedToCenter}
+          onClick={handleNewSlot}
           // Creating a slot is a server write, so offline it can only end in the
           // failure the banner above already predicts — after the full retry
           // ladder. The sibling actions on this tab (slot switch, copy-to-slot)
           // are disabled the same way.
-          disabled: isOffline,
-        },
-        "+ New Slot",
-      ),
-      newSlotError
-        ? createElement(
-            "div",
-            {
-              key: "new-slot-error",
-              style: { fontSize: "11px", color: "#d94126", marginTop: "4px" },
-            },
-            newSlotError,
-          )
-        : null,
-    ),
+          disabled={isOffline}
+        >
+          + New Slot
+        </DialogButton>
+        {newSlotError ? (
+          <div key="new-slot-error" style={{ fontSize: "11px", color: "#d94126", marginTop: "4px" }}>
+            {newSlotError}
+          </div>
+        ) : null}
+      </div>
+    </Focusable>
   );
 };

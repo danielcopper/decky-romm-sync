@@ -13,9 +13,8 @@ import type { SaveStatus, SaveSlotSummary, SaveFileStatus, SwitchSlotResponse, L
 import type { SlotPanel } from "./saves/SlotPanel";
 import { installDomEventListenerSpy, uninstallDomEventListenerSpy } from "../test-utils/dom-event-listener-spy";
 
-// showModal from the global @decky/ui mock receives a React element created via
-// createElement(NewSlotModal, props). Tests pull `props.onSubmit` off the
-// captured element to drive the new-slot flow.
+// showModal from the global @decky/ui mock receives the <NewSlotModal> element.
+// Tests pull `props.onSubmit` off the captured element to drive the new-slot flow.
 interface NewSlotModalProps {
   onSubmit?: (name: string) => void | Promise<void>;
 }
@@ -50,10 +49,11 @@ vi.mock("./saves/SlotPanel", () => ({
 }));
 
 // Stub renderSaveFileRow — keeps the legacy-files branch trivial to assert
-// without dragging in the full DialogButton render tree.
+// without dragging in the full DialogButton render tree. Keyed by filename like
+// the real one: these are rendered as a list, and an unkeyed stub warns.
 vi.mock("./saves/SaveFileRow", () => ({
   renderSaveFileRow: (f: SaveFileStatus) =>
-    createElement("div", { "data-testid": `save-file-row-${f.filename}` }, f.filename),
+    createElement("div", { key: f.filename, "data-testid": `save-file-row-${f.filename}` }, f.filename),
 }));
 
 function makeSlot(overrides: Partial<SaveSlotSummary> = {}): SaveSlotSummary {

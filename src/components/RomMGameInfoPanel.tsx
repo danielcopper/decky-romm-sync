@@ -12,11 +12,10 @@
  * below it are not all passive: the SAVES pane switches slots and rolls back
  * versions.
  *
- * Uses createElement throughout (no JSX) to match the RomMPlaySection pattern.
  * CSS classes prefixed with `romm-panel-` are injected separately by styleInjector.
  */
 
-import { useState, useEffect, useRef, FC, createElement } from "react";
+import { useState, useEffect, useRef, FC } from "react";
 import { Focusable } from "@decky/ui";
 import { refreshMigrationState, logError } from "../api/backend";
 import { AchievementsTab } from "./AchievementsTab";
@@ -135,35 +134,39 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
 
   // --- Version mismatch — replace entire panel with polished error card ---
   if (versionError) {
-    return createElement("div", { "data-romm": "true" }, createElement(VersionErrorCard, { message: versionError }));
+    return (
+      <div data-romm="true">
+        <VersionErrorCard message={versionError} />
+      </div>
+    );
   }
 
   // --- Corrupt-settings reset — surface the reason instead of a bare "offline" ---
   if (settingsReset.pending) {
-    return createElement(
-      "div",
-      { "data-romm": "true" },
-      createElement(SettingsResetCard, { backedUpTo: settingsReset.backedUpTo, compact: true }),
+    return (
+      <div data-romm="true">
+        <SettingsResetCard backedUpTo={settingsReset.backedUpTo} compact={true} />
+      </div>
     );
   }
 
   // --- Pending RetroDECK migration — block the page until resolved ---
   if (migration.pending) {
-    return createElement("div", { "data-romm": "true" }, createElement(MigrationBlockedCard, {}));
+    return (
+      <div data-romm="true">
+        <MigrationBlockedCard />
+      </div>
+    );
   }
 
   // --- Loading state ---
   // Use minHeight so Steam's scroll container allocates enough space
   // before async data loads and expands the panel.
   if (state.loading) {
-    return createElement(
-      "div",
-      {
-        "data-romm": "true",
-        className: "romm-panel-container",
-        style: { minHeight: "500px" },
-      },
-      createElement("div", { className: "romm-panel-loading" }, "Loading..."),
+    return (
+      <div data-romm="true" className="romm-panel-container" style={{ minHeight: "500px" }}>
+        <div className="romm-panel-loading">Loading...</div>
+      </div>
     );
   }
 
@@ -174,43 +177,37 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
 
   const romId = state.romId;
 
-  return createElement(
-    "div",
-    { "data-romm": "true" },
-    saveSortPending ? createElement(SaveSortWarning, { key: "save-sort-warning" }) : null,
-    createElement(PanelTabBar, {
-      activeTab: state.activeTab,
-      hasAchievements: !!state.raId,
-      hasSaves: state.saveSyncEnabled,
-      hasBios: !!state.biosStatus,
-      onSelect: (tabId) => setState((prev) => ({ ...prev, activeTab: tabId })),
-    }),
-    createElement(
-      Focusable,
-      {
-        noFocusRing: true,
-        className: "romm-tab-content",
-        style: { paddingBottom: "48px" },
-      },
-      buildTabContent({ appId, binding: bindRomInState(romId, setState), state }),
-      // Mounted for every ROM and rendering nothing until their tab is active.
-      // For achievements that is load-bearing: the list is fetched by the tab
-      // itself, and unmounting it on a tab switch would re-fetch (and re-spinner)
-      // on every visit. Its key is the ROM, so a version switch remounts it —
-      // which is how its per-rom state and load-once gate re-key. BiosTab needs
-      // no key: it renders from props and holds nothing of its own.
-      createElement(AchievementsTab, {
-        key: `achievements-${romId}`,
-        romId,
-        raId: state.raId,
-        isActive: state.activeTab === "achievements",
-      }),
-      createElement(BiosTab, {
-        biosStatus: state.biosStatus,
-        biosLevel: state.biosLevel,
-        coreInfo: state.coreInfo,
-        isActive: state.activeTab === "bios",
-      }),
-    ),
+  return (
+    <div data-romm="true">
+      {saveSortPending ? <SaveSortWarning key="save-sort-warning" /> : null}
+      <PanelTabBar
+        activeTab={state.activeTab}
+        hasAchievements={!!state.raId}
+        hasSaves={state.saveSyncEnabled}
+        hasBios={!!state.biosStatus}
+        onSelect={(tabId) => setState((prev) => ({ ...prev, activeTab: tabId }))}
+      />
+      <Focusable noFocusRing={true} className="romm-tab-content" style={{ paddingBottom: "48px" }}>
+        {buildTabContent({ appId, binding: bindRomInState(romId, setState), state })}
+        {/* Mounted for every ROM and rendering nothing until their tab is active.
+            For achievements that is load-bearing: the list is fetched by the tab
+            itself, and unmounting it on a tab switch would re-fetch (and re-spinner)
+            on every visit. Its key is the ROM, so a version switch remounts it —
+            which is how its per-rom state and load-once gate re-key. BiosTab needs
+            no key: it renders from props and holds nothing of its own. */}
+        <AchievementsTab
+          key={`achievements-${romId}`}
+          romId={romId}
+          raId={state.raId}
+          isActive={state.activeTab === "achievements"}
+        />
+        <BiosTab
+          biosStatus={state.biosStatus}
+          biosLevel={state.biosLevel}
+          coreInfo={state.coreInfo}
+          isActive={state.activeTab === "bios"}
+        />
+      </Focusable>
+    </div>
   );
 };
