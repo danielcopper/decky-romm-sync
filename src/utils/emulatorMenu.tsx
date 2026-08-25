@@ -46,6 +46,19 @@ export interface EmulatorMenuConfig {
   onPick: (label: string) => void;
 }
 
+/**
+ * The entry text for a bakeable emulator: its label plus the markers saying what
+ * it is. "(default)" is the es_systems default, "(system)" the per-platform
+ * override, ✓ the one actually in effect — one entry can carry all three, which
+ * is why they are suffixes rather than a single state.
+ */
+function emulatorEntryLabel(e: EmulatorOption, isActive: boolean, isPlatformCore: boolean): string {
+  const defaultMark = e.is_default ? " (default)" : "";
+  const systemMark = isPlatformCore ? " (system)" : "";
+  const activeMark = isActive ? " ✓" : "";
+  return `${e.label}${defaultMark}${systemMark}${activeMark}`;
+}
+
 /** Build the `<Menu>` element for `showContextMenu`. */
 export function buildEmulatorMenu(config: EmulatorMenuConfig): ReactNode {
   const { emulators, emulatorDataAvailable, activeLabel, platformCoreLabel, followSystem, onPick } = config;
@@ -100,7 +113,7 @@ export function buildEmulatorMenu(config: EmulatorMenuConfig): ReactNode {
     const isPlatformCore = platformCoreLabel !== null && e.label === platformCoreLabel;
     children.push(
       <MenuItem key={key} onClick={() => onPick(e.label)}>
-        {`${e.label}${e.is_default ? " (default)" : ""}${isPlatformCore ? " (system)" : ""}${isActive ? " ✓" : ""}`}
+        {emulatorEntryLabel(e, isActive, isPlatformCore)}
       </MenuItem>,
     );
   }
