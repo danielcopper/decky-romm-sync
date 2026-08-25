@@ -45,7 +45,7 @@ import {
   onSyncProgressChange,
   withinUnitFraction,
 } from "../utils/syncProgress";
-import { getDownloadState } from "../utils/downloadStore";
+import { useDownloads } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
 import { getSettingsResetState, onSettingsResetChange } from "../utils/settingsResetStore";
 import { getPlaytimeScopeState, onPlaytimeScopeChange, fetchPlaytimeScopeState } from "../utils/playtimeScopeStore";
@@ -72,7 +72,6 @@ import type {
   SyncPreview,
   SyncPreviewSummary,
   SessionBudgetStatus,
-  DownloadItem,
   MigrationStatus,
   Page,
 } from "../types";
@@ -433,9 +432,8 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [settingsReset, setSettingsReset] = useState(getSettingsResetState());
   const [playtimeScope, setPlaytimeScope] = useState(getPlaytimeScopeState());
   const [saveSortMigration, setSaveSortMigration] = useState(getSaveSortMigrationState());
-  const [downloads, setDownloads] = useState<DownloadItem[]>([]);
+  const downloads = useDownloads();
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const downloadPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const showTransientStatus = (text: string, tone: StatusTone = "neutral") => {
     if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
@@ -599,11 +597,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       }
     });
 
-    // Poll download state for inline display
-    downloadPollRef.current = setInterval(() => {
-      setDownloads([...getDownloadState()]);
-    }, 1000);
-
     const unsubMigration = onMigrationChange(() => setMigration(getMigrationState()));
     const unsubSettingsReset = onSettingsResetChange(() => setSettingsReset(getSettingsResetState()));
     const unsubPlaytimeScope = onPlaytimeScopeChange(() => setPlaytimeScope(getPlaytimeScopeState()));
@@ -615,7 +608,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       unsubPlaytimeScope();
       unsubSaveSort();
       if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-      if (downloadPollRef.current) clearInterval(downloadPollRef.current);
     };
   }, []);
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, FC, Fragment } from "react";
+import { useEffect, FC, Fragment } from "react";
 import { PanelSection, PanelSectionRow, ButtonItem, Field } from "@decky/ui";
 import { showToast } from "../utils/toast";
 import {
@@ -8,7 +8,7 @@ import {
   resumeDownload,
   clearCompletedDownloads,
 } from "../api/backend";
-import { getDownloadState, setDownloads, removeTerminalDownloads } from "../utils/downloadStore";
+import { setDownloads, removeTerminalDownloads, useDownloads } from "../utils/downloadStore";
 import { formatBytes } from "../utils/formatters";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
@@ -29,41 +29,18 @@ function formatFinishedDescription(item: DownloadItem): string {
 }
 
 export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
-  const [downloads, setLocalDownloads] = useState<DownloadItem[]>([]); // NOSONAR(typescript:S6754) — setter intentionally renamed (local wrapper around global download state).
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const downloads = useDownloads();
 
   useEffect(() => {
-    // The interval machinery is scoped to the effect: nothing outside it drives
-    // the poll, and keeping these helpers here means the mount-only effect has no
-    // reactive dependencies to track.
-    const stopPolling = () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-
-    const pollTick = () => {
-      setLocalDownloads([...getDownloadState()]);
-    };
-
-    const startPolling = () => {
-      stopPolling();
-      pollRef.current = setInterval(pollTick, 500);
-    };
-
-    // Seed from backend on mount, then poll the store
-    getDownloadQueue()
-      .then((result) => {
+    // Seed the store from the backend queue on mount; the subscription renders
+    // whatever lands there. A rejected fetch needs no handling of its own — the
+    // store keeps whatever the event listeners have already put in it, and that
+    // is exactly what stays on screen.
+    detach(
+      getDownloadQueue().then((result) => {
         setDownloads(result.downloads);
-        setLocalDownloads([...result.downloads]);
-      })
-      .catch(() => {
-        // Fall back to whatever is in the store already
-        setLocalDownloads([...getDownloadState()]);
-      });
-    startPolling();
-    return () => stopPolling();
+      }),
+    );
   }, []);
 
   const handleCancel = async (romId: number) => {
@@ -106,9 +83,8 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
       return;
     }
     // The backend evicted the terminal entries; drop them from the store too so
-    // the poll and any remount reflect the cleared queue immediately (#149).
+    // this view and any remount reflect the cleared queue immediately (#149).
     removeTerminalDownloads();
-    setLocalDownloads([...getDownloadState()]);
   };
 
   // Paused and extracting downloads stay in the active section — they're not

@@ -817,14 +817,11 @@ describe("MainPage", () => {
       };
       setDownloads([item]);
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
-      // mount useEffect resolves, then advance the 1000ms downloadPollRef so
-      // local `downloads` state populates from the store.
+      // The store is seeded before render, so the subscription has it from the
+      // first pass — only the mount useEffect's microtasks need flushing.
       await act(async () => {
         await Promise.resolve();
         await Promise.resolve();
-      });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1100);
       });
       return container;
     }
@@ -4176,10 +4173,6 @@ describe("MainPage", () => {
           await Promise.resolve();
           await Promise.resolve();
         });
-        // downloadPollRef ticks at 1000ms — advance one tick to populate state.
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(1100);
-        });
         fireEvent.click(buttonByExactText(container, "View All")!);
         expect(onNavigate).toHaveBeenCalledWith("downloads");
       } finally {
@@ -4192,9 +4185,9 @@ describe("MainPage", () => {
   // M. Downloads section render
   // ===========================================================================
   describe("downloads section", () => {
-    // The downloads section local state is populated by downloadPollRef
-    // (1000ms setInterval reading getDownloadState()). Use fake timers +
-    // advance one tick so the store contents propagate into render.
+    // The downloads section reads the store through useDownloads(), so seeding
+    // the store before render is enough. Fake timers stay for MainPage's other
+    // timed effects.
     beforeEach(() => {
       vi.useFakeTimers({
         toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"],
@@ -4205,20 +4198,17 @@ describe("MainPage", () => {
       vi.useRealTimers();
     });
 
-    async function renderAndTick(): Promise<HTMLElement> {
+    async function renderSection(): Promise<HTMLElement> {
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await act(async () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1100);
-      });
       return container;
     }
 
     it("hidden when no downloads in the store", async () => {
-      const container = await renderAndTick();
+      const container = await renderSection();
       // The downloads block is heading-less; its "View All" button is the
       // presence anchor.
       expect(buttonByExactText(container, "View All")).toBeNull();
@@ -4238,7 +4228,7 @@ describe("MainPage", () => {
           resumable: false,
         },
       ]);
-      const container = await renderAndTick();
+      const container = await renderSection();
       expect(buttonByExactText(container, "View All")).not.toBeNull();
       // The rom name lands in the full-width caption (not clipped in a Field
       // label column) — see the #751 ProgressBarWithInfo fix.
@@ -4281,7 +4271,7 @@ describe("MainPage", () => {
           resumable: false,
         },
       ]);
-      const container = await renderAndTick();
+      const container = await renderSection();
       expect(container.textContent).toContain("+1 more downloading");
     });
 
@@ -4310,7 +4300,7 @@ describe("MainPage", () => {
           resumable: false,
         },
       ]);
-      const container = await renderAndTick();
+      const container = await renderSection();
       // Self-describing label — the heading-less downloads block gives the row
       // no context of its own.
       expect(container.textContent).toContain("2 downloads completed");
@@ -4332,7 +4322,7 @@ describe("MainPage", () => {
           resumable: false,
         },
       ]);
-      const container = await renderAndTick();
+      const container = await renderSection();
       const progress = container.querySelector('[data-testid="progress-progress"]');
       expect(progress?.textContent).toBe("25");
       const indet = container.querySelector('[data-testid="progress-indeterminate"]');
@@ -4355,7 +4345,7 @@ describe("MainPage", () => {
           resumable: false,
         },
       ]);
-      const container = await renderAndTick();
+      const container = await renderSection();
       const indet = container.querySelector('[data-testid="progress-indeterminate"]');
       expect(indet?.textContent).toBe("true");
       expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("P");
@@ -4364,32 +4354,9 @@ describe("MainPage", () => {
   });
 
   // ===========================================================================
-  // N. Polling cleanup — setInterval / clearInterval spy pattern
+  // N. Subscription cleanup
   // ===========================================================================
-  describe("polling cleanup", () => {
-    it("downloadPollRef setInterval is cleared on unmount", async () => {
-      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
-      const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
-
-      const { unmount } = render(<MainPage onNavigate={vi.fn()} />);
-      await flushAsync();
-
-      // Capture the 1000ms (downloadPollRef) interval id.
-      const downloadIds = setIntervalSpy.mock.results
-        .filter((_, i) => setIntervalSpy.mock.calls[i]![1] === 1000)
-        .map((r) => r.value as ReturnType<typeof setInterval>);
-      const expectedId = downloadIds[downloadIds.length - 1];
-      expect(expectedId).toBeDefined();
-
-      const callsBeforeUnmount = clearIntervalSpy.mock.calls.length;
-      unmount();
-      expect(clearIntervalSpy.mock.calls.length).toBeGreaterThan(callsBeforeUnmount);
-      expect(clearIntervalSpy).toHaveBeenCalledWith(expectedId);
-
-      setIntervalSpy.mockRestore();
-      clearIntervalSpy.mockRestore();
-    });
-
+  describe("subscription cleanup", () => {
     it("onSyncProgressChange subscription is removed on unmount", async () => {
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,

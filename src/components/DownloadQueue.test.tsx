@@ -1,9 +1,5 @@
 // CATCH-REJECTION ASSERTION RULE:
-// DownloadQueue has 3 catch sites:
-//   - useEffect mount: getDownloadQueue().catch → falls back to
-//     setLocalDownloads([...getDownloadState()]). Observable side effect:
-//     pre-seeded store items render. Asserted in "mount: rejection falls back
-//     to store".
+// DownloadQueue has 2 catch sites:
 //   - handleCancel `try/catch`. Both the failure RESULT (success: false) and a
 //     rejection now surface a toast — a cancel is never a silent no-op (#149
 //     downloads-round). Asserted in "a failing cancel result surfaces a toast"
@@ -13,22 +9,29 @@
 //     removeTerminalDownloads(), so the finished rows stay visible and the
 //     store is untouched. Asserted in "a failed clear leaves the finished
 //     rows in place".
+// The mount fetch's rejection is handed to detach(): the store already holds
+// whatever the event listeners put there, and that is what stays on screen —
+// asserted in "a rejected mount fetch leaves the store's entries on screen".
 //
 // MUTATION CHECKS (by inspection):
-//   1. If clearInterval(pollRef.current) is removed from stopPolling, the
-//      "interval is cleared on unmount" test fails — clearIntervalSpy would
-//      not be called with the captured pollRef id after unmount.
-//   2. If removeTerminalDownloads() is removed from handleClearCompleted, the
+//   1. If removeTerminalDownloads() is removed from handleClearCompleted, the
 //      "cleared downloads do not reappear on remount" test fails — the store
-//      keeps the terminal entries, so the poll re-shows them.
+//      keeps the terminal entries, so a remount re-shows them.
+//   2. If a store mutator notifies (or installs a new array) when it changed
+//      nothing, "a store mutation that changes nothing does not re-render"
+//      fails on the render count.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { toaster } from "@decky/api";
 import { DownloadQueue } from "./DownloadQueue";
 import * as backend from "../api/backend";
-import { setDownloads, getDownloadState, removeDownload } from "../utils/downloadStore";
+import { setDownloads, getDownloadState, removeDownload, removeTerminalDownloads } from "../utils/downloadStore";
 import type { DownloadItem } from "../types";
+
+// Counts every DownloadQueue render: its two PanelSections are re-created on
+// each one, so the counter moves with the component, not with the store.
+const renderCounter = vi.hoisted(() => ({ count: 0 }));
 
 // Local @decky/ui mock adds ProgressBar (not in the global stub) and exposes
 // per-prop testids so we can assert progress bar wiring directly. The active
@@ -40,7 +43,10 @@ vi.mock("@decky/ui", async () => {
   const { createElement: ce } = await import("react");
   const passthrough = (tag: string) => (p: AnyProps) => ce(tag, p, p.children as never);
   return {
-    PanelSection: (p: AnyProps & { title?: unknown }) => ce("section", { title: p.title }, p.children as never),
+    PanelSection: (p: AnyProps & { title?: unknown }) => {
+      renderCounter.count += 1;
+      return ce("section", { title: p.title }, p.children as never);
+    },
     PanelSectionRow: passthrough("div"),
     ButtonItem: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
       ce("button", { onClick, disabled }, children as never),
@@ -104,9 +110,9 @@ async function flushMount(): Promise<void> {
 
 describe("DownloadQueue", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
     // Reset shared module-level store between tests.
     setDownloads([]);
+    renderCounter.count = 0;
     // Default mount fetch resolves to an empty queue; tests override per case.
     vi.mocked(backend.getDownloadQueue).mockResolvedValue({ downloads: [] });
     vi.mocked(backend.cancelDownload).mockResolvedValue({ success: true, message: "" });
@@ -116,16 +122,11 @@ describe("DownloadQueue", () => {
     vi.mocked(toaster.toast).mockClear();
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    setDownloads([]);
-  });
-
   // ---------------------------------------------------------------------------
   // Mount-time fetch (useEffect)
   // ---------------------------------------------------------------------------
   describe("mount fetch", () => {
-    it("seeds the store + local state from getDownloadQueue() on mount", async () => {
+    it("seeds the store from getDownloadQueue() on mount and renders it", async () => {
       const item = makeItem({ rom_id: 7, rom_name: "Item7" });
       vi.mocked(backend.getDownloadQueue).mockResolvedValue({
         downloads: [item],
@@ -136,14 +137,14 @@ describe("DownloadQueue", () => {
 
       // Store was seeded — verifies setDownloads(result.downloads) ran.
       expect(getDownloadState()).toEqual([item]);
-      // Local state rendered — caption present for the active item.
+      // The subscription rendered it — caption present for the active item.
       const caption = container.querySelector('[data-testid="dl-caption"]');
       expect(caption?.textContent).toBe("Item7 (Genesis)");
     });
 
-    it("rejection falls back to current getDownloadState() store contents", async () => {
-      // Pre-seed the store; the mount fetch will reject and the catch branch
-      // should rebuild local state from this.
+    it("a rejected mount fetch leaves the store's entries on screen", async () => {
+      // The fetch is fire-and-forget: on a rejection nothing writes the store,
+      // so what the event listeners already put there stays rendered.
       const fallback = makeItem({ rom_id: 99, rom_name: "Fallback" });
       setDownloads([fallback]);
       vi.mocked(backend.getDownloadQueue).mockRejectedValue(new Error("net"));
@@ -153,7 +154,7 @@ describe("DownloadQueue", () => {
 
       const caption = container.querySelector('[data-testid="dl-caption"]');
       expect(caption?.textContent).toBe("Fallback (Genesis)");
-      // Store unchanged by the catch branch.
+      // Store untouched by the failed fetch.
       expect(getDownloadState()).toEqual([fallback]);
     });
   });
@@ -186,61 +187,48 @@ describe("DownloadQueue", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Polling (500ms setInterval)
+  // Store subscription (#1181 — replaced the 500ms poll)
   // ---------------------------------------------------------------------------
-  describe("polling", () => {
-    it("each 500ms tick re-reads getDownloadState() and updates local state", async () => {
+  describe("store subscription", () => {
+    it("a store write from outside the component renders on the spot", async () => {
       const { container } = render(<DownloadQueue onBack={() => {}} />);
       await flushMount();
       // Empty queue at mount.
       expect(container.textContent).toContain("No downloads");
 
-      // Push a new item to the store from outside the component, then tick.
-      const incoming = makeItem({ rom_id: 5, rom_name: "Ticked" });
-      setDownloads([incoming]);
-
+      // Push a new item to the store from outside the component — no timer.
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(500);
+        setDownloads([makeItem({ rom_id: 5, rom_name: "Notified" })]);
       });
 
       const caption = container.querySelector('[data-testid="dl-caption"]');
-      expect(caption?.textContent).toBe("Ticked (Genesis)");
+      expect(caption?.textContent).toBe("Notified (Genesis)");
     });
 
-    it("interval is cleared on unmount — clearInterval is invoked with the pollRef id", async () => {
-      // Spy on setInterval to capture the timer id assigned to pollRef, and
-      // on clearInterval to assert stopPolling runs it with that exact id.
-      // The prior `not.toContain("AfterUnmount")` assertion was vacuous:
-      // setLocalDownloads no-ops on unmounted components and the container
-      // is detached, so it passed whether or not clearInterval ran. A
-      // mutation that drops `clearInterval(pollRef.current)` from stopPolling
-      // now fails — clearIntervalSpy is never called with the captured id.
-      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
-      const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
-
-      const { unmount } = render(<DownloadQueue onBack={() => {}} />);
+    it("a store mutation that changes nothing does not re-render (#1181)", async () => {
+      vi.mocked(backend.getDownloadQueue).mockResolvedValue({
+        downloads: [makeItem({ rom_id: 5, rom_name: "Idle" })],
+      });
+      const { container } = render(<DownloadQueue onBack={() => {}} />);
       await flushMount();
+      const settled = renderCounter.count;
 
-      // startPolling calls setInterval(pollTick, 500). Pick out that id.
-      const pollIntervalIds = setIntervalSpy.mock.results
-        .filter((_, i) => setIntervalSpy.mock.calls[i]![1] === 500)
-        .map((r) => r.value as ReturnType<typeof setInterval>);
-      const expectedId = pollIntervalIds[pollIntervalIds.length - 1];
-      expect(expectedId).toBeDefined();
+      // Neither call finds anything to do: rom 999 is not queued and the one
+      // entry is active. The old 500ms poll spread a fresh array regardless and
+      // re-rendered the list on every tick, which is the churn #1181 reports.
+      await act(async () => {
+        removeDownload(999);
+        removeTerminalDownloads();
+      });
+      expect(renderCounter.count).toBe(settled);
+      expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Idle (Genesis)");
 
-      // startPolling's leading stopPolling() runs before pollRef is set, so
-      // its clearInterval calls do nothing — capture the baseline regardless.
-      const callsBeforeUnmount = clearIntervalSpy.mock.calls.length;
-
-      unmount();
-
-      // After unmount, clearInterval must have been called with the id we
-      // captured from setInterval.
-      expect(clearIntervalSpy.mock.calls.length).toBeGreaterThan(callsBeforeUnmount);
-      expect(clearIntervalSpy).toHaveBeenCalledWith(expectedId);
-
-      setIntervalSpy.mockRestore();
-      clearIntervalSpy.mockRestore();
+      // A real change still re-renders — the guard is not simply mute.
+      await act(async () => {
+        removeDownload(5);
+      });
+      expect(renderCounter.count).toBeGreaterThan(settled);
+      expect(container.textContent).toContain("No downloads");
     });
   });
 
@@ -282,9 +270,8 @@ describe("DownloadQueue", () => {
       expect(container.textContent).toContain("No downloads");
 
       // Now the same rom_id restarts: store contains it with status="downloading".
-      setDownloads([makeItem({ rom_id: 42, rom_name: "Restart" })]);
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(500);
+        setDownloads([makeItem({ rom_id: 42, rom_name: "Restart" })]);
       });
 
       // The re-entered download renders again — nothing keeps it hidden.
@@ -313,9 +300,8 @@ describe("DownloadQueue", () => {
       });
       expect(container.textContent).toContain("No downloads");
 
-      setDownloads([makeItem({ rom_id: 13, rom_name: "Queued", status: "queued" })]);
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(500);
+        setDownloads([makeItem({ rom_id: 13, rom_name: "Queued", status: "queued" })]);
       });
       expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Queued (Genesis)");
     });
@@ -383,10 +369,10 @@ describe("DownloadQueue", () => {
       expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Cancellable (Genesis)");
     });
 
-    it("a paused download cancelled + removed from the store disappears on the next poll (#149 downloads-round)", async () => {
+    it("a paused download cancelled + removed from the store disappears at once (#149 downloads-round)", async () => {
       // The row drops via the backend's terminal cancelled frame → the index.tsx
       // store listener's removeDownload (stood in for here) → DownloadQueue's
-      // poll. No client-side 'cancelled' row lingers.
+      // subscription. No client-side 'cancelled' row lingers.
       const paused = makeItem({ rom_id: 42, rom_name: "Paused", status: "paused", resumable: true });
       vi.mocked(backend.getDownloadQueue).mockResolvedValue({ downloads: [paused] });
       const { container } = render(<DownloadQueue onBack={() => {}} />);
@@ -401,9 +387,8 @@ describe("DownloadQueue", () => {
       expect(backend.cancelDownload).toHaveBeenCalledWith(42);
 
       // Backend evicted + emitted the cancelled frame; the store loses the entry.
-      removeDownload(42);
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(500);
+        removeDownload(42);
       });
       expect(container.textContent).toContain("No downloads");
     });
@@ -564,7 +549,7 @@ describe("DownloadQueue", () => {
       expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Active (Genesis)");
       // Clear Completed button is gone (no finished items remain).
       expect(buttonByExactText(container, "Clear Completed")).toBeNull();
-      // The finished entries left the shared store too, so the poll won't re-show
+      // The finished entries left the shared store too, so nothing re-shows
       // them and a remount fetch (from the evicted backend queue) stays clean.
       expect(getDownloadState().map((d) => d.rom_id)).toEqual([1]);
     });
