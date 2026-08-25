@@ -1,9 +1,10 @@
 /**
  * Public surface for the frontend type catalog. This file is a façade —
  * actual type definitions live in domain modules (api, sync, downloads,
- * firmware, saves, achievements, navigation). Consumers may deep-import the domain
- * module directly (`from "../types/saves"`) or use the broad re-export
- * surface here (`from "../types"`).
+ * firmware, saves, achievements, migration, devices, retrodeck, navigation).
+ * Consumers may deep-import the domain module directly
+ * (`from "../types/saves"`) or use the broad re-export surface here
+ * (`from "../types"`).
  */
 
 export * from "./api";
