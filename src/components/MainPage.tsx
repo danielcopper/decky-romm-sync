@@ -29,8 +29,9 @@ import {
   getRetroDeckStatus,
   logError,
 } from "../api/backend";
+import { formatTimeAgo } from "../utils/formatters";
 import { pluralize } from "../utils/pluralize";
-import { estimateApplySeconds, formatDuration } from "../utils/syncEstimate";
+import { formatDuration, previewApplySeconds } from "../utils/syncEstimate";
 import {
   observeApplyProgress,
   displayedEtaSeconds,
@@ -73,14 +74,13 @@ import type {
   SessionBudgetStatus,
   DownloadItem,
   MigrationStatus,
+  Page,
 } from "../types";
 import { detach } from "../utils/detach";
 import { wrapText } from "../utils/textStyles";
 
-type Page = "settings" | "library" | "data" | "downloads" | "system";
-
 interface MainPageProps {
-  onNavigate: (page: Page) => void;
+  onNavigate: (page: Exclude<Page, "main">) => void;
 }
 
 /** The connection-row label for a failed probe, mapped from the backend's
@@ -191,24 +191,6 @@ function formatProgressText(progress: SyncProgress | null): string {
 const FINE_DETAIL_LINE_HEIGHT = 1.4;
 const FINE_DETAIL_CLAMP_LINES = 2;
 
-function formatLastSync(iso: string | null): string {
-  if (!iso) return "Never";
-  try {
-    const d = new Date(iso);
-    const now = new Date();
-    const diffMs = now.getTime() - d.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    if (diffMins < 1) return "Just now";
-    if (diffMins < 60) return `${diffMins}m ago`;
-    const diffHours = Math.floor(diffMins / 60);
-    if (diffHours < 24) return `${diffHours}h ago`;
-    const diffDays = Math.floor(diffHours / 24);
-    return `${diffDays}d ago`;
-  } catch {
-    return iso;
-  }
-}
-
 /** Wall-clock ``HH:MM`` for the "last attempt" hint; the raw ISO on a bad parse. */
 function formatClockTime(iso: string): string {
   const d = new Date(iso);
@@ -230,7 +212,7 @@ function lastSyncValue(stats: SyncStats): ReactNode {
   if (stats.last_sync) {
     return (
       <span style={{ fontSize: "12px", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-        <span>{formatLastSync(stats.last_sync)}</span>
+        <span>{formatTimeAgo(stats.last_sync) ?? stats.last_sync}</span>
         {stats.last_attempt && (
           <span style={{ opacity: 0.6 }}>
             last attempt: {formatClockTime(stats.last_attempt.finished_at)} ({stats.last_attempt.status})
@@ -370,26 +352,6 @@ function formatLibraryLine(stats: SyncStats): string {
   const collections = stats.collections ?? 0;
   if (collections > 0) parts.push(pluralize(collections, "collection"));
   return parts.join(" · ");
-}
-
-/**
- * Expected apply seconds for a preview — the DELTA cost. The delta-restricted
- * apply (#1383) touches only new + changed shortcuts; content-unchanged items are
- * skipped entirely (no Set* walk, no confirm poll), so they cost nothing and are
- * no longer priced. Creates run at the new-shortcut rate, changed at the lighter
- * update rate, plus the flat fixed-overhead allowance. This is now a tight
- * estimate rather than an inflated upper bound — the old model priced every
- * unchanged item as an update because a resume re-walked them, which the skip has
- * eliminated. Cover refreshes are their own term (#1511): they are backend
- * downloads on already-bound shortcuts, so they carry no shortcut-walk cost, and
- * a cover-only preview must price its covers rather than read the flat allowance.
- * Absent on older backends, where zero is the right reading. Used for BOTH the
- * preview "Estimated time" row and the handleApply seed, so the number the user
- * approves is the number the run starts with; the live countdown still corrects
- * it against the measured apply rate.
- */
-function previewApplySeconds(s: SyncPreviewSummary): number {
-  return estimateApplySeconds(s.new_count, s.changed_count, s.cover_refresh_count ?? 0);
 }
 
 /** Preview apply-time (seconds) at/above which the hint appends the sleep-pause

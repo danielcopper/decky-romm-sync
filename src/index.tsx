@@ -70,6 +70,7 @@ import type {
   SyncStaleData,
   SyncCollectionsData,
   ServerRetryProgressEvent,
+  Page,
 } from "./types";
 import { setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
 import { removeShortcutsPaced } from "./utils/shortcutRemoval";
@@ -89,8 +90,6 @@ import type { PruneActionRequired } from "./utils/pruneActions";
 import { admitPruneFrame, setPruneComplete, setPruneProgress } from "./utils/pruneStore";
 import type { PruneComplete, PruneProgress } from "./utils/pruneStore";
 import { publishCommittedVersionSwitch } from "./utils/versionSwitchApplication";
-
-type Page = "main" | "settings" | "library" | "data" | "downloads" | "system";
 
 // Module-level page state survives QAM remounts (e.g. after modal close)
 let currentPage: Page = "main";

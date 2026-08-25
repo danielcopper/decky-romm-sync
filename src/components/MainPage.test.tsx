@@ -867,7 +867,7 @@ describe("MainPage", () => {
     });
   });
 
-  describe("formatLastSync (via Last sync field)", () => {
+  describe("Last sync field", () => {
     function lastSyncText(container: HTMLElement): string | null {
       const labels = Array.from(container.querySelectorAll('[data-testid="field-label"]'));
       const idx = labels.findIndex((n) => n.textContent === "Last sync");
