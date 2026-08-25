@@ -10,6 +10,9 @@
  *
  * Read by:
  *   - MainPage.tsx and DownloadQueue.tsx, both through {@link useDownloads}
+ *   - the download_progress / download_failed handlers themselves, which read
+ *     the current entry through {@link getDownloadState} to carry forward the
+ *     fields their event frame does not carry
  *
  * The state is held immutably: every mutation that changes something installs a
  * NEW array and notifies, and one that changes nothing does neither. That is
@@ -40,7 +43,7 @@ function sameEntries(a: readonly DownloadItem[], b: readonly DownloadItem[]): bo
 
 /** Replace the whole queue. Stores a copy, so a caller that keeps mutating the
  *  array it passed in cannot change store state behind the subscribers' backs. */
-export function setDownloads(items: DownloadItem[]): void {
+export function setDownloads(items: readonly DownloadItem[]): void {
   if (sameEntries(_downloads, items)) return;
   _downloads = items.slice();
   notify();
@@ -70,7 +73,7 @@ export function removeDownload(romId: number): void {
   notify();
 }
 
-export function getDownloadState(): DownloadItem[] {
+export function getDownloadState(): readonly DownloadItem[] {
   return _downloads;
 }
 
@@ -95,6 +98,6 @@ export function onDownloadsChange(fn: () => void): () => void {
 
 /** Subscribe to the download queue from a component. Re-renders the caller
  *  whenever the queue changes and drops its subscription on unmount. */
-export function useDownloads(): DownloadItem[] {
+export function useDownloads(): readonly DownloadItem[] {
   return useSyncExternalStore(onDownloadsChange, getDownloadState);
 }

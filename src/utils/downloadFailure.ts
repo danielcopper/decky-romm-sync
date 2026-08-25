@@ -19,7 +19,7 @@ export interface ToasterLike {
 }
 
 export interface DownloadStoreLike {
-  getDownloadState: () => DownloadItem[];
+  getDownloadState: () => readonly DownloadItem[];
   updateDownload: (item: DownloadItem) => void;
 }
 
