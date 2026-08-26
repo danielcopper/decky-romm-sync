@@ -33,7 +33,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.cover_refresh import count_cover_refreshes
-from domain.preview_delta import PreviewDelta, preview_expires_at
 from domain.session_budget import post_run_advisory, session_memory_delta
 from domain.shortcut_data import build_shortcuts_data
 from domain.sibling_group import compute_component_group_keys
@@ -79,7 +78,6 @@ _SYNC_CANCELLED = "Sync cancelled"
 # ``sync_runs.error`` via ``mark_interrupted``; the status split lets the UI
 # report "(interrupted)" instead of "(cancelled)" for a crash.
 _SYNC_INTERRUPTED = "Sync interrupted (Steam UI stopped responding)"
-_PREVIEW_MAX_AGE_SECONDS = 1800  # 30 minutes — preview snapshots stale beyond this
 
 
 def _collection_membership_key(unit: WorkUnit) -> tuple[str, str]:
@@ -407,11 +405,9 @@ class SyncOrchestrator:
                 # seconds count because the panel runs on the same machine and the
                 # same clock, and a deadline survives the Deck suspending where a
                 # locally counted-down number does not.
-                "expires_at": preview_expires_at(created_at, _PREVIEW_MAX_AGE_SECONDS),
+                "expires_at": box.preview_deadline(created_at),
             }
-            # Stage the answer itself, so a panel that lost its card is handed
-            # back exactly what the user was shown rather than a re-assembly.
-            box.pending_delta = PreviewDelta(
+            box.stage_preview(
                 preview_id=preview_id,
                 created_at=created_at,
                 platforms_count=platforms_count,
@@ -430,14 +426,14 @@ class SyncOrchestrator:
             # SyncCancelled is a BaseException (not Exception), so it skips the
             # generic ``except Exception`` below and lands here as a distinct
             # cooperative signal — never conflated with a real asyncio cancel.
-            box.pending_delta = None
+            box.discard_preview()
             await self._finish_sync(_SYNC_CANCELLED)
             return {"success": False, "reason": "cancelled", "message": _SYNC_CANCELLED}
         except Exception as e:
             import traceback
 
             self._logger.error(f"Sync preview failed: {e}\n{traceback.format_exc()}")
-            box.pending_delta = None
+            box.discard_preview()
             _reason, _msg = classify_error(e)
             await self.emit_progress(SyncStage.ERROR, message=_msg, running=False)
             return {"success": False, "reason": _reason, "message": _msg}
@@ -490,14 +486,15 @@ class SyncOrchestrator:
 
     async def sync_apply_delta(self, preview_id):
         box = self._sync_state
-        if not box.pending_delta or box.pending_delta.preview_id != preview_id:
+        if not box.matches_preview(preview_id):
             return {
                 "success": False,
                 "reason": ErrorCode.STALE_PREVIEW.value,
                 "message": "Preview expired, please re-sync",
             }
-        if box.pending_delta.is_expired(self._clock.time(), _PREVIEW_MAX_AGE_SECONDS):
-            box.pending_delta = None
+        # The read drops an over-age snapshot on its way out, so a repeat apply
+        # can't pick it up.
+        if box.read_fresh_preview(self._clock.time()) is None:
             return {
                 "success": False,
                 "reason": ErrorCode.STALE_PREVIEW.value,
@@ -506,11 +503,11 @@ class SyncOrchestrator:
         # Admission guard: a rapid second apply (or an apply landing while a
         # sync is already in flight) must be rejected without consuming the
         # staged delta, so the still-valid preview survives for the legitimate
-        # apply (#1202). Claim the run slot before nulling ``pending_delta``.
+        # apply (#1202). Claim the run slot BEFORE discarding the preview.
         run_id = self._uuid_gen.uuid4()
         if not box.try_begin_run(run_id):
             return {"success": False, "reason": "sync_in_progress", "message": "Sync already in progress"}
-        box.pending_delta = None
+        box.discard_preview()
         box.sync_last_heartbeat = self._clock.monotonic()
 
         self._loop.create_task(self._do_sync_per_unit())
@@ -518,28 +515,18 @@ class SyncOrchestrator:
         return {"success": True, "message": "Applying changes"}
 
     def sync_cancel_preview(self):
-        self._sync_state.pending_delta = None
+        self._sync_state.discard_preview()
         return {"success": True}
 
     def get_pending_preview(self):
         """Hand back the staged preview answer, so a remounted panel can show its card again.
 
-        ``{"success": True, "preview": None}`` when nothing is staged — "no
-        preview" is a normal answer, not a failure, so it never takes the
-        failure shape. A staged snapshot past its TTL answers the same way and
-        is dropped on the spot: the apply would refuse it anyway, and clearing
-        it here keeps the read and the apply on one verdict.
-
-        A pure read plus that lazy clear — it starts, cancels and touches no run.
+        ``preview: None`` — nothing staged, or a snapshot the read aged out —
+        is a normal answer, never the failure shape. Starts, cancels and
+        touches no run.
         """
-        box = self._sync_state
-        delta = box.pending_delta
-        if delta is None:
-            return {"success": True, "preview": None}
-        if delta.is_expired(self._clock.time(), _PREVIEW_MAX_AGE_SECONDS):
-            box.pending_delta = None
-            return {"success": True, "preview": None}
-        return {"success": True, "preview": dict(delta.answer)}
+        delta = self._sync_state.read_fresh_preview(self._clock.time())
+        return {"success": True, "preview": dict(delta.answer) if delta else None}
 
     # ── Progress & safety ────────────────────────────────────────
 

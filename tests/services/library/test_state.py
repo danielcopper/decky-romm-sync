@@ -1,10 +1,13 @@
-"""Tests for the ``LibrarySyncStateBox`` run-lifecycle verb methods.
+"""Tests for the ``LibrarySyncStateBox`` verb methods.
 
-The box's four verbs (``try_begin_run`` / ``request_cancel`` / ``finish_run`` /
-``is_in_flight``) are the only writers of the run-lifecycle pair
-(``sync_state`` / ``current_sync_id``). These tests pin the compare-and-swap
-admission, the run-scoped cancel routing, and the compare-and-reset terminal so
-a rapid Sync/Cancel can't leave a half-reset run id (#1202).
+The box's four run-lifecycle verbs (``try_begin_run`` / ``request_cancel`` /
+``finish_run`` / ``is_in_flight``) are the only writers of the run-lifecycle
+pair (``sync_state`` / ``current_sync_id``). These tests pin the
+compare-and-swap admission, the run-scoped cancel routing, and the
+compare-and-reset terminal so a rapid Sync/Cancel can't leave a half-reset run
+id (#1202). The preview-snapshot verbs (``stage_preview`` /
+``read_fresh_preview`` / ``matches_preview`` / ``discard_preview``) are the
+only writers of ``pending_delta``, and carry the TTL with it.
 """
 
 from __future__ import annotations
@@ -12,7 +15,7 @@ from __future__ import annotations
 import asyncio
 
 from domain.sync_state import SyncState
-from services.library._state import AbandonedChunk, LibrarySyncStateBox
+from services.library._state import PREVIEW_MAX_AGE_SECONDS, AbandonedChunk, LibrarySyncStateBox
 
 
 class TestTryBeginRun:
@@ -255,6 +258,109 @@ class TestAbandonedChunkStash:
     def test_take_returns_none_when_no_stash(self):
         box = LibrarySyncStateBox()
         assert box.take_abandoned_chunk("run-1", 5, 2) is None
+
+
+class TestPreviewSnapshot:
+    """The staged preview's whole lifetime: stage, read-if-fresh, match, discard.
+
+    These four verbs are the only writers of ``pending_delta``. The TTL is the
+    box's (``PREVIEW_MAX_AGE_SECONDS``), applied against a caller-supplied
+    ``now`` so the box stays clock-free.
+    """
+
+    _CREATED_AT = 1_700_000_000.0
+
+    def _staged_box(self, preview_id: str = "pv-1") -> LibrarySyncStateBox:
+        box = LibrarySyncStateBox()
+        box.stage_preview(
+            preview_id=preview_id,
+            created_at=self._CREATED_AT,
+            platforms_count=2,
+            total_roms=7,
+            answer={"success": True, "preview_id": preview_id},
+        )
+        return box
+
+    def test_stage_holds_every_field_including_the_answer(self):
+        box = self._staged_box()
+
+        delta = box.pending_delta
+        assert delta is not None
+        assert delta.preview_id == "pv-1"
+        assert delta.created_at == self._CREATED_AT
+        assert delta.platforms_count == 2
+        assert delta.total_roms == 7
+        assert delta.answer == {"success": True, "preview_id": "pv-1"}
+
+    def test_stage_replaces_an_earlier_snapshot(self):
+        box = self._staged_box("pv-old")
+
+        box.stage_preview(
+            preview_id="pv-new",
+            created_at=self._CREATED_AT,
+            platforms_count=0,
+            total_roms=0,
+            answer={"success": True, "preview_id": "pv-new"},
+        )
+
+        assert box.matches_preview("pv-new") is True
+        assert box.matches_preview("pv-old") is False
+
+    def test_read_returns_the_snapshot_inside_the_ttl(self):
+        box = self._staged_box()
+
+        delta = box.read_fresh_preview(self._CREATED_AT + PREVIEW_MAX_AGE_SECONDS)
+
+        assert delta is not None
+        assert delta.preview_id == "pv-1"
+        # A read inside the window consumes nothing.
+        assert box.pending_delta is delta
+
+    def test_read_discards_the_snapshot_past_the_ttl(self):
+        box = self._staged_box()
+
+        assert box.read_fresh_preview(self._CREATED_AT + PREVIEW_MAX_AGE_SECONDS + 1) is None
+        # Dropped on the way out, so no later caller is handed one the apply
+        # would refuse.
+        assert box.pending_delta is None
+
+    def test_read_returns_none_when_nothing_staged(self):
+        box = LibrarySyncStateBox()
+        assert box.read_fresh_preview(self._CREATED_AT) is None
+
+    def test_matches_is_identity_only_and_ignores_age(self):
+        box = self._staged_box()
+
+        assert box.matches_preview("pv-1") is True
+        assert box.matches_preview("pv-other") is False
+        # Still a match long past the TTL — age is the read's verdict, not this one.
+        assert box.matches_preview("pv-1") is True
+        assert box.pending_delta is not None
+
+    def test_matches_is_false_when_nothing_staged(self):
+        box = LibrarySyncStateBox()
+        assert box.matches_preview("pv-1") is False
+
+    def test_discard_drops_the_snapshot_and_is_idempotent(self):
+        box = self._staged_box()
+
+        box.discard_preview()
+        assert box.pending_delta is None
+        box.discard_preview()
+        assert box.pending_delta is None
+
+    def test_preview_verbs_leave_the_run_lifecycle_alone(self):
+        """The staged preview is not run state: staging or dropping it must never
+        admit, cancel or end a run."""
+        box = self._staged_box()
+        assert box.sync_state is SyncState.IDLE
+        assert box.current_sync_id is None
+
+        box.read_fresh_preview(self._CREATED_AT)
+        box.discard_preview()
+
+        assert box.sync_state is SyncState.IDLE
+        assert box.current_sync_id is None
 
 
 class TestIsInFlight:

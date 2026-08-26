@@ -267,7 +267,9 @@ class LibraryService:
     # run-lifecycle pair (``_sync_state`` / ``_current_sync_id``) is read-only
     # here: those two fields are written **only** through the box's verb
     # methods (``try_begin_run`` / ``request_cancel`` / ``finish_run``), so no
-    # setter is exposed (#1202).
+    # setter is exposed (#1202). ``_pending_delta`` is read-only for the same
+    # reason — the staged preview is written only through ``stage_preview`` /
+    # ``read_fresh_preview`` / ``discard_preview``.
 
     @property
     def _sync_state(self) -> SyncState:
@@ -284,10 +286,6 @@ class LibraryService:
     @property
     def _pending_delta(self) -> PreviewDelta | None:
         return self._box.pending_delta
-
-    @_pending_delta.setter
-    def _pending_delta(self, value: PreviewDelta | None) -> None:
-        self._box.pending_delta = value
 
     @property
     def _pending_collection_memberships(self) -> dict[tuple[str, str], CollectionMembership]:

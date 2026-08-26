@@ -34,7 +34,6 @@ import pytest
 from adapters.persistence import (
     PersistenceAdapter,
 )
-from domain.preview_delta import PreviewDelta
 from domain.sync_diff import BIND_ROM_ID_KEY
 from domain.sync_stage import SyncStage
 from domain.sync_state import SyncState
@@ -563,8 +562,8 @@ class TestSyncApplyDelta:
     """
 
     def _setup_pending_delta(self, plugin, preview_id="test-preview-123"):
-        """Helper to populate _pending_delta with valid data."""
-        plugin._sync_service._pending_delta = PreviewDelta(
+        """Helper to stage a valid pending delta through the box's own verb."""
+        plugin._sync_service._box.stage_preview(
             preview_id=preview_id,
             created_at=plugin._sync_service._orchestrator._clock.time(),
             platforms_count=1,
@@ -709,7 +708,7 @@ class TestSyncCancelPreview:
 
     @pytest.mark.asyncio
     async def test_clears_pending_delta(self, plugin):
-        plugin._sync_service._pending_delta = PreviewDelta(
+        plugin._sync_service._box.stage_preview(
             preview_id="some-id",
             created_at=plugin._sync_service._orchestrator._clock.time(),
             platforms_count=0,

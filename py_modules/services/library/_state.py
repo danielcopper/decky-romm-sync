@@ -14,6 +14,13 @@ field assignment from a sub-service. Confining those two writes to the box
 keeps run admission, cancellation, and termination a single
 compare-and-swap on the one event loop, so a rapid Sync/Cancel can't leave
 a half-reset run id (#1202). Enforced by ``scripts/check_sync_lifecycle_owner.py``.
+
+``pending_delta`` is held to the same discipline, unenforced: the staged
+preview snapshot is written only through ``stage_preview`` /
+``read_fresh_preview`` / ``discard_preview``, so its whole lifetime — when it
+appears, when it ages out, when it is consumed — is readable in one place
+rather than inferred from assignments scattered across the orchestrator. The
+TTL lives here with it.
 """
 
 from __future__ import annotations
@@ -21,12 +28,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from domain.preview_delta import PreviewDelta, preview_expires_at
 from domain.sync_state import SyncState
 
 if TYPE_CHECKING:
     import asyncio
+    from collections.abc import Mapping
 
-    from domain.preview_delta import PreviewDelta
+
+PREVIEW_MAX_AGE_SECONDS = 1800  # 30 minutes — preview snapshots stale beyond this
 
 
 def _default_progress() -> dict[str, Any]:
@@ -123,6 +133,8 @@ class LibrarySyncStateBox:
     # ``ChunkDispatcher`` and reset with it; kept across the heartbeat-timeout
     # abandon window so a late ack still stamps the confirmed values.
     pending_cover_sources: dict[int, str] = field(default_factory=dict)
+    # The staged preview snapshot, between ``sync_preview`` and the apply that
+    # consumes it. Written only through the preview-lifecycle verbs below.
     pending_delta: PreviewDelta | None = None
     # Per-run collection-membership accumulator, keyed by a collision-free
     # ``(collection_kind, collection_id)`` identity (never the display name), so
@@ -310,6 +322,64 @@ class LibrarySyncStateBox:
     def is_cancelling(self) -> bool:
         """True while a cancel has been requested for the in-flight run."""
         return self.sync_state is SyncState.CANCELLING
+
+    # ── Preview snapshot — the only writers of pending_delta ──
+
+    def stage_preview(
+        self,
+        *,
+        preview_id: str,
+        created_at: float,
+        platforms_count: int,
+        total_roms: int,
+        answer: Mapping[str, Any],
+    ) -> None:
+        """Hold the computed preview for the apply — and for a panel that comes back to it.
+
+        ``answer`` is the exact dict ``sync_preview`` returned; a restored card
+        is that payload, never a second assembly of it. Replaces any snapshot
+        already staged: only the newest preview is appliable.
+        """
+        self.pending_delta = PreviewDelta(
+            preview_id=preview_id,
+            created_at=created_at,
+            platforms_count=platforms_count,
+            total_roms=total_roms,
+            answer=answer,
+        )
+
+    def preview_deadline(self, created_at: float) -> float:
+        """The wall clock this box stops accepting a snapshot taken at ``created_at``.
+
+        The frontend counts down against it, so the number it shows and the
+        verdict :meth:`read_fresh_preview` reaches come from the same TTL.
+        """
+        return preview_expires_at(created_at, PREVIEW_MAX_AGE_SECONDS)
+
+    def read_fresh_preview(self, now: float) -> PreviewDelta | None:
+        """The staged snapshot while it is still appliable, else ``None``.
+
+        A snapshot past its TTL at wall-clock ``now`` is discarded here rather
+        than returned, so no caller can be handed one the apply would refuse.
+        """
+        delta = self.pending_delta
+        if delta is None:
+            return None
+        if delta.is_expired(now, PREVIEW_MAX_AGE_SECONDS):
+            self.pending_delta = None
+            return None
+        return delta
+
+    def matches_preview(self, preview_id: str) -> bool:
+        """Whether the staged snapshot is the one ``preview_id`` names.
+
+        Identity only — a match says nothing about the snapshot's age.
+        """
+        return self.pending_delta is not None and self.pending_delta.preview_id == preview_id
+
+    def discard_preview(self) -> None:
+        """Drop the staged snapshot — consumed by an apply, cancelled, or failed."""
+        self.pending_delta = None
 
     # ── Abandoned-chunk stash — the heartbeat-timeout recovery seam ──
 

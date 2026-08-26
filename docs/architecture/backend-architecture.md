@@ -288,7 +288,7 @@ The library sync subsystem is a façade over seven sub-services that coordinate 
 | `reporter.py`                 | `SyncReporter` — post-apply finalisation (artwork filenames, per-unit `roms` upsert + `SyncRun` lifecycle) and the `roms`-derived queries                                                                                                                                                                                                  |
 | `session_budget.py`           | `SessionBudgetMonitor` — Steam's per-session renderer-heap budget: the GC-settled RSS measurement, the chunk-boundary pause verdict, the headroom clip that trims a chunk's additive cover work to what that verdict left, the post-preview prognosis, the run-start baseline, and the `get_session_budget_status` payload                 |
 | `shortcut_launch_resolver.py` | `ShortcutLaunchResolver` — resolves each ROM's launch facts for the shortcut bake: the disc-resolved installed path and the active emulator, both handed to `build_shortcuts_data`                                                                                                                                                         |
-| `_state.py`                   | `LibrarySyncStateBox` — shared mutable in-flight sync state; single source of truth threaded through every sub-service, and the **sole owner** of the run-lifecycle pair (`sync_state` / `current_sync_id`) via its verb methods                                                                                                           |
+| `_state.py`                   | `LibrarySyncStateBox` — shared mutable in-flight sync state; single source of truth threaded through every sub-service, and the **sole owner** of the run-lifecycle pair (`sync_state` / `current_sync_id`) and of the staged preview snapshot (`pending_delta`, TTL included) via its verb methods                                        |
 
 The pipeline is split **fetch (read-only) / apply (owns persistence)**: the fetcher never mutates the `roms` registry or
 `rom_metadata`, and the reporter's per-unit commit upserts each acked ROM's `roms` row and stamps its cached
@@ -576,7 +576,7 @@ recording the requested `run_id`, the active `current_sync_id`, and the `sync_st
 the run id from the backend-fed `sync_progress` store — its additive `runId` field (see below) — and passes it on the
 Cancel click; in the pre-run "Fetching library…" window the store's `runId` is still `""`, which maps to the
 unconditional cancel path rather than a stale prior-run id the backend would reject as a cross-run mismatch.
-`sync_cancel_preview` is **not** run-scoped: it only clears the pending preview delta (`pending_delta`), never touches
+`sync_cancel_preview` is **not** run-scoped: it only discards the pending preview delta (`pending_delta`), never touches
 `sync_state`, and `sync_apply_delta` independently validates the `preview_id`, so a stale preview-cancel cannot abort a
 fresh sync.
 
@@ -784,12 +784,24 @@ the window the checkpoint closes cannot reopen. The confinement is enforced by `
 returned, and `get_pending_preview` hands it back verbatim — the QAM card dies with its render, while the backend holds
 the snapshot for its full 30-minute TTL, so a user who steps into a submenu used to lose an Apply that was still
 perfectly valid. Storing the answer rather than re-assembling one is what guarantees the restored card is what the user
-was shown. The answer also carries `expires_at` — `created_at + _PREVIEW_MAX_AGE_SECONDS`, an absolute epoch — which the
-card counts down against; absolute rather than a remaining-seconds count because plugin and panel share a clock and a
-deadline survives a suspend. `get_pending_preview` is a pure read plus one lazy clear: nothing staged (or a snapshot
-past its TTL, dropped on the spot) answers `{"success": True, "preview": None}` — "no preview" is a normal answer, not a
-failure. "Too old" has exactly one expression, `PreviewDelta.is_expired`, shared by that read and by
-`sync_apply_delta`'s refusal, so the read can never offer an Apply the apply would reject.
+was shown. The answer also carries `expires_at` — an absolute epoch — which the card counts down against; absolute
+rather than a remaining-seconds count because plugin and panel share a clock and a deadline survives a suspend.
+`get_pending_preview` is a pure read plus one lazy clear: nothing staged (or a snapshot past its TTL, dropped on the
+spot) answers `{"success": True, "preview": None}` — "no preview" is a normal answer, not a failure.
+
+**`pending_delta` is box-owned, like the run-lifecycle pair.** The staged snapshot's whole lifetime runs through four
+`LibrarySyncStateBox` verbs — `stage_preview` / `read_fresh_preview` / `matches_preview` / `discard_preview` — and no
+module outside `_state.py` assigns the field (the façade exposes a getter only). The TTL lives with them:
+`PREVIEW_MAX_AGE_SECONDS` and the `preview_deadline` the answer's `expires_at` comes from are the box's, so the number
+the card counts down to and the verdict `read_fresh_preview` reaches cannot drift apart. "Too old" has exactly one
+expression, `PreviewDelta.is_expired`, reached only from `read_fresh_preview` — which both the pending read and
+`sync_apply_delta`'s age refusal go through, so the read can never offer an Apply the apply would reject. Unlike the
+run-lifecycle pair this has no CI gate; it is prose plus the box's own tests.
+
+In `sync_apply_delta` the ordering is load-bearing and deliberately left as three visible steps — identity check,
+run-slot claim, then discard — rather than one atomic "take" verb: a rapid second apply, or one landing while a run is
+in flight, is refused by `try_begin_run` **before** `discard_preview` runs, so the still-valid preview survives for the
+legitimate apply (#1202).
 
 **`sync_progress` carries `runId`.** Every `sync_progress` event (and the persisted `get_sync_status` snapshot) now
 includes an additive `runId: str` field — `str(current_sync_id or "")` — so the frontend reads the active run id from
