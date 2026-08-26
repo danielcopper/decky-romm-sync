@@ -15,7 +15,6 @@ import {
 import { FaCheckCircle, FaTimesCircle, FaExclamationTriangle } from "react-icons/fa";
 import {
   cancelSync,
-  getSyncStats,
   getSettings,
   fixRetroarchInputDriver,
   startSync,
@@ -25,7 +24,6 @@ import {
   clearSyncCache,
   refreshMigrationState,
   getSyncStatus,
-  getSessionBudgetStatus,
   getRetroDeckStatus,
   logError,
 } from "../api/backend";
@@ -46,6 +44,14 @@ import {
   withinUnitFraction,
 } from "../utils/syncProgress";
 import { useDownloads } from "../utils/downloadStore";
+import {
+  refreshSessionBudget,
+  refreshSessionBudgetAfterChange,
+  refreshSyncStats,
+  refreshSyncStatsAfterChange,
+  useSessionBudget,
+  useSyncStats,
+} from "../utils/syncStatsStore";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
 import { getSettingsResetState, onSettingsResetChange } from "../utils/settingsResetStore";
 import { getPlaytimeScopeState, onPlaytimeScopeChange, fetchPlaytimeScopeState } from "../utils/playtimeScopeStore";
@@ -71,7 +77,6 @@ import type {
   SyncStats,
   SyncPreview,
   SyncPreviewSummary,
-  SessionBudgetStatus,
   MigrationStatus,
   Page,
 } from "../types";
@@ -393,8 +398,13 @@ function terminalStatusTone(stage: SyncProgress["stage"]): StatusTone {
 }
 
 export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
-  const [stats, setStats] = useState<SyncStats | null>(null);
-  const [budgetStatus, setBudgetStatus] = useState<SessionBudgetStatus | null>(null);
+  // Both facts are owned by `utils/syncStatsStore.ts`: seven refresh sites in
+  // this file ask for them, and the store is what keeps an older answer from
+  // landing last and overwriting a newer one. What stays here is the SCHEDULE —
+  // the mount burst, the terminal-stage re-read and the poll interval below
+  // decide when to ask; the store only owns the data.
+  const stats = useSyncStats();
+  const budgetStatus = useSessionBudget();
   // `failure` classifies a resolved-but-failed probe so the connection row can
   // show a specific label (auth rejected / server unreachable / no URL / not
   // signed in). Null for every non-failed state and for a probe that never
@@ -448,15 +458,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         setSaveSortMigrationStatus(save_sort);
       })
       .catch((e) => logError(`Failed to refresh migration state: ${e}`));
-    getSyncStats()
-      .then(setStats)
-      .catch((e) => logError(`Failed to load sync stats: ${e}`));
+    detach(refreshSyncStats());
     // Live renderer-heap reading for the session-budget banners (#1383). Fail-open:
     // the backend always resolves (rss_kb null when unreadable), so the banners
     // degrade to text-only rather than erroring.
-    getSessionBudgetStatus()
-      .then(setBudgetStatus)
-      .catch((e) => logError(`Failed to load session budget status: ${e}`));
+    detach(refreshSessionBudget());
 
     getSettings()
       .then((s) => {
@@ -566,14 +572,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           // drain state (#1202, RC-B).
           setCancelling(false);
           showTransientStatus(progress.message || "Sync finished", terminalStatusTone(progress.stage));
-          getSyncStats()
-            .then(setStats)
-            .catch((e) => logError(`Failed to refresh sync stats: ${e}`));
+          // Both re-reads are provoked by the run ending, so neither may join a
+          // read issued while it was still going — see the two AfterChange
+          // functions.
+          detach(refreshSyncStatsAfterChange());
           // Refresh the live heap reading so the paused / high-heap banner reflects
           // the run's end state (a pause leaves it high; a completed run may too).
-          getSessionBudgetStatus()
-            .then(setBudgetStatus)
-            .catch((e) => logError(`Failed to refresh session budget status: ${e}`));
+          detach(refreshSessionBudgetAfterChange());
         } else {
           // Feed the live-rate estimator from applying frames that carry ITEM
           // progress only — fetch frames carry page/cover counters, and an
@@ -622,18 +627,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     if (!syncing && !lastRunPaused) return;
     const id = setInterval(
       () => {
-        getSessionBudgetStatus()
-          .then(setBudgetStatus)
-          .catch((e) => logError(`Failed to poll session budget status: ${e}`));
+        detach(refreshSessionBudget());
         // Belt-and-braces on top of the backend emit-last fix (#39): while the paused
         // banner is showing (idle), also re-read stats so the "Last sync" line + the
         // paused banner (which keys on last_attempt) recover if the one-shot terminal
         // refetch was ever missed/dropped. Then this poll self-stops (last_attempt is
         // no longer paused).
         if (!syncing) {
-          getSyncStats()
-            .then(setStats)
-            .catch((e) => logError(`Failed to poll sync stats: ${e}`));
+          detach(refreshSyncStats());
         }
       },
       syncing ? 5000 : 10000,
@@ -1162,9 +1163,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                     } catch {
                       showTransientStatus("Failed to clear sync cache");
                     }
-                    getSyncStats()
-                      .then(setStats)
-                      .catch((e) => logError(`Failed to refresh sync stats: ${e}`));
+                    // The clear just CHANGED the stats, so this re-read must
+                    // not join one issued before it — see
+                    // refreshSyncStatsAfterChange.
+                    detach(refreshSyncStatsAfterChange());
                   })(),
                 );
               }}

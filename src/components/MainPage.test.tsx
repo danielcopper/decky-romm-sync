@@ -54,6 +54,7 @@ import * as syncEta from "../utils/syncEta";
 import { NEW_ITEM_SEC, UPDATED_ITEM_SEC, COVER_DOWNLOAD_SEC, FETCH_ALLOWANCE_SEC } from "../utils/syncEstimate";
 import { setDownloads } from "../utils/downloadStore";
 import { resetConnectionProbeForTests } from "../utils/connectionProbe";
+import { resetSyncStatsStoreForTests } from "../utils/syncStatsStore";
 import { showModal } from "@decky/ui";
 import * as syncManager from "../utils/syncManager";
 import * as connectionState from "../utils/connectionState";
@@ -212,6 +213,16 @@ const flushAsync = () =>
     await Promise.resolve();
   });
 
+/** A promise plus the handle to settle it, so a test can hold a backend read
+ *  open across an event and decide when — and in which order — it answers. */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function defaultSettings(): PluginSettings {
   return {
     romm_url: "https://romm.local",
@@ -267,6 +278,9 @@ describe("MainPage", () => {
     // The connection probe outlives the panel by design (#1730), so its verdict
     // survives unmount and would carry a prior test's answer into the next.
     resetConnectionProbeForTests();
+    // Same for the sync stats and session budget: both the stored answers and
+    // any read still open outlive the render that issued them.
+    resetSyncStatsStoreForTests();
     setSyncProgress({
       running: false,
       stage: "",
@@ -4412,6 +4426,87 @@ describe("MainPage", () => {
       expect(buttonByExactText(container, "Cancel Sync")).toBeNull();
       expect(fieldLabels(container)).toContain("Sync complete: 7 games");
       expect(vi.mocked(backend.getSyncStats)).toHaveBeenCalledTimes(2);
+    });
+
+    // The terminal stage rewrites last_sync, last_attempt and the counts, and it
+    // re-measures the heap the run consumed — so both re-reads below are issued
+    // BECAUSE the facts changed, and neither may join a read issued while the run
+    // was still going. Open the panel in a run's last seconds and the mount reads
+    // are exactly such reads. Nothing re-reads afterwards for a completed run —
+    // the poll interval needs `syncing || lastRunPaused` and stops on the same
+    // tick — so a joined pre-run answer is the last one the panel ever shows.
+    it("re-reads the stats itself at the terminal stage rather than joining the read still open", async () => {
+      const mountRead = deferred<SyncStats>();
+      const terminalRead = deferred<SyncStats>();
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        message: "Working",
+      });
+      vi.mocked(backend.getSyncStats).mockReturnValueOnce(mountRead.promise).mockReturnValueOnce(terminalRead.promise);
+
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      // Still open: the mount read has not answered, so the library line is blank.
+      expect(container.textContent).not.toContain("games");
+
+      await act(async () => {
+        setSyncProgress({ running: false, stage: "done", message: "Sync complete" });
+        await Promise.resolve();
+      });
+      // Two reads, not one — a joined read would answer for the run that just ended.
+      expect(vi.mocked(backend.getSyncStats)).toHaveBeenCalledTimes(2);
+
+      terminalRead.resolve({ ...defaultStats(), roms: 7, platforms: 1, last_sync: new Date().toISOString() });
+      await flushAsync();
+      // The overtaken pre-run answer lands last and must change nothing.
+      mountRead.resolve({ ...defaultStats(), roms: 3, platforms: 1 });
+      await flushAsync();
+
+      expect(container.textContent).toContain("7 games");
+      expect(container.textContent).not.toContain("3 games");
+    });
+
+    it("re-reads the heap itself at the terminal stage rather than joining the read still open", async () => {
+      const liveBudget = (rssKb: number): SessionBudgetStatus => ({
+        success: true,
+        rss_kb: rssKb,
+        warn_kb: 1_800_000,
+        ceiling_kb: 2_200_000,
+        cliff_kb: 2_450_000,
+        memory_delta_kb: null,
+        resume_ready: null,
+        run_done_items: null,
+        run_total_items: null,
+      });
+      const mountRead = deferred<SessionBudgetStatus>();
+      const terminalRead = deferred<SessionBudgetStatus>();
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        message: "Working",
+      });
+      vi.mocked(backend.getSessionBudgetStatus)
+        .mockReturnValueOnce(mountRead.promise)
+        .mockReturnValueOnce(terminalRead.promise);
+
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        setSyncProgress({ running: false, stage: "done", message: "Sync complete" });
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.getSessionBudgetStatus)).toHaveBeenCalledTimes(2);
+
+      terminalRead.resolve(liveBudget(500_000));
+      await flushAsync();
+      mountRead.resolve(liveBudget(1_300_000));
+      await flushAsync();
+
+      const memoryRow = container.querySelector('[data-testid="steam-memory"]')?.textContent ?? "";
+      expect(memoryRow).toContain("0.5 GB");
+      expect(memoryRow).not.toContain("1.3 GB");
     });
 
     it("a bare running:false (no terminal stage) does NOT tear down the in-flight UI", async () => {
