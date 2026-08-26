@@ -172,7 +172,7 @@ import {
 } from "../utils/connectionState";
 import { registerConnectionHeartbeat } from "../utils/connectionHeartbeat";
 import { useVersionError } from "./VersionErrorCard";
-import { useMigrationStatus } from "./MigrationBlockedPage";
+import { useMigrationStatus } from "../utils/migrationStore";
 import { detach } from "../utils/detach";
 
 // S3776 is raised on the declaration line, so its NOSONAR must stay there. prettier-ignore stops

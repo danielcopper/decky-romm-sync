@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, act } from "@testing-library/react";
-import { createElement, type ComponentProps } from "react";
+import { createElement, useSyncExternalStore, type ComponentProps } from "react";
 import { RomMGameInfoPanel } from "./RomMGameInfoPanel";
 import * as backend from "../api/backend";
 import type { CachedGameDetail } from "../api/backend";
@@ -113,42 +113,57 @@ vi.mock("../utils/cachedGameDetailStore", () => ({
 // `vi.resetAllMocks()` in beforeEach wipes the impls — re-stubbed there.
 const migrationListeners: Array<() => void> = [];
 let currentMigrationState: MigrationStatus = { pending: false };
-vi.mock("../utils/migrationStore", () => ({
-  getMigrationState: vi.fn(() => currentMigrationState),
-  setMigrationStatus: vi.fn((s: MigrationStatus) => {
-    currentMigrationState = s;
-    migrationListeners.forEach((fn) => fn());
-  }),
-  onMigrationChange: vi.fn((cb: () => void) => {
-    migrationListeners.push(cb);
-    return () => {
-      const i = migrationListeners.indexOf(cb);
-      if (i >= 0) migrationListeners.splice(i, 1);
-    };
-  }),
-}));
+// useMigrationStatus routes through the mocked seams rather than being stubbed
+// with a constant, so the listener-array assertions still measure the panel's
+// real subscribe/unsubscribe. subscribe/snapshot are built once — a fresh
+// subscribe reference per render makes React re-subscribe on every render.
+vi.mock("../utils/migrationStore", () => {
+  const subscribe = (cb: () => void) => mod.onMigrationChange(cb);
+  const snapshot = () => mod.getMigrationState();
+  const mod = {
+    getMigrationState: vi.fn(() => currentMigrationState),
+    setMigrationStatus: vi.fn((s: MigrationStatus) => {
+      currentMigrationState = s;
+      migrationListeners.forEach((fn) => fn());
+    }),
+    onMigrationChange: vi.fn((cb: () => void) => {
+      migrationListeners.push(cb);
+      return () => {
+        const i = migrationListeners.indexOf(cb);
+        if (i >= 0) migrationListeners.splice(i, 1);
+      };
+    }),
+    useMigrationStatus: () => useSyncExternalStore(subscribe, snapshot),
+  };
+  return mod;
+});
 import * as migrationStore from "../utils/migrationStore";
 
 // ----- saveSortMigrationStore — same listener-array pattern as
 // migrationStore. The panel reads .pending on mount and re-renders when the
-// store notifies. clearSaveSortMigration isn't used by the panel but the mock
-// declares it as a vi.fn for shape parity with the real module.
+// store notifies.
 const saveSortListeners: Array<() => void> = [];
 let currentSaveSortState: SaveSortMigrationStatus = { pending: false };
-vi.mock("../utils/saveSortMigrationStore", () => ({
-  getSaveSortMigrationState: vi.fn(() => currentSaveSortState),
-  setSaveSortMigrationStatus: vi.fn((s: SaveSortMigrationStatus) => {
-    currentSaveSortState = s;
-    saveSortListeners.forEach((fn) => fn());
-  }),
-  onSaveSortMigrationChange: vi.fn((cb: () => void) => {
-    saveSortListeners.push(cb);
-    return () => {
-      const i = saveSortListeners.indexOf(cb);
-      if (i >= 0) saveSortListeners.splice(i, 1);
-    };
-  }),
-}));
+vi.mock("../utils/saveSortMigrationStore", () => {
+  const subscribe = (cb: () => void) => mod.onSaveSortMigrationChange(cb);
+  const snapshot = () => mod.getSaveSortMigrationState();
+  const mod = {
+    getSaveSortMigrationState: vi.fn(() => currentSaveSortState),
+    setSaveSortMigrationStatus: vi.fn((s: SaveSortMigrationStatus) => {
+      currentSaveSortState = s;
+      saveSortListeners.forEach((fn) => fn());
+    }),
+    onSaveSortMigrationChange: vi.fn((cb: () => void) => {
+      saveSortListeners.push(cb);
+      return () => {
+        const i = saveSortListeners.indexOf(cb);
+        if (i >= 0) saveSortListeners.splice(i, 1);
+      };
+    }),
+    useSaveSortMigrationState: () => useSyncExternalStore(subscribe, snapshot),
+  };
+  return mod;
+});
 import * as saveSortMigrationStore from "../utils/saveSortMigrationStore";
 
 // ----- @decky/ui — global stub from test-setup.ts covers Focusable +

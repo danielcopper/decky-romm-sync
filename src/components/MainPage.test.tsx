@@ -23,9 +23,12 @@
 //
 // MUTATION CHECKS (by inspection — auto-mode classifier likely blocks on
 // React state internals + listener cleanup, so confidence is recorded here):
-//   1. Removing the `unsubMigration()` call from the unmount cleanup would
-//      break the "subscribes on mount and unsubscribes on unmount" test —
-//      migrationListeners.length would stay at 1 after unmount.
+//   1. Removing the useMigrationStatus() call from MainPage would break the
+//      "subscribes on mount and unsubscribes on unmount" test —
+//      migrationListeners.length would stay at 0 after mount. (The real hook's
+//      own teardown is NOT covered here: this file module-mocks
+//      ../utils/migrationStore, so neither it nor the real onMigrationChange
+//      ever runs. Its unsubscribe is pinned in src/utils/migrationStore.test.ts.)
 //   2. Removing `clearInterval(pollRef.current)` from stopPolling would
 //      break the "interval cleared on unmount" test — clearIntervalSpy
 //      would not be called with the captured pollRef id.
@@ -36,7 +39,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
-import { createElement, type ReactElement } from "react";
+import { createElement, useSyncExternalStore, type ReactElement } from "react";
 import { MainPage, ConnectionIndicator } from "./MainPage";
 import * as backend from "../api/backend";
 import { useVersionError } from "./VersionErrorCard";
@@ -89,39 +92,55 @@ vi.mock("./MigrationBlockedPage", () => ({
 // deterministically. resetAllMocks wipes impls; re-stubbed in beforeEach.
 const migrationListeners: Array<() => void> = [];
 let currentMigrationState: MigrationStatus = { pending: false };
-vi.mock("../utils/migrationStore", () => ({
-  getMigrationState: vi.fn(() => currentMigrationState),
-  setMigrationStatus: vi.fn((s: MigrationStatus) => {
-    currentMigrationState = s;
-    migrationListeners.forEach((fn) => fn());
-  }),
-  onMigrationChange: vi.fn((cb: () => void) => {
-    migrationListeners.push(cb);
-    return () => {
-      const i = migrationListeners.indexOf(cb);
-      if (i >= 0) migrationListeners.splice(i, 1);
-    };
-  }),
-}));
+// useMigrationStatus routes through the mocked seams rather than being stubbed
+// with a constant, so the listener-array assertions still measure the panel's
+// real subscribe/unsubscribe. subscribe/snapshot are built once — a fresh
+// subscribe reference per render makes React re-subscribe on every render.
+vi.mock("../utils/migrationStore", () => {
+  const subscribe = (cb: () => void) => mod.onMigrationChange(cb);
+  const snapshot = () => mod.getMigrationState();
+  const mod = {
+    getMigrationState: vi.fn(() => currentMigrationState),
+    setMigrationStatus: vi.fn((s: MigrationStatus) => {
+      currentMigrationState = s;
+      migrationListeners.forEach((fn) => fn());
+    }),
+    onMigrationChange: vi.fn((cb: () => void) => {
+      migrationListeners.push(cb);
+      return () => {
+        const i = migrationListeners.indexOf(cb);
+        if (i >= 0) migrationListeners.splice(i, 1);
+      };
+    }),
+    useMigrationStatus: () => useSyncExternalStore(subscribe, snapshot),
+  };
+  return mod;
+});
 import * as migrationStore from "../utils/migrationStore";
 
 // saveSortMigrationStore — same listener-array pattern.
 const saveSortListeners: Array<() => void> = [];
 let currentSaveSortState: SaveSortMigrationStatus = { pending: false };
-vi.mock("../utils/saveSortMigrationStore", () => ({
-  getSaveSortMigrationState: vi.fn(() => currentSaveSortState),
-  setSaveSortMigrationStatus: vi.fn((s: SaveSortMigrationStatus) => {
-    currentSaveSortState = s;
-    saveSortListeners.forEach((fn) => fn());
-  }),
-  onSaveSortMigrationChange: vi.fn((cb: () => void) => {
-    saveSortListeners.push(cb);
-    return () => {
-      const i = saveSortListeners.indexOf(cb);
-      if (i >= 0) saveSortListeners.splice(i, 1);
-    };
-  }),
-}));
+vi.mock("../utils/saveSortMigrationStore", () => {
+  const subscribe = (cb: () => void) => mod.onSaveSortMigrationChange(cb);
+  const snapshot = () => mod.getSaveSortMigrationState();
+  const mod = {
+    getSaveSortMigrationState: vi.fn(() => currentSaveSortState),
+    setSaveSortMigrationStatus: vi.fn((s: SaveSortMigrationStatus) => {
+      currentSaveSortState = s;
+      saveSortListeners.forEach((fn) => fn());
+    }),
+    onSaveSortMigrationChange: vi.fn((cb: () => void) => {
+      saveSortListeners.push(cb);
+      return () => {
+        const i = saveSortListeners.indexOf(cb);
+        if (i >= 0) saveSortListeners.splice(i, 1);
+      };
+    }),
+    useSaveSortMigrationState: () => useSyncExternalStore(subscribe, snapshot),
+  };
+  return mod;
+});
 import * as saveSortMigrationStore from "../utils/saveSortMigrationStore";
 
 vi.mock("../utils/syncManager", () => ({

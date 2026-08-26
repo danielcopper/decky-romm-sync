@@ -11,9 +11,18 @@
  *   - SettingsResetBanner Dismiss button (setSettingsResetState on ack success)
  *
  * Read by:
- *   - SettingsResetBanner (QAM) and SettingsResetCard (game detail)
+ *   - MainPage.tsx and RomMGameInfoPanel.tsx, both through
+ *     {@link useSettingsResetState}, which decide whether to render the
+ *     SettingsResetBanner (QAM) / SettingsResetCard (game detail)
+ *
+ * Every write installs a NEW state object and notifies. That is what lets
+ * {@link getSettingsResetState} serve as a `useSyncExternalStore` snapshot —
+ * React compares snapshots by identity, so a getter handing back a fresh object
+ * per call would re-render forever, and an in-place write would leave a
+ * subscriber unable to tell that the notice moved.
  */
 
+import { useSyncExternalStore } from "react";
 import { getSettingsResetNotice } from "../api/backend";
 
 export interface SettingsResetState {
@@ -38,6 +47,12 @@ export function onSettingsResetChange(fn: () => void): () => void {
   return () => {
     _listeners = _listeners.filter((l) => l !== fn);
   };
+}
+
+/** Subscribe to the corrupt-settings-reset notice from a component. Re-renders
+ *  the caller whenever it changes and drops its subscription on unmount. */
+export function useSettingsResetState(): SettingsResetState {
+  return useSyncExternalStore(onSettingsResetChange, getSettingsResetState);
 }
 
 /**

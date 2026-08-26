@@ -34,7 +34,7 @@ import * as saveStatusUtils from "../utils/saveStatus";
 import * as formatters from "../utils/formatters";
 import { getGameDetail } from "../utils/gameDetailStore";
 import { useVersionError } from "./VersionErrorCard";
-import { useMigrationStatus } from "./MigrationBlockedPage";
+import { useMigrationStatus } from "../utils/migrationStore";
 
 // Type-only import — vi.mock("./CustomPlayButton", ...) below replaces the
 // runtime impl, but pinning the captured-props shape to the real component
@@ -45,7 +45,10 @@ import type { CustomPlayButton } from "./CustomPlayButton";
 vi.mock("./VersionErrorCard", () => ({
   useVersionError: vi.fn(() => null),
 }));
-vi.mock("./MigrationBlockedPage", () => ({
+// Only the hook is replaced — the store's writers stay real, so anything else
+// in the tree that reads migration state still sees a consistent module.
+vi.mock("../utils/migrationStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/migrationStore")>()),
   useMigrationStatus: vi.fn(() => ({ pending: false })),
 }));
 

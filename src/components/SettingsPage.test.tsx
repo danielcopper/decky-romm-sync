@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
-import { createElement, type ComponentProps, type ReactElement } from "react";
+import { createElement, useSyncExternalStore, type ComponentProps, type ReactElement } from "react";
 import { SettingsPage } from "./SettingsPage";
 import * as backend from "../api/backend";
 import type { SaveSortMigrationStatus, RegisteredDevice } from "../types";
@@ -142,24 +142,34 @@ vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
 // drive the subscribe/unsubscribe + state-change flow deterministically.
 const saveSortListeners: Array<() => void> = [];
 let currentSortState: SaveSortMigrationStatus = { pending: false };
-vi.mock("../utils/saveSortMigrationStore", () => ({
-  getSaveSortMigrationState: vi.fn(() => currentSortState),
-  setSaveSortMigrationStatus: vi.fn((s: SaveSortMigrationStatus) => {
-    currentSortState = s;
-    saveSortListeners.forEach((fn) => fn());
-  }),
-  clearSaveSortMigration: vi.fn(() => {
-    currentSortState = { pending: false };
-    saveSortListeners.forEach((fn) => fn());
-  }),
-  onSaveSortMigrationChange: vi.fn((cb: () => void) => {
-    saveSortListeners.push(cb);
-    return () => {
-      const i = saveSortListeners.indexOf(cb);
-      if (i >= 0) saveSortListeners.splice(i, 1);
-    };
-  }),
-}));
+// useSaveSortMigrationState routes through the mocked seams rather than being
+// stubbed with a constant, so the listener assertions still measure the page's
+// real subscribe/unsubscribe. subscribe/snapshot are built once — a fresh
+// subscribe reference per render makes React re-subscribe on every render.
+vi.mock("../utils/saveSortMigrationStore", () => {
+  const subscribe = (cb: () => void) => mod.onSaveSortMigrationChange(cb);
+  const snapshot = () => mod.getSaveSortMigrationState();
+  const mod = {
+    getSaveSortMigrationState: vi.fn(() => currentSortState),
+    setSaveSortMigrationStatus: vi.fn((s: SaveSortMigrationStatus) => {
+      currentSortState = s;
+      saveSortListeners.forEach((fn) => fn());
+    }),
+    clearSaveSortMigration: vi.fn(() => {
+      currentSortState = { pending: false };
+      saveSortListeners.forEach((fn) => fn());
+    }),
+    onSaveSortMigrationChange: vi.fn((cb: () => void) => {
+      saveSortListeners.push(cb);
+      return () => {
+        const i = saveSortListeners.indexOf(cb);
+        if (i >= 0) saveSortListeners.splice(i, 1);
+      };
+    }),
+    useSaveSortMigrationState: () => useSyncExternalStore(subscribe, snapshot),
+  };
+  return mod;
+});
 
 // Wait one microtask for the mount-time useEffect promises to resolve.
 const flushAsync = () =>

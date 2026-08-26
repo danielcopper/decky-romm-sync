@@ -13,9 +13,17 @@
  *   - PlaytimeScopeBanner Dismiss button (setPlaytimeScopeState — local dismiss)
  *
  * Read by:
- *   - PlaytimeScopeBanner (QAM)
+ *   - MainPage.tsx through {@link usePlaytimeScopeState}, which decides whether
+ *     to render the PlaytimeScopeBanner (QAM)
+ *
+ * Every write installs a NEW state object and notifies. That is what lets
+ * {@link getPlaytimeScopeState} serve as a `useSyncExternalStore` snapshot —
+ * React compares snapshots by identity, so a getter handing back a fresh object
+ * per call would re-render forever, and an in-place write would leave a
+ * subscriber unable to tell that the notice moved.
  */
 
+import { useSyncExternalStore } from "react";
 import { getPlaytimeScopeNotice } from "../api/backend";
 
 export interface PlaytimeScopeState {
@@ -39,6 +47,12 @@ export function onPlaytimeScopeChange(fn: () => void): () => void {
   return () => {
     _listeners = _listeners.filter((l) => l !== fn);
   };
+}
+
+/** Subscribe to the playtime-scope notice from a component. Re-renders the
+ *  caller whenever it changes and drops its subscription on unmount. */
+export function usePlaytimeScopeState(): PlaytimeScopeState {
+  return useSyncExternalStore(onPlaytimeScopeChange, getPlaytimeScopeState);
 }
 
 /**

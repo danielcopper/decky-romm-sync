@@ -29,17 +29,15 @@ import {
   logError,
 } from "../api/backend";
 import type {
-  SaveSortMigrationStatus,
   RegisteredDevice,
   CollectionNamingMode,
   SaveSyncSettings as SaveSyncSettingsType,
   RetroArchInputCheck,
 } from "../types";
 import {
-  getSaveSortMigrationState,
   setSaveSortMigrationStatus as setStoreSaveSortStatus,
   clearSaveSortMigration,
-  onSaveSortMigrationChange,
+  useSaveSortMigrationState,
 } from "../utils/saveSortMigrationStore";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
@@ -94,7 +92,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   const [retroarchFixStatus, setRetroarchFixStatus] = useState("");
 
   // Save sort migration state
-  const [saveSortMigration, setSaveSortMigration] = useState<SaveSortMigrationStatus>(getSaveSortMigrationState());
+  const saveSortMigration = useSaveSortMigrationState();
   const [saveSortMigrating, setSaveSortMigrating] = useState(false);
   const [saveSortResult, setSaveSortResult] = useState("");
 
@@ -158,15 +156,9 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
       .then((s) => {
         if (s.pending) {
           setStoreSaveSortStatus(s);
-          setSaveSortMigration(s);
         }
       })
       .catch(() => {});
-
-    const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortMigration(getSaveSortMigrationState()));
-    return () => {
-      unsubSaveSort();
-    };
   }, []);
 
   function loadDevices() {

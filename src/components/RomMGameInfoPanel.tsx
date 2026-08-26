@@ -26,13 +26,9 @@ import { bindRomInState, loadData, type PanelReadSeqs, type PanelState } from ".
 import { wirePanelEvents } from "./panelEvents";
 import { useSaveSlotsLoad } from "./panelSlotsLoad";
 import { buildTabContent } from "./panelTabContent";
-import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
-import { getSettingsResetState, onSettingsResetChange } from "../utils/settingsResetStore";
-import {
-  getSaveSortMigrationState,
-  onSaveSortMigrationChange,
-  setSaveSortMigrationStatus,
-} from "../utils/saveSortMigrationStore";
+import { setMigrationStatus, useMigrationStatus } from "../utils/migrationStore";
+import { useSettingsResetState } from "../utils/settingsResetStore";
+import { setSaveSortMigrationStatus, useSaveSortMigrationState } from "../utils/saveSortMigrationStore";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { MigrationBlockedCard } from "./MigrationBlockedCard";
 import { SettingsResetCard } from "./SettingsResetCard";
@@ -85,20 +81,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
   // enforce is stated at `takeReadTicket`. They live here because the loads, the
   // event lane and the lazy slots lane take tickets from the same counters.
   const readSeqs = useRef<PanelReadSeqs>({ detail: 0, saveStatus: 0, slots: 0, slotTracking: 0, bios: 0 });
-  const [migration, setMigration] = useState(getMigrationState());
-  const [settingsReset, setSettingsReset] = useState(getSettingsResetState());
-  const [saveSortPending, setSaveSortPending] = useState(getSaveSortMigrationState().pending);
-
-  useEffect(() => {
-    const unsub = onMigrationChange(() => setMigration(getMigrationState()));
-    const unsubSettingsReset = onSettingsResetChange(() => setSettingsReset(getSettingsResetState()));
-    const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortPending(getSaveSortMigrationState().pending));
-    return () => {
-      unsub();
-      unsubSettingsReset();
-      unsubSaveSort();
-    };
-  }, []);
+  const migration = useMigrationStatus();
+  const settingsReset = useSettingsResetState();
+  const saveSortPending = useSaveSortMigrationState().pending;
 
   useEffect(() => {
     refreshMigrationState()

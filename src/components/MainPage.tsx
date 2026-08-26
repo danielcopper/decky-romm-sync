@@ -52,14 +52,10 @@ import {
   useSessionBudget,
   useSyncStats,
 } from "../utils/syncStatsStore";
-import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
-import { getSettingsResetState, onSettingsResetChange } from "../utils/settingsResetStore";
-import { getPlaytimeScopeState, onPlaytimeScopeChange, fetchPlaytimeScopeState } from "../utils/playtimeScopeStore";
-import {
-  getSaveSortMigrationState,
-  onSaveSortMigrationChange,
-  setSaveSortMigrationStatus,
-} from "../utils/saveSortMigrationStore";
+import { setMigrationStatus, useMigrationStatus } from "../utils/migrationStore";
+import { useSettingsResetState } from "../utils/settingsResetStore";
+import { fetchPlaytimeScopeState, usePlaytimeScopeState } from "../utils/playtimeScopeStore";
+import { setSaveSortMigrationStatus, useSaveSortMigrationState } from "../utils/saveSortMigrationStore";
 import { reconcileStaleShortcuts, requestSyncCancel, isCancelRequested, resetSyncCancel } from "../utils/syncManager";
 import { useConnectionProbe } from "../utils/connectionProbe";
 import type { BackendFailed, ConnectionFailure } from "../utils/connectionProbe";
@@ -71,15 +67,7 @@ import { MigrationBlockedPage } from "./MigrationBlockedPage";
 import { SettingsResetBanner } from "./SettingsResetBanner";
 import { PlaytimeScopeBanner } from "./PlaytimeScopeBanner";
 import { SessionBudgetBanner, formatGb, formatSignedGb, memoryLevelColor } from "./SessionBudgetBanner";
-import type {
-  SyncProgress,
-  SyncStage,
-  SyncStats,
-  SyncPreview,
-  SyncPreviewSummary,
-  MigrationStatus,
-  Page,
-} from "../types";
+import type { SyncProgress, SyncStage, SyncStats, SyncPreview, SyncPreviewSummary, Page } from "../types";
 import { detach } from "../utils/detach";
 import { wrapText } from "../utils/textStyles";
 
@@ -476,10 +464,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [skipPreview, setSkipPreview] = useState(false);
   const [retroarchWarning, setRetroarchWarning] = useState<{ warning: boolean; current?: string } | null>(null);
   const [retrodeckBanner, setRetrodeckBanner] = useState<RetroDeckBanner | null>(null);
-  const [migration, setMigration] = useState<MigrationStatus>(getMigrationState());
-  const [settingsReset, setSettingsReset] = useState(getSettingsResetState());
-  const [playtimeScope, setPlaytimeScope] = useState(getPlaytimeScopeState());
-  const [saveSortMigration, setSaveSortMigration] = useState(getSaveSortMigrationState());
+  const migration = useMigrationStatus();
+  const settingsReset = useSettingsResetState();
+  const playtimeScope = usePlaytimeScopeState();
+  const saveSortMigration = useSaveSortMigrationState();
   const downloads = useDownloads();
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The run this panel is watching, by id, and whether its end has been handled.
@@ -680,16 +668,8 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       }
     });
 
-    const unsubMigration = onMigrationChange(() => setMigration(getMigrationState()));
-    const unsubSettingsReset = onSettingsResetChange(() => setSettingsReset(getSettingsResetState()));
-    const unsubPlaytimeScope = onPlaytimeScopeChange(() => setPlaytimeScope(getPlaytimeScopeState()));
-    const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortMigration(getSaveSortMigrationState()));
     return () => {
       unsubProgress();
-      unsubMigration();
-      unsubSettingsReset();
-      unsubPlaytimeScope();
-      unsubSaveSort();
       if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
     };
   }, []);

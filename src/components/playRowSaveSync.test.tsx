@@ -16,11 +16,16 @@ import { setRommConnectionState, setVersionError } from "../utils/connectionStat
 import { registerConnectionHeartbeat } from "../utils/connectionHeartbeat";
 import { stubAppStore } from "../test-utils/steamStubs";
 import { useVersionError } from "./VersionErrorCard";
-import { useMigrationStatus } from "./MigrationBlockedPage";
+import { useMigrationStatus } from "../utils/migrationStore";
 import type { SaveStatus, SyncConflict } from "../types";
 
 vi.mock("./VersionErrorCard", () => ({ useVersionError: vi.fn(() => null) }));
-vi.mock("./MigrationBlockedPage", () => ({ useMigrationStatus: vi.fn(() => ({ pending: false })) }));
+// Only the hook is replaced — the store's writers stay real, so anything else
+// in the tree that reads migration state still sees a consistent module.
+vi.mock("../utils/migrationStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/migrationStore")>()),
+  useMigrationStatus: vi.fn(() => ({ pending: false })),
+}));
 // The heartbeat owns a real setInterval; the artwork apply and the playtime
 // overview write both reach into Steam. None of the three is on the path under
 // test, so they are stubbed inert rather than driven.

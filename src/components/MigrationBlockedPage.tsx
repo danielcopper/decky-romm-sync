@@ -1,22 +1,12 @@
-import { FC, useEffect, useState } from "react";
+import { FC, useState } from "react";
 import { PanelSection, PanelSectionRow, ButtonItem, Field, ConfirmModal, showModal } from "@decky/ui";
 import { showToast } from "../utils/toast";
 import { migrateRetroDeckFiles, dismissRetrodeckMigration } from "../api/backend";
 import type { MigrationStatus } from "../types";
-import { getMigrationState, onMigrationChange, clearMigration } from "../utils/migrationStore";
+import { clearMigration } from "../utils/migrationStore";
 import { MigrationConflictModal } from "./MigrationConflictModal";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
-
-/**
- * Subscribe to migration state changes.
- * Returns the current migration status.
- */
-export function useMigrationStatus(): MigrationStatus {
-  const [status, setStatus] = useState<MigrationStatus>(getMigrationState());
-  useEffect(() => onMigrationChange(() => setStatus(getMigrationState())), []);
-  return status;
-}
 
 interface MigrationBlockedPageProps {
   migration: MigrationStatus;

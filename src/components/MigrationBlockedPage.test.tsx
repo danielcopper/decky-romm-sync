@@ -6,15 +6,14 @@
 // Both surface through the rendered <Field label={migrateResult} /> — the
 // catch tests below assert that label text.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, fireEvent, act, renderHook } from "@testing-library/react";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, fireEvent, act } from "@testing-library/react";
 import { createElement, type ComponentProps, type ReactElement } from "react";
 import { showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
-import { MigrationBlockedPage, useMigrationStatus } from "./MigrationBlockedPage";
+import { MigrationBlockedPage } from "./MigrationBlockedPage";
 import * as backend from "../api/backend";
 import { setMigrationStatus, clearMigration, getMigrationState } from "../utils/migrationStore";
-import * as migrationStore from "../utils/migrationStore";
 import type { MigrationStatus, MigrationResult } from "../types";
 // Type-only — vi.mock("./MigrationConflictModal") below replaces the runtime
 // impl; the captured-props type stays pinned to the real component.
@@ -76,7 +75,8 @@ describe("MigrationBlockedPage component", () => {
     vi.mocked(toaster.toast).mockClear();
     vi.mocked(backend.migrateRetroDeckFiles).mockReset();
     vi.mocked(backend.dismissRetrodeckMigration).mockReset();
-    // Reset migrationStore so listener-based hooks aren't carrying leak state.
+    // The clearMigration/getMigrationState assertions below read the real store,
+    // which outlives the test — reset it so each case starts from not-pending.
     clearMigration();
   });
 
@@ -381,59 +381,5 @@ describe("MigrationBlockedPage component", () => {
       const confirm = lastShownModalProps<{ strTitle?: string }>();
       expect(confirm?.strTitle).toBe("Dismiss Migration?");
     });
-  });
-});
-
-describe("useMigrationStatus hook", () => {
-  // act-wrapped: this teardown runs before RTL's cleanup(), so the hook is still
-  // mounted and the reset notifies its subscriber — a real state update.
-  afterEach(() => {
-    act(() => {
-      clearMigration();
-    });
-  });
-
-  it("returns the current state from getMigrationState() on mount", () => {
-    setMigrationStatus({ pending: true, old_path: "/x" });
-    const { result } = renderHook(() => useMigrationStatus());
-    expect(result.current).toEqual({ pending: true, old_path: "/x" });
-  });
-
-  it("updates when setMigrationStatus fires after mount", () => {
-    const { result } = renderHook(() => useMigrationStatus());
-    expect(result.current).toEqual({ pending: false });
-    act(() => {
-      setMigrationStatus({ pending: true, roms_count: 9 });
-    });
-    expect(result.current).toEqual({ pending: true, roms_count: 9 });
-  });
-
-  it("updates when clearMigration fires", () => {
-    setMigrationStatus({ pending: true, roms_count: 9 });
-    const { result } = renderHook(() => useMigrationStatus());
-    expect(result.current.pending).toBe(true);
-    act(() => {
-      clearMigration();
-    });
-    expect(result.current).toEqual({ pending: false });
-  });
-
-  it("unsubscribes on unmount — useEffect cleanup invokes the returned unsubscribe", () => {
-    // Spy on onMigrationChange so the test owns the unsubscribe callback.
-    // The "updates after mount" tests above cover the subscribe-then-callback
-    // path; this test isolates the cleanup invocation. Asserting unsubSpy
-    // was called proves the hook returns its unsubscribe from useEffect — a
-    // mutation that drops the return fails this test, where the prior
-    // `not.toThrow()` pattern passed vacuously under React 19's silent
-    // no-op-on-unmounted-setState.
-    const unsubSpy = vi.fn();
-    vi.spyOn(migrationStore, "onMigrationChange").mockImplementation((_cb) => {
-      return unsubSpy;
-    });
-
-    const { unmount } = renderHook(() => useMigrationStatus());
-    expect(unsubSpy).not.toHaveBeenCalled();
-    unmount();
-    expect(unsubSpy).toHaveBeenCalledTimes(1);
   });
 });
