@@ -21,6 +21,7 @@ import {
   syncPreview,
   syncApplyDelta,
   syncCancelPreview,
+  getPendingPreview,
   clearSyncCache,
   refreshMigrationState,
   getSyncStatus,
@@ -29,7 +30,7 @@ import {
 } from "../api/backend";
 import { formatTimeAgo } from "../utils/formatters";
 import { pluralize } from "../utils/pluralize";
-import { formatDuration, previewApplySeconds } from "../utils/syncEstimate";
+import { formatDuration, formatTimeRemaining, previewApplySeconds } from "../utils/syncEstimate";
 import {
   observeApplyProgress,
   displayedEtaSeconds,
@@ -352,6 +353,25 @@ function formatLibraryLine(stats: SyncStats): string {
 const LONG_SYNC_HINT_THRESHOLD_SEC = 600;
 
 /**
+ * Seconds left before the backend stops accepting *preview*, measured against
+ * *nowMs*, or `null` when the preview carries no deadline (an older backend) —
+ * the card then shows no countdown at all. Never negative: past the deadline it
+ * is 0, which the card reads as expired.
+ *
+ * `nowMs` is passed in rather than read here: the value ticks from an interval
+ * into state, so render stays pure.
+ */
+function previewSecondsLeft(preview: SyncPreview, nowMs: number): number | null {
+  if (preview.expires_at === undefined) return null;
+  return Math.max(0, preview.expires_at - nowMs / 1000);
+}
+
+/** How often the preview card's expiry countdown re-reads the clock. The readout
+ *  itself is minute-coarse; the second-level cadence is what makes the switch to
+ *  the expired notice land promptly rather than up to a minute late. */
+const PREVIEW_COUNTDOWN_TICK_MS = 1000;
+
+/**
  * Thin horizontal rule dividing the panel's blocks (status | sync | menu).
  * The panel carries no section headings — these rules are the only block
  * boundaries.
@@ -461,6 +481,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [liveEtaDisplay, setLiveEtaDisplay] = useState<number | null>(null);
   const [status, setStatus] = useState<TransientStatus | null>(null);
   const [preview, setPreview] = useState<SyncPreview | null>(null);
+  // Clock mirror for the preview card's expiry countdown, written from the
+  // interval below (never read during render, same rule as the live-ETA row).
+  // `null` while no preview is up, or when the preview carries no deadline.
+  const [previewNowMs, setPreviewNowMs] = useState<number | null>(null);
   const [skipPreview, setSkipPreview] = useState(false);
   const [retroarchWarning, setRetroarchWarning] = useState<{ warning: boolean; current?: string } | null>(null);
   const [retrodeckBanner, setRetrodeckBanner] = useState<RetroDeckBanner | null>(null);
@@ -520,6 +544,25 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     getRetroDeckStatus()
       .then((s) => setRetrodeckBanner(retroDeckBanner(s.status, s)))
       .catch((e) => logError(`Failed to query RetroDECK status: ${e}`));
+
+    // The backend holds a computed preview for 30 minutes, but this panel's card
+    // dies with the render — leaving the main page for a submenu used to strand a
+    // preview that was still perfectly appliable. Ask for it back on every mount.
+    getPendingPreview()
+      .then((answer) => {
+        if (!answer.success || !answer.preview) return;
+        const restored = answer.preview;
+        // Same reasoning as the getSyncStatus seed above: this answer describes
+        // the world as it was when the read was ISSUED, so anything that happened
+        // since outranks it. A run started in that window owns the panel — the
+        // store, not this read, is authoritative about a sync being in flight —
+        // and a preview the user produced or dismissed in it is the one they are
+        // looking at, so the functional update lets the restored one lose.
+        if (getSyncProgress().running) return;
+        setPreviewNowMs(Date.now());
+        setPreview((cur) => cur ?? restored);
+      })
+      .catch((e) => logError(`Failed to query pending preview: ${e}`));
 
     // Cross-device playtime scope notice. The backend sets a durable flag when a
     // playtime reconcile is rejected for a token missing `roms.user.read`; it
@@ -674,6 +717,19 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     };
   }, []);
 
+  // Drive the preview card's expiry countdown. The deadline is absolute, so the
+  // only thing that has to tick is the current time — mirrored into state here
+  // rather than read in render, which must stay pure. The first value is stamped
+  // by whoever adopts the preview (both are handlers); this only keeps it moving,
+  // and is torn down when the preview goes away (dismissed, applied, or the panel
+  // unmounting). A preview without a deadline (older backend) arms nothing.
+  const previewExpiresAt = preview?.expires_at;
+  useEffect(() => {
+    if (previewExpiresAt === undefined) return;
+    const id = setInterval(() => setPreviewNowMs(Date.now()), PREVIEW_COUNTDOWN_TICK_MS);
+    return () => clearInterval(id);
+  }, [previewExpiresAt]);
+
   // Poll the live renderer-heap reading while it can still change: during a sync (so
   // the "Steam memory" row tracks the climbing RSS mid-apply) AND while the last run
   // is paused (so the paused banner notices once a Steam restart frees memory and
@@ -756,6 +812,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         abortOptimisticSync("Sync cancelled");
         return;
       }
+      // Stamp the clock the card's expiry countdown reads from — an impure read,
+      // so it belongs here rather than in render or in the interval's effect body.
+      setPreviewNowMs(Date.now());
       setPreview(result);
       // The preview run is over — retract the optimistic running:true rather than
       // waiting for the backend's own terminal frame for it. That frame can be
@@ -770,6 +829,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
 
   const handleApply = async () => {
     if (!preview) return;
+    // A press that beat the countdown's tick to the expired state. The backend
+    // would refuse this apply, so don't spend the user's press on a failure they
+    // could not have avoided — re-read the clock instead, which flips the card to
+    // its expired form and takes the button with it.
+    if (previewSecondsLeft(preview, Date.now()) === 0) {
+      setPreviewNowMs(Date.now());
+      return;
+    }
     const previewId = preview.preview_id;
     // Seed the apply ETA from the walk cost (shared with the preview row via
     // previewApplySeconds) so the number the user approved is the run's seed. It
@@ -966,6 +1033,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // omits the scope counts leaves scopeText empty; the duration line then
     // stands alone.
     const scopeText = formatSyncScope(preview.summary);
+    // Time left before the backend stops accepting this preview. `null` when the
+    // backend sent no deadline (older backend) — no countdown, no expiry, the
+    // card behaves exactly as it did before. At zero the card STAYS: nothing is
+    // allowed to disappear or move on its own, so the countdown is replaced by
+    // the expired notice, Apply goes away, and only Dismiss remains.
+    const secondsLeft = previewNowMs === null ? null : previewSecondsLeft(preview, previewNowMs);
+    const expired = secondsLeft === 0;
     // The sleep-pause caveat is only worth the extra line for a genuinely long run.
     const hintText =
       "Progress is saved about every 200 games — cancelling is safe." +
@@ -1027,7 +1101,23 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             </Focusable>
           </PanelSectionRow>
         ) : null}
-        {hasChanges ? (
+        {hasChanges && secondsLeft !== null && (
+          <PanelSectionRow>
+            <Focusable>
+              <div
+                data-testid="preview-expiry"
+                style={{
+                  fontSize: "12px",
+                  color: expired ? "#e5b93c" : "rgba(255, 255, 255, 0.6)",
+                  padding: "4px 0",
+                }}
+              >
+                {expired ? "Expired — run the preview again" : `Expires in ${formatTimeRemaining(secondsLeft)}`}
+              </div>
+            </Focusable>
+          </PanelSectionRow>
+        )}
+        {hasChanges && !expired ? (
           <>
             <PanelSectionRow>
               <ButtonItem

@@ -391,6 +391,8 @@ describe("MainPage", () => {
       success: true,
       message: "",
     });
+    // Nothing staged is the default; the restore tests opt into a preview.
+    vi.mocked(backend.getPendingPreview).mockResolvedValue({ success: true, preview: null });
     vi.mocked(backend.getSyncStatus).mockResolvedValue({
       running: false,
       stage: "",
@@ -3908,6 +3910,215 @@ describe("MainPage", () => {
 
       expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
       expect(fieldLabels(container)).not.toContain("Preview ready");
+    });
+  });
+
+  // ===========================================================================
+  // G2. A preview outlives the panel that computed it
+  // ===========================================================================
+  describe("pending preview restored on mount", () => {
+    /** A preview with a real delta, so the card offers Apply Sync. */
+    function heldPreview(overrides: Partial<SyncPreview> = {}): SyncPreview {
+      return {
+        success: true,
+        summary: {
+          new_count: 2,
+          changed_count: 0,
+          unchanged_count: 0,
+          remove_count: 0,
+          disabled_platform_remove_count: 0,
+        },
+        new_names: ["a", "b"],
+        changed_names: [],
+        preview_id: "preview-held",
+        ...overrides,
+      };
+    }
+
+    function changesText(container: HTMLElement): string {
+      return container.querySelector('[data-testid="sync-changes"]')?.textContent ?? "";
+    }
+
+    function expiryText(container: HTMLElement): string | null {
+      return container.querySelector('[data-testid="preview-expiry"]')?.textContent ?? null;
+    }
+
+    it("shows the card again on mount and applies the preview the backend still holds", async () => {
+      vi.mocked(backend.getPendingPreview).mockResolvedValue({ success: true, preview: heldPreview() });
+      vi.mocked(backend.syncApplyDelta).mockResolvedValue({ success: true, message: "" });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      expect(changesText(container)).toContain("Games: 2 new");
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Apply Sync")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.syncApplyDelta)).toHaveBeenCalledWith("preview-held");
+    });
+
+    it("nothing pending leaves the idle page untouched", async () => {
+      vi.mocked(backend.getPendingPreview).mockResolvedValue({ success: true, preview: null });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
+      expect(buttonByExactText(container, "Apply Sync")).toBeNull();
+    });
+
+    it("logs the failure when getPendingPreview rejects, and the idle page stands", async () => {
+      vi.mocked(backend.getPendingPreview).mockRejectedValue(new Error("boom"));
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to query pending preview"));
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
+      logSpy.mockRestore();
+    });
+
+    it("loses to a preview the user produced while the read was in flight", async () => {
+      // The answer describes the world as it was when the read was issued; the
+      // preview the user is looking at was computed after it.
+      const held = deferred<{ success: boolean; preview: SyncPreview | null }>();
+      vi.mocked(backend.getPendingPreview).mockReturnValue(held.promise);
+      vi.mocked(backend.syncPreview).mockResolvedValue(heldPreview({ preview_id: "preview-fresh" }));
+      vi.mocked(backend.syncApplyDelta).mockResolvedValue({ success: true, message: "" });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        held.resolve({ success: true, preview: heldPreview({ preview_id: "preview-held" }) });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Apply Sync")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.syncApplyDelta)).toHaveBeenCalledWith("preview-fresh");
+    });
+
+    it("is dropped when a run started while the read was in flight", async () => {
+      const held = deferred<{ success: boolean; preview: SyncPreview | null }>();
+      vi.mocked(backend.getPendingPreview).mockReturnValue(held.promise);
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        setSyncProgress({ running: true, stage: "fetching", message: "Fetching library..." });
+        await Promise.resolve();
+      });
+      await act(async () => {
+        held.resolve({ success: true, preview: heldPreview() });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // The run owns the panel — no card, and its progress rows stand.
+      expect(buttonByExactText(container, "Apply Sync")).toBeNull();
+      expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
+    });
+
+    it("counts down the time left and advances as the clock runs", async () => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        vi.setSystemTime(0);
+        vi.mocked(backend.getPendingPreview).mockResolvedValue({
+          success: true,
+          preview: heldPreview({ expires_at: 1800 }),
+        });
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+
+        expect(expiryText(container)).toBe("Expires in 30 min");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(60_000);
+        });
+        expect(expiryText(container)).toBe("Expires in 29 min");
+        // Floored, so the readout never promises more time than remains.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+        expect(expiryText(container)).toBe("Expires in 28 min");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("at zero the card stays, says it expired, and drops Apply Sync for Dismiss", async () => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        vi.setSystemTime(0);
+        // A five-second deadline: the same expiry the 30-minute one reaches,
+        // without ticking the interval 1800 times to get there.
+        vi.mocked(backend.getPendingPreview).mockResolvedValue({
+          success: true,
+          preview: heldPreview({ expires_at: 5 }),
+        });
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+        expect(expiryText(container)).toBe("Expires in < 1 min");
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6000);
+        });
+
+        expect(expiryText(container)).toBe("Expired — run the preview again");
+        // Nothing disappeared or moved on its own: the change list is still there
+        // and only the user's Dismiss takes the card away.
+        expect(changesText(container)).toContain("Games: 2 new");
+        expect(buttonByExactText(container, "Apply Sync")).toBeNull();
+        expect(buttonByExactText(container, "Dismiss")).not.toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("an expired preview cannot be applied by a press that beat the tick", async () => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        vi.setSystemTime(0);
+        vi.mocked(backend.getPendingPreview).mockResolvedValue({
+          success: true,
+          preview: heldPreview({ expires_at: 5 }),
+        });
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+        const apply = buttonByExactText(container, "Apply Sync")!;
+
+        // The clock passes the deadline without the interval having ticked, so
+        // the button the user presses is one the render still believes in.
+        vi.setSystemTime(6000);
+        await act(async () => {
+          fireEvent.click(apply);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+
+        expect(vi.mocked(backend.syncApplyDelta)).not.toHaveBeenCalled();
+        expect(expiryText(container)).toBe("Expired — run the preview again");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("shows no countdown at all when the backend sends no deadline", async () => {
+      vi.mocked(backend.getPendingPreview).mockResolvedValue({ success: true, preview: heldPreview() });
+      vi.mocked(backend.syncApplyDelta).mockResolvedValue({ success: true, message: "" });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      expect(expiryText(container)).toBeNull();
+      expect(buttonByExactText(container, "Apply Sync")).not.toBeNull();
     });
   });
 

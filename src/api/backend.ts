@@ -24,6 +24,7 @@ import type {
   SyncConflict,
   RommErrorCode,
   SyncPreview,
+  PendingPreviewAnswer,
   SessionBudgetStatus,
   AchievementSummary,
   AchievementList,
@@ -238,6 +239,13 @@ export const syncHeartbeat = callable<[], { success: boolean }>("sync_heartbeat"
 export const syncPreview = callable<[], SyncPreview>("sync_preview");
 export const syncApplyDelta = callable<[string], BackendResult>("sync_apply_delta");
 export const syncCancelPreview = callable<[], BackendResult>("sync_cancel_preview");
+/**
+ * The preview the backend is still holding, if any — how a panel that was
+ * navigated away from gets its card back. `preview: null` is the normal
+ * "nothing pending" answer; the backend also drops (and reports as null) a
+ * snapshot past its 30-minute TTL, which the apply would refuse anyway.
+ */
+export const getPendingPreview = callable<[], PendingPreviewAnswer>("get_pending_preview");
 export const getSyncStatus = callable<[], SyncProgress>("get_sync_status");
 export const getSessionBudgetStatus = callable<[], SessionBudgetStatus>("get_session_budget_status");
 export const clearSyncCache = callable<[], BackendResult>("clear_sync_cache");

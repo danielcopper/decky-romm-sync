@@ -7,6 +7,7 @@ import {
   estimateApplySeconds,
   estimatePlanSeconds,
   formatDuration,
+  formatTimeRemaining,
 } from "./syncEstimate";
 import type { SyncPlanUnit } from "../types/sync";
 
@@ -222,5 +223,30 @@ describe("formatDuration", () => {
 
   it("omits the minutes part on a whole-hour value", () => {
     expect(formatDuration(7200)).toBe("2 h");
+  });
+});
+
+describe("formatTimeRemaining", () => {
+  it("shows '< 1 min' for anything under a minute", () => {
+    expect(formatTimeRemaining(0)).toBe("< 1 min");
+    expect(formatTimeRemaining(59)).toBe("< 1 min");
+  });
+
+  it("floors to the minute rather than rounding, so it never promises more time than remains", () => {
+    // 89s = 1.48 min — formatDuration rounds this to "1 min" too, but 90s
+    // (exactly 1.5 min) is where the two part: rounding reads "2 min" for a
+    // deadline that is 90 seconds away.
+    expect(formatTimeRemaining(89)).toBe("1 min");
+    expect(formatTimeRemaining(90)).toBe("1 min");
+    expect(formatDuration(90)).toBe("2 min");
+    // 3599s is one second short of the hour and must not read "1 h".
+    expect(formatTimeRemaining(3599)).toBe("59 min");
+    expect(formatDuration(3599)).toBe("1 h");
+  });
+
+  it("renders the full TTL and the hour boundary", () => {
+    expect(formatTimeRemaining(1800)).toBe("30 min");
+    expect(formatTimeRemaining(3600)).toBe("1 h");
+    expect(formatTimeRemaining(4200)).toBe("1 h 10 min");
   });
 });

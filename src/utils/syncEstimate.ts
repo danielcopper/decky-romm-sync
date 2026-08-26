@@ -168,3 +168,13 @@ export function formatApproxDuration(seconds: number, roundMinutes: (n: number) 
 export function formatDuration(seconds: number): string {
   return formatApproxDuration(seconds, Math.round, "");
 }
+
+/**
+ * Render the time left before a deadline — ``"< 1 min"``, ``"29 min"``,
+ * ``"1 h 10 min"``. Minutes are FLOORED, which is what separates this from
+ * ``formatDuration``: a readout counting down to a hard cutoff must never
+ * promise more time than remains, so 89 seconds reads "1 min", not "2 min".
+ */
+export function formatTimeRemaining(seconds: number): string {
+  return formatApproxDuration(seconds, Math.floor, "");
+}
