@@ -15,9 +15,9 @@
 //   - handleApply try/catch → setStatus("Failed to apply sync") — asserted.
 //   - handleDismiss inline `.catch(() => {})` — truly-ignored; asserted by
 //     verifying the dismiss path completed (preview cleared, no crash).
-//   - handleCancel try/catch → finishCancelWithStatus("Failed to cancel sync")
-//     surfaces the message after stopPolling + setSyncing(false) + setLoading(false)
-//     un-gate the status field; #733 fix landed — message now visible.
+//   - handleCancel try/catch → showTransientStatus("Failed to cancel sync"),
+//     surfaced under the still-running progress rows (the status field is gated
+//     on the preview only, not on the run being idle).
 //   - fixRetroarchInputDriver inline `.catch(() => {})` (inside ConfirmModal
 //     onOK) — truly-ignored; warning state remains (no clear).
 //
@@ -1449,6 +1449,12 @@ describe("MainPage", () => {
       expect(container.querySelector('[data-testid="budget-paused-banner"]')).not.toBeNull();
       expect(container.textContent).toContain("(paused)");
 
+      // The resume the user pressed is under way — the terminal frame below ends
+      // THIS run, which is what provokes the stats re-read.
+      await act(async () => {
+        setSyncProgress({ running: true, stage: "applying", message: "Working" });
+      });
+
       // A newer cancelled attempt supersedes the paused run; the stats refetch on the
       // terminal event returns it.
       vi.mocked(backend.getSyncStats).mockResolvedValue({
@@ -2456,6 +2462,103 @@ describe("MainPage", () => {
       expect(container.querySelector('[data-testid="estimate-time"]')).toBeNull();
       // Stale fine line from the prior run is gone too.
       expect(container.textContent).not.toContain("PSX: 1200/3084");
+    });
+
+    it("does not replay a stored terminal frame as a fresh completion (#1019)", async () => {
+      // The last run's terminal frame is still in the store when the panel comes
+      // back — the state every QAM close leaves behind. Nothing is in flight, so
+      // this mount ends no run: it has nothing to tear down and nothing to
+      // announce, however long ago that run finished.
+      setSyncProgress({
+        running: false,
+        stage: "done",
+        current: 0,
+        total: 0,
+        message: "Preview ready",
+      });
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: false,
+        stage: "done",
+        current: 0,
+        total: 0,
+        message: "Preview ready",
+      });
+
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      // No completion line, and specifically not the affirmative green one a
+      // just-finished run gets.
+      expect(fieldLabels(container)).not.toContain("Preview ready");
+      // The two change-driven re-reads are provoked by a run ENDING; only the
+      // mount's own reads may have gone out.
+      expect(vi.mocked(backend.getSyncStats)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(backend.getSessionBudgetStatus)).toHaveBeenCalledTimes(1);
+      // The idle body, not a run: a stored terminal frame arms no Cancel.
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
+      expect(buttonByExactText(container, "Cancel Sync")).toBeNull();
+    });
+
+    it("takes the completion wording from the run's own terminal frame, not the sync_complete merge", async () => {
+      // The backend ends a run with two signals in a fixed order, and both reach
+      // the store: sync_complete, which index.tsx merges as {running, stage} and
+      // so carries the PREVIOUS frame's message, then the run's own terminal frame
+      // with the summary. The panel must end up showing the second.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        current: 118,
+        total: 120,
+        message: "PSX: 118/120",
+        step: 3,
+        totalSteps: 3,
+        runId: "run-9",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const statsReadsBefore = vi.mocked(backend.getSyncStats).mock.calls.length;
+
+      // The run's last pre-terminal frame.
+      await act(async () => {
+        setSyncProgress({
+          running: true,
+          stage: "finalizing",
+          current: 120,
+          total: 120,
+          message: "Finalizing…",
+          step: 3,
+          totalSteps: 3,
+          runId: "run-9",
+        });
+        await Promise.resolve();
+      });
+
+      // 1) sync_complete, merged — inherits "Finalizing…".
+      await act(async () => {
+        updateSyncProgress({ running: false, stage: "done" });
+        await Promise.resolve();
+      });
+      // 2) The run's authoritative terminal frame.
+      await act(async () => {
+        setSyncProgress({
+          running: false,
+          stage: "done",
+          current: 120,
+          total: 120,
+          message: "Sync complete: 120 games from 3 platforms",
+          step: 3,
+          totalSteps: 3,
+          runId: "run-9",
+        });
+        await Promise.resolve();
+      });
+
+      expect(fieldLabels(container)).toContain("Sync complete: 120 games from 3 platforms");
+      expect(fieldLabels(container)).not.toContain("Finalizing…");
+      // Still ONE run ending: the second frame corrects the wording, it does not
+      // re-run the change-driven re-reads.
+      expect(vi.mocked(backend.getSyncStats).mock.calls.length - statsReadsBefore).toBe(1);
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
     });
   });
 
@@ -3657,6 +3760,50 @@ describe("MainPage", () => {
       });
       expect(fieldLabels(container)).toContain("could not start");
     });
+
+    it("the panel's own retraction does not blind it to the run's terminal frame", async () => {
+      // The preview run is ended twice over: by its backend terminal frame and by
+      // the panel retracting the optimistic start once the callable answers. The
+      // two arrive over the same socket in that order, but the panel must not
+      // depend on it — retracting a run is not forgetting which run it was, so a
+      // terminal frame landing after the retraction is still that run's ending.
+      const preview = deferred<SyncPreview>();
+      vi.mocked(backend.syncPreview).mockReturnValue(preview.promise);
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+      });
+      const before = vi.mocked(backend.getSyncStats).mock.calls.length;
+      // The callable answers FIRST — the panel retracts its own optimistic run.
+      await act(async () => {
+        preview.resolve({
+          success: true,
+          summary: {
+            new_count: 0,
+            changed_count: 0,
+            unchanged_count: 0,
+            remove_count: 0,
+            disabled_platform_remove_count: 0,
+          },
+          new_names: [],
+          changed_names: [],
+          preview_id: "p1",
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // ...and only then does the preview run's own terminal frame arrive.
+      await act(async () => {
+        setSyncProgress({ running: false, stage: "done", message: "Preview ready" });
+        await Promise.resolve();
+      });
+      // Treated as an ending: the change-driven stats re-read is what an ending
+      // does here (the status line itself is hidden behind the preview it belongs
+      // to), and a swallowed frame would issue none.
+      expect(vi.mocked(backend.getSyncStats).mock.calls.length - before).toBe(1);
+    });
   });
 
   // ===========================================================================
@@ -3721,6 +3868,27 @@ describe("MainPage", () => {
         await Promise.resolve();
       });
       expect(fieldLabels(container)).toContain("Failed to apply sync");
+    });
+
+    it("the preview's own status line does not ride into the apply run", async () => {
+      // The preview run ends with a terminal frame of its own, which arms the
+      // "Preview ready" line for 15s — invisible only while the preview it belongs
+      // to is on screen. Apply replaces that screen with the run's progress rows.
+      vi.mocked(backend.syncApplyDelta).mockResolvedValue({ success: true, message: "" });
+      const container = await openPreviewWithChanges();
+      await act(async () => {
+        setSyncProgress({ running: false, stage: "done", message: "Preview ready" });
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Apply Sync")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
+      expect(fieldLabels(container)).not.toContain("Preview ready");
     });
   });
 
@@ -3933,10 +4101,39 @@ describe("MainPage", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(backend.cancelSync)).toHaveBeenCalled();
-      // Status field un-gated and shows the failure message; re-armed to idle.
+      // The failure message reaches the user under the still-running progress
+      // rows, and the button is re-armed for the retry — out of "Cancelling…" but
+      // still a Cancel, because the run it would stop never learned of the cancel.
       expect(fieldLabels(container)).toContain("Failed to cancel sync");
-      expect(buttonByExactText(container, "Cancel Sync")).toBeNull();
+      expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
       expect(buttonByExactText(container, "Cancelling…")).toBeNull();
+    });
+
+    it("a cancel whose call failed leaves the run in flight for every reader of the store (#1019)", async () => {
+      // DangerZone and RemovedGamesCleanup read `running` straight from the
+      // module store, so whatever the panel concludes here they conclude too.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        message: "Working",
+        runId: "run-x",
+      });
+      vi.mocked(backend.cancelSync).mockRejectedValue(new Error("net"));
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Cancel Sync")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // The cancel never reached the backend, so the run it would have stopped is
+      // still going — the store keeps saying so...
+      expect(getSyncProgress().running).toBe(true);
+      // ...and the panel says the same thing, rather than offering a Sync button
+      // that can only earn a sync_in_progress reject.
+      expect(buttonByExactText(container, "Sync Library")).toBeNull();
+      expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
     });
 
     it("when a preview is showing: clicking Cancel (non-zero preview) routes through handleDismiss", async () => {
@@ -4509,25 +4706,34 @@ describe("MainPage", () => {
       expect(memoryRow).not.toContain("1.3 GB");
     });
 
-    it("a bare running:false (no terminal stage) does NOT tear down the in-flight UI", async () => {
-      // Reproduces the #751 teardown race: a non-terminal running:false must
-      // not collapse the syncing UI (it would right after startSync, before
-      // events land).
-      vi.mocked(backend.getSyncStatus).mockResolvedValue({
-        running: true,
-        stage: "applying",
-        message: "Working",
-      });
+    it("a status read still open when Sync is clicked does not retract the optimistic start (#751)", async () => {
+      // The mount's get_sync_status was issued before the click, so it cannot
+      // answer whether the run the click just started is in flight — and its
+      // "nothing running" must not be allowed to collapse the syncing UI.
+      const status = deferred<SyncProgress>();
+      vi.mocked(backend.getSyncStatus).mockReturnValue(status.promise);
+      // Hold the preview open so the run stays optimistic: no result lands to end
+      // it, leaving the click's running:true as the only thing that could.
+      vi.mocked(backend.syncPreview).mockReturnValue(new Promise<SyncPreview>(() => {}));
+
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
 
+      // The pre-click snapshot lands late.
       await act(async () => {
-        setSyncProgress({ running: false, stage: "", message: "" });
+        status.resolve({ running: false, stage: "", current: 0, total: 0, message: "" });
         await Promise.resolve();
       });
 
-      // Still in-flight — only a terminal stage tears down.
+      // The store still carries the run the click started — so the panel, and
+      // every other reader of it, still shows one in flight.
+      expect(getSyncProgress().running).toBe(true);
       expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
       expect(buttonByExactText(container, "Sync Library")).toBeNull();
     });

@@ -28,7 +28,9 @@ games appear in the Steam Library with cover art, metadata, and organized into c
 
 You can tap **Cancel Sync** to stop mid-sync. Games already added will remain. A cancelled sync never removes any Steam
 collections — stale-collection cleanup only runs after a sync finishes in full, so cancelling can never wipe the
-collections for platforms the run did not reach.
+collections for platforms the run did not reach. If the cancel request itself does not get through, the run is still
+going, so the panel keeps showing its progress with **Cancel Sync** ready to try again rather than offering to start a
+second run on top of the first.
 
 ## Time estimate and progress
 

@@ -185,6 +185,17 @@ Format: **invariant** — tier — enforced by.
   `scripts/check_settings_owner.py`
 - **Sync run-lifecycle (`sync_state` / `current_sync_id`) written only via `LibrarySyncStateBox` verbs** — check —
   `scripts/check_sync_lifecycle_owner.py`
+- **An emitted `sync_progress` frame stops a run (`running: False`) only with a terminal stage, and a terminal stage is
+  only ever emitted with the run stopped** — test — `tests/services/library/test_terminal_frame_contract.py`
+  (structural, AST call sites and dict literals across all of `py_modules/services` — it covers the error paths a
+  behavioural test would have to provoke one at a time, but a frame assembled by a helper it cannot follow, or emitted
+  through an aliased callable, slips past it; its own scope tests pin the producers and the root it reaches, so a
+  narrowing fails rather than shrinking the rule in silence. Frame producers are not confined to `services/library/`:
+  `services/artwork.py` emits through an injected `emit_progress`). The QAM panel derives "a run is in flight" from
+  `running` and keys the run's end — the status line, the live-ETA teardown, the two change-driven re-reads — on the
+  stage, so a stopping frame with a non-terminal stage would collapse the in-progress rows while ending nothing. The
+  panel cannot defend against it: a bare `running: false` is exactly what its own retraction of an optimistic start
+  looks like
 - **Aggregate state mutated only via verb-named methods (no field assignment)** — check —
   `scripts/check_aggregate_field_assignment.py`
 - **No UoW-opening seam (ActiveCoreResolver, RelaunchOptionsResolver, uow_factory) is called while a UoW is open on the

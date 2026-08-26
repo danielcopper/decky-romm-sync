@@ -397,6 +397,38 @@ function terminalStatusTone(stage: SyncProgress["stage"]): StatusTone {
   return stage === "done" ? "success" : "neutral";
 }
 
+/** The id of the run a frame belongs to, `""` for a frame that names none — the
+ *  panel's own optimistic start, or a backend with no run stamped yet. */
+function frameRunId(progress: SyncProgress): string {
+  return progress.runId ?? "";
+}
+
+/** The run a frame puts in flight, or `null` when the frame has none running. */
+function inFlightRunId(progress: SyncProgress): string | null {
+  return progress.running ? frameRunId(progress) : null;
+}
+
+/**
+ * Whether a terminal frame ends the run the panel is watching — true unless it
+ * names a DIFFERENT run, since an unnamed run on either side (the panel's own
+ * optimistic start before the backend stamps an id, or a frame that carries
+ * none) cannot be shown to be another one, and refusing it would strand the
+ * panel on a run that has already ended. `null` — nothing watched at all — is
+ * the one case that ends nothing: that is a terminal frame the panel FOUND
+ * rather than witnessed, the stored frame every QAM close leaves behind (#1019).
+ *
+ * The leniency leaves one window open, knowingly: between a run's two terminal
+ * signals — the merged `sync_complete` and the frame that follows it, under
+ * 100 ms apart — a user who starts the next run in the gap has the old run's
+ * second frame taken as ending the new one, costing that run its first status
+ * line. Accepted rather than closed: the previous boolean had the same window,
+ * nothing here can widen it, and the alternative — refusing an unnamed terminal
+ * frame — strands the panel on the far more reachable case above.
+ */
+function endsWatchedRun(watched: string | null, runId: string): boolean {
+  return watched !== null && (watched === "" || runId === "" || watched === runId);
+}
+
 export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // Both facts are owned by `utils/syncStatsStore.ts`: seven refresh sites in
   // this file ask for them, and the store is what keeps an older answer from
@@ -412,13 +444,20 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // not abandon a run that has not reached a verdict yet.
   const { connected, failure: connectionFailure } = useConnectionProbe();
   const versionError = useVersionError();
-  const [syncing, setSyncing] = useState(false);
   // Disarmed "Cancelling…" state during the backend's RUNNING→CANCELLING→IDLE
   // drain. The Sync/Cancel button stays disabled until the terminal
   // sync_progress stage re-arms it, so a quick re-press can't hit the
   // sync_in_progress reject and look like an instant finish (#1202, RC-B).
   const [cancelling, setCancelling] = useState(false);
-  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  // The frame this panel last saw, seeded from the store so a remount mid-run
+  // renders the live run on its first pass rather than a frame later.
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(() => getSyncProgress());
+  // "A run is in flight" is DERIVED from that frame, never mirrored in a second
+  // boolean: DangerZone and RemovedGamesCleanup read the same store field, so a
+  // path that ends the run locally without ending it in the store would make the
+  // three disagree (#1019). The optimistic start is not lost — a Sync click writes
+  // running:true into the store, which the subscription below feeds straight back.
+  const syncing = syncProgress?.running ?? false;
   // Last non-empty fine-detail line, carried across unit-boundary anchor frames
   // so the fine-detail row (and its inline spinner) stay MOUNTED when the next
   // unit's FETCHING anchor frame resets current/total to 0 (#1415) — otherwise
@@ -435,7 +474,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [status, setStatus] = useState<TransientStatus | null>(null);
   const [preview, setPreview] = useState<SyncPreview | null>(null);
   const [skipPreview, setSkipPreview] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [retroarchWarning, setRetroarchWarning] = useState<{ warning: boolean; current?: string } | null>(null);
   const [retrodeckBanner, setRetrodeckBanner] = useState<RetroDeckBanner | null>(null);
   const [migration, setMigration] = useState<MigrationStatus>(getMigrationState());
@@ -444,6 +482,22 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [saveSortMigration, setSaveSortMigration] = useState(getSaveSortMigrationState());
   const downloads = useDownloads();
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The run this panel is watching, by id, and whether its end has been handled.
+  // Seeded at first render — BEFORE the subscription below exists, so the mount
+  // seed's own write is measured against the state it replaced rather than against
+  // itself; a stored terminal frame the panel merely finds therefore watches
+  // nothing and announces nothing (#1019).
+  //
+  // The pair is a run key rather than a "have I seen a terminal" boolean because
+  // the backend signals a run's end TWICE, in a fixed order: `sync_complete`,
+  // which index.tsx merges into the store as `{running:false, stage}` — keeping
+  // the PREVIOUS frame's message, e.g. "Finalizing…" — and then the run's own
+  // terminal frame carrying the authoritative wording ("Sync complete: N games
+  // from M platforms", the cancelled/interrupted sentence, or a budget pause's
+  // resume guidance). Both belong to the same run: the first does the once-per-run
+  // teardown, the second is allowed to correct the text it left behind.
+  const watchedRunId = useRef<string | null>(inFlightRunId(getSyncProgress()));
+  const watchedRunEnded = useRef(false);
 
   const showTransientStatus = (text: string, tone: StatusTone = "neutral") => {
     if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
@@ -498,9 +552,16 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // authoritative running/stage/runId. Run identity is compared via runId when
     // both sides carry it; when the backend is idle or the runs differ, keep the
     // replace behavior (the store holds nothing worth preserving).
+    const storeAtIssue = getSyncProgress();
     getSyncStatus()
       .then((backendProgress) => {
         const stored = getSyncProgress();
+        // An answer reporting nothing in flight has no authority over a write
+        // that landed after the read was issued: a Sync click in that window
+        // writes the optimistic running:true, and this snapshot was taken before
+        // it existed, so applying it would retract a run that has just started
+        // (#751). The store's own frames then carry the run from here.
+        if (!backendProgress.running && stored !== storeAtIssue) return;
         const sameRun = backendProgress.runId && stored.runId ? backendProgress.runId === stored.runId : true;
         const isSameLiveRun = backendProgress.running && stored.running && sameRun;
         // Same live run: spread the store (keeping its fine fields + etaSeconds)
@@ -522,18 +583,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             }
           : backendProgress;
         setStoredSyncProgress(progress);
-        if (progress.running) {
-          setSyncing(true);
-          setLoading(true);
-          setSyncProgress(progress);
-        }
       })
       .catch((e) => logError(`Failed to query sync status: ${e}`));
 
     // Subscribe to the module store — every backend sync_progress event and
-    // every frontend updateSyncProgress notifies, driving a re-render. The
-    // in-progress UI is torn down ONLY on a terminal stage, never on a bare
-    // running:false (which can transiently race a fresh run's first event).
+    // every frontend updateSyncProgress notifies, driving a re-render. What the
+    // end-of-run work keys on is the watched RUN reaching a terminal stage, not a
+    // terminal stage being present: the frame the panel finds in the store on
+    // mount ends nothing, and the two frames that end the same run are one ending
+    // (see the run refs above).
     const unsubProgress = onSyncProgressChange(() => {
       // The local mirror must update FIRST and unconditionally — it is what
       // drives the re-render. Everything after it is derived work (terminal
@@ -541,6 +599,21 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       // the re-render chain (on-device freeze, cause not yet reproduced in tests).
       const progress = getSyncProgress();
       setSyncProgress(progress);
+      // Run bookkeeping, taken before the refs move on and outside the try below so
+      // a subscriber throw can never leave the panel believing a finished run is
+      // still live. A running frame is what starts a watch; the frames that end one
+      // split into the first (the run ended: tear down and announce) and any that
+      // follow it (the same run's authoritative wording: the text, nothing else).
+      const inFlight = inFlightRunId(progress);
+      if (inFlight !== null) {
+        watchedRunId.current = inFlight;
+        watchedRunEnded.current = false;
+      }
+      const terminal = isTerminalStage(progress.stage);
+      const runEndedNow =
+        terminal && !watchedRunEnded.current && endsWatchedRun(watchedRunId.current, frameRunId(progress));
+      const laterTerminalFrame = terminal && watchedRunEnded.current;
+      if (runEndedNow) watchedRunEnded.current = true;
       // Carry the fine-detail line so the row survives a unit boundary's anchor
       // frame (which resets current/total, #1415); drop it the moment the run
       // ends so the next run starts clean. Kept outside the try below so the
@@ -561,13 +634,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         setCarriedFineDetail(progress.message);
       }
       try {
-        if (isTerminalStage(progress.stage)) {
+        if (runEndedNow) {
           // Tear down the run's live-ETA state (deadline included) so the next run
           // measures fresh, and clear the display mirror.
           resetEta();
           setLiveEtaDisplay(null);
-          setSyncing(false);
-          setLoading(false);
           // True terminal reached — re-arm the button out of any "Cancelling…"
           // drain state (#1202, RC-B).
           setCancelling(false);
@@ -579,7 +650,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           // Refresh the live heap reading so the paused / high-heap banner reflects
           // the run's end state (a pause leaves it high; a completed run may too).
           detach(refreshSessionBudgetAfterChange());
-        } else {
+        } else if (laterTerminalFrame && progress.message) {
+          // The same run's second terminal signal. Everything above has already
+          // happened for this run; what this frame adds is the run's own account of
+          // how it ended, which replaces the text the merged sync_complete frame
+          // carried over from mid-run. A frame with no message of its own changes
+          // nothing rather than blanking the one already shown.
+          showTransientStatus(progress.message, terminalStatusTone(progress.stage));
+        } else if (!terminal) {
           // Feed the live-rate estimator from applying frames that carry ITEM
           // progress only — fetch frames carry page/cover counters, and an
           // applying-stage cover-refresh frame (``coverRefresh``, #1456) carries a
@@ -642,13 +720,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     return () => clearInterval(id);
   }, [syncing, lastRunPaused]);
 
-  // A start/apply call never reached a running backend sync (rejected up
-  // front or threw). Reset both the local UI and the MODULE store so the
-  // store mirrors reality — the optimistic running:true must not linger.
+  // A start/apply call never reached a running backend sync (rejected up front or
+  // threw). Nothing is draining, so the optimistic running:true is retracted from
+  // the store — which is also what returns this panel to its idle body.
   const abortOptimisticSync = (msg: string) => {
     setStatus({ text: msg, tone: "neutral" });
-    setSyncing(false);
-    setLoading(false);
     setCancelling(false);
     setStoredSyncProgress({ running: false, stage: "" });
   };
@@ -662,8 +738,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // the backend's first sync_progress event lands — writing running:true
     // into the MODULE store (the single source of truth the subscription
     // reads), not a shadowing local state.
-    setLoading(true);
-    setSyncing(true);
     setCancelling(false);
     setStatus(null);
     setPreview(null);
@@ -703,8 +777,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         return;
       }
       setPreview(result);
-      setSyncing(false);
-      setLoading(false);
+      // The preview run is over — retract the optimistic running:true rather than
+      // waiting for the backend's own terminal frame for it. That frame can be
+      // dropped or raced (the reason index.tsx also drives teardown from
+      // sync_complete), and a dropped one would leave every reader of the store
+      // waiting on a run that has already answered.
+      setStoredSyncProgress({ running: false, stage: "" });
     } catch {
       abortOptimisticSync("Failed to start sync");
     }
@@ -724,8 +802,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // cancel (#1202).
     resetSyncCancel();
     setPreview(null);
-    setLoading(true);
-    setSyncing(true);
+    // The preview's own "Preview ready" line is still armed for its 15s lifetime,
+    // hidden only by the preview it belongs to; clearing the preview without it
+    // would carry a finished run's status into this one's progress rows.
+    setStatus(null);
     setCancelling(false);
     setStoredSyncProgress({ running: true, stage: "applying", message: "Applying changes...", etaSeconds });
     try {
@@ -749,18 +829,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     }
   };
 
-  const finishCancelWithStatus = (msg: string) => {
-    setCancelling(false);
-    setSyncing(false);
-    setLoading(false);
-    showTransientStatus(msg);
-  };
-
   const handleCancel = async () => {
     if (preview) {
       await handleDismiss();
-      setSyncing(false);
-      setLoading(false);
       return;
     }
     // RC-B (#1202): do NOT re-arm the Sync button here. The backend drains
@@ -778,9 +849,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       // re-arms, surfacing the backend's final message — no status here, so no
       // instant-finish flash during the drain.
     } catch {
-      // The cancel call itself failed — no terminal will arrive from a cancel
-      // that never landed, so re-arm and surface the failure for a retry.
-      finishCancelWithStatus("Failed to cancel sync");
+      // The cancel call itself failed — no terminal will arrive from a cancel that
+      // never landed, so re-arm the button and surface the failure for a retry. The
+      // run is NOT ended here: a cancel that never reached the backend leaves it
+      // draining or still working, and claiming otherwise would both re-offer a
+      // Sync button that only earns a sync_in_progress reject and tell the other
+      // readers of the store that a live run had stopped (#1019).
+      setCancelling(false);
+      showTransientStatus("Failed to cancel sync");
     }
   };
 
@@ -1108,6 +1184,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       </>
     );
   } else {
+    // The idle body. A run in flight renders the branch above instead, so nothing
+    // here needs an "already syncing" guard — the buttons only ever exist while
+    // there is no run to collide with, and the connection is all that can gate them.
     syncBody = (
       <>
         {/* Persistent session-budget banner (#1383): blue while the last run was
@@ -1118,7 +1197,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           lastAttemptStatus={stats?.last_attempt?.status}
           rssKb={budgetStatus?.rss_kb ?? null}
           resumeReady={budgetStatus?.resume_ready ?? null}
-          restartDisabled={loading || connectionUnavailable}
+          restartDisabled={connectionUnavailable}
           runDoneItems={budgetStatus?.run_done_items ?? null}
           runTotalItems={budgetStatus?.run_total_items ?? null}
         />
@@ -1129,7 +1208,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             onClick={() => {
               detach(handleSync());
             }}
-            disabled={loading || connectionUnavailable}
+            disabled={connectionUnavailable}
           >
             {syncButtonLabel}
           </ButtonItem>
@@ -1170,7 +1249,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                   })(),
                 );
               }}
-              disabled={loading || connectionUnavailable}
+              disabled={connectionUnavailable}
             >
               Force Full Sync
             </ButtonItem>
@@ -1335,7 +1414,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
 
       <PanelSection>
         {syncBody}
-        {status?.text && !syncing && !preview && (
+        {/* Not gated on the run being idle: a cancel whose CALL failed leaves the
+            run in flight, and its "Failed to cancel sync" line has to reach the
+            user under the progress rows or it is lost entirely. Every other status
+            is set by a path that has already ended its run — but a status OUTLIVES
+            the run that set it (15s), so the two paths that start a run clear it
+            rather than let it ride into the next one. */}
+        {status?.text && !preview && (
           <PanelSectionRow>
             <Field
               label={
