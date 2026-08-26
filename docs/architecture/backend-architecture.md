@@ -775,9 +775,21 @@ a fresh run's start and leave a half-reset id:
 
 `sync_preview` adds a final cancel checkpoint **after** the unit loop, immediately before it stages `pending_delta`, so
 a cancel landing in that last window routes into the cancelled branch (`{success: False, reason: "cancelled"}`,
-`pending_delta` left `None`) rather than staging a delta the user already cancelled. The confinement is enforced by
-`scripts/check_sync_lifecycle_owner.py` (an AST gate that fails CI if `sync_state` / `current_sync_id` is assigned
-anywhere outside `_state.py`).
+`pending_delta` left `None`) rather than staging a delta the user already cancelled. Nothing awaits between that
+checkpoint and the staging — the session-budget prognosis is taken before it, and the `done` frame emitted after it — so
+the window the checkpoint closes cannot reopen. The confinement is enforced by `scripts/check_sync_lifecycle_owner.py`
+(an AST gate that fails CI if `sync_state` / `current_sync_id` is assigned anywhere outside `_state.py`).
+
+**The preview outlives the panel that asked for it.** `PreviewDelta` carries the exact answer dict `sync_preview`
+returned, and `get_pending_preview` hands it back verbatim — the QAM card dies with its render, while the backend holds
+the snapshot for its full 30-minute TTL, so a user who steps into a submenu used to lose an Apply that was still
+perfectly valid. Storing the answer rather than re-assembling one is what guarantees the restored card is what the user
+was shown. The answer also carries `expires_at` — `created_at + _PREVIEW_MAX_AGE_SECONDS`, an absolute epoch — which the
+card counts down against; absolute rather than a remaining-seconds count because plugin and panel share a clock and a
+deadline survives a suspend. `get_pending_preview` is a pure read plus one lazy clear: nothing staged (or a snapshot
+past its TTL, dropped on the spot) answers `{"success": True, "preview": None}` — "no preview" is a normal answer, not a
+failure. "Too old" has exactly one expression, `PreviewDelta.is_expired`, shared by that read and by
+`sync_apply_delta`'s refusal, so the read can never offer an Apply the apply would reject.
 
 **`sync_progress` carries `runId`.** Every `sync_progress` event (and the persisted `get_sync_status` snapshot) now
 includes an additive `runId: str` field — `str(current_sync_id or "")` — so the frontend reads the active run id from
@@ -1555,7 +1567,7 @@ documented in [Database Design](database-design.md). Selected modules:
 | `sync_action.py`                                                                  | The `SyncAction` union (`Skip` / `Upload` / `Download` / `Conflict`) the whole vertical dispatches on and the compiled core answers in. The decisions themselves are made in the core, not here. See [Save File Sync Architecture](save-file-sync-architecture.md).                                                            |
 | `sync_diff.py`                                                                    | ROM classification and platform/collection diff computation for the sync preview                                                                                                                                                                                                                                               |
 | `cover_refresh.py`                                                                | cover-fingerprint compare kernel (#1386) — `scan_cover_refresh_candidates` / `count_cover_refreshes`, shared by the apply-path invalidation pass and the preview's cover-work count so the two can never diverge                                                                                                               |
-| `preview_delta.py`                                                                | `PreviewDelta` shape for the sync preview                                                                                                                                                                                                                                                                                      |
+| `preview_delta.py`                                                                | `PreviewDelta` shape for the sync preview (the staged answer included) plus `is_expired` / `preview_expires_at`, the one expression of its TTL                                                                                                                                                                                 |
 | `work_unit.py`                                                                    | `WorkUnit` — the per-unit sync work item                                                                                                                                                                                                                                                                                       |
 | `rom_save_sync_state.py`                                                          | `RomSaveSyncState` aggregate + `FileSyncState` value object — per-ROM save-sync state, backed by `rom_save_sync_states` + `rom_save_files`                                                                                                                                                                                     |
 | `save_path.py` / `save_attribution.py` / `save_status*.py` / `save_extensions.py` | save path resolution, uploader attribution, status DTO building                                                                                                                                                                                                                                                                |

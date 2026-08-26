@@ -17,8 +17,10 @@ games appear in the Steam Library with cover art, metadata, and organized into c
 
 1. Open the QAM and navigate to the plugin
 2. Tap **Sync Library** on the main page
-3. A progress bar shows the sync status
-4. When complete, a toast reports what actually changed — the true delta, not the total in your library. It shows the
+3. The plugin works out what would change and shows you a preview; tap **Apply Sync** to start the run, or **Cancel** to
+   throw the preview away (with **Skip Preview** switched on, the run starts straight away instead)
+4. A progress bar shows the sync status
+5. When complete, a toast reports what actually changed — the true delta, not the total in your library. It shows the
    number of shortcuts added and/or removed this run (e.g. "Sync complete — 42 added, 3 removed."), omitting a part that
    is zero. If nothing changed, it reads "Library up to date."
 
@@ -44,6 +46,14 @@ line, shown as "up to X min".
 Cover changes count too: if you replaced a game's cover on the server but nothing else changed, the preview reads "No
 shortcut changes — N cover updates" and still offers **Apply Sync** — applying refreshes those tiles without touching
 the shortcuts. Only when there is truly nothing to do does the preview read "Everything is up to date."
+
+A preview stays good for **30 minutes**, and it belongs to the plugin rather than to the page you are looking at: you
+can leave the main page for the settings or a submenu, come back, and the same preview is still there with **Apply
+Sync** ready. The card tells you how long that has left — "Expires in 26 min" next to the button, counting down. If you
+leave it sitting past the half hour, the card stays where it is and says "Expired — run the preview again"; the change
+list remains readable, **Apply Sync** goes away, and the card only disappears when you tap **Dismiss**. Nothing you were
+shown is discarded behind your back. Tapping **Sync Library** again works out a fresh preview against whatever your
+server holds now.
 
 That starting estimate is **skip-aware**: when the run is planned, the plugin already knows which platforms haven't
 changed since their last sync and expects to skip them wholesale, so they don't inflate the number — an incremental
