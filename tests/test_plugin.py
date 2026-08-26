@@ -888,6 +888,10 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_sync_status",
     "get_sync_stats",
     "get_session_budget_status",
+    # Read-only pending-preview query (plus the lazy drop of an expired
+    # snapshot) — it starts no run and touches no RetroDECK path, and the panel
+    # asks for it on every mount, so a pending migration must not refuse it.
+    "get_pending_preview",
     "get_rom_by_steam_app_id",
     "get_download_queue",
     "get_installed_rom",

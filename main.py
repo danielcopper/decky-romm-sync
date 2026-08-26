@@ -500,6 +500,9 @@ class Plugin:
     async def sync_cancel_preview(self):
         return self._sync_service.sync_cancel_preview()
 
+    async def get_pending_preview(self):
+        return self._sync_service.get_pending_preview()
+
     async def get_sync_status(self):
         return self._sync_service.get_sync_status()
 

@@ -378,6 +378,9 @@ class LibraryService:
     def sync_cancel_preview(self):
         return self._orchestrator.sync_cancel_preview()
 
+    def get_pending_preview(self):
+        return self._orchestrator.get_pending_preview()
+
     def get_sync_status(self):
         return self._orchestrator.get_sync_status()
 

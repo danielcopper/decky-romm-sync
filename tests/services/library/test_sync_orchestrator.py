@@ -569,6 +569,7 @@ class TestSyncApplyDelta:
             created_at=plugin._sync_service._orchestrator._clock.time(),
             platforms_count=1,
             total_roms=3,
+            answer={"success": True, "preview_id": preview_id},
         )
 
     @pytest.mark.asyncio
@@ -713,6 +714,7 @@ class TestSyncCancelPreview:
             created_at=plugin._sync_service._orchestrator._clock.time(),
             platforms_count=0,
             total_roms=0,
+            answer={"success": True, "preview_id": "some-id"},
         )
         result = await plugin.sync_cancel_preview()
         assert plugin._sync_service._pending_delta is None
@@ -722,6 +724,99 @@ class TestSyncCancelPreview:
     async def test_returns_success(self, plugin):
         result = await plugin.sync_cancel_preview()
         assert result == {"success": True}
+
+
+class TestGetPendingPreview:
+    """Tests for get_pending_preview().
+
+    The staged snapshot is what a panel that was navigated away from asks
+    for on its next mount, so the read hands back the preview answer
+    verbatim, answers "nothing pending" as a success, and drops a snapshot
+    the apply would refuse anyway.
+    """
+
+    @staticmethod
+    def _preview_setup(plugin, fake_romm_api):
+        import decky
+
+        plugin.loop = asyncio.get_event_loop()
+        decky.emit.reset_mock()
+        _use_fake_romm(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "Game A", "fs_name": "a.z64"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_nothing_pending(self, plugin):
+        assert plugin._sync_service._pending_delta is None
+        assert await plugin.get_pending_preview() == {"success": True, "preview": None}
+
+    @pytest.mark.asyncio
+    async def test_hands_back_the_exact_answer_sync_preview_returned(self, plugin, fake_romm_api):
+        """The restored card must be what the user was shown — the same payload,
+        not a second assembly of it that can drift from the first."""
+        self._preview_setup(plugin, fake_romm_api)
+
+        fresh = await plugin.sync_preview()
+        restored = await plugin.get_pending_preview()
+
+        assert fresh["success"] is True
+        assert restored == {"success": True, "preview": fresh}
+
+    @pytest.mark.asyncio
+    async def test_answer_carries_the_absolute_expiry_deadline(self, plugin, fake_romm_api):
+        self._preview_setup(plugin, fake_romm_api)
+        clock = plugin._sync_service._orchestrator._clock
+
+        fresh = await plugin.sync_preview()
+
+        assert fresh["expires_at"] == clock.time() + 1800
+
+    @pytest.mark.asyncio
+    async def test_over_age_snapshot_is_dropped_and_answered_as_none(self, plugin, fake_romm_api):
+        """Past the TTL the read answers "nothing pending" AND clears the box —
+        the apply refuses the same snapshot, so leaving it staged would only
+        offer the user an Apply that cannot succeed."""
+        self._preview_setup(plugin, fake_romm_api)
+        await plugin.sync_preview()
+        assert plugin._sync_service._pending_delta is not None
+        plugin._sync_service._orchestrator._clock.advance(1801)
+
+        assert await plugin.get_pending_preview() == {"success": True, "preview": None}
+        assert plugin._sync_service._pending_delta is None
+
+    @pytest.mark.asyncio
+    async def test_just_under_the_ttl_is_still_handed_back(self, plugin, fake_romm_api):
+        self._preview_setup(plugin, fake_romm_api)
+        fresh = await plugin.sync_preview()
+        plugin._sync_service._orchestrator._clock.advance(1799)
+
+        assert await plugin.get_pending_preview() == {"success": True, "preview": fresh}
+
+    @pytest.mark.asyncio
+    async def test_cancelled_preview_leaves_nothing_to_hand_back(self, plugin, fake_romm_api):
+        """A cancel landing after the unit loop stages no delta (#1202), so the
+        read has nothing to restore — the panel comes back to an idle page."""
+        self._preview_setup(plugin, fake_romm_api)
+        orch = plugin._sync_service._orchestrator
+        box = plugin._sync_service._box
+        orig_fetch = orch._fetch_preview_unit
+
+        async def fetch_then_cancel(unit, *args, **kwargs):
+            await orig_fetch(unit, *args, **kwargs)
+            box.request_cancel()
+
+        orch._fetch_preview_unit = fetch_then_cancel
+
+        result = await plugin.sync_preview()
+
+        assert result["success"] is False
+        assert await plugin.get_pending_preview() == {"success": True, "preview": None}
 
 
 # ── Tests for uncovered helper methods in library_sync.py ──────────

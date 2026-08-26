@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.cover_refresh import count_cover_refreshes
-from domain.preview_delta import PreviewDelta
+from domain.preview_delta import PreviewDelta, preview_expires_at
 from domain.session_budget import post_run_advisory, session_memory_delta
 from domain.shortcut_data import build_shortcuts_data
 from domain.sibling_group import compute_component_group_keys
@@ -338,6 +338,16 @@ class SyncOrchestrator:
             # short-circuit the apply and strand a changed cover forever.
             cover_refresh_count = count_cover_refreshes(all_roms, registry)
 
+            # Post-preview session-budget prognosis (#1383): warn up front when the
+            # planned work would walk the renderer heap past the budget ceiling. The
+            # gate is fail-open, so an unreadable renderer simply yields no warning.
+            #
+            # Taken here rather than after the DONE frame so that nothing awaits
+            # between the cancel checkpoint below and the staging that follows it.
+            pause_likely = await self._session_budget.predict_pause_likely(
+                new_items=len(new), changed_items=len(changed)
+            )
+
             # Final cancel checkpoint: a cancel can land after the unit loop's
             # last per-unit check but before the preview is staged. Re-check
             # here so a late cancel routes into the SyncCancelled branch (which
@@ -347,25 +357,11 @@ class SyncOrchestrator:
                 raise SyncCancelled(_SYNC_CANCELLED)
 
             preview_id = self._uuid_gen.uuid4()
+            created_at = self._clock.time()
             platforms_count = sum(1 for u in work_queue if u.type == "platform")
             collections_count = sum(1 for u in work_queue if u.type == "collection")
-            box.pending_delta = PreviewDelta(
-                preview_id=preview_id,
-                created_at=self._clock.time(),
-                platforms_count=platforms_count,
-                total_roms=len(all_roms),
-            )
 
-            await self.emit_progress(SyncStage.DONE, message="Preview ready", running=False)
-
-            # Post-preview session-budget prognosis (#1383): warn up front when the
-            # planned work would walk the renderer heap past the budget ceiling. The
-            # gate is fail-open, so an unreadable renderer simply yields no warning.
-            pause_likely = await self._session_budget.predict_pause_likely(
-                new_items=len(new), changed_items=len(changed)
-            )
-
-            return {
+            answer = {
                 "success": True,
                 "pause_likely": pause_likely,
                 "summary": {
@@ -406,7 +402,26 @@ class SyncOrchestrator:
                 "new_names": [s["name"] for s in new[:10]],
                 "changed_names": [s["name"] for s in changed[:10]],
                 "preview_id": preview_id,
+                # Absolute wall-clock deadline (epoch seconds) the backend stops
+                # accepting this snapshot at. Absolute rather than a remaining-
+                # seconds count because the panel runs on the same machine and the
+                # same clock, and a deadline survives the Deck suspending where a
+                # locally counted-down number does not.
+                "expires_at": preview_expires_at(created_at, _PREVIEW_MAX_AGE_SECONDS),
             }
+            # Stage the answer itself, so a panel that lost its card is handed
+            # back exactly what the user was shown rather than a re-assembly.
+            box.pending_delta = PreviewDelta(
+                preview_id=preview_id,
+                created_at=created_at,
+                platforms_count=platforms_count,
+                total_roms=len(all_roms),
+                answer=answer,
+            )
+
+            await self.emit_progress(SyncStage.DONE, message="Preview ready", running=False)
+
+            return answer
         except SyncCancelled:
             # sync_preview is a Decky callable — the frontend awaits its return.
             # Re-raising leaves that promise unsettled, so a user-initiated
@@ -481,8 +496,7 @@ class SyncOrchestrator:
                 "reason": ErrorCode.STALE_PREVIEW.value,
                 "message": "Preview expired, please re-sync",
             }
-        age = self._clock.time() - box.pending_delta.created_at
-        if age > _PREVIEW_MAX_AGE_SECONDS:
+        if box.pending_delta.is_expired(self._clock.time(), _PREVIEW_MAX_AGE_SECONDS):
             box.pending_delta = None
             return {
                 "success": False,
@@ -506,6 +520,26 @@ class SyncOrchestrator:
     def sync_cancel_preview(self):
         self._sync_state.pending_delta = None
         return {"success": True}
+
+    def get_pending_preview(self):
+        """Hand back the staged preview answer, so a remounted panel can show its card again.
+
+        ``{"success": True, "preview": None}`` when nothing is staged — "no
+        preview" is a normal answer, not a failure, so it never takes the
+        failure shape. A staged snapshot past its TTL answers the same way and
+        is dropped on the spot: the apply would refuse it anyway, and clearing
+        it here keeps the read and the apply on one verdict.
+
+        A pure read plus that lazy clear — it starts, cancels and touches no run.
+        """
+        box = self._sync_state
+        delta = box.pending_delta
+        if delta is None:
+            return {"success": True, "preview": None}
+        if delta.is_expired(self._clock.time(), _PREVIEW_MAX_AGE_SECONDS):
+            box.pending_delta = None
+            return {"success": True, "preview": None}
+        return {"success": True, "preview": dict(delta.answer)}
 
     # ── Progress & safety ────────────────────────────────────────
 
