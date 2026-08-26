@@ -4120,6 +4120,108 @@ describe("MainPage", () => {
       expect(expiryText(container)).toBeNull();
       expect(buttonByExactText(container, "Apply Sync")).not.toBeNull();
     });
+
+    it("loses to a preview the user dismissed while the read was in flight", async () => {
+      // A dismissal told the backend to discard the snapshot, so restoring it
+      // would put back a card whose Apply can only answer stale_preview.
+      const held = deferred<{ success: boolean; preview: SyncPreview | null }>();
+      vi.mocked(backend.getPendingPreview).mockReturnValue(held.promise);
+      vi.mocked(backend.syncPreview).mockResolvedValue(heldPreview({ preview_id: "preview-fresh" }));
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Cancel")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.syncCancelPreview)).toHaveBeenCalled();
+
+      await act(async () => {
+        held.resolve({ success: true, preview: heldPreview({ preview_id: "preview-held" }) });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Back to the idle page — no card came back.
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
+      expect(buttonByExactText(container, "Apply Sync")).toBeNull();
+      expect(changesText(container)).toBe("");
+    });
+
+    it("shows no countdown on a preview with nothing to apply", async () => {
+      vi.mocked(backend.getPendingPreview).mockResolvedValue({
+        success: true,
+        preview: heldPreview({
+          summary: {
+            new_count: 0,
+            changed_count: 0,
+            unchanged_count: 4,
+            remove_count: 0,
+            disabled_platform_remove_count: 0,
+          },
+          new_names: [],
+          expires_at: 1800,
+        }),
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      // Nothing to apply, so there is no deadline worth counting down to —
+      // only the Dismiss the empty card already had.
+      expect(changesText(container)).toContain("Everything is up to date.");
+      expect(expiryText(container)).toBeNull();
+      expect(buttonByExactText(container, "Dismiss")).not.toBeNull();
+    });
+
+    it("tears the countdown timer down when the preview goes away, and on unmount", async () => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        vi.setSystemTime(0);
+        const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+        const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+        vi.mocked(backend.getPendingPreview).mockResolvedValue({
+          success: true,
+          preview: heldPreview({ expires_at: 1800 }),
+        });
+        const { container, unmount } = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+        expect(expiryText(container)).toBe("Expires in 30 min");
+
+        // The panel's only 1 Hz timer is the countdown's.
+        const armed = setIntervalSpy.mock.calls.findIndex((call) => call[1] === 1000);
+        expect(armed).toBeGreaterThanOrEqual(0);
+        const countdownTimer = setIntervalSpy.mock.results[armed]?.value;
+
+        await act(async () => {
+          fireEvent.click(buttonByExactText(container, "Cancel")!);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(clearIntervalSpy).toHaveBeenCalledWith(countdownTimer);
+
+        // …and a card still on screen at unmount leaves nothing ticking either.
+        clearIntervalSpy.mockClear();
+        vi.mocked(backend.getPendingPreview).mockResolvedValue({
+          success: true,
+          preview: heldPreview({ expires_at: 1800 }),
+        });
+        const second = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+        expect(expiryText(second.container)).toBe("Expires in 30 min");
+
+        second.unmount();
+        unmount();
+        expect(clearIntervalSpy).toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   // ===========================================================================

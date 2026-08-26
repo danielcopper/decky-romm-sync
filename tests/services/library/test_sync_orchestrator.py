@@ -756,6 +756,35 @@ class TestGetPendingPreview:
         assert await plugin.get_pending_preview() == {"success": True, "preview": None}
 
     @pytest.mark.asyncio
+    async def test_withholds_the_snapshot_while_a_run_is_in_flight(self, plugin, fake_romm_api):
+        """A panel that remounts mid-run must not be handed a card to render over
+        the run's own progress rows. The snapshot is withheld, not discarded —
+        the frontend's own store guard can be wrong about a live run exactly
+        when it matters (an apply refused with ``sync_in_progress`` retracts the
+        optimistic running flag while the backend keeps the delta), so the
+        backend is the one that has to be right.
+        """
+        self._preview_setup(plugin, fake_romm_api)
+        await plugin.sync_preview()
+        box = plugin._sync_service._box
+        assert box.try_begin_run("run-1") is True
+
+        assert await plugin.get_pending_preview() == {"success": True, "preview": None}
+        assert box.pending_delta is not None
+
+    @pytest.mark.asyncio
+    async def test_hands_the_snapshot_back_once_the_run_is_over(self, plugin, fake_romm_api):
+        self._preview_setup(plugin, fake_romm_api)
+        fresh = await plugin.sync_preview()
+        box = plugin._sync_service._box
+        box.try_begin_run("run-1")
+        assert await plugin.get_pending_preview() == {"success": True, "preview": None}
+
+        box.finish_run("run-1")
+
+        assert await plugin.get_pending_preview() == {"success": True, "preview": fresh}
+
+    @pytest.mark.asyncio
     async def test_hands_back_the_exact_answer_sync_preview_returned(self, plugin, fake_romm_api):
         """The restored card must be what the user was shown — the same payload,
         not a second assembly of it that can drift from the first."""

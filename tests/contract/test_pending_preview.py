@@ -58,6 +58,32 @@ async def test_restored_preview_id_still_applies(harness):
     assert applied == {"success": True, "message": "Applying changes"}
 
 
+async def test_withheld_while_a_run_is_in_flight_then_handed_back(harness):
+    """A run in flight owns the panel: the callable answers "nothing pending"
+    rather than a card the frontend would render over the run's progress rows.
+
+    The frontend cannot be the authority here — an apply refused with
+    ``sync_in_progress`` retracts its optimistic running flag while the backend
+    deliberately keeps the delta (#1202), so its store says idle during a live
+    run. Withheld, not discarded: once the run ends the same payload comes back.
+    """
+    _seed_one_platform(harness)
+    fresh = await harness.plugin.sync_preview()
+    box = harness.plugin._sync_service._box
+    assert box.try_begin_run("run-1") is True
+
+    assert await harness.plugin.get_pending_preview() == {"success": True, "preview": None}
+    assert box.pending_delta is not None
+
+    # An overlapping apply keeps its own refusal — the withholding is the
+    # restore reader's alone and must not leak into the apply's verdict.
+    rejected = await harness.plugin.sync_apply_delta(fresh["preview_id"])
+    assert rejected == {"success": False, "reason": "sync_in_progress", "message": "Sync already in progress"}
+
+    box.finish_run("run-1")
+    assert await harness.plugin.get_pending_preview() == {"success": True, "preview": fresh}
+
+
 async def test_over_age_snapshot_is_dropped(harness):
     """Past the TTL the read answers "nothing pending" and clears the staged
     snapshot, on the same rule the apply refuses it by."""

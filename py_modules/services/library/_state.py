@@ -370,6 +370,21 @@ class LibrarySyncStateBox:
             return None
         return delta
 
+    def read_restorable_preview(self, now: float) -> PreviewDelta | None:
+        """The staged snapshot a returning panel may put back on screen, else ``None``.
+
+        Everything :meth:`read_fresh_preview` refuses, plus one more: while a
+        run is in flight the snapshot is **withheld, never discarded**. A panel
+        that remounts mid-run must show that run, not a card that would render
+        over its progress rows — and the same snapshot is handed back on the
+        next mount after the run ends, as long as it is still inside its TTL.
+        Withholding is this reader's alone: the apply path must keep answering
+        an overlapping apply with its own refusal, not this one's silence.
+        """
+        if self.is_in_flight():
+            return None
+        return self.read_fresh_preview(now)
+
     def matches_preview(self, preview_id: str) -> bool:
         """Whether the staged snapshot is the one ``preview_id`` names.
 

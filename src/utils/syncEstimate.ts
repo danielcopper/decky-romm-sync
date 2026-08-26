@@ -142,13 +142,25 @@ export function estimatePlanSeconds(units: readonly SyncPlanUnit[]): number {
 }
 
 /**
- * Shared coarse-duration renderer for the sync UI's two readouts. Renders
- * *seconds* as ``"< 1 min"`` under a minute, ``"N min"`` under an hour, and
- * ``"H h M min"`` / ``"H h"`` (on the hour) beyond, appending *suffix* to every
- * branch. *roundMinutes* controls the minute rounding: ``Math.round`` for the
- * neutral estimate, ``Math.ceil`` for the live countdown (which must never promise
- * less time than it expects). No ``~`` prefix — the coarse minute rounding already
- * reads as an estimate, and the tilde read as noise on-device.
+ * Shared coarse-duration renderer for the sync UI's three duration readouts.
+ * Renders *seconds* as ``"< 1 min"`` under a minute, ``"N min"`` under an hour,
+ * and ``"H h M min"`` / ``"H h"`` (on the hour) beyond, appending *suffix* to
+ * every branch. No ``~`` prefix — the coarse minute rounding already reads as an
+ * estimate, and the tilde read as noise on-device.
+ *
+ * *roundMinutes* is where the three part company, and the direction follows what
+ * the number would cost the reader if it were wrong:
+ *
+ * - ``Math.round`` (`formatDuration`) — the neutral estimate of how long a run
+ *   will take. Nothing depends on the error's sign, so it rounds to whichever
+ *   minute is nearer.
+ * - ``Math.ceil`` (`formatEtaCountdown`) — the live countdown of a run in
+ *   progress. It is a FORECAST, so it must never promise less time than it
+ *   expects: a run that outlives its own countdown reads as stuck.
+ * - ``Math.floor`` (`formatTimeRemaining`) — the time left before a hard cutoff,
+ *   which the preview card counts down to. The deadline is a fact rather than a
+ *   forecast, so the honest error is the opposite one: never promise more time
+ *   than remains, or the card offers an Apply that is already refused.
  */
 export function formatApproxDuration(seconds: number, roundMinutes: (n: number) => number, suffix: string): string {
   if (seconds < 60) return `< 1 min${suffix}`;
@@ -173,7 +185,7 @@ export function formatDuration(seconds: number): string {
  * Render the time left before a deadline — ``"< 1 min"``, ``"29 min"``,
  * ``"1 h 10 min"``. Minutes are FLOORED, which is what separates this from
  * ``formatDuration``: a readout counting down to a hard cutoff must never
- * promise more time than remains, so 89 seconds reads "1 min", not "2 min".
+ * promise more time than remains, so 90 seconds reads "1 min", not "2 min".
  */
 export function formatTimeRemaining(seconds: number): string {
   return formatApproxDuration(seconds, Math.floor, "");

@@ -328,6 +328,46 @@ class TestPreviewSnapshot:
         box = LibrarySyncStateBox()
         assert box.read_fresh_preview(self._CREATED_AT) is None
 
+    def test_restorable_read_withholds_while_a_run_is_in_flight(self):
+        """A panel remounting mid-run must show the run, not a card that would
+        render over its progress rows — but the snapshot is only withheld."""
+        box = self._staged_box()
+        box.try_begin_run("run-1")
+
+        assert box.read_restorable_preview(self._CREATED_AT) is None
+        # Withheld, NOT discarded.
+        assert box.pending_delta is not None
+        # A cancelling run is still in flight, so it withholds too.
+        box.request_cancel("run-1")
+        assert box.read_restorable_preview(self._CREATED_AT) is None
+        assert box.pending_delta is not None
+
+    def test_restorable_read_hands_the_snapshot_back_once_the_run_ends(self):
+        box = self._staged_box()
+        box.try_begin_run("run-1")
+        box.read_restorable_preview(self._CREATED_AT)
+
+        box.finish_run("run-1")
+
+        delta = box.read_restorable_preview(self._CREATED_AT)
+        assert delta is not None
+        assert delta.preview_id == "pv-1"
+
+    def test_restorable_read_still_refuses_an_over_age_snapshot(self):
+        box = self._staged_box()
+
+        assert box.read_restorable_preview(self._CREATED_AT + PREVIEW_MAX_AGE_SECONDS + 1) is None
+        assert box.pending_delta is None
+
+    def test_in_flight_withholding_does_not_reach_the_apply_path_read(self):
+        """``read_fresh_preview`` is the apply's age check and must stay
+        run-blind: an overlapping apply is refused by the run-slot claim with
+        its own reason, never rewritten into a staleness verdict."""
+        box = self._staged_box()
+        box.try_begin_run("run-1")
+
+        assert box.read_fresh_preview(self._CREATED_AT) is not None
+
     def test_matches_is_identity_only_and_ignores_age(self):
         box = self._staged_box()
 

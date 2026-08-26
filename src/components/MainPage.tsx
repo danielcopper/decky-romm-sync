@@ -482,8 +482,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [status, setStatus] = useState<TransientStatus | null>(null);
   const [preview, setPreview] = useState<SyncPreview | null>(null);
   // Clock mirror for the preview card's expiry countdown, written from the
-  // interval below (never read during render, same rule as the live-ETA row).
-  // `null` while no preview is up, or when the preview carries no deadline.
+  // interval below and from each site that adopts a preview — never read during
+  // render, same rule as the live-ETA row. `null` only until the first preview
+  // of this mount is adopted: nothing resets it afterwards, because the reset
+  // would have to live in the countdown effect and a setState there is a lint
+  // error (react-hooks/set-state-in-effect). That costs nothing while EVERY
+  // adopter stamps it first — the invariant a third adopter must keep — since it
+  // is read only through `previewSecondsLeft`, i.e. only while a preview is up,
+  // and the interval refreshes it every second from then on.
   const [previewNowMs, setPreviewNowMs] = useState<number | null>(null);
   const [skipPreview, setSkipPreview] = useState(false);
   const [retroarchWarning, setRetroarchWarning] = useState<{ warning: boolean; current?: string } | null>(null);
@@ -494,6 +500,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const saveSortMigration = useSaveSortMigrationState();
   const downloads = useDownloads();
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Whether the user has dismissed a preview since this mount. Read by the
+  // pending-preview restore, which cannot see the difference in state: a
+  // dismissed preview and one that never existed both leave `preview` null.
+  const previewDismissedRef = useRef(false);
   // The run this panel is watching, by id, and whether its end has been handled.
   // Seeded at first render — BEFORE the subscription below exists, so the mount
   // seed's own write is measured against the state it replaced rather than against
@@ -553,11 +563,20 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         if (!answer.success || !answer.preview) return;
         const restored = answer.preview;
         // Same reasoning as the getSyncStatus seed above: this answer describes
-        // the world as it was when the read was ISSUED, so anything that happened
-        // since outranks it. A run started in that window owns the panel — the
-        // store, not this read, is authoritative about a sync being in flight —
-        // and a preview the user produced or dismissed in it is the one they are
-        // looking at, so the functional update lets the restored one lose.
+        // the world as it was when the read was ISSUED, so anything the user did
+        // since outranks it. A preview they produced in that window is the one
+        // they are looking at (the functional update below lets the restored one
+        // lose), and a preview they DISMISSED is one the backend has already been
+        // told to discard — restoring it would put back a card whose Apply can
+        // only answer stale_preview, which is the failure this whole change
+        // exists to remove. State cannot tell the two apart (both leave `cur`
+        // null), so the dismissal is recorded in a ref.
+        //
+        // The run check is belt-and-braces: the backend withholds a staged
+        // preview while a run is in flight, precisely because this store can be
+        // wrong here — an apply refused with sync_in_progress retracts the
+        // optimistic running flag while the backend keeps the delta (#1202).
+        if (previewDismissedRef.current) return;
         if (getSyncProgress().running) return;
         setPreviewNowMs(Date.now());
         setPreview((cur) => cur ?? restored);
@@ -867,6 +886,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   };
 
   const handleDismiss = async () => {
+    // The user has answered the preview question: whatever the mount read is
+    // still holding is a snapshot the backend is being told to discard.
+    previewDismissedRef.current = true;
     setPreview(null);
     setStatus(null);
     try {

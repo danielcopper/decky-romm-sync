@@ -521,11 +521,11 @@ class SyncOrchestrator:
     def get_pending_preview(self):
         """Hand back the staged preview answer, so a remounted panel can show its card again.
 
-        ``preview: None`` — nothing staged, or a snapshot the read aged out —
-        is a normal answer, never the failure shape. Starts, cancels and
-        touches no run.
+        ``preview: None`` — nothing staged, a snapshot the read aged out, or a
+        run in flight (which withholds it rather than discarding it) — is a
+        normal answer, never the failure shape. Starts and cancels no run.
         """
-        delta = self._sync_state.read_fresh_preview(self._clock.time())
+        delta = self._sync_state.read_restorable_preview(self._clock.time())
         return {"success": True, "preview": dict(delta.answer) if delta else None}
 
     # ── Progress & safety ────────────────────────────────────────
