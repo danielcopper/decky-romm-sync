@@ -14,11 +14,21 @@ opens none, because the injected ``active_core`` seam opens one per ROM.
 **Those two must never share a transaction.** A Unit of Work takes SQLite's
 non-reentrant ``BEGIN IMMEDIATE``, so resolving a core inside an open UoW
 blocks until ``busy_timeout`` and then raises ``database is locked`` — on a
-real device only, since ``FakeUnitOfWork`` shares no connection and stays
-green. Folding the path read and the core read into one pass looks like an
-obvious win from inside this module and is exactly that deadlock;
-``scripts/check_uow_seam_nesting.py`` is what would catch it, so do not write
-the fold that makes it fire.
+real device only, since ``FakeUnitOfWork`` shares no connection and every test
+stays green. Holding all three methods on one class is what makes folding the
+path read and the core read into one pass a one-liner, and only half of that
+one-liner is gated: ``scripts/check_uow_seam_nesting.py`` fires on the inline
+form (naming ``active_emulator_for_rom`` inside the ``with`` block) and is
+silent on the peer-call form (``self.do_build_core_overrides(...)`` inside it),
+a blind spot its own docstring records. So the reason not to write the fold is
+the deadlock, not a check that would stop you — nothing will.
+
+One rule this module does not keep, inherited with the code rather than
+introduced by it: both install-path readers hold their UoW open across the disc
+resolver's directory listing, once per installed ROM. CONTEXT.md's Unit of Work
+entry keeps a transaction narrow — database reads and writes, never file I/O —
+so this file is where that fix lands when it comes, and a reader should not
+take the boundary above as evidence the rest is clean.
 """
 
 from __future__ import annotations

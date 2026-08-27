@@ -20,10 +20,6 @@ already makes:
   package — every other budget site prices against a reading that module handed
   it (:mod:`services.library.session_budget`).
 
-``service.py`` co-owns every seam: it is the façade that receives them from
-``bootstrap`` and hands each to the sub-service that owns it. Passing a seam
-through the composition root is not holding it.
-
 The scan is AST-shaped and covers the two ways a module takes hold of a seam:
 
 * an **attribute** named after the seam's config attribute, read or written
@@ -32,12 +28,37 @@ The scan is AST-shaped and covers the two ways a module takes hold of a seam:
 * an **annotation** naming the seam's Protocol type (``ActiveCoreReader``,
   ``RendererRssFn``, …) on a dataclass field, a parameter, or a return.
 
-It is a surface-syntax guardrail, not dataflow analysis. What it cannot see:
-a seam aliased to a differently-named attribute or local, one reached through
-``getattr``, one passed positionally into a helper that holds it, and a
-quoted (string) annotation. Those stay on review.
+**A composition root may pass a seam on; it may not use one.** The façade takes
+all four from ``bootstrap`` and hands each to the sub-service that owns it, so
+two shapes are allowed everywhere rather than one file being exempted wholesale:
+a seam attribute that *is* a call's keyword-argument value
+(``ShortcutBakeInputsConfig(active_core=config.active_core)`` — handed on, not
+held) and a seam annotation on a field of :data:`FACADE_CONFIG_CLASS`, the one
+class ``bootstrap`` delivers into. A façade method that *reaches through* the
+seam (``self._config.active_core.active_emulator_for_rom(...)``) is neither, and
+is a finding — which a blanket file exemption could not tell from wiring.
 
-Exit 0 when every seam is held only by its owners, 1 (one line per offending
+It is a surface-syntax guardrail, not dataflow analysis. What it cannot see:
+
+* a seam aliased to a differently-named attribute or local, or reached through
+  ``getattr``;
+* a seam passed positionally into a helper that then holds it;
+* a quoted (string) annotation, which is a ``Constant`` and never a type name;
+* a Protocol imported under an alias
+  (``from services.protocols import ActiveCoreReader as CoreReader``), which
+  leaves the annotation leaf unmatched — the aliasing this catches is of the
+  *value*, not of the *type*;
+* the field **name** in a foreign config, which is never inspected — so
+  ``active_core: CoreReader`` combines the previous two and is invisible on both
+  halves of the scan.
+
+The last two are precision in the documented reach rather than a way through:
+whatever the field is called and however its type was imported, the constructor
+that unpacks it reads ``config.<seam>`` outside a keyword argument, and that
+read is flagged. What actually stays on review is a seam reached without ever
+naming it.
+
+Exit 0 when every seam is held only by its owner, 1 (one line per offending
 site) otherwise.
 """
 
@@ -55,10 +76,10 @@ LIBRARY_DIR = REPO_ROOT / "py_modules" / "services" / "library"
 # to hold it. A new confinement is a one-line addition here plus its Protocol
 # type in SEAM_PROTOCOLS below.
 SEAM_OWNERS: dict[str, frozenset[str]] = {
-    "active_core": frozenset({"service.py", "bake_inputs.py"}),
-    "disc_resolver": frozenset({"service.py", "bake_inputs.py"}),
-    "renderer_rss": frozenset({"service.py", "session_budget.py"}),
-    "renderer_gc": frozenset({"service.py", "session_budget.py"}),
+    "active_core": frozenset({"bake_inputs.py"}),
+    "disc_resolver": frozenset({"bake_inputs.py"}),
+    "renderer_rss": frozenset({"session_budget.py"}),
+    "renderer_gc": frozenset({"session_budget.py"}),
 }
 
 # Protocol type name -> the seam it types, so an annotation is attributed to
@@ -69,6 +90,11 @@ SEAM_PROTOCOLS: dict[str, str] = {
     "RendererRssFn": "renderer_rss",
     "RendererGcFn": "renderer_gc",
 }
+
+# The one config class ``bootstrap`` delivers a seam into. A seam annotation on
+# one of ITS fields is the package's entry point for that seam, not a second
+# holder of it.
+FACADE_CONFIG_CLASS = "LibraryServiceConfig"
 
 
 def _iter_scanned_files(library_dir: Path) -> list[Path]:
@@ -106,8 +132,30 @@ def _annotation_leaf(annotation: ast.expr) -> str | None:
     return None
 
 
+def _passed_on_nodes(tree: ast.AST) -> set[int]:
+    """Node ids a composition root is allowed to name: wiring, not use.
+
+    Two shapes, collected by node identity so nothing else inherits the
+    exemption: an attribute standing as a call's keyword-argument value (the
+    seam handed to a sub-service's config), and an annotation on a field of
+    :data:`FACADE_CONFIG_CLASS` (the seam arriving from ``bootstrap``).
+    """
+    allowed: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            allowed.update(id(kw.value) for kw in node.keywords if isinstance(kw.value, ast.Attribute))
+        elif isinstance(node, ast.ClassDef) and node.name == FACADE_CONFIG_CLASS:
+            allowed.update(
+                id(inner)
+                for field in node.body
+                if isinstance(field, ast.AnnAssign)
+                for inner in ast.walk(field.annotation)
+            )
+    return allowed
+
+
 def find_violations(files: list[Path] | None = None) -> list[str]:
-    """Return one human-readable line per seam held outside its owner modules."""
+    """Return one human-readable line per seam held outside its owner module."""
     if files is None:
         files = _iter_scanned_files(LIBRARY_DIR)
     findings: list[str] = []
@@ -122,18 +170,21 @@ def find_violations(files: list[Path] | None = None) -> list[str]:
             continue
         module = path.relative_to(LIBRARY_DIR).as_posix()
         rel = path.relative_to(REPO_ROOT)
+        passed_on = _passed_on_nodes(tree)
         for node in ast.walk(tree):
-            findings.extend(_node_findings(node, module=module, rel=rel))
+            findings.extend(_node_findings(node, module=module, rel=rel, passed_on=passed_on))
     return sorted(findings)
 
 
-def _node_findings(node: ast.AST, *, module: str, rel: Path) -> list[str]:
+def _node_findings(node: ast.AST, *, module: str, rel: Path, passed_on: set[int]) -> list[str]:
     """Seam violations introduced by a single AST node."""
     findings: list[str] = []
-    if isinstance(node, ast.Attribute) and node.attr in SEAM_OWNERS:
+    if isinstance(node, ast.Attribute) and node.attr in SEAM_OWNERS and id(node) not in passed_on:
         findings.extend(_report(node.attr, node, module=module, rel=rel, held_as=f"holds '....{node.attr}'"))
     for annotation in _annotation_names(node):
         for inner in ast.walk(annotation):
+            if id(inner) in passed_on:
+                continue
             leaf = _annotation_leaf(inner) if isinstance(inner, ast.Name | ast.Attribute) else None
             seam = SEAM_PROTOCOLS.get(leaf) if leaf is not None else None
             if seam is not None:
