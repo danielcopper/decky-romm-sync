@@ -15,14 +15,15 @@ from services.library.fetcher import _SUPPORTED_VIRTUAL_TYPES
 def rebind_loop(library_service, loop):
     """Rebind the event loop on every LibraryService sub-service.
 
-    The façade composes three sub-services (fetcher, orchestrator,
-    reporter) that each hold their own ctor-bound ``_loop``. Tests that
-    swap in a mock loop must propagate it to all three so async calls
-    land on the override.
+    The façade composes four sub-services (fetcher, orchestrator,
+    reporter, session-budget monitor) that each hold their own ctor-bound
+    ``_loop``. Tests that swap in a mock loop must propagate it to all
+    four so async calls land on the override.
     """
     library_service._fetcher._loop = loop
     library_service._orchestrator._loop = loop
     library_service._reporter._loop = loop
+    library_service._session_budget._loop = loop
 
 
 def _make_loop_with_executor(*return_values):

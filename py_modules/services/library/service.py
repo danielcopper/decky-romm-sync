@@ -7,7 +7,8 @@ threads through every sub-service. Implementation lives in the
 sub-service modules: :class:`LibraryFetcher` for ROM/metadata
 roundtrips, :class:`SyncOrchestrator` for the preview/apply
 lifecycle and safety heartbeat, :class:`SyncReporter` for post-apply
-finalisation and registry queries. The façade itself only wires the
+finalisation and registry queries, :class:`SessionBudgetMonitor` for
+Steam's renderer-heap budget. The façade itself only wires the
 pieces together and delegates — anything that touches RomM or mutates
 in-flight sync state belongs in a sub-service.
 """
@@ -21,6 +22,7 @@ from lib.late_binding import LateBinding
 from services.library._state import CollectionMembership, LibrarySyncStateBox
 from services.library.fetcher import LibraryFetcher, LibraryFetcherConfig
 from services.library.reporter import SyncReporter, SyncReporterConfig
+from services.library.session_budget import SessionBudgetMonitor, SessionBudgetMonitorConfig
 from services.library.sync_orchestrator import SyncOrchestrator, SyncOrchestratorConfig
 
 if TYPE_CHECKING:
@@ -91,9 +93,10 @@ class LibraryService:
 
     Composes :class:`LibraryFetcher` (platform/collection roundtrips +
     metadata-cache stamping), :class:`SyncOrchestrator` (preview/apply
-    lifecycle + safety heartbeat), and :class:`SyncReporter`
-    (post-apply finalisation + registry queries) over a single shared
-    :class:`LibrarySyncStateBox`. The façade itself owns the box and
+    lifecycle + safety heartbeat), :class:`SyncReporter`
+    (post-apply finalisation + registry queries), and
+    :class:`SessionBudgetMonitor` (Steam's renderer-heap budget) over a
+    single shared :class:`LibrarySyncStateBox`. The façade itself owns the box and
     exposes the callable surface; every implementation method lives on
     one of the sub-services.
     """
@@ -123,6 +126,19 @@ class LibraryService:
             )
         )
 
+        # Sub-service: session-budget monitor. Constructed before the
+        # orchestrator, which drives it through the ``SessionBudgetGate`` seam
+        # at every chunk boundary.
+        self._session_budget = SessionBudgetMonitor(
+            config=SessionBudgetMonitorConfig(
+                loop=config.loop,
+                logger=config.logger,
+                sync_state_box=self._box,
+                renderer_rss=config.renderer_rss,
+                renderer_gc=config.renderer_gc,
+            )
+        )
+
         # The orchestrator dispatches the per-unit pipeline's finalize
         # step (sync_collections + sync_complete) through the reporter,
         # but the reporter doesn't exist yet at this point in __init__.
@@ -146,8 +162,7 @@ class LibraryService:
                 artwork=config.artwork,
                 active_core=config.active_core,
                 disc_resolver=config.disc_resolver,
-                renderer_rss=config.renderer_rss,
-                renderer_gc=config.renderer_gc,
+                session_budget=self._session_budget,
             )
         )
 
@@ -320,7 +335,7 @@ class LibraryService:
         return self._orchestrator.get_sync_status()
 
     async def get_session_budget_status(self):
-        return await self._orchestrator.get_session_budget_status()
+        return await self._session_budget.get_session_budget_status()
 
     # Reporting
     async def report_unit_results(self, rom_id_to_app_id, run_id, unit_id, chunk_index):

@@ -276,15 +276,16 @@ continue unrelated groups.
 
 #### LibraryService decomposition (`services/library/`)
 
-The library sync subsystem is a façade over three sub-services that coordinate through a shared `LibrarySyncStateBox`:
+The library sync subsystem is a façade over four sub-services that coordinate through a shared `LibrarySyncStateBox`:
 
-| Module                 | Role                                                                                                                                                                                                                             |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `service.py`           | `LibraryService` façade — public callable surface; wires the sub-services and delegates                                                                                                                                          |
-| `fetcher.py`           | `LibraryFetcher` — read-only RomM roundtrips: list platforms/collections, the incremental/full pagination loop, per-unit work-queue construction                                                                                 |
-| `sync_orchestrator.py` | `SyncOrchestrator` — preview (read-only), the per-unit apply pipeline, cancel, the heartbeat clock, progress emission                                                                                                            |
-| `reporter.py`          | `SyncReporter` — post-apply finalisation (artwork filenames, per-unit `roms` upsert + `SyncRun` lifecycle) and the `roms`-derived queries                                                                                        |
-| `_state.py`            | `LibrarySyncStateBox` — shared mutable in-flight sync state; single source of truth threaded through every sub-service, and the **sole owner** of the run-lifecycle pair (`sync_state` / `current_sync_id`) via its verb methods |
+| Module                 | Role                                                                                                                                                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `service.py`           | `LibraryService` façade — public callable surface; wires the sub-services and delegates                                                                                                                                              |
+| `fetcher.py`           | `LibraryFetcher` — read-only RomM roundtrips: list platforms/collections, the incremental/full pagination loop, per-unit work-queue construction                                                                                     |
+| `sync_orchestrator.py` | `SyncOrchestrator` — preview (read-only), the per-unit apply pipeline, cancel, the heartbeat clock, progress emission                                                                                                                |
+| `reporter.py`          | `SyncReporter` — post-apply finalisation (artwork filenames, per-unit `roms` upsert + `SyncRun` lifecycle) and the `roms`-derived queries                                                                                            |
+| `session_budget.py`    | `SessionBudgetMonitor` — Steam's per-session renderer-heap budget: the GC-settled RSS measurement, the chunk-boundary pause verdict, the post-preview prognosis, the run-start baseline, and the `get_session_budget_status` payload |
+| `_state.py`            | `LibrarySyncStateBox` — shared mutable in-flight sync state; single source of truth threaded through every sub-service, and the **sole owner** of the run-lifecycle pair (`sync_state` / `current_sync_id`) via its verb methods     |
 
 The pipeline is split **fetch (read-only) / apply (owns persistence)**: the fetcher never mutates the `roms` registry or
 `rom_metadata`, and the reporter's per-unit commit upserts each acked ROM's `roms` row and stamps its cached
@@ -473,69 +474,71 @@ teardown branches on the cause (#1052) — and either way, **every chunk committ
 ([ADR-0024](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0024-session-budget-rss-gate.md)).**
 Steam's `SharedJSContext` renderer OOM-crashes at ~2.45–2.53 GB RSS and never self-recovers within a session; each
 created shortcut costs 0.7–1.5 MB permanently (measured on-device). Chunking (ADR-0023) makes hitting that cliff a cheap
-resume; this gate stops the run _before_ it, at a chunk boundary, as a controlled pause. At each chunk boundary the
-orchestrator reads the renderer's RSS (`RendererRssFn`, `adapters/renderer_rss.py` — the max `VmRSS` across
-`steamwebhelper` processes from `/proc`) and, when that raw reading is at/above `GC_SKIP_BELOW_KB` (1.5 GB), forces a
-renderer GC (`RendererGcFn`, `adapters/renderer_gc.py` — an `HeapProfiler.collectGarbage` over the CEF debugger on
-`localhost:8080`, so the reading reflects settled heap not transient garbage that Steam's measured-unreliable natural GC
-hasn't reclaimed) and re-reads; below the floor the raw reading (which can only over-estimate) already clears every
-threshold, so the ~5 s GC is skipped and a small sync pays zero GC cost. It then runs the pure
-`domain/session_budget.py::gate_decision` over the chunk's **composition-priced** cost (`chunk_worst_cost_kb`): now that
-the emitted chunk is new + changed only (the delta-restricted apply above), a create is priced at the worst-case create
-rate _plus_ its transient cover term while a changed/rebind item is priced at the lighter `Set*`-walk rate — the gate no
-longer prices every item as a cover-applying create. Pause iff `rss + chunk_cost ≥ limit`; the pause log line names the
-composition ("… + N creates + M updates projects …"). The frontend decides create-vs-update itself via its
-existing-shortcut scan, so a small backend/frontend mismatch only ever overprices (worst-case safe). Both modes are
-predictive and differ only in the `limit` line: every **later** chunk projects against `cliff − margin` (≈2.2 GB,
-keeping the anti-thrash safety margin), while the run's **very first chunk** projects against `CLIFF_KB` (≈2.45 GB)
-instead. Forward progress must be guaranteed (the run has to apply at least one chunk or it loops forever on a
-no-progress pause), so the first chunk is allowed to spend _into_ the safety margin — but the predictive projection
-still stops it before the crash line. A resume's first chunk therefore proceeds only when its worst-case peak stays
-below the cliff (≈1.95 GB for a full 200-item chunk of cover-applying creates, each priced create + cover) and can never
-be projected past it; a resume attempted without a Steam restart re-pauses cleanly rather than driving a chunk into the
-cliff. On a pause it sets `run_paused` + a distinct `interrupt_reason` and requests cancel — the loop returns cleanly
-with prior chunks committed and the terminal write records the new terminal status **`paused`** (migration 014, its own
-status distinct from a crash's `interrupted`; both resumable, but the split lets the UI say "(paused)"). Completed
-platforms keep their `PlatformSyncState` stamps, so Resume Sync redoes only the remainder. Every step is **fail-open**:
-an unavailable RSS reading (no `steamwebhelper`, unreadable `/proc`) skips the gate — and short-circuits further GC
-attempts — for the rest of the run (logged once), a seam error is caught locally, and a failed GC only makes the reading
-less precise; measurement never blocks a sync. The same seams feed the UI surfaces: `sync_preview` returns
-`pause_likely` (a `predict_run_crosses` prognosis pricing only new creates + changed updates, never fully-unchanged
-items, so an unchanged re-sync never warns), a clean run's `sync_complete` carries `restart_recommended`
-(`post_run_advisory`, RSS > ~1.8 GB, read GC-first), and the `get_session_budget_status` callable returns a live RSS
-reading (no GC) plus the three fixed threshold lines (`warn_kb` ≈1.8 GB, `ceiling_kb` ≈2.2 GB, `cliff_kb` ≈2.45 GB) for
-the persistent QAM banners (a blue "paused" banner, a yellow high-heap banner) and the always-on "Steam memory" status
-row. The row's value text is traffic-light coloured against those three thresholds — green / yellow (`warn_kb`) / red
-(`ceiling_kb`) — so the frontend holds no threshold magic numbers, and while a sync runs (or a paused banner is showing)
-the row polls the callable (~5 s during a sync, ~10 s while paused) so the number tracks the climbing RSS and the blue
-paused banner notices once a Steam restart frees memory. That notice is driven by `resume_ready` on the callable
-(`domain.session_budget.resume_would_proceed`: `rss + RESUME_HEADROOM_CHUNKS × FULL_CHUNK_WORST_KB < ceiling` — room for
-TWO worst-case chunks, ≈1.2 GB bar, because a one-chunk bar sits exactly on the pause point where Steam's own small
-frees flicker the verdict; `None` when RSS is unreadable) — when it flips `true` the blue banner reads "Steam memory is
-free again — press Resume Sync" and hides the restart button. The callable also carries the paused run's progress
-(`run_done_items` / `run_total_items`), so that banner reads "1200 of 2001 games done": the counters are run-scoped
-fields on `LibrarySyncStateBox`, stamped with the plan's ROM total and grown by the delta-restricted apply's SKIPPED
-entries (already correct on their shortcut), each wholesale-skipped unit's ROMs, and every COMMITTED chunk's acked items
-— an emitted-but-uncommitted chunk (cancel / heartbeat timeout / the pause itself) never counts, so the number can't
-over-report. They live in the backend deliberately: the plugin process survives the Steam restart the banner asks for,
-while the frontend reloads. In-memory only — a plugin reload wipes them and both come back `None`, which the banner
-renders by dropping the sentence rather than showing a zero. That row also shows the **last run's signed RSS growth**,
-appended inline after the value ("X.X GB · last run ±Y"), measured at EVERY terminal (completed / paused / cancelled /
-interrupted) so a paused run reads as _its own_ consumption-so-far rather than a prior clean run's: a RAW read taken
-unconditionally at run start is the baseline (`run_start_rss_kb` — captured before any chunk, so even a
-fully-incremental-skip run still records one and reports ≈ +0.0 GB), the terminal RSS read is the end, and
-`session_memory_delta` differences them (an approximation for information only, which a raw start baseline is fine for).
-The value is retained in `last_run_delta_kb` so `get_session_budget_status` surfaces it on a QAM remount (in-memory
-only, lost on reload, no migration; `None` when either endpoint was unmeasurable, so a stale delta is never shown); the
-UI reads it from that callable, so it is deliberately NOT put on the `sync_complete` wire. Both banners also offer a
-**Restart Steam now** button that calls `SteamClient.User.StartRestart` directly from the frontend — a deterministic
-full client restart that resets the renderer's per-session budget to the ~430 MB baseline. The button is disabled while
-a game is running and hard-guarded on click (`isAnyAppRunning`) so a restart can never close a game. The RSS reader and
-GC trigger are wired through `SyncOrchestratorConfig`; the gate's per-item cost is a parameter, and because the apply
-now pushes each created shortcut's cover through Steam's artwork API (`SetCustomArtworkForApp`, transiently resident but
-GC-reclaimable — hence the GC-before-measure), the orchestrator prices each create at the worst-case create rate
-**plus** the transient cover term (`COVER_TRANSIENT_KB`) at both the chunk gate and the preview prognosis, while a
-changed item stays at the lighter update rate.
+resume; this gate stops the run _before_ it, at a chunk boundary, as a controlled pause. Every renderer reading and
+verdict below belongs to `SessionBudgetMonitor` (`services/library/session_budget.py`), which the orchestrator drives
+through the `SessionBudgetGate` seam. At each chunk boundary the monitor reads the renderer's RSS (`RendererRssFn`,
+`adapters/renderer_rss.py` — the max `VmRSS` across `steamwebhelper` processes from `/proc`) and, when that raw reading
+is at/above `GC_SKIP_BELOW_KB` (1.5 GB), forces a renderer GC (`RendererGcFn`, `adapters/renderer_gc.py` — an
+`HeapProfiler.collectGarbage` over the CEF debugger on `localhost:8080`, so the reading reflects settled heap not
+transient garbage that Steam's measured-unreliable natural GC hasn't reclaimed) and re-reads; below the floor the raw
+reading (which can only over-estimate) already clears every threshold, so the ~5 s GC is skipped and a small sync pays
+zero GC cost. It then runs the pure `domain/session_budget.py::gate_decision` over the chunk's **composition-priced**
+cost (`chunk_worst_cost_kb`): now that the emitted chunk is new + changed only (the delta-restricted apply above), a
+create is priced at the worst-case create rate _plus_ its transient cover term while a changed/rebind item is priced at
+the lighter `Set*`-walk rate — the gate no longer prices every item as a cover-applying create. Pause iff
+`rss + chunk_cost ≥ limit`; the pause log line names the composition ("… + N creates + M updates projects …"). The
+frontend decides create-vs-update itself via its existing-shortcut scan, so a small backend/frontend mismatch only ever
+overprices (worst-case safe). Both modes are predictive and differ only in the `limit` line: every **later** chunk
+projects against `cliff − margin` (≈2.2 GB, keeping the anti-thrash safety margin), while the run's **very first chunk**
+projects against `CLIFF_KB` (≈2.45 GB) instead. Forward progress must be guaranteed (the run has to apply at least one
+chunk or it loops forever on a no-progress pause), so the first chunk is allowed to spend _into_ the safety margin — but
+the predictive projection still stops it before the crash line. A resume's first chunk therefore proceeds only when its
+worst-case peak stays below the cliff (≈1.95 GB for a full 200-item chunk of cover-applying creates, each priced
+create + cover) and can never be projected past it; a resume attempted without a Steam restart re-pauses cleanly rather
+than driving a chunk into the cliff. On a pause it sets `run_paused` + a distinct `interrupt_reason` and requests cancel
+— the loop returns cleanly with prior chunks committed and the terminal write records the new terminal status
+**`paused`** (migration 014, its own status distinct from a crash's `interrupted`; both resumable, but the split lets
+the UI say "(paused)"). Completed platforms keep their `PlatformSyncState` stamps, so Resume Sync redoes only the
+remainder. Every step is **fail-open**: an unavailable RSS reading (no `steamwebhelper`, unreadable `/proc`) skips the
+gate — and short-circuits further GC attempts — for the rest of the run (logged once), a seam error is caught locally,
+and a failed GC only makes the reading less precise; measurement never blocks a sync. The same seams feed the UI
+surfaces: `sync_preview` returns `pause_likely` (a `predict_run_crosses` prognosis pricing only new creates + changed
+updates, never fully-unchanged items, so an unchanged re-sync never warns), a clean run's `sync_complete` carries
+`restart_recommended` (`post_run_advisory`, RSS > ~1.8 GB, read GC-first), and the `get_session_budget_status` callable
+returns a live RSS reading (no GC) plus the three fixed threshold lines (`warn_kb` ≈1.8 GB, `ceiling_kb` ≈2.2 GB,
+`cliff_kb` ≈2.45 GB) for the persistent QAM banners (a blue "paused" banner, a yellow high-heap banner) and the
+always-on "Steam memory" status row. The row's value text is traffic-light coloured against those three thresholds —
+green / yellow (`warn_kb`) / red (`ceiling_kb`) — so the frontend holds no threshold magic numbers, and while a sync
+runs (or a paused banner is showing) the row polls the callable (~5 s during a sync, ~10 s while paused) so the number
+tracks the climbing RSS and the blue paused banner notices once a Steam restart frees memory. That notice is driven by
+`resume_ready` on the callable (`domain.session_budget.resume_would_proceed`:
+`rss + RESUME_HEADROOM_CHUNKS × FULL_CHUNK_WORST_KB < ceiling` — room for TWO worst-case chunks, ≈1.2 GB bar, because a
+one-chunk bar sits exactly on the pause point where Steam's own small frees flicker the verdict; `None` when RSS is
+unreadable) — when it flips `true` the blue banner reads "Steam memory is free again — press Resume Sync" and hides the
+restart button. The callable also carries the paused run's progress (`run_done_items` / `run_total_items`), so that
+banner reads "1200 of 2001 games done": the counters are run-scoped fields on `LibrarySyncStateBox`, stamped with the
+plan's ROM total and grown by the delta-restricted apply's SKIPPED entries (already correct on their shortcut), each
+wholesale-skipped unit's ROMs, and every COMMITTED chunk's acked items — an emitted-but-uncommitted chunk (cancel /
+heartbeat timeout / the pause itself) never counts, so the number can't over-report. They live in the backend
+deliberately: the plugin process survives the Steam restart the banner asks for, while the frontend reloads. In-memory
+only — a plugin reload wipes them and both come back `None`, which the banner renders by dropping the sentence rather
+than showing a zero. That row also shows the **last run's signed RSS growth**, appended inline after the value ("X.X GB
+· last run ±Y"), measured at EVERY terminal (completed / paused / cancelled / interrupted) so a paused run reads as _its
+own_ consumption-so-far rather than a prior clean run's: a RAW read taken unconditionally at run start is the baseline
+(`run_start_rss_kb` — captured before any chunk, so even a fully-incremental-skip run still records one and reports ≈
++0.0 GB), the terminal RSS read is the end, and `session_memory_delta` differences them (an approximation for
+information only, which a raw start baseline is fine for). The value is retained in `last_run_delta_kb` so
+`get_session_budget_status` surfaces it on a QAM remount (in-memory only, lost on reload, no migration; `None` when
+either endpoint was unmeasurable, so a stale delta is never shown); the UI reads it from that callable, so it is
+deliberately NOT put on the `sync_complete` wire. Both banners also offer a **Restart Steam now** button that calls
+`SteamClient.User.StartRestart` directly from the frontend — a deterministic full client restart that resets the
+renderer's per-session budget to the ~430 MB baseline. The button is disabled while a game is running and hard-guarded
+on click (`isAnyAppRunning`) so a restart can never close a game. The RSS reader and GC trigger are wired through
+`SessionBudgetMonitorConfig`; the gate's per-item cost is a parameter, and because the apply now pushes each created
+shortcut's cover through Steam's artwork API (`SetCustomArtworkForApp`, transiently resident but GC-reclaimable — hence
+the GC-before-measure), the monitor prices each create at the worst-case create rate **plus** the transient cover term
+(`COVER_TRANSIENT_KB`) at both the chunk gate and the preview prognosis, while a changed item stays at the lighter
+update rate.
 
 **Run/unit/chunk identity on the ack (#1041).** Every `sync_apply_unit` event carries the `run_id` (the run's
 `current_sync_id` UUID), the `unit_id` (the `WorkUnit.id`), and the `chunk_index`; the frontend echoes all three back on

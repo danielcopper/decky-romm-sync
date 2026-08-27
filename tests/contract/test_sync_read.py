@@ -499,7 +499,7 @@ async def test_get_session_budget_status_shape_rss_present(harness):
     """A readable RSS flows through unchanged alongside the fixed budget lines."""
     from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB, POST_RUN_ADVISORY_KB
 
-    harness.plugin._sync_service._orchestrator._renderer_rss.rss_kb = 2_100_000
+    harness.plugin._sync_service._session_budget._renderer_rss.rss_kb = 2_100_000
 
     result = await harness.plugin.get_session_budget_status()
     assert result == {

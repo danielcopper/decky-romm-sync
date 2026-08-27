@@ -698,3 +698,26 @@ class PlaytimeScopeNoticeClearFn(Protocol):
     """
 
     def __call__(self) -> None: ...
+
+
+class SessionBudgetGate(Protocol):
+    """Steam's renderer-heap budget as the sync lifecycle sees it.
+
+    The composition root satisfies this with the library context's session-budget
+    monitor. The orchestrator hands it the counts of work it is about to do and
+    acts on what comes back: a chunk-boundary verdict (the run pauses itself when
+    the next chunk would cross the budget line), a post-preview prognosis (an
+    advisory shown before an apply), a settled reading it can budget additive
+    chunk work against, and the run-start baseline the last-run memory delta is
+    measured from. Every method is fail-open — an unreadable renderer degrades to
+    no verdict, never to an error — so the lifecycle never handles a measurement
+    failure itself.
+    """
+
+    async def record_run_start_baseline(self) -> None: ...
+
+    async def measure_rss(self) -> int | None: ...
+
+    async def maybe_pause_for_budget(self, *, creates: int, updates: int, limit_kb: int) -> int | None: ...
+
+    async def predict_pause_likely(self, *, new_items: int, changed_items: int) -> bool: ...

@@ -2,7 +2,8 @@
 
 The package's public API is the :class:`LibraryService` façade — it
 composes the library sync sub-services (:class:`LibraryFetcher`,
-:class:`SyncOrchestrator`, :class:`SyncReporter`) over a shared
+:class:`SyncOrchestrator`, :class:`SyncReporter`,
+:class:`SessionBudgetMonitor`) over a shared
 :class:`LibrarySyncStateBox` and exposes the callable surface consumed
 by the Decky entrypoints (platform/collection metadata, sync preview/
 apply, post-apply reporting, registry queries). RomM
