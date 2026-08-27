@@ -9,7 +9,7 @@ roundtrips, :class:`SyncOrchestrator` for the preview/apply
 lifecycle and safety heartbeat, :class:`SyncReporter` for post-apply
 finalisation and the ``roms``-derived callable queries,
 :class:`SessionBudgetMonitor` for Steam's renderer-heap budget,
-:class:`ShortcutBakeInputs` for each ROM's launch facts,
+:class:`ShortcutLaunchResolver` for each ROM's launch facts,
 :class:`LocalLibraryReader` for what this device already recorded about the
 library. The façade itself only wires the
 pieces together and delegates — anything that touches RomM or mutates
@@ -23,11 +23,11 @@ from typing import TYPE_CHECKING, Any
 
 from lib.late_binding import LateBinding
 from services.library._state import CollectionMembership, LibrarySyncStateBox
-from services.library.bake_inputs import ShortcutBakeInputs, ShortcutBakeInputsConfig
 from services.library.fetcher import LibraryFetcher, LibraryFetcherConfig
 from services.library.local_library_reader import LocalLibraryReader, LocalLibraryReaderConfig
 from services.library.reporter import SyncReporter, SyncReporterConfig
 from services.library.session_budget import SessionBudgetMonitor, SessionBudgetMonitorConfig
+from services.library.shortcut_launch_resolver import ShortcutLaunchResolver, ShortcutLaunchResolverConfig
 from services.library.sync_orchestrator import SyncOrchestrator, SyncOrchestratorConfig
 
 if TYPE_CHECKING:
@@ -101,7 +101,7 @@ class LibraryService:
     lifecycle + safety heartbeat), :class:`SyncReporter`
     (post-apply finalisation + the ``roms``-derived callable queries),
     :class:`SessionBudgetMonitor` (Steam's renderer-heap budget),
-    :class:`ShortcutBakeInputs` (each ROM's installed path + active
+    :class:`ShortcutLaunchResolver` (each ROM's installed path + active
     emulator), and :class:`LocalLibraryReader` (this device's own record of
     the library, read back out of SQLite) over a
     single shared :class:`LibrarySyncStateBox`. The façade itself owns the box and
@@ -134,11 +134,12 @@ class LibraryService:
             )
         )
 
-        # Sub-service: shortcut-bake inputs. Constructed before the
-        # orchestrator, which holds it and resolves every bake's per-ROM
-        # launch facts through it.
-        self._bake_inputs = ShortcutBakeInputs(
-            config=ShortcutBakeInputsConfig(
+        # Sub-service: ShortcutLaunchResolver — resolves, per ROM, which file
+        # is launched and which program runs it. Constructed before the
+        # orchestrator, which holds it and resolves every bake's launch facts
+        # through it.
+        self._shortcut_launch_resolver = ShortcutLaunchResolver(
+            config=ShortcutLaunchResolverConfig(
                 uow_factory=config.uow_factory,
                 active_core=config.active_core,
                 disc_resolver=config.disc_resolver,
@@ -184,7 +185,7 @@ class LibraryService:
                 fetcher=self._fetcher,
                 reporter=reporter_binding,
                 artwork=config.artwork,
-                bake_inputs=self._bake_inputs,
+                shortcut_launch_resolver=self._shortcut_launch_resolver,
                 local_library_reader=self._local_library_reader,
                 session_budget=self._session_budget,
             )

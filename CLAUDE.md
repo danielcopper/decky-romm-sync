@@ -186,23 +186,23 @@ Format: **invariant** — tier — enforced by.
 - **Sync run-lifecycle (`sync_state` / `current_sync_id`) written only via `LibrarySyncStateBox` verbs** — check —
   `scripts/check_sync_lifecycle_owner.py`
 - **A library-sync seam is held only by the module owning the job it belongs to: `active_core` / `disc_resolver` by
-  `services/library/bake_inputs.py`, `renderer_rss` / `renderer_gc` by `services/library/session_budget.py`. The
-  `service.py` façade is not a co-owner — it may **pass** a seam on and may not **use** one, which the check reads
-  structurally: a seam attribute standing as a call's keyword-argument value, and a seam annotation on a field of
-  `LibraryServiceConfig`, are wiring; anything else in the façade is a finding** — check — `scripts/check_seam_owner.py`
-  (AST over attributes named after a seam and over annotations naming its Protocol, resolved per seam rather than per
-  module — owning one grants nothing about another. It sees the injection, not every later use: a seam aliased to a
-  differently-named attribute or local, one reached through `getattr`, one passed positionally into a helper that holds
-  it, a quoted string annotation, and a Protocol imported under an alias all slip past it — the last two only on the
-  annotation half, because the constructor read that unpacks the config is flagged whatever the field is called). What
-  the confinement buys is that each module's transactions stay separable: `bake_inputs` holds a read UoW across its
-  install-path scan while the `active_core` seam opens its own `BEGIN IMMEDIATE` per ROM, so folding the two into one
-  pass deadlocks — on a real device only, since `FakeUnitOfWork` shares no connection. **Nothing mechanical stands
-  behind that half.** `check_uow_seam_nesting.py` catches the fold only in its inline form (the seam method named inside
-  the `with` block); the peer-call form — `do_build_core_overrides` invoked from inside the install-path readers' own
-  UoW, which is what putting the three methods on one class makes cheapest — is that gate's documented blind spot and
-  passes green. On the budget side the confinement holds `session_budget`'s stated promise that no renderer-RSS reading
-  is taken anywhere else in the package
+  `services/library/shortcut_launch_resolver.py`, `renderer_rss` / `renderer_gc` by
+  `services/library/session_budget.py`. The `service.py` façade is not a co-owner — it may **pass** a seam on and may
+  not **use** one, which the check reads structurally: a seam attribute standing as a call's keyword-argument value, and
+  a seam annotation on a field of `LibraryServiceConfig`, are wiring; anything else in the façade is a finding** — check
+  — `scripts/check_seam_owner.py` (AST over attributes named after a seam and over annotations naming its Protocol,
+  resolved per seam rather than per module — owning one grants nothing about another. It sees the injection, not every
+  later use: a seam aliased to a differently-named attribute or local, one reached through `getattr`, one passed
+  positionally into a helper that holds it, a quoted string annotation, and a Protocol imported under an alias all slip
+  past it — the last two only on the annotation half, because the constructor read that unpacks the config is flagged
+  whatever the field is called). What the confinement buys is that each module's transactions stay separable:
+  `shortcut_launch_resolver` holds a read UoW across its install-path scan while the `active_core` seam opens its own
+  `BEGIN IMMEDIATE` per ROM, so folding the two into one pass deadlocks — on a real device only, since `FakeUnitOfWork`
+  shares no connection. **Nothing mechanical stands behind that half.** `check_uow_seam_nesting.py` catches the fold
+  only in its inline form (the seam method named inside the `with` block); the peer-call form —
+  `do_build_core_overrides` invoked from inside the install-path readers' own UoW, which is what putting the three
+  methods on one class makes cheapest — is that gate's documented blind spot and passes green. On the budget side the
+  confinement holds `session_budget`'s stated promise that no renderer-RSS reading is taken anywhere else in the package
 - **A module declared read-only calls no repository write — `services/library/local_library_reader.py` to start** —
   check — `scripts/check_read_only_module.py` (AST over the declared file's own calls, matching the two-attribute
   `<...>.<repo>.<method>` shape against the eleven repositories the UoW exposes). Read or write is decided **by the

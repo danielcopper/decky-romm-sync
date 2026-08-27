@@ -10,11 +10,11 @@ split was for stops being checkable by reading one file.
 Two confinements are enforced here, each recording a promise a module docstring
 already makes:
 
-* ``active_core`` / ``disc_resolver`` belong to ``bake_inputs.py``. They are the
-  only reason the sync ever resolves a ROM's emulator or its disc-pinned launch
-  path, and holding them in one module is what keeps the per-ROM UoW the
-  ``active_core`` seam opens out of the read UoW the install-path scan holds
-  (:mod:`services.library.bake_inputs`).
+* ``active_core`` / ``disc_resolver`` belong to ``shortcut_launch_resolver.py``.
+  They are the only reason the sync ever resolves a ROM's emulator or its
+  disc-pinned launch path, and holding them in one module is what keeps the
+  per-ROM UoW the ``active_core`` seam opens out of the read UoW the
+  install-path scan holds (:mod:`services.library.shortcut_launch_resolver`).
 * ``renderer_rss`` / ``renderer_gc`` belong to ``session_budget.py``. Its
   contract is that no renderer-RSS **reading** is taken anywhere else in the
   package — every other budget site prices against a reading that module handed
@@ -32,11 +32,11 @@ The scan is AST-shaped and covers the two ways a module takes hold of a seam:
 all four from ``bootstrap`` and hands each to the sub-service that owns it, so
 two shapes are allowed everywhere rather than one file being exempted wholesale:
 a seam attribute that *is* a call's keyword-argument value
-(``ShortcutBakeInputsConfig(active_core=config.active_core)`` — handed on, not
-held) and a seam annotation on a field of :data:`FACADE_CONFIG_CLASS`, the one
-class ``bootstrap`` delivers into. A façade method that *reaches through* the
-seam (``self._config.active_core.active_emulator_for_rom(...)``) is neither, and
-is a finding — which a blanket file exemption could not tell from wiring.
+(``ShortcutLaunchResolverConfig(active_core=config.active_core)`` — handed on,
+not held) and a seam annotation on a field of :data:`FACADE_CONFIG_CLASS`, the
+one class ``bootstrap`` delivers into. A façade method that *reaches through*
+the seam (``self._config.active_core.active_emulator_for_rom(...)``) is neither,
+and is a finding — which a blanket file exemption could not tell from wiring.
 
 It is a surface-syntax guardrail, not dataflow analysis. What it cannot see:
 
@@ -76,8 +76,8 @@ LIBRARY_DIR = REPO_ROOT / "py_modules" / "services" / "library"
 # to hold it. A new confinement is a one-line addition here plus its Protocol
 # type in SEAM_PROTOCOLS below.
 SEAM_OWNERS: dict[str, frozenset[str]] = {
-    "active_core": frozenset({"bake_inputs.py"}),
-    "disc_resolver": frozenset({"bake_inputs.py"}),
+    "active_core": frozenset({"shortcut_launch_resolver.py"}),
+    "disc_resolver": frozenset({"shortcut_launch_resolver.py"}),
     "renderer_rss": frozenset({"session_budget.py"}),
     "renderer_gc": frozenset({"session_budget.py"}),
 }

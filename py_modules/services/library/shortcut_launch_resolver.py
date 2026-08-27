@@ -1,4 +1,4 @@
-"""Each ROM's launch facts — where its file is, and what runs it.
+"""Resolve each ROM's launch facts — which file is launched, and what runs it.
 
 Answers the two questions :func:`domain.shortcut_data.build_shortcuts_data`
 asks about every ROM it bakes into a Steam shortcut: the disc-resolved path of
@@ -42,8 +42,8 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class ShortcutBakeInputsConfig:
-    """Frozen wiring bundle handed to ``ShortcutBakeInputs.__init__``.
+class ShortcutLaunchResolverConfig:
+    """Frozen wiring bundle handed to ``ShortcutLaunchResolver.__init__``.
 
     Holds the SQLite Unit-of-Work factory the install lookups read through and
     the two per-ROM resolvers the bake's inputs are drawn from: ``active_core``
@@ -58,10 +58,10 @@ class ShortcutBakeInputsConfig:
     disc_resolver: DiscResolver
 
 
-class ShortcutBakeInputs:
-    """The per-ROM launch facts a shortcut bake is built from."""
+class ShortcutLaunchResolver:
+    """Resolves the per-ROM launch facts a shortcut bake is built from."""
 
-    def __init__(self, *, config: ShortcutBakeInputsConfig) -> None:
+    def __init__(self, *, config: ShortcutLaunchResolverConfig) -> None:
         self._uow_factory = config.uow_factory
         self._active_core = config.active_core
         self._disc_resolver = config.disc_resolver

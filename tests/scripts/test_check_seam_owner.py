@@ -43,8 +43,8 @@ check = _load_check_module()
 # The owner table the fixtures run against — the real one, restated so a
 # deliberate change to production ownership shows up as a test edit.
 _OWNERS = {
-    "active_core": frozenset({"bake_inputs.py"}),
-    "disc_resolver": frozenset({"bake_inputs.py"}),
+    "active_core": frozenset({"shortcut_launch_resolver.py"}),
+    "disc_resolver": frozenset({"shortcut_launch_resolver.py"}),
     "renderer_rss": frozenset({"session_budget.py"}),
     "renderer_gc": frozenset({"session_budget.py"}),
 }
@@ -76,11 +76,11 @@ def patched_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 class TestFindViolations:
     def test_flags_seam_read_in_a_foreign_module(self, patched_check):
         holder = "class H:\n    def __init__(self, config):\n        self._a = config.active_core\n"
-        findings = patched_check({"bake_inputs.py": holder, "sync_orchestrator.py": holder})
+        findings = patched_check({"shortcut_launch_resolver.py": holder, "sync_orchestrator.py": holder})
         assert len(findings) == 1
         assert "sync_orchestrator.py" in findings[0]
         assert "active_core" in findings[0]
-        assert "bake_inputs.py" in findings[0]  # the message names the owner
+        assert "shortcut_launch_resolver.py" in findings[0]  # the message names the owner
 
     def test_flags_protocol_annotation_in_a_foreign_module(self, patched_check):
         findings = patched_check(
@@ -130,7 +130,7 @@ class TestFindViolations:
     def test_owner_module_not_flagged(self, patched_check):
         findings = patched_check(
             {
-                "bake_inputs.py": (
+                "shortcut_launch_resolver.py": (
                     "class Config:\n    active_core: ActiveCoreReader\n    disc_resolver: DiscResolver\n\n"
                     "class B:\n    def __init__(self, config):\n"
                     "        self._a = config.active_core\n        self._d = config.disc_resolver\n"
@@ -188,8 +188,8 @@ class TestCompositionRoot:
                     "    renderer_gc: RendererGcFn\n\n"
                     "class LibraryService:\n"
                     "    def __init__(self, config):\n"
-                    "        self._bake = ShortcutBakeInputs(\n"
-                    "            config=ShortcutBakeInputsConfig(\n"
+                    "        self._bake = ShortcutLaunchResolver(\n"
+                    "            config=ShortcutLaunchResolverConfig(\n"
                     "                active_core=config.active_core, disc_resolver=config.disc_resolver\n"
                     "            )\n"
                     "        )\n"
@@ -269,7 +269,7 @@ class TestCompositionRoot:
             }
         )
         assert len(findings) == 1
-        assert findings[0].endswith("the 'active_core' seam is held only by bake_inputs.py.")
+        assert findings[0].endswith("the 'active_core' seam is held only by shortcut_launch_resolver.py.")
 
 
 class TestDocumentedBlindSpots:

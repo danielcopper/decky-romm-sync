@@ -10,7 +10,7 @@ through their config. Anything that fetches ROMs belongs in
 :class:`LibraryFetcher`; anything that finalises shortcuts after the apply
 completes belongs in :class:`SyncReporter`; Steam's renderer memory belongs
 in :class:`SessionBudgetMonitor`; a single ROM's launch facts — where its
-file is and what runs it — belong in :class:`ShortcutBakeInputs`; reading
+file is and what runs it — belong in :class:`ShortcutLaunchResolver`; reading
 the registry and the completion stamps into the projections these decisions
 are made against belongs in :class:`LocalLibraryReader`. What stayed here of that
 last group is the platform stamp's DELETE — a write, and a step of the apply
@@ -64,10 +64,10 @@ if TYPE_CHECKING:
     from domain.work_unit import WorkUnit
     from lib.late_binding import LateBinding
     from services.library._state import LibrarySyncStateBox
-    from services.library.bake_inputs import ShortcutBakeInputs
     from services.library.fetcher import LibraryFetcher
     from services.library.local_library_reader import LocalLibraryReader
     from services.library.reporter import SyncReporter
+    from services.library.shortcut_launch_resolver import ShortcutLaunchResolver
     from services.protocols import (
         ArtworkManager,
         Clock,
@@ -132,9 +132,9 @@ class SyncOrchestratorConfig:
     field is a :class:`LateBinding` because :class:`LibraryService`
     constructs the orchestrator before the reporter exists; the façade
     plugs the reader in via ``set()`` once the reporter is built. The
-    ``bake_inputs`` peer answers the two per-ROM questions each shortcut bake
-    needs — the disc-resolved installed path and the active emulator — which
-    preview and the per-unit apply both hand straight to
+    ``shortcut_launch_resolver`` peer answers the two per-ROM questions each
+    shortcut bake needs — the disc-resolved installed path and the active
+    emulator — which preview and the per-unit apply both hand straight to
     :func:`build_shortcuts_data`. The ``local_library_reader`` peer answers every
     question the run asks of this device's own record of the library — the
     classify baseline, the per-unit bound-row projection, the unstamped-platform
@@ -159,7 +159,7 @@ class SyncOrchestratorConfig:
     fetcher: LibraryFetcher
     reporter: LateBinding[SyncReporter]
     artwork: ArtworkManager
-    bake_inputs: ShortcutBakeInputs
+    shortcut_launch_resolver: ShortcutLaunchResolver
     local_library_reader: LocalLibraryReader
     session_budget: SessionBudgetMonitor
 
@@ -199,7 +199,7 @@ class SyncOrchestrator:
         self._fetcher = config.fetcher
         self._artwork = config.artwork
         self._reporter = config.reporter
-        self._bake_inputs = config.bake_inputs
+        self._shortcut_launch_resolver = config.shortcut_launch_resolver
         self._local_library_reader = config.local_library_reader
         self._session_budget = config.session_budget
 
@@ -293,8 +293,12 @@ class SyncOrchestrator:
                     progress_total_steps=total_units,
                 )
 
-            installed_paths = await self._loop.run_in_executor(None, self._bake_inputs.do_scan_installed_paths)
-            core_overrides = await self._loop.run_in_executor(None, self._bake_inputs.do_build_core_overrides, all_roms)
+            installed_paths = await self._loop.run_in_executor(
+                None, self._shortcut_launch_resolver.do_scan_installed_paths
+            )
+            core_overrides = await self._loop.run_in_executor(
+                None, self._shortcut_launch_resolver.do_build_core_overrides, all_roms
+            )
             # Stamp each fresh ROM's component sibling-group key before the build so
             # the collapse below groups games, not dumps. The preview union is a
             # complete view of every enabled platform's groups; the DB's persisted
@@ -980,9 +984,11 @@ class SyncOrchestrator:
         # full launch command; uninstalled ROMs get an empty placeholder until
         # they are downloaded.
         installed_paths = await self._loop.run_in_executor(
-            None, self._bake_inputs.do_read_installed_paths, {rom["id"] for rom in unit_roms}
+            None, self._shortcut_launch_resolver.do_read_installed_paths, {rom["id"] for rom in unit_roms}
         )
-        core_overrides = await self._loop.run_in_executor(None, self._bake_inputs.do_build_core_overrides, unit_roms)
+        core_overrides = await self._loop.run_in_executor(
+            None, self._shortcut_launch_resolver.do_build_core_overrides, unit_roms
+        )
 
         # Read the bound-row registry once, before the build: its persisted keys
         # seed the component keying (a fresh member edging into a DB-resident
