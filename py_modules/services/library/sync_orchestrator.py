@@ -1,17 +1,17 @@
 """Preview / apply / per-unit sync lifecycle and the heartbeat clock.
 
-Owns every async path the user triggers from the QAM that mutates
-in-flight sync state: starting and cancelling syncs, computing a
-preview (read-only), and dispatching the per-unit sync pipeline on
-apply. The heartbeat clock — refreshed on every progress emission and
-inspected by per-unit waits — lives here too. Progress emission also
-lives here — sub-services that need to surface progress receive the
-orchestrator's ``emit_progress`` callback through their config.
-Anything that fetches ROMs belongs in :class:`LibraryFetcher`;
-anything that finalises shortcuts after the apply completes belongs
-in :class:`SyncReporter`. Cached ``rom_metadata`` is written by the
-reporter's per-unit commit (the same write UoW as the ``roms`` upsert),
-so preview never persists metadata and an interrupted apply leaves only
+Owns every async path the user triggers from the QAM that mutates in-flight
+sync state: starting and cancelling syncs, computing a preview (read-only),
+and dispatching the per-unit sync pipeline on apply. The heartbeat clock —
+refreshed on every progress emission and inspected by per-unit waits — lives
+here too. Progress emission also lives here — sub-services that need to
+surface progress receive the orchestrator's ``emit_progress`` callback
+through their config. Anything that fetches ROMs belongs in
+:class:`LibraryFetcher`; anything that finalises shortcuts after the apply
+completes belongs in :class:`SyncReporter`; Steam's renderer memory belongs
+in :class:`SessionBudgetMonitor`. Cached ``rom_metadata`` is written by the
+reporter's per-unit commit (the same write UoW as the ``roms`` upsert), so
+preview never persists metadata and an interrupted apply leaves only
 already-committed units' metadata.
 """
 
@@ -1312,9 +1312,9 @@ class SyncOrchestrator:
                 box.clear_active_unit()
                 return applied_count
 
-            # Session-budget gate (#1383): at every chunk boundary force a renderer
-            # GC + measure RSS and pause here — a clean chunk boundary — if applying
-            # this chunk would cross Steam's per-session heap budget. On pause the
+            # Session-budget gate (#1383): at every chunk boundary ask the monitor
+            # whether applying this chunk would cross Steam's per-session heap budget,
+            # and pause here — a clean chunk boundary — if it would. On pause the
             # gate sets ``run_paused`` + ``interrupt_reason`` and requests
             # cancel, so the check just below returns cleanly with the prior chunks
             # committed — the terminal finalize then records the resumable ``paused``
@@ -1334,12 +1334,10 @@ class SyncOrchestrator:
             #    chunk of cover-applying creates, each priced create + cover) and can
             #    never be projected past it; at/above that it re-pauses with zero
             #    progress and the banner directs the user to restart Steam.
-            # Composition-aware pricing (#1383): now that emitted = new + changed
-            # only, price this chunk's creates at the create+cover rate and its
-            # updates (changed + rebind) at the lighter Set*-walk rate, instead of
-            # pricing every item as a cover-applying create. The frontend decides
-            # create-vs-update itself via its existing-shortcut scan; a small
-            # backend/frontend mismatch only ever overprices (worst-case safe).
+            # The chunk is priced by composition, so the gate needs its creates and
+            # updates apart. The frontend decides create-vs-update itself via its
+            # existing-shortcut scan; a small backend/frontend mismatch only ever
+            # overprices (worst-case safe).
             creates = sum(1 for e in chunk.emitted if e["rom_id"] in new_ids)
             updates = len(chunk.emitted) - creates
             budget_limit_kb = CLIFF_KB if box.chunks_emitted_this_run == 0 else EFFECTIVE_CEILING_KB
