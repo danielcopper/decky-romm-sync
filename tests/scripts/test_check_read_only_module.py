@@ -256,7 +256,8 @@ class TestTables:
     def test_the_pinned_partition_covers_both_directions(self):
         # Guards the assertion above against a vacuous pass: neither half may be
         # empty, and no name may sit in both.
-        assert _EXPECTED_READS and _EXPECTED_WRITES
+        assert _EXPECTED_READS
+        assert _EXPECTED_WRITES
         assert not (_EXPECTED_READS & _EXPECTED_WRITES)
 
 
