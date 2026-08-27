@@ -63,6 +63,7 @@ run = [
     "python scripts/check_settings_owner.py",
     "python scripts/check_sync_lifecycle_owner.py",
     "python scripts/check_seam_owner.py",
+    "python scripts/check_read_only_module.py",
     "python scripts/check_lock_sync.py",
     "python scripts/check_markdown_links.py",
     "python scripts/check_romm_min_version.py",

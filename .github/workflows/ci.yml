@@ -170,6 +170,9 @@ jobs:
       - name: Check library-sync seam-owner confinement
         run: python scripts/check_seam_owner.py
 
+      - name: Check read-only module declarations
+        run: python scripts/check_read_only_module.py
+
       - name: Check dependency locks satisfy their source constraints
         run: python scripts/check_lock_sync.py
 

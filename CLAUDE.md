@@ -203,6 +203,18 @@ Format: **invariant** — tier — enforced by.
   UoW, which is what putting the three methods on one class makes cheapest — is that gate's documented blind spot and
   passes green. On the budget side the confinement holds `session_budget`'s stated promise that no renderer-RSS reading
   is taken anywhere else in the package
+- **A module declared read-only calls no repository write — `services/library/registry_queries.py` to start** — check —
+  `scripts/check_read_only_module.py` (AST over the declared file's own calls, matching the two-attribute
+  `<...>.<repo>.<method>` shape against the eleven repositories the UoW exposes; the read set is `get` / `get_*` /
+  `iter_*` / `count` plus the one oddly-named read, derived from `services/protocols/repositories.py`, so a repository
+  growing a read outside those shapes is called a write until a line is added here. It sees only what the file itself
+  writes: a write behind a helper it calls, an aliased handle (`repo = uow.roms`), a `getattr`-reached repository, and a
+  repository name not in its list all pass green — it catches the accident, not the evasion). The declaration is what
+  makes the boundary load-bearing rather than descriptive: these reads open their own short UoW and are offloaded to an
+  executor at points chosen for cheapness, so a write among them commits at a moment nobody picked. That is why the
+  platform stamp's DELETE stayed in `sync_orchestrator.py` ten lines from `do_count_unstamped_platforms`, which reads
+  the same table through the same repository — a query has no position in the apply's recovery protocol and a write does
+  (ADR-0023)
 - **An emitted `sync_progress` frame stops a run (`running: False`) only with a terminal stage, and a terminal stage is
   only ever emitted with the run stopped** — test — `tests/services/library/test_terminal_frame_contract.py`
   (structural, AST call sites and dict literals across all of `py_modules/services` — it covers the error paths a
