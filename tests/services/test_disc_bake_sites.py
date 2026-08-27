@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
@@ -119,7 +119,7 @@ class TestSyncOrchestratorBakeSite:
                 artwork=MagicMock(),
                 active_core=FakeActiveCoreResolver(default=(None, None)),
                 disc_resolver=disc_resolver,
-                session_budget=MagicMock(),
+                session_budget=AsyncMock(),
             )
         )
 

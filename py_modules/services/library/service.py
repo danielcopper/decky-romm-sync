@@ -127,8 +127,7 @@ class LibraryService:
         )
 
         # Sub-service: session-budget monitor. Constructed before the
-        # orchestrator, which drives it through the ``SessionBudgetGate`` seam
-        # at every chunk boundary.
+        # orchestrator, which holds it and calls it at every chunk boundary.
         self._session_budget = SessionBudgetMonitor(
             config=SessionBudgetMonitorConfig(
                 loop=config.loop,

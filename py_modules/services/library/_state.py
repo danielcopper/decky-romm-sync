@@ -210,9 +210,11 @@ class LibrarySyncStateBox:
     # Surfaced in the ``sync_complete`` payload so the UI shows the pause
     # guidance distinctly. Reset at the start of each run (#1383).
     interrupt_reason: str | None = None
-    # One-shot guard so the session-budget gate logs "RSS unavailable" at most
-    # once per run instead of on every chunk boundary (the reading is fail-open —
-    # a ``None`` reading skips the gate). Reset at the start of each run (#1383).
+    # One-shot latch: once a run finds the renderer's RSS unreadable it stops
+    # re-reading (and stops re-logging) for the rest of that run — the reading is
+    # fail-open, so a ``None`` reading skips the gate. Re-armed at the start of each
+    # run by ``SessionBudgetMonitor.record_run_start_baseline``, which is the only
+    # writer besides the gate's own measure path (#1383).
     budget_measure_unavailable_logged: bool = False
     # Renderer RSS (KB) captured at run START — a RAW read (may include transient
     # garbage; not GC-settled), taken before any chunk is applied. The run-end

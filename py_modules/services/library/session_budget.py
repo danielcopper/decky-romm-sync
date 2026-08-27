@@ -1,13 +1,22 @@
 """Steam's per-session renderer-heap budget — measurement, pause, and reporting.
 
-Everything the sync subsystem knows about the renderer's memory lives here: the
-GC-settled RSS measurement, the chunk-boundary pause decision, the post-preview
-prognosis, the run-start baseline behind the last-run delta, and the live reading
-the QAM banners poll. The pure arithmetic behind every one of those decisions is
-:mod:`domain.session_budget`; the ``/proc`` reader and the CDP garbage-collect
-trigger are adapters reached through the ``RendererRssFn`` / ``RendererGcFn``
-seams. What belongs here is the orchestration between the two — measure, ask the
-domain, record the verdict on the shared :class:`LibrarySyncStateBox`.
+Owns every renderer-RSS **reading** the sync subsystem takes, and the verdicts
+drawn from one: the GC-settled measurement itself, the chunk-boundary pause
+decision, the post-preview prognosis, the run-start baseline behind the last-run
+delta, and the live reading the QAM banners poll. The pure arithmetic behind
+every one of those decisions is :mod:`domain.session_budget`; the ``/proc``
+reader and the CDP garbage-collect trigger are adapters reached through the
+``RendererRssFn`` / ``RendererGcFn`` seams. What belongs here is the
+orchestration between the two — measure, ask the domain, record the verdict on
+the shared :class:`LibrarySyncStateBox`.
+
+Two sites in :mod:`services.library.sync_orchestrator` still price against the
+budget, from a reading this module handed them rather than one they took:
+``_clip_cover_refreshes`` (trimming the cover-refresh list to a chunk's leftover
+headroom) and the terminal ``session_memory_delta`` / ``post_run_advisory``
+computation in ``_finalize_per_unit``. They sit with the chunk loop and the
+finalize phase they belong to; what never happens outside this module is taking
+a reading.
 
 Fail-open is the contract of every path: an unavailable reading, or any seam
 error, degrades to "no verdict" (no pause, no warning, no number) and never
@@ -90,16 +99,24 @@ class SessionBudgetMonitor:
     # ── Measurement ──────────────────────────────────────────────
 
     async def record_run_start_baseline(self) -> None:
-        """Stamp the run's RSS baseline on the state box — the delta's start point.
+        """Re-arm measurement for a fresh run and stamp its RSS baseline.
 
-        A RAW read (no GC — the settle isn't worth it for an informational number)
-        taken before any chunk is applied, so even a fully-incremental-skip run
-        (nothing to apply, no chunk gate ever fires) still records a baseline and
-        reports an honest ≈ "+0.0 GB" delta instead of wiping it to ``None``.
-        Fail-open: an unavailable reading leaves the baseline ``None`` (the delta is
-        then unmeasurable). ``last_run_delta_kb`` is deliberately NOT reset here (it
-        retains the previous clean run's delta for QAM remounts).
+        The baseline is a RAW read (no GC — the settle isn't worth it for an
+        informational number) taken before any chunk is applied, so even a
+        fully-incremental-skip run (nothing to apply, no chunk gate ever fires) still
+        records one and reports an honest ≈ "+0.0 GB" delta instead of wiping it to
+        ``None``. Fail-open: an unavailable reading leaves the baseline ``None`` (the
+        delta is then unmeasurable). ``last_run_delta_kb`` is deliberately NOT reset
+        here (it retains the previous clean run's delta for QAM remounts).
+
+        The re-arm comes first and is not optional: :meth:`measure_rss` latches
+        ``budget_measure_unavailable_logged`` on the first unreadable reading and then
+        short-circuits every later read, so a run that starts without clearing it
+        inherits the previous run's verdict and the gate stays silently off for the
+        life of the process. Clearing it here — in the one method every run entry
+        passes through — keeps the latch's lifetime inside the module that sets it.
         """
+        self._sync_state.budget_measure_unavailable_logged = False
         self._sync_state.run_start_rss_kb = None
         try:
             self._sync_state.run_start_rss_kb = await self._loop.run_in_executor(None, self._renderer_rss)

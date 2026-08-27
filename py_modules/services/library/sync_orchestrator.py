@@ -51,7 +51,7 @@ from domain.sync_state import SyncCancelled
 from lib.errors import classify_error
 from lib.list_result import ErrorCode
 from services.library._state import CollectionMembership
-from services.library.session_budget import SYNC_PAUSED_BUDGET
+from services.library.session_budget import SYNC_PAUSED_BUDGET, SessionBudgetMonitor
 
 if TYPE_CHECKING:
     import logging
@@ -67,7 +67,6 @@ if TYPE_CHECKING:
         Clock,
         DiscResolver,
         EventEmitter,
-        SessionBudgetGate,
         Sleeper,
         UnitOfWorkFactory,
         UuidGen,
@@ -153,7 +152,7 @@ class SyncOrchestratorConfig:
     artwork: ArtworkManager
     active_core: ActiveCoreReader
     disc_resolver: DiscResolver
-    session_budget: SessionBudgetGate
+    session_budget: SessionBudgetMonitor
 
 
 @dataclass(frozen=True)
@@ -615,19 +614,19 @@ class SyncOrchestrator:
         box.run_interrupted = False
         # Session-budget gate run-scoped state (#1383): the paused flag, the
         # emitted-chunk counter (first chunk exempt → guaranteed forward progress),
-        # the distinct pause reason, and the once-per-run "RSS unavailable" log guard.
+        # and the distinct pause reason. The gate's own once-per-run measurement
+        # latch is re-armed by the baseline stamp below, in the module that sets it.
         box.run_paused = False
         box.chunks_emitted_this_run = 0
         box.interrupt_reason = None
-        box.budget_measure_unavailable_logged = False
         # Run-scoped progress counters for the paused banner's "X of Y games done"
         # (#1383). The total is stamped at plan time below; the done count grows with
         # the skipped + committed work as the run proceeds.
         box.run_total_items = None
         box.run_done_items = 0
-        # Run-start RSS baseline for the last-run memory delta (#1383), stamped
-        # UNCONDITIONALLY before any chunk is applied so even a fully-incremental-skip
-        # run reports an honest delta instead of none at all.
+        # Re-arm the gate's measurement latch and stamp the run-start RSS baseline
+        # for the last-run memory delta (#1383) — UNCONDITIONALLY, before any chunk is
+        # applied, so even a fully-incremental-skip run reports an honest delta.
         await self._session_budget.record_run_start_baseline()
         # Capture the run id up front so the terminal SyncRun writes and the
         # ``finally`` reset below operate on a stable id for the lifetime of

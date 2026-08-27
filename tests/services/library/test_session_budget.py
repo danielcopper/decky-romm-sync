@@ -194,6 +194,37 @@ class TestSessionBudgetMonitor:
         assert plugin._renderer_gc.calls == 1  # GC fired to settle the reading
         assert plugin._renderer_rss.calls == 2  # raw sample + post-GC re-read
 
+    # ── record_run_start_baseline (the per-run re-arm) ───────────
+
+    @pytest.mark.asyncio
+    async def test_run_start_baseline_rearms_the_measurement_latch(self, plugin):
+        # measure_rss latches "unreadable" for the rest of a run and short-circuits
+        # every later read, so a run that starts without clearing the latch inherits
+        # the previous run's verdict and the gate stays silently off from then on.
+        budget = plugin._sync_service._session_budget
+        box = plugin._sync_service._box
+        box.budget_measure_unavailable_logged = True  # a prior run found RSS unreadable
+        plugin._renderer_rss.rss_kb = 1_400_000
+
+        await budget.record_run_start_baseline()
+
+        assert box.budget_measure_unavailable_logged is False
+        assert box.run_start_rss_kb == 1_400_000
+        # The latch really is clear: the gate reads again on this run.
+        assert await budget.measure_rss() == 1_400_000
+
+    @pytest.mark.asyncio
+    async def test_run_start_baseline_is_none_when_rss_unavailable(self, plugin):
+        # Fail-open: no reading ⇒ no baseline (the delta is unmeasurable), never an
+        # error out of the run's opening move.
+        budget = plugin._sync_service._session_budget
+        box = plugin._sync_service._box
+        plugin._renderer_rss.rss_kb = None
+
+        await budget.record_run_start_baseline()
+
+        assert box.run_start_rss_kb is None
+
     # ── get_session_budget_status callable ───────────────────────
 
     @pytest.mark.asyncio
