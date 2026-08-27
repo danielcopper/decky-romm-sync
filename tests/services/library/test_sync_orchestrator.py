@@ -34,7 +34,6 @@ from adapters.persistence import (
     PersistenceAdapter,
 )
 from domain.preview_delta import PreviewDelta
-from domain.shortcut_data import EmulatorInvocation
 from domain.sync_diff import BIND_ROM_ID_KEY
 from domain.sync_stage import SyncStage
 from domain.sync_state import SyncState
@@ -42,7 +41,7 @@ from domain.work_unit import WorkUnit
 from lib.romm_paging import LIST_PAGE_SIZE
 
 # conftest.py patches decky before this import
-
+from tests.services.library._helpers import _seed_install
 
 # ── Test helpers ─────────────────────────────────────────────────
 
@@ -158,34 +157,6 @@ def _seed_rom_row(
         plugin._uow.roms.set_applied_launch_options(rom_id, applied_launch_options)
 
 
-def _seed_install(plugin, rom_id, *, file_path, platform_slug="n64"):
-    """Insert a ``RomInstall`` record (with its FK-parent ``Rom``) into the shared UoW."""
-    from domain.rom import Rom
-    from domain.rom_install import RomInstall
-
-    with plugin._uow:
-        plugin._uow.roms.save(
-            Rom(
-                rom_id=rom_id,
-                platform_slug=platform_slug,
-                name=f"Game {rom_id}",
-                fs_name=f"game_{rom_id}.z64",
-                shortcut_app_id=None,
-                last_synced_at="2025-01-01T00:00:00",
-            )
-        )
-        plugin._uow.rom_installs.save(
-            RomInstall.mark_installed(
-                rom_id=rom_id,
-                file_path=file_path,
-                rom_dir=None,
-                platform_slug=platform_slug,
-                system=platform_slug,
-                installed_at="2025-01-01T00:00:00",
-            )
-        )
-
-
 def _seed_completed_run(plugin, *, at, platforms=None, collections=None, run_id="run-prev"):
     """Insert a completed ``SyncRun`` so ``last_sync`` / ``last_synced_*`` reads resolve."""
     from domain.sync_run import SyncRun
@@ -290,56 +261,6 @@ class TestShortcutDataFormat:
 
         result = build_shortcuts_data([{"id": 1, "name": "Game"}], decky.DECKY_PLUGIN_DIR, {}, {})
         assert result[0]["start_dir"] == os.path.dirname(result[0]["exe"])
-
-
-class TestBuildCoreOverrides:
-    """The ``core_overrides`` map both preview and apply pass to ``build_shortcuts_data``.
-
-    Maps ``rom_id -> resolved core_so`` for every ROM in the unit that carries a
-    still-valid ``emulator_override``; NULL pins never enter the map, and a stale
-    LABEL is omitted with a WARNING so the bake degrades to the plain launch.
-    """
-
-    def test_resolved_override_included_null_omitted(self, plugin):
-        """A resolvable pin maps to its libretro EmulatorInvocation; an unpinned ROM is absent."""
-        plugin._core_info.available_cores = [
-            {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
-        ]
-        _seed_install(plugin, 10, file_path="/roms/psx/a.chd", platform_slug="psx")
-        _seed_install(plugin, 11, file_path="/roms/psx/b.chd", platform_slug="psx")
-        with plugin._uow:
-            plugin._uow.roms.set_emulator_override(10, "PCSX ReARMed")
-
-        roms = [{"id": 10, "platform_slug": "psx"}, {"id": 11, "platform_slug": "psx"}]
-        result = plugin._sync_service._orchestrator._build_core_overrides(roms)
-
-        assert result == {10: EmulatorInvocation.libretro("pcsx_rearmed_libretro", "PCSX ReARMed")}
-        assert 11 not in result
-
-    def test_stale_override_omitted_with_warning(self, plugin, caplog):
-        """A pin whose LABEL no longer resolves is omitted and a WARNING is logged."""
-        import logging
-
-        plugin._core_info.available_cores = [
-            {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
-        ]
-        _seed_install(plugin, 10, file_path="/roms/psx/a.chd", platform_slug="psx")
-        with plugin._uow:
-            plugin._uow.roms.set_emulator_override(10, "Removed Core")
-
-        roms = [{"id": 10, "platform_slug": "psx"}]
-        with caplog.at_level(logging.WARNING):
-            result = plugin._sync_service._orchestrator._build_core_overrides(roms)
-
-        assert result == {}
-        assert "Removed Core" in caplog.text
-        assert "no longer resolves" in caplog.text
-
-    def test_no_overrides_returns_empty(self, plugin):
-        """No pins anywhere → empty map (no available-cores lookups needed)."""
-        _seed_install(plugin, 10, file_path="/roms/n64/a.z64", platform_slug="n64")
-        result = plugin._sync_service._orchestrator._build_core_overrides([{"id": 10, "platform_slug": "n64"}])
-        assert result == {}
 
 
 class TestSyncPreview:

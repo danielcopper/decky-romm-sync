@@ -8,7 +8,8 @@ sub-service modules: :class:`LibraryFetcher` for ROM/metadata
 roundtrips, :class:`SyncOrchestrator` for the preview/apply
 lifecycle and safety heartbeat, :class:`SyncReporter` for post-apply
 finalisation and registry queries, :class:`SessionBudgetMonitor` for
-Steam's renderer-heap budget. The façade itself only wires the
+Steam's renderer-heap budget, :class:`ShortcutBakeInputs` for each
+ROM's launch facts. The façade itself only wires the
 pieces together and delegates — anything that touches RomM or mutates
 in-flight sync state belongs in a sub-service.
 """
@@ -20,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from lib.late_binding import LateBinding
 from services.library._state import CollectionMembership, LibrarySyncStateBox
+from services.library.bake_inputs import ShortcutBakeInputs, ShortcutBakeInputsConfig
 from services.library.fetcher import LibraryFetcher, LibraryFetcherConfig
 from services.library.reporter import SyncReporter, SyncReporterConfig
 from services.library.session_budget import SessionBudgetMonitor, SessionBudgetMonitorConfig
@@ -94,8 +96,10 @@ class LibraryService:
     Composes :class:`LibraryFetcher` (platform/collection roundtrips +
     metadata-cache stamping), :class:`SyncOrchestrator` (preview/apply
     lifecycle + safety heartbeat), :class:`SyncReporter`
-    (post-apply finalisation + registry queries), and
-    :class:`SessionBudgetMonitor` (Steam's renderer-heap budget) over a
+    (post-apply finalisation + registry queries),
+    :class:`SessionBudgetMonitor` (Steam's renderer-heap budget), and
+    :class:`ShortcutBakeInputs` (each ROM's installed path + active
+    emulator) over a
     single shared :class:`LibrarySyncStateBox`. The façade itself owns the box and
     exposes the callable surface; every implementation method lives on
     one of the sub-services.
@@ -123,6 +127,17 @@ class LibraryService:
                 uow_factory=config.uow_factory,
                 sync_state_box=self._box,
                 emit_progress=self._emit_progress_proxy,
+            )
+        )
+
+        # Sub-service: shortcut-bake inputs. Constructed before the
+        # orchestrator, which holds it and resolves every bake's per-ROM
+        # launch facts through it.
+        self._bake_inputs = ShortcutBakeInputs(
+            config=ShortcutBakeInputsConfig(
+                uow_factory=config.uow_factory,
+                active_core=config.active_core,
+                disc_resolver=config.disc_resolver,
             )
         )
 
@@ -159,8 +174,7 @@ class LibraryService:
                 fetcher=self._fetcher,
                 reporter=reporter_binding,
                 artwork=config.artwork,
-                active_core=config.active_core,
-                disc_resolver=config.disc_resolver,
+                bake_inputs=self._bake_inputs,
                 session_budget=self._session_budget,
             )
         )

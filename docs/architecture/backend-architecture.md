@@ -276,7 +276,7 @@ continue unrelated groups.
 
 #### LibraryService decomposition (`services/library/`)
 
-The library sync subsystem is a façade over four sub-services that coordinate through a shared `LibrarySyncStateBox`:
+The library sync subsystem is a façade over five sub-services that coordinate through a shared `LibrarySyncStateBox`:
 
 | Module                 | Role                                                                                                                                                                                                                                 |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -285,6 +285,7 @@ The library sync subsystem is a façade over four sub-services that coordinate t
 | `sync_orchestrator.py` | `SyncOrchestrator` — preview (read-only), the per-unit apply pipeline, cancel, the heartbeat clock, progress emission                                                                                                                |
 | `reporter.py`          | `SyncReporter` — post-apply finalisation (artwork filenames, per-unit `roms` upsert + `SyncRun` lifecycle) and the `roms`-derived queries                                                                                            |
 | `session_budget.py`    | `SessionBudgetMonitor` — Steam's per-session renderer-heap budget: the GC-settled RSS measurement, the chunk-boundary pause verdict, the post-preview prognosis, the run-start baseline, and the `get_session_budget_status` payload |
+| `bake_inputs.py`       | `ShortcutBakeInputs` — each ROM's launch facts for the shortcut bake: the disc-resolved installed path and the active emulator, both handed to `build_shortcuts_data`                                                                |
 | `_state.py`            | `LibrarySyncStateBox` — shared mutable in-flight sync state; single source of truth threaded through every sub-service, and the **sole owner** of the run-lifecycle pair (`sync_state` / `current_sync_id`) via its verb methods     |
 
 The pipeline is split **fetch (read-only) / apply (owns persistence)**: the fetcher never mutates the `roms` registry or

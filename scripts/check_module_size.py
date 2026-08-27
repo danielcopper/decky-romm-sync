@@ -74,7 +74,7 @@ SCOPE_DIRS = (
 ALLOWLIST = {
     "py_modules/services/downloads.py": 1119,
     "py_modules/services/library/fetcher.py": 1150,
-    "py_modules/services/library/sync_orchestrator.py": 1340,
+    "py_modules/services/library/sync_orchestrator.py": 1282,
 }
 
 

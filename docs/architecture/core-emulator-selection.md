@@ -262,11 +262,11 @@ Sync** to re-bake — see [A frozen default needs a Force Full Sync](#a-frozen-d
 emulator** through the same `ActiveCoreResolver.active_emulator_for_rom` seam and pass the `EmulatorInvocation` into
 `resolve_emulator_invocation`, so the read-path core and the launched emulator cannot diverge:
 
-| Bake site                                    | When it runs                             | How it resolves the emulator                                                             |
-| -------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `SyncOrchestrator` → `_build_core_overrides` | every sync (preview + apply)             | each ROM through `active_emulator_for_rom` → `{rom_id: EmulatorInvocation}` for the bake |
-| `DownloadService` → `_resolve_bound_app_id`  | on download-complete (install/reinstall) | the ROM through `active_emulator_for_rom` in the same flow                               |
-| `MigrationService` → `_build_relaunch_items` | on RetroDECK-home migration              | each relocated ROM through `active_emulator_for_rom`                                     |
+| Bake site                                        | When it runs                             | How it resolves the emulator                                                             |
+| ------------------------------------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `ShortcutBakeInputs` → `do_build_core_overrides` | every sync (preview + apply)             | each ROM through `active_emulator_for_rom` → `{rom_id: EmulatorInvocation}` for the bake |
+| `DownloadService` → `_resolve_bound_app_id`      | on download-complete (install/reinstall) | the ROM through `active_emulator_for_rom` in the same flow                               |
+| `MigrationService` → `_build_relaunch_items`     | on RetroDECK-home migration              | each relocated ROM through `active_emulator_for_rom`                                     |
 
 The download-complete bake is the one that re-applies a pin after reinstall — the exact path `roms` storage was chosen
 to protect. Each site bakes `-e` for every ROM that resolves to a concrete emulator (libretro or standalone), and the
@@ -392,11 +392,11 @@ resolver yields the **path**, `ActiveCoreResolver` yields the **`EmulatorInvocat
 `resolve_emulator_invocation(rom, emulator)` + `build_launch_options(invocation, disc_path)` fold them into one command
 — a per-game core (or standalone emulator) and a pinned disc on the same shortcut coexist.
 
-| Bake site                                                              | How it resolves the disc path                                                             |
-| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `SyncOrchestrator` (`_scan_installed_paths` / `_read_installed_paths`) | each installed ROM through `resolve_for_install` → `{rom_id: bake_path}` for the bake     |
-| `DownloadService._resolve_bound_app_id`                                | the freshly-installed ROM through `resolve_for_install` → re-applies the pin on reinstall |
-| `MigrationService._build_relaunch_items`                               | each relocated ROM through `resolve_for_install` against the moved install directory      |
+| Bake site                                                                    | How it resolves the disc path                                                             |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `ShortcutBakeInputs` (`do_scan_installed_paths` / `do_read_installed_paths`) | each installed ROM through `resolve_for_install` → `{rom_id: bake_path}` for the bake     |
+| `DownloadService._resolve_bound_app_id`                                      | the freshly-installed ROM through `resolve_for_install` → re-applies the pin on reinstall |
+| `MigrationService._build_relaunch_items`                                     | each relocated ROM through `resolve_for_install` against the moved install directory      |
 
 ### The picker callables
 

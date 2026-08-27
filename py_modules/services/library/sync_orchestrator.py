@@ -9,7 +9,9 @@ surface progress receive the orchestrator's ``emit_progress`` callback
 through their config. Anything that fetches ROMs belongs in
 :class:`LibraryFetcher`; anything that finalises shortcuts after the apply
 completes belongs in :class:`SyncReporter`; Steam's renderer memory belongs
-in :class:`SessionBudgetMonitor`. Cached ``rom_metadata`` is written by the
+in :class:`SessionBudgetMonitor`; a single ROM's launch facts — where its
+file is and what runs it — belong in :class:`ShortcutBakeInputs`. Cached
+``rom_metadata`` is written by the
 reporter's per-unit commit (the same write UoW as the ``roms`` upsert), so
 preview never persists metadata and an interrupted apply leaves only
 already-committed units' metadata.
@@ -33,7 +35,7 @@ from domain.session_budget import (
     post_run_advisory,
     session_memory_delta,
 )
-from domain.shortcut_data import EmulatorInvocation, build_shortcuts_data
+from domain.shortcut_data import build_shortcuts_data
 from domain.sibling_group import compute_component_group_keys
 from domain.sibling_resolution import AUTO_REGION
 from domain.sync_chunking import build_unit_chunks, wire_shortcuts
@@ -59,13 +61,12 @@ if TYPE_CHECKING:
     from domain.work_unit import WorkUnit
     from lib.late_binding import LateBinding
     from services.library._state import LibrarySyncStateBox
+    from services.library.bake_inputs import ShortcutBakeInputs
     from services.library.fetcher import LibraryFetcher
     from services.library.reporter import SyncReporter
     from services.protocols import (
-        ActiveCoreReader,
         ArtworkManager,
         Clock,
-        DiscResolver,
         EventEmitter,
         Sleeper,
         UnitOfWorkFactory,
@@ -127,11 +128,10 @@ class SyncOrchestratorConfig:
     field is a :class:`LateBinding` because :class:`LibraryService`
     constructs the orchestrator before the reporter exists; the façade
     plugs the reader in via ``set()`` once the reporter is built. The
-    shared ``active_core`` resolver bakes each ROM's full active core (the
-    per-game/per-platform deviation folded over the es_systems default)
-    into ``launch_options`` at sync time, and the shared ``disc_resolver`` bakes
-    each multi-disc ROM's selected disc (the persisted ``selected_disc`` pin) into
-    the installed-launch path at sync time. The ``session_budget`` seam owns every
+    ``bake_inputs`` peer answers the two per-ROM questions each shortcut bake
+    needs — the disc-resolved installed path and the active emulator — which
+    preview and the per-unit apply both hand straight to
+    :func:`build_shortcuts_data`. The ``session_budget`` seam owns every
     renderer-heap reading and verdict: at each chunk boundary the orchestrator asks
     it whether applying the chunk would exhaust Steam's per-session heap budget, and
     the run pauses itself when it would (#1383).
@@ -150,8 +150,7 @@ class SyncOrchestratorConfig:
     fetcher: LibraryFetcher
     reporter: LateBinding[SyncReporter]
     artwork: ArtworkManager
-    active_core: ActiveCoreReader
-    disc_resolver: DiscResolver
+    bake_inputs: ShortcutBakeInputs
     session_budget: SessionBudgetMonitor
 
 
@@ -190,8 +189,7 @@ class SyncOrchestrator:
         self._fetcher = config.fetcher
         self._artwork = config.artwork
         self._reporter = config.reporter
-        self._active_core = config.active_core
-        self._disc_resolver = config.disc_resolver
+        self._bake_inputs = config.bake_inputs
         self._session_budget = config.session_budget
 
     # ── Sync control ─────────────────────────────────────────────
@@ -284,8 +282,8 @@ class SyncOrchestrator:
                     progress_total_steps=total_units,
                 )
 
-            installed_paths = await self._loop.run_in_executor(None, self._scan_installed_paths)
-            core_overrides = await self._loop.run_in_executor(None, self._build_core_overrides, all_roms)
+            installed_paths = await self._loop.run_in_executor(None, self._bake_inputs.do_scan_installed_paths)
+            core_overrides = await self._loop.run_in_executor(None, self._bake_inputs.do_build_core_overrides, all_roms)
             # Stamp each fresh ROM's component sibling-group key before the build so
             # the collapse below groups games, not dumps. The preview union is a
             # complete view of every enabled platform's groups; the DB's persisted
@@ -1067,9 +1065,9 @@ class SyncOrchestrator:
         # full launch command; uninstalled ROMs get an empty placeholder until
         # they are downloaded.
         installed_paths = await self._loop.run_in_executor(
-            None, self._read_installed_paths, {rom["id"] for rom in unit_roms}
+            None, self._bake_inputs.do_read_installed_paths, {rom["id"] for rom in unit_roms}
         )
-        core_overrides = await self._loop.run_in_executor(None, self._build_core_overrides, unit_roms)
+        core_overrides = await self._loop.run_in_executor(None, self._bake_inputs.do_build_core_overrides, unit_roms)
 
         # Read the bound-row registry once, before the build: its persisted keys
         # seed the component keying (a fresh member edging into a DB-resident
@@ -1711,68 +1709,6 @@ class SyncOrchestrator:
             interrupt_reason=interrupt_reason,
             restart_recommended=restart_recommended,
         )
-
-    def _build_core_overrides(self, roms: list[dict[str, Any]]) -> dict[int, EmulatorInvocation]:
-        """Resolve each ROM's FULL active emulator for the bake.
-
-        Runs every ROM in *roms* through the shared per-ROM ``active_core``
-        resolver (the single seam that folds the per-game ``emulator_override``
-        and per-platform ``settings.json`` core over the standalone-aware
-        es_systems default). Only ROMs that resolve to an emulator (libretro core
-        or standalone) appear in the returned ``{rom_id: EmulatorInvocation}``
-        map, so :func:`build_shortcuts_data` bakes their ``-e`` form; a ROM that
-        resolves to nothing (a genuinely unresolvable platform) is absent and
-        falls back to the plain launch. The resolver already warns + degrades on
-        a stale label, so no bogus invocation ever reaches the bake.
-        """
-        resolved: dict[int, EmulatorInvocation] = {}
-        for rom in roms:
-            emulator = self._active_core.active_emulator_for_rom(rom["id"])
-            if emulator is not None:
-                resolved[rom["id"]] = emulator
-        return resolved
-
-    def _scan_installed_paths(self) -> dict[int, str]:
-        """Read ``{rom_id: bake_path}`` for the whole installed library in one scan.
-
-        Used by the preview path, which already operates over every ROM in the
-        library — a single ``iter_all()`` is the cheapest way to cover them all.
-        Each path is the disc-resolved launch path: a multi-disc ROM resolves its
-        persisted ``selected_disc`` pin against its install directory (a
-        single-disc ROM resolves to its own ``file_path``, unchanged), or ``""``
-        when the install has no launch target. Only ROMs with a current install
-        record appear in the map; a ROM not downloaded is absent, and both cases
-        reach :func:`build_shortcuts_data` as the same empty launch command.
-        """
-        with self._uow_factory() as uow:
-            paths: dict[int, str] = {}
-            for install in uow.rom_installs.iter_all():
-                rom = uow.roms.get(install.rom_id)
-                selected_disc = rom.selected_disc if rom is not None else None
-                paths[install.rom_id] = self._disc_resolver.resolve_for_install(install, selected_disc)
-            return paths
-
-    def _read_installed_paths(self, rom_ids: set[int]) -> dict[int, str]:
-        """Read ``{rom_id: bake_path}`` for *rom_ids* via targeted point-lookups.
-
-        Used by the per-unit apply path: scanning the whole ``rom_installs``
-        table once per unit is O(units * all-installs) (#797), so this resolves
-        only the unit's ROMs via ``get(rom_id)``. Each path is the disc-resolved
-        launch path — a multi-disc ROM resolves its persisted ``selected_disc``
-        pin against its install directory (a single-disc ROM resolves to its own
-        ``file_path``, unchanged), or ``""`` when the install has no launch
-        target. A ROM with no install record is absent; both cases reach
-        :func:`build_shortcuts_data` as the same empty launch command.
-        """
-        with self._uow_factory() as uow:
-            paths: dict[int, str] = {}
-            for rom_id in rom_ids:
-                install = uow.rom_installs.get(rom_id)
-                if install is not None:
-                    rom = uow.roms.get(rom_id)
-                    selected_disc = rom.selected_disc if rom is not None else None
-                    paths[rom_id] = self._disc_resolver.resolve_for_install(install, selected_disc)
-            return paths
 
     def _scan_stale_roms(self, synced_rom_ids: set[int], synced_app_ids: set[int]) -> list[tuple[int, int]]:
         """Return ``(rom_id, app_id)`` for bound ROMs not synced this run.

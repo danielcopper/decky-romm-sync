@@ -1,10 +1,11 @@
 """Shared helpers for the LibraryService sub-service test files.
 
 Mock-loop factories for the executor pattern (LibraryService runs
-sync RomM calls in an executor) and small ROM/registry/page builders
+sync RomM calls in an executor), small ROM/registry/page builders
 used across :class:`TestFetchCollectionRoms`,
 :class:`TestCollectionSyncEdgeCases`, and the facade-integration
-collection tests.
+collection tests, plus the shared-UoW seeders the sub-service test
+files drive their fixtures with.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -15,10 +16,11 @@ from services.library.fetcher import _SUPPORTED_VIRTUAL_TYPES
 def rebind_loop(library_service, loop):
     """Rebind the event loop on every LibraryService sub-service.
 
-    The façade composes four sub-services (fetcher, orchestrator,
-    reporter, session-budget monitor) that each hold their own ctor-bound
-    ``_loop``. Tests that swap in a mock loop must propagate it to all
-    four so async calls land on the override.
+    Four of the façade's sub-services (fetcher, orchestrator, reporter,
+    session-budget monitor) hold their own ctor-bound ``_loop``. Tests that
+    swap in a mock loop must propagate it to all four so async calls land on
+    the override. ``ShortcutBakeInputs`` holds none — its methods are
+    synchronous workers the orchestrator offloads through *its* loop.
     """
     library_service._fetcher._loop = loop
     library_service._orchestrator._loop = loop
@@ -96,3 +98,31 @@ def _make_registry_entry(name, platform_name, app_id, platform_slug="gba", appli
 def _page(items):
     """Wrap items in a paginated API response dict."""
     return {"items": items, "total": len(items)}
+
+
+def _seed_install(plugin, rom_id, *, file_path, platform_slug="n64"):
+    """Insert a ``RomInstall`` record (with its FK-parent ``Rom``) into the shared UoW."""
+    from domain.rom import Rom
+    from domain.rom_install import RomInstall
+
+    with plugin._uow:
+        plugin._uow.roms.save(
+            Rom(
+                rom_id=rom_id,
+                platform_slug=platform_slug,
+                name=f"Game {rom_id}",
+                fs_name=f"game_{rom_id}.z64",
+                shortcut_app_id=None,
+                last_synced_at="2025-01-01T00:00:00",
+            )
+        )
+        plugin._uow.rom_installs.save(
+            RomInstall.mark_installed(
+                rom_id=rom_id,
+                file_path=file_path,
+                rom_dir=None,
+                platform_slug=platform_slug,
+                system=platform_slug,
+                installed_at="2025-01-01T00:00:00",
+            )
+        )

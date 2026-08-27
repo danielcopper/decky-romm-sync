@@ -8,7 +8,8 @@ existing per-site happy-path tests already assert; here we pin the disc-aware
 behavior.
 
 Bake sites covered:
-  * ``services.library.sync_orchestrator`` — the ``installed_paths`` map.
+  * ``services.library.bake_inputs`` — the ``installed_paths`` map both the
+    preview scan and the per-unit apply read hand to the bake.
   * ``services.rom_install_recorder`` — ``do_resolve_launch_bake``, which both a
     completed download and an adoption re-bake through.
 
@@ -21,13 +22,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
-from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
+from fakes.system_time import FakeClock
 
 from domain.disc_selection import Disc
 from domain.rom import Rom
@@ -95,52 +95,39 @@ def disc_resolver() -> FakeDiscResolver:
     return resolver
 
 
-# ── sync_orchestrator bake site ──────────────────────────────────────────
+# ── library-sync bake site ───────────────────────────────────────────────
 
 
-class TestSyncOrchestratorBakeSite:
-    def _orchestrator(self, uow_factory, disc_resolver):
-        from services.library.sync_orchestrator import SyncOrchestrator, SyncOrchestratorConfig
+class TestLibrarySyncBakeSite:
+    def _bake_inputs(self, uow_factory, disc_resolver):
+        from services.library.bake_inputs import ShortcutBakeInputs, ShortcutBakeInputsConfig
 
-        return SyncOrchestrator(
-            config=SyncOrchestratorConfig(
-                settings={},
-                loop=MagicMock(),
-                logger=logging.getLogger("test_disc_bake"),
-                plugin_dir="/plugin",
-                emit=MagicMock(),
-                clock=FakeClock(),
-                uuid_gen=FakeUuidGen(),
-                sleeper=FakeSleeper(),
+        return ShortcutBakeInputs(
+            config=ShortcutBakeInputsConfig(
                 uow_factory=uow_factory,
-                sync_state_box=MagicMock(),
-                fetcher=MagicMock(),
-                reporter=MagicMock(),
-                artwork=MagicMock(),
                 active_core=FakeActiveCoreResolver(default=(None, None)),
                 disc_resolver=disc_resolver,
-                session_budget=AsyncMock(),
             )
         )
 
     def test_scan_installed_paths_honors_pin(self, disc_resolver):
         uow = FakeUnitOfWork()
         _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2)
-        orch = self._orchestrator(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
-        assert orch._scan_installed_paths() == {1: _DISC2_PATH}
+        bake = self._bake_inputs(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        assert bake.do_scan_installed_paths() == {1: _DISC2_PATH}
 
     def test_read_installed_paths_honors_pin(self, disc_resolver):
         uow = FakeUnitOfWork()
         _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2)
-        orch = self._orchestrator(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
-        assert orch._read_installed_paths({1}) == {1: _DISC2_PATH}
+        bake = self._bake_inputs(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        assert bake.do_read_installed_paths({1}) == {1: _DISC2_PATH}
 
     def test_scan_installed_paths_unpinned_defaults_to_disc_1(self, disc_resolver):
         uow = FakeUnitOfWork()
         _seed_multi_disc(uow, rom_id=1, selected_disc=None)
-        orch = self._orchestrator(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        bake = self._bake_inputs(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
         # file_path is disc 1 (not an m3u) → default resolves to disc 1.
-        assert orch._scan_installed_paths() == {1: _DISC1_PATH}
+        assert bake.do_scan_installed_paths() == {1: _DISC1_PATH}
 
     def test_scan_installed_paths_maps_an_unlaunchable_install_to_the_empty_path(self, disc_resolver):
         # The ROM stays IN the map — it IS downloaded, and collapse_sibling_groups
@@ -148,14 +135,14 @@ class TestSyncOrchestratorBakeSite:
         # launch path, so build_shortcuts_data emits the empty launch command (#1652).
         uow = FakeUnitOfWork()
         _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, launchable=False)
-        orch = self._orchestrator(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
-        assert orch._scan_installed_paths() == {1: ""}
+        bake = self._bake_inputs(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        assert bake.do_scan_installed_paths() == {1: ""}
 
     def test_read_installed_paths_maps_an_unlaunchable_install_to_the_empty_path(self, disc_resolver):
         uow = FakeUnitOfWork()
         _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, launchable=False)
-        orch = self._orchestrator(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
-        assert orch._read_installed_paths({1}) == {1: ""}
+        bake = self._bake_inputs(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
+        assert bake.do_read_installed_paths({1}) == {1: ""}
 
 
 # ── install-recorder bake site ───────────────────────────────────────────
