@@ -185,6 +185,18 @@ Format: **invariant** — tier — enforced by.
   `scripts/check_settings_owner.py`
 - **Sync run-lifecycle (`sync_state` / `current_sync_id`) written only via `LibrarySyncStateBox` verbs** — check —
   `scripts/check_sync_lifecycle_owner.py`
+- **A library-sync seam is held only by the module owning the job it belongs to: `active_core` / `disc_resolver` by
+  `services/library/bake_inputs.py`, `renderer_rss` / `renderer_gc` by `services/library/session_budget.py`; the
+  `service.py` façade co-owns every seam because it receives them from `bootstrap` and hands each to its owner** — check
+  — `scripts/check_seam_owner.py` (AST over attributes named after a seam and over annotations naming its Protocol,
+  resolved per seam rather than per module — owning one grants nothing about another. It sees the injection, not every
+  later use: a seam aliased to a differently-named attribute or local, one reached through `getattr`, one passed
+  positionally into a helper that holds it, and a quoted string annotation all slip past it). What the confinement buys
+  is that each module's transactions stay separable: `bake_inputs` holds a read UoW across its install-path scan while
+  the `active_core` seam opens its own `BEGIN IMMEDIATE` per ROM, so folding the two into one pass deadlocks — on a real
+  device only, since `FakeUnitOfWork` shares no connection (`check_uow_seam_nesting.py` is the gate that would fire). On
+  the budget side it holds `session_budget`'s stated promise that no renderer-RSS reading is taken anywhere else in the
+  package
 - **An emitted `sync_progress` frame stops a run (`running: False`) only with a terminal stage, and a terminal stage is
   only ever emitted with the run stopped** — test — `tests/services/library/test_terminal_frame_contract.py`
   (structural, AST call sites and dict literals across all of `py_modules/services` — it covers the error paths a
