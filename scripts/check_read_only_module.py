@@ -79,21 +79,19 @@ REPOSITORY_ATTRS: frozenset[str] = frozenset(
 
 # Read-method shapes, derived from services/protocols/repositories.py: every
 # read is one of these, and no write is.
-READ_PREFIXES: tuple[str, ...] = ("get", "iter_")
-# Reads whose names carry neither prefix. ``count`` is exact (not a prefix) so a
+READ_PREFIXES: tuple[str, ...] = ("get_", "iter_")
+# Reads whose names carry neither prefix. Exact names, not prefixes, so a
 # hypothetical ``count_and_prune`` would not inherit the exemption.
-READ_METHODS: frozenset[str] = frozenset({"count", "rom_ids_with_pending_device"})
+READ_METHODS: frozenset[str] = frozenset({"get", "count", "rom_ids_with_pending_device"})
 
 
 def _is_read(method: str) -> bool:
     """True when *method* is one of the repository reads.
 
-    ``get`` matches both the bare name and every ``get_*``; ``iter_`` only the
-    prefixed forms, there being no bare ``iter``.
+    ``get`` is exact and ``get_*`` is a prefix; ``iter_`` has only prefixed
+    forms, there being no bare ``iter``.
     """
-    if method in READ_METHODS:
-        return True
-    return method == "get" or method.startswith(("get_", "iter_"))
+    return method in READ_METHODS or method.startswith(READ_PREFIXES)
 
 
 def _repository_call(node: ast.Call) -> tuple[str, str] | None:
