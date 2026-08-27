@@ -27,7 +27,6 @@ class TestRegistryProjections:
     """
 
     _OLD = "/cover/big.png?ts=2026-01-01 00:00:00"
-    _NEW = "/cover/big.png?ts=2026-07-11 12:00:00"
 
     def test_apply_registry_projection_carries_cover_source(self, plugin):
         # Round-trip: the bound-row projection the apply scan (and its group

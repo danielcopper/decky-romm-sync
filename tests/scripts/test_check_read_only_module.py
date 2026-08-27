@@ -6,14 +6,17 @@ module under ``tmp_path`` and point the check's declaration table at it, so the
 scan runs exactly as it does in CI.
 
 Coverage centres on the rule (a declared module calls repository reads only),
-the read/write split as ``services/protocols/repositories.py`` actually shapes
-it, the receiver-shaped narrowing that keeps unrelated two-deep calls out, and
-the documented blind spots — a gate whose advertised reach outruns its real one
-is worse than none, because the register quotes the advert.
+the read/write split re-derived from ``services/protocols/repositories.py`` and
+pinned method by method, the receiver-shaped narrowing that keeps unrelated
+two-deep calls out, and the documented blind spots — including the asymmetric
+one: a write NAMED like a read passes in silence, which the gate's own texts
+have to say out loud. A gate whose advertised reach outruns its real one is
+worse than none, because the register quotes the advert.
 """
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -24,10 +27,60 @@ import pytest
 if TYPE_CHECKING:
     from types import ModuleType
 
-_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "check_read_only_module.py"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SCRIPT_PATH = _REPO_ROOT / "scripts" / "check_read_only_module.py"
+_PROTOCOLS_PATH = _REPO_ROOT / "py_modules" / "services" / "protocols" / "repositories.py"
 
 _MODULE = "py_modules/services/library/registry_queries.py"
 _REASON = "it only ever reads"
+
+# The classification the gate must produce for every method the repository
+# Protocols declare, pinned here so a new one fails until someone decides which
+# half it belongs to. Reads first — these are what a read-only module may call.
+_EXPECTED_READS = frozenset(
+    {
+        "count",
+        "get",
+        "get_all_emulator_overrides",
+        "get_by_app_id",
+        "get_cache_epoch",
+        "get_latest_completed",
+        "get_latest_terminal",
+        "get_running",
+        "iter_all",
+        "iter_by_group_key",
+        "iter_by_platform",
+        "iter_page",
+        "iter_pending_sessions",
+        "rom_ids_with_pending_device",
+    }
+)
+_EXPECTED_WRITES = frozenset(
+    {
+        "clear",
+        "clear_all_applied_launch_options",
+        "delete",
+        "replace_all",
+        "save",
+        "set",
+        "set_applied_launch_options",
+        "set_emulator_override",
+        "set_fs_size_bytes",
+        "set_selected_disc",
+    }
+)
+
+
+def _repository_protocol_methods() -> set[str]:
+    """Every method name declared on a Protocol in ``services/protocols/repositories.py``."""
+    tree = ast.parse(_PROTOCOLS_PATH.read_text(encoding="utf-8"))
+    return {
+        node.name
+        for cls in tree.body
+        if isinstance(cls, ast.ClassDef)
+        for node in cls.body
+        if isinstance(node, ast.FunctionDef)
+    }
 
 
 def _load_check_module() -> ModuleType:
@@ -91,6 +144,13 @@ class TestWritesAreFlagged:
         assert len(findings) == 1
         assert "could not be read" in findings[0]
 
+    def test_an_unparsable_declared_module_is_a_finding(self, scan):
+        # A declared module the parser chokes on is a module nobody is checking:
+        # the one path where "nothing to scan" must not read as "nothing wrong".
+        findings = scan("def (:\n")
+        assert len(findings) == 1
+        assert "does not parse" in findings[0]
+
 
 class TestReadsAreNotFlagged:
     def test_the_real_module_is_clean(self):
@@ -147,6 +207,13 @@ class TestDocumentedBlindSpots:
         findings = scan("def go(uow):\n    getattr(uow, 'roms').save(rom)\n")
         assert findings == []
 
+    def test_a_write_passed_as_a_bound_method_escapes(self, scan):
+        # ``uow.roms.save`` as an argument is an Attribute, never a Call — and
+        # this is the idiom every method in the declared module is itself
+        # invoked through, so it is the shape a reader here reaches for.
+        findings = scan("def go(loop, uow, rom):\n    return loop.run_in_executor(None, uow.roms.save, rom)\n")
+        assert findings == []
+
     def test_a_write_behind_a_helper_escapes(self, scan):
         # Only calls written in the declared module are inspected.
         findings = scan("from helpers import persist\n\ndef go(uow):\n    persist(uow, rom)\n")
@@ -160,11 +227,7 @@ class TestDocumentedBlindSpots:
 class TestTables:
     def test_repository_attrs_match_the_unit_of_work_protocol(self):
         # The scan's whole precision rests on this list being the UoW's own.
-        import ast
-
-        source = (Path(__file__).resolve().parents[2] / "py_modules/services/protocols/uow.py").read_text(
-            encoding="utf-8"
-        )
+        source = (_REPO_ROOT / "py_modules/services/protocols/uow.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
         uow_class = next(
             node for node in ast.walk(tree) if isinstance(node, ast.ClassDef) and node.name == "UnitOfWork"
@@ -177,20 +240,43 @@ class TestTables:
         }
         assert properties == set(check.REPOSITORY_ATTRS)
 
-    def test_no_write_name_from_the_repository_protocols_reads_as_a_read(self):
-        writes = {
-            "save",
-            "delete",
-            "clear",
-            "clear_all_applied_launch_options",
-            "replace_all",
-            "set",
-            "set_emulator_override",
-            "set_selected_disc",
-            "set_applied_launch_options",
-            "set_fs_size_bytes",
-        }
-        assert not any(check._is_read(name) for name in writes)
+    def test_every_repository_protocol_method_is_classified_as_pinned(self):
+        # The read/write split is what the gate IS, so it is pinned against the
+        # protocol file rather than against a hand-kept list: a new repository
+        # method lands in neither set and fails here, forcing the decision to be
+        # made where it is reviewed. A hardcoded list would let a read-shaped
+        # write (``get_or_create``) widen the gate in silence.
+        methods = _repository_protocol_methods()
+        assert methods == _EXPECTED_READS | _EXPECTED_WRITES, (
+            "a repository Protocol method is unclassified — add it to _EXPECTED_READS or "
+            "_EXPECTED_WRITES here, and check whether check_read_only_module.py agrees"
+        )
+        assert {name for name in methods if check._is_read(name)} == _EXPECTED_READS
+
+    def test_the_pinned_partition_covers_both_directions(self):
+        # Guards the assertion above against a vacuous pass: neither half may be
+        # empty, and no name may sit in both.
+        assert _EXPECTED_READS and _EXPECTED_WRITES
+        assert not (_EXPECTED_READS & _EXPECTED_WRITES)
+
+
+class TestReadShapedWriteBlindSpot:
+    """The asymmetry the docstring and the register entry both state.
+
+    A read named outside the shapes fails loud (safe); a WRITE named like a read
+    passes in silence. These two pin the direction so the texts cannot claim the
+    classification errs safe both ways.
+    """
+
+    @pytest.mark.parametrize("name", ["get_or_create", "iter_and_purge", "get_and_delete"])
+    def test_a_read_shaped_write_name_is_not_flagged(self, scan, name):
+        assert scan(f"def go(uow):\n    uow.roms.{name}(1)\n") == []
+
+    def test_a_read_named_outside_the_shapes_is_flagged(self, scan):
+        # The safe direction: a genuine read the shapes do not cover fails until
+        # someone adds it to READ_METHODS.
+        findings = scan("def go(uow):\n    uow.roms.rom_ids_on_platform('n64')\n")
+        assert len(findings) == 1
 
 
 class TestMainEntryPoint:

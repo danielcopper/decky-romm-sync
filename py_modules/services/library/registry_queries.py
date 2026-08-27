@@ -11,21 +11,25 @@ not fit the sentence above, it belongs elsewhere.
 
 **The module is declared read-only**, and that is checked:
 ``scripts/check_read_only_module.py`` fails on any repository call here that is
-not a read. The declaration is what makes the boundary worth having — every
-method opens its own short Unit of Work and is offloaded through the
-orchestrator's executor, so a write slipped in among them would land at a moment
-nobody chose.
+not a read. Its reach stops at what this file itself calls, and at calls rather
+than bound-method references, and it reads a method's *name* rather than what it
+does — so a write named like a read (``get_or_create``) would pass. The
+declaration is worth having anyway: every method here opens its own short Unit
+of Work and is offloaded through the orchestrator's executor at points chosen
+for cheapness, so a write among them would land at a moment nobody picked.
 
 Two neighbours deliberately stayed with the orchestrator, both touching the same
 tables through the same repositories:
 
-* ``_clear_platform_stamp_io`` **writes**, and its correctness is positional —
-  after the fetch succeeded, after the artwork, after the cancel guard, before
-  the first chunk, so a crash in between leaves no stamp (ADR-0023 / #1025). A
-  query can be lifted anywhere because it has no position in the recovery
-  protocol; that delete cannot. It and :meth:`RegistryQueries.do_count_unstamped_platforms`
-  sit either side of that line: one is a move the caller makes at a chosen
-  moment, the other is a question the caller reasons about.
+* ``_clear_platform_stamp_io`` **writes**. That alone rules it out of a
+  read-only module, and it belongs with the apply pipeline that performs it
+  rather than with the projections a run reasons about.
+  :meth:`RegistryQueries.do_count_unstamped_platforms` reads the same table and
+  answers a question the caller weighs; the delete is a step the pipeline takes.
+  *When* it is taken — after the fetch, after the artwork, after the cancel
+  guard, before the first chunk, so a crash in between leaves no stamp
+  (ADR-0023 / #1025) — is a property of its call site, and the argument for that
+  ordering lives there in full.
 * ``_stamp_component_group_keys`` does no I/O at all — it calls a pure domain
   function and writes the result back onto the caller's own list.
 

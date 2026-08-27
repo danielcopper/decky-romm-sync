@@ -12,14 +12,13 @@ completes belongs in :class:`SyncReporter`; Steam's renderer memory belongs
 in :class:`SessionBudgetMonitor`; a single ROM's launch facts — where its
 file is and what runs it — belong in :class:`ShortcutBakeInputs`; reading
 the registry and the completion stamps into the projections these decisions
-are made against belongs in :class:`RegistryQueries`. What stayed here of
-that last group is the platform stamp's DELETE, because it is a write whose
-correctness is positional within the apply's recovery protocol (ADR-0023 /
-#1025), and the pure component-key stamp, which does no I/O at all. Cached
-``rom_metadata`` is written by the
-reporter's per-unit commit (the same write UoW as the ``roms`` upsert), so
-preview never persists metadata and an interrupted apply leaves only
-already-committed units' metadata.
+are made against belongs in :class:`RegistryQueries`. What stayed here of that
+last group is the platform stamp's DELETE — a write, and a step of the apply
+pipeline rather than a question a run weighs; its ordering is argued at its call
+site — and the pure component-key stamp, which does no I/O at all. Cached
+``rom_metadata`` is written by the reporter's per-unit commit (the same write
+UoW as the ``roms`` upsert), so preview never persists metadata and an
+interrupted apply leaves only already-committed units' metadata.
 """
 
 from __future__ import annotations

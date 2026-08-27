@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 
 # kv_config key for the offline ``platform_slug → display_name`` cache,
 # refreshed on every sync from the live work-queue. Read by the offline
-# registry queries (DangerZone label, game-detail platform name) so a
+# ``roms``-derived queries (DangerZone label, game-detail platform name) so a
 # RomM-down panel shows "Nintendo 64" rather than the bare "n64" slug.
 _PLATFORM_NAMES_KEY = "platform_names"
 
@@ -88,7 +88,7 @@ class SyncReporterConfig:
 
 
 class SyncReporter:
-    """Post-apply reporter + registry queries + cache reset."""
+    """Post-apply reporter + the ``roms``-derived queries + cache reset."""
 
     def __init__(self, *, config: SyncReporterConfig) -> None:
         self._steam_config = config.steam_config
@@ -336,7 +336,7 @@ class SyncReporter:
         ``roms`` table (the row survives) before collections are built,
         keeping the backend registry in sync with the frontend removals.
         ``platform_names`` is the live ``platform_slug → display_name``
-        map from the work-queue, cached for offline registry queries.
+        map from the work-queue, cached for the offline ``roms``-derived queries.
 
         Returns the ``(platform_app_ids, romm_collection_app_ids)`` maps the caller
         needs for the completed-run ``SyncRun`` write and the terminal emit. The
@@ -784,7 +784,7 @@ class SyncReporter:
         )
         self._sync_state.committed_app_ids.update(int(aid) for aid in rom_id_to_app_id.values())
 
-    # ── Registry queries ─────────────────────────────────────────
+    # ── ``roms``-derived queries ─────────────────────────────────
 
     def _read_platform_name_cache(self, uow) -> dict[str, str]:
         """Decode the ``platform_slug → display_name`` cache, ``{}`` when absent/corrupt."""

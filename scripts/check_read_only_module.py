@@ -5,36 +5,50 @@ A module named for reading is a promise about *when* it may be called. The
 promise is worth something only while it holds: the sync's registry reads are
 offloaded to an executor and opened as their own short Units of Work, chosen for
 where they are cheap rather than for where a write would be safe. Drop a write
-in among them and it commits at a moment nobody picked — which is exactly the
-distinction that kept the platform stamp's DELETE in the orchestrator, where its
-position in the apply's recovery protocol is the whole point (ADR-0023 / #1025).
+in among them and it commits at a moment nobody picked.
 
 Each module listed in :data:`READ_ONLY_MODULES` is walked for repository calls —
 ``<anything>.<repo>.<method>(...)`` where ``<repo>`` is one of the eleven
 repositories :class:`services.protocols.uow.UnitOfWork` exposes — and every
-method not in :data:`READ_METHODS` is a finding. The read set is derived from
-``services/protocols/repositories.py``: every read there is ``get`` / ``get_*``
-/ ``iter_*`` / ``count`` or is named explicitly below, and no write matches
-those shapes (``save``, ``delete``, ``clear``, ``clear_*``, ``replace_all``,
-``set``, ``set_*``). A repository that grows a read outside those shapes needs a
-line here — until then the gate calls it a write, which fails loud rather than
-silently widening.
+method that is not a read is a finding. Read or write is decided **by the name's
+shape**: ``get`` / ``get_*`` / ``iter_*`` / ``count`` plus the explicit names in
+:data:`READ_METHODS`. That partition is exact over
+``services/protocols/repositories.py`` as it stands today (no write there matches
+a read shape: ``save``, ``delete``, ``clear``, ``clear_*``, ``replace_all``,
+``set``, ``set_*``), and `test_check_read_only_module.py` re-derives every method
+name from that file so a new one has to be classified here rather than drift past.
+
+**The two directions are not symmetric, and the asymmetry runs the wrong way.**
+A read named outside the shapes is called a write: it fails loud until a line is
+added below, which is safe. A **write named like a read is called a read and
+passes in silence** — ``uow.roms.get_or_create(1)`` and
+``uow.roms.iter_and_purge()`` are both green today. Nothing in the scan looks at
+what a method does, so a repository that grows a read-shaped mutator reopens
+exactly the accident this gate is otherwise for. That is a reason to keep naming
+repository writes as writes, not a hole the gate can close.
 
 It is a surface-syntax guardrail over one file each, not dataflow analysis. What
 it cannot see:
 
 * a write reached through a **helper** — the listed module calling a function
   elsewhere that writes; only calls written in the module itself are inspected;
+* a write **passed as a bound method rather than called** —
+  ``loop.run_in_executor(None, uow.roms.save, rom)`` is an ``ast.Attribute``, not
+  an ``ast.Call``, so the scan never sees it. This one is pointed rather than
+  theoretical: every method in the declared module is *invoked* through that
+  exact idiom, so it is the shape a reader of this area reaches for;
+* a **read-shaped write name**, per the asymmetry above;
 * an **aliased repository handle** (``repo = uow.roms`` then ``repo.save(...)``),
   which flattens the two-attribute shape the scan matches on;
 * ``getattr(uow, "roms").save(...)`` or any other dynamically-named access;
 * a write through a repository the UoW does not expose under one of the eleven
   names in :data:`REPOSITORY_ATTRS`, including a future twelfth not added here.
 
-None of those is a way to keep a module honest-looking while writing — they are
-what a deliberate evasion would have to look like. What the gate does catch is
-the accident: the plain ``uow.roms.save(...)`` added to a read module because it
-was the closest place with a Unit of Work already open.
+What the gate does catch is the plain ``uow.roms.save(...)`` added to a read
+module because it was the closest place with a Unit of Work already open. The
+list above is the honest boundary of that: most of it is what a deliberate
+evasion would look like, but the bound-method reference and the read-shaped name
+are accidents too, and they pass.
 
 Exit 0 when every listed module only reads, 1 (one line per offending call)
 otherwise.
@@ -54,7 +68,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 READ_ONLY_MODULES: dict[str, str] = {
     "py_modules/services/library/registry_queries.py": (
         "it reads the registry and the completion stamps into projections the sync decides against; "
-        "a write belongs where its position in the run is chosen"
+        "a write belongs with the pipeline that performs it"
     ),
 }
 
@@ -78,7 +92,8 @@ REPOSITORY_ATTRS: frozenset[str] = frozenset(
 )
 
 # Read-method shapes, derived from services/protocols/repositories.py: every
-# read is one of these, and no write is.
+# read is one of these, and — as that file stands today — no write is. The test
+# re-derives every method name from it, so a new one has to be classified.
 READ_PREFIXES: tuple[str, ...] = ("get_", "iter_")
 # Reads whose names carry neither prefix. Exact names, not prefixes, so a
 # hypothetical ``count_and_prune`` would not inherit the exemption.
@@ -120,7 +135,11 @@ def find_violations(modules: dict[str, str] | None = None, *, root: Path | None 
             continue
         try:
             tree = ast.parse(source, filename=str(path))
-        except SyntaxError:
+        except SyntaxError as exc:
+            # Not "nothing to scan": a declared module the parser cannot read is
+            # a module nobody is checking. Failing here costs a CI run on code
+            # that would not import anyway.
+            findings.append(f"{module}:{exc.lineno or 0}: declared read-only but does not parse — {exc.msg}.")
             continue
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -148,9 +167,9 @@ def main(argv: list[str]) -> int:
             print(line)
         print()
         print(
-            "ERROR: a module declared read-only calls a repository write — put the write where the "
-            "moment it happens is chosen, or drop the module's read-only declaration "
-            "(CLAUDE.md → Invariant register, #1777)."
+            "ERROR: a module declared read-only does not hold to it — put the write with the "
+            "pipeline that performs it (or fix the declared path), or drop the module's read-only "
+            "declaration (CLAUDE.md → Invariant register, #1777)."
         )
         return 1
     print(f"OK: all {len(READ_ONLY_MODULES)} read-only module(s) call repository reads only.")

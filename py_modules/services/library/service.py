@@ -145,7 +145,7 @@ class LibraryService:
             )
         )
 
-        # Sub-service: registry queries. Constructed before the
+        # Sub-service: RegistryQueries. Constructed before the
         # orchestrator, which holds it and offloads every one of its reads
         # through its own executor.
         self._registry_queries = RegistryQueries(config=RegistryQueriesConfig(uow_factory=config.uow_factory))
