@@ -45,7 +45,7 @@ def _reg(
     app_id=1001,
     applied_launch_options: str | None = "",
 ):
-    """Build a registry entry dict matching _read_preview_baseline output.
+    """Build a registry entry dict matching do_read_preview_baseline output.
 
     ``applied_launch_options`` defaults to ``""`` — an uninstalled ROM whose
     empty placeholder was recorded — so a same-identity fetch with the default
@@ -583,7 +583,7 @@ def _greg(
     platform_slug="n64",
     applied_launch_options="",
 ):
-    """A bound-registry entry as _read_apply_registry / _read_preview_baseline shape it.
+    """A bound-registry entry as do_read_apply_registry / do_read_preview_baseline shape it.
 
     ``applied_launch_options`` defaults to ``""`` — the recorded empty placeholder —
     so a same-identity re-fetch with the default ``_gsd`` launch_options ("") reads

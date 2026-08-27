@@ -5,7 +5,9 @@ sync RomM calls in an executor), small ROM/registry/page builders
 used across :class:`TestFetchCollectionRoms`,
 :class:`TestCollectionSyncEdgeCases`, and the facade-integration
 collection tests, plus the shared-UoW seeders the sub-service test
-files drive their fixtures with.
+files drive their fixtures with — including ``_seed_rom_row``, which the
+orchestrator and registry-query suites both build their bound-row baselines
+from.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -19,8 +21,9 @@ def rebind_loop(library_service, loop):
     Four of the façade's sub-services (fetcher, orchestrator, reporter,
     session-budget monitor) hold their own ctor-bound ``_loop``. Tests that
     swap in a mock loop must propagate it to all four so async calls land on
-    the override. ``ShortcutBakeInputs`` holds none — its methods are
-    synchronous workers the orchestrator offloads through *its* loop.
+    the override. ``ShortcutBakeInputs`` and ``RegistryQueries`` hold none —
+    their methods are synchronous workers the orchestrator offloads through
+    *its* loop.
     """
     library_service._fetcher._loop = loop
     library_service._orchestrator._loop = loop
@@ -126,3 +129,46 @@ def _seed_install(plugin, rom_id, *, file_path, platform_slug="n64"):
                 installed_at="2025-01-01T00:00:00",
             )
         )
+
+
+def _seed_rom_row(
+    plugin,
+    rom_id,
+    *,
+    app_id,
+    platform_slug,
+    name="Game",
+    fs_name=None,
+    sibling_group_key: str | None = "romm:seed:1",
+    applied_launch_options: str | None = "",
+    cover_source: str | None = None,
+):
+    """Insert a bound (or unbound when app_id is None) ROM into the shared fake UoW.
+
+    ``sibling_group_key`` defaults to a non-null value so the incremental-skip
+    path treats the registry as already backfilled (#1295); pass ``None`` to
+    seed a pre-migration row that must force a full fetch for backfill.
+
+    ``applied_launch_options`` defaults to ``""`` — the recorded uninstalled
+    placeholder — so an uninstalled bound baseline (built launch_options "")
+    reads as unchanged by the delta-restricted classify (#1383); pass ``None`` to
+    seed a pre-migration-015 row (unknown → always "changed").
+
+    ``cover_source`` is the persisted cover-cache fingerprint (#1386); defaults
+    to ``None`` (a pre-migration-016 row — the NULL-adopt path).
+    """
+    from domain.rom import Rom
+
+    rom = Rom(
+        rom_id=rom_id,
+        platform_slug=platform_slug,
+        name=name,
+        fs_name=fs_name if fs_name is not None else f"{name}.z64",
+        shortcut_app_id=app_id,
+        last_synced_at="2025-01-01T00:00:00",
+        sibling_group_key=sibling_group_key,
+        cover_source=cover_source,
+    )
+    with plugin._uow:
+        plugin._uow.roms.save(rom)
+        plugin._uow.roms.set_applied_launch_options(rom_id, applied_launch_options)

@@ -1,15 +1,17 @@
 """LibraryService façade.
 
 Owns the public callable surface exposed via ``main.py`` (platform/
-collection metadata, sync preview/apply/cancel, reporting,
-registry queries) and the shared :class:`LibrarySyncStateBox` that
+collection metadata, sync preview/apply/cancel, reporting, the
+``roms``-derived queries) and the shared :class:`LibrarySyncStateBox` that
 threads through every sub-service. Implementation lives in the
 sub-service modules: :class:`LibraryFetcher` for ROM/metadata
 roundtrips, :class:`SyncOrchestrator` for the preview/apply
 lifecycle and safety heartbeat, :class:`SyncReporter` for post-apply
-finalisation and registry queries, :class:`SessionBudgetMonitor` for
-Steam's renderer-heap budget, :class:`ShortcutBakeInputs` for each
-ROM's launch facts. The façade itself only wires the
+finalisation and the ``roms``-derived callable queries,
+:class:`SessionBudgetMonitor` for Steam's renderer-heap budget,
+:class:`ShortcutBakeInputs` for each ROM's launch facts,
+:class:`RegistryQueries` for the registry/stamp reads a run's decisions are
+made against. The façade itself only wires the
 pieces together and delegates — anything that touches RomM or mutates
 in-flight sync state belongs in a sub-service.
 """
@@ -23,6 +25,7 @@ from lib.late_binding import LateBinding
 from services.library._state import CollectionMembership, LibrarySyncStateBox
 from services.library.bake_inputs import ShortcutBakeInputs, ShortcutBakeInputsConfig
 from services.library.fetcher import LibraryFetcher, LibraryFetcherConfig
+from services.library.registry_queries import RegistryQueries, RegistryQueriesConfig
 from services.library.reporter import SyncReporter, SyncReporterConfig
 from services.library.session_budget import SessionBudgetMonitor, SessionBudgetMonitorConfig
 from services.library.sync_orchestrator import SyncOrchestrator, SyncOrchestratorConfig
@@ -96,10 +99,11 @@ class LibraryService:
     Composes :class:`LibraryFetcher` (platform/collection roundtrips +
     metadata-cache stamping), :class:`SyncOrchestrator` (preview/apply
     lifecycle + safety heartbeat), :class:`SyncReporter`
-    (post-apply finalisation + registry queries),
-    :class:`SessionBudgetMonitor` (Steam's renderer-heap budget), and
+    (post-apply finalisation + the ``roms``-derived callable queries),
+    :class:`SessionBudgetMonitor` (Steam's renderer-heap budget),
     :class:`ShortcutBakeInputs` (each ROM's installed path + active
-    emulator) over a
+    emulator), and :class:`RegistryQueries` (the registry and
+    completion-stamp reads a run's decisions are made against) over a
     single shared :class:`LibrarySyncStateBox`. The façade itself owns the box and
     exposes the callable surface; every implementation method lives on
     one of the sub-services.
@@ -141,6 +145,11 @@ class LibraryService:
             )
         )
 
+        # Sub-service: registry queries. Constructed before the
+        # orchestrator, which holds it and offloads every one of its reads
+        # through its own executor.
+        self._registry_queries = RegistryQueries(config=RegistryQueriesConfig(uow_factory=config.uow_factory))
+
         # Sub-service: session-budget monitor. Constructed before the
         # orchestrator, which holds it and calls it at every chunk boundary.
         self._session_budget = SessionBudgetMonitor(
@@ -175,6 +184,7 @@ class LibraryService:
                 reporter=reporter_binding,
                 artwork=config.artwork,
                 bake_inputs=self._bake_inputs,
+                registry_queries=self._registry_queries,
                 session_budget=self._session_budget,
             )
         )
@@ -354,7 +364,7 @@ class LibraryService:
     async def report_unit_results(self, rom_id_to_app_id, run_id, unit_id, chunk_index):
         return await self._reporter.report_unit_results(rom_id_to_app_id, run_id, unit_id, chunk_index)
 
-    # Registry queries
+    # ``roms``-derived queries
     def get_registry_platforms(self):
         return self._reporter.get_registry_platforms()
 

@@ -108,7 +108,7 @@ def _read_meta(file_store, cover_cache_dir, rom_id) -> dict[str, Any]:
 def _registry(uow):
     """The bound-row registry projection the orchestrator hands the refresh pass (#1386).
 
-    Mirrors ``_read_apply_registry``'s contract slice: bound rows only, keyed by
+    Mirrors ``do_read_apply_registry``'s contract slice: bound rows only, keyed by
     ``str(rom_id)``, each entry carrying ``app_id`` + ``cover_source``.
     """
     with uow:

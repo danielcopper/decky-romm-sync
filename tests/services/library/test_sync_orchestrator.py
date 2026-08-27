@@ -41,7 +41,7 @@ from domain.work_unit import WorkUnit
 from lib.romm_paging import LIST_PAGE_SIZE
 
 # conftest.py patches decky before this import
-from tests.services.library._helpers import _seed_install
+from tests.services.library._helpers import _seed_install, _seed_rom_row
 
 # ── Test helpers ─────────────────────────────────────────────────
 
@@ -112,49 +112,6 @@ def _seed_collection(
         for rid in rom_ids:
             rom = fake_romm_api.roms.setdefault(rid, {"id": rid})
             rom.setdefault("collection_ids", []).append(collection_id)
-
-
-def _seed_rom_row(
-    plugin,
-    rom_id,
-    *,
-    app_id,
-    platform_slug,
-    name="Game",
-    fs_name=None,
-    sibling_group_key: str | None = "romm:seed:1",
-    applied_launch_options: str | None = "",
-    cover_source: str | None = None,
-):
-    """Insert a bound (or unbound when app_id is None) ROM into the shared fake UoW.
-
-    ``sibling_group_key`` defaults to a non-null value so the incremental-skip
-    path treats the registry as already backfilled (#1295); pass ``None`` to
-    seed a pre-migration row that must force a full fetch for backfill.
-
-    ``applied_launch_options`` defaults to ``""`` — the recorded uninstalled
-    placeholder — so an uninstalled bound baseline (built launch_options "")
-    reads as unchanged by the delta-restricted classify (#1383); pass ``None`` to
-    seed a pre-migration-015 row (unknown → always "changed").
-
-    ``cover_source`` is the persisted cover-cache fingerprint (#1386); defaults
-    to ``None`` (a pre-migration-016 row — the NULL-adopt path).
-    """
-    from domain.rom import Rom
-
-    rom = Rom(
-        rom_id=rom_id,
-        platform_slug=platform_slug,
-        name=name,
-        fs_name=fs_name if fs_name is not None else f"{name}.z64",
-        shortcut_app_id=app_id,
-        last_synced_at="2025-01-01T00:00:00",
-        sibling_group_key=sibling_group_key,
-        cover_source=cover_source,
-    )
-    with plugin._uow:
-        plugin._uow.roms.save(rom)
-        plugin._uow.roms.set_applied_launch_options(rom_id, applied_launch_options)
 
 
 def _seed_completed_run(plugin, *, at, platforms=None, collections=None, run_id="run-prev"):
@@ -371,7 +328,7 @@ class TestSyncPreview:
 
         Setup: rom 1 is bound and still present on the server (unchanged),
         rom 99 is an unbound leftover that is absent from the live fetch.
-        If ``_read_preview_baseline`` leaked rom 99 into the registry, it
+        If ``do_read_preview_baseline`` leaked rom 99 into the registry, it
         would be classified as stale (not in the current fetch) and reported
         as a removal. The NULL-exclusion guard keeps ``remove_count`` at 0.
         """
@@ -541,29 +498,6 @@ class TestPreviewCoverRefreshCount:
         assert result["summary"]["cover_refresh_count"] == 0
         assert result["summary"]["new_count"] == 0
         assert result["summary"]["changed_count"] == 0
-
-    def test_apply_registry_projection_carries_cover_source(self, plugin):
-        # Round-trip: the bound-row projection the apply scan (and its group
-        # collapse) reads must surface the persisted fingerprint.
-        _seed_rom_row(
-            plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64", cover_source=self._OLD
-        )
-        _seed_rom_row(plugin, 11, app_id=1011, platform_slug="n64", name="Null", fs_name="null.z64", cover_source=None)
-
-        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
-        registry = plugin._sync_service._orchestrator._read_apply_registry(unit)
-
-        assert registry["10"]["cover_source"] == self._OLD
-        assert registry["11"]["cover_source"] is None
-
-    def test_preview_baseline_projection_carries_cover_source(self, plugin):
-        _seed_rom_row(
-            plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64", cover_source=self._OLD
-        )
-
-        registry, _platforms, _collections = plugin._sync_service._orchestrator._read_preview_baseline({"n64": "N64"})
-
-        assert registry["10"]["cover_source"] == self._OLD
 
 
 class TestPreviewRestampPlatformCount:
@@ -2961,7 +2895,7 @@ class TestLateAckReconciliationWithStaleScan:
         # app 5000 for removal — it's a freshly-committed binding.
         stale = await plugin.loop.run_in_executor(
             None,
-            plugin._sync_service._orchestrator._scan_stale_roms,
+            plugin._sync_service._registry_queries.do_scan_stale_roms,
             set(),  # synced_rom_ids — neither rom counts as synced for this scan
             set(box.committed_app_ids),
         )
@@ -5067,14 +5001,6 @@ class TestComponentGroupKeyStamping:
         assert resident["sibling_group_key"] == "igdb:100:57"
         assert fresh_in_unit["sibling_group_key"] == "igdb:100:57"
         assert fresh_vs_db["sibling_group_key"] == "igdb:777:57"
-
-    def test_read_resident_group_keys_filters_null_keys(self, plugin):
-        _seed_rom_row(plugin, 1, app_id=100, platform_slug="n64", sibling_group_key="igdb:5:1")
-        _seed_rom_row(plugin, 2, app_id=None, platform_slug="n64", sibling_group_key=None)
-
-        keys = plugin._sync_service._orchestrator._read_resident_group_keys()
-
-        assert keys == {1: "igdb:5:1"}
 
 
 class TestDeltaRestrictedApply:

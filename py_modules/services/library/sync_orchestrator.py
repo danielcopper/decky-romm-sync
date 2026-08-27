@@ -10,7 +10,12 @@ through their config. Anything that fetches ROMs belongs in
 :class:`LibraryFetcher`; anything that finalises shortcuts after the apply
 completes belongs in :class:`SyncReporter`; Steam's renderer memory belongs
 in :class:`SessionBudgetMonitor`; a single ROM's launch facts — where its
-file is and what runs it — belong in :class:`ShortcutBakeInputs`. Cached
+file is and what runs it — belong in :class:`ShortcutBakeInputs`; reading
+the registry and the completion stamps into the projections these decisions
+are made against belongs in :class:`RegistryQueries`. What stayed here of
+that last group is the platform stamp's DELETE, because it is a write whose
+correctness is positional within the apply's recovery protocol (ADR-0023 /
+#1025), and the pure component-key stamp, which does no I/O at all. Cached
 ``rom_metadata`` is written by the
 reporter's per-unit commit (the same write UoW as the ``roms`` upsert), so
 preview never persists metadata and an interrupted apply leaves only
@@ -45,7 +50,6 @@ from domain.sync_diff import (
     collapse_sibling_groups,
     compute_collection_diff,
     compute_platform_collection_diff,
-    select_stale_removals,
 )
 from domain.sync_run import SyncRun
 from domain.sync_stage import SyncStage
@@ -63,6 +67,7 @@ if TYPE_CHECKING:
     from services.library._state import LibrarySyncStateBox
     from services.library.bake_inputs import ShortcutBakeInputs
     from services.library.fetcher import LibraryFetcher
+    from services.library.registry_queries import RegistryQueries
     from services.library.reporter import SyncReporter
     from services.protocols import (
         ArtworkManager,
@@ -131,7 +136,11 @@ class SyncOrchestratorConfig:
     ``bake_inputs`` peer answers the two per-ROM questions each shortcut bake
     needs — the disc-resolved installed path and the active emulator — which
     preview and the per-unit apply both hand straight to
-    :func:`build_shortcuts_data`. The ``session_budget`` seam owns every
+    :func:`build_shortcuts_data`. The ``registry_queries`` peer answers every
+    question the run asks of the local registry and the completion stamps —
+    the classify baseline, the per-unit bound-row projection, the unstamped-
+    platform count, the resident sibling-group keys, and the stale-row scan —
+    each in its own short read Unit of Work. The ``session_budget`` seam owns every
     renderer-heap reading and verdict: at each chunk boundary the orchestrator asks
     it whether applying the chunk would exhaust Steam's per-session heap budget, and
     the run pauses itself when it would (#1383).
@@ -151,6 +160,7 @@ class SyncOrchestratorConfig:
     reporter: LateBinding[SyncReporter]
     artwork: ArtworkManager
     bake_inputs: ShortcutBakeInputs
+    registry_queries: RegistryQueries
     session_budget: SessionBudgetMonitor
 
 
@@ -190,6 +200,7 @@ class SyncOrchestrator:
         self._artwork = config.artwork
         self._reporter = config.reporter
         self._bake_inputs = config.bake_inputs
+        self._registry_queries = config.registry_queries
         self._session_budget = config.session_budget
 
     # ── Sync control ─────────────────────────────────────────────
@@ -288,13 +299,13 @@ class SyncOrchestrator:
             # the collapse below groups games, not dumps. The preview union is a
             # complete view of every enabled platform's groups; the DB's persisted
             # keys seed a member edging into a resident sibling on a skipped platform.
-            resident_keys = await self._loop.run_in_executor(None, self._read_resident_group_keys)
+            resident_keys = await self._loop.run_in_executor(None, self._registry_queries.do_read_resident_group_keys)
             self._stamp_component_group_keys(all_roms, resident_keys)
             shortcuts_data = build_shortcuts_data(all_roms, self._plugin_dir, installed_paths, core_overrides)
             platform_name_set = {u.name for u in work_queue if u.type == "platform"}
             slug_to_name = {u.slug: u.name for u in work_queue if u.type == "platform" and u.slug}
             registry, last_synced_platforms, last_synced_collections = await self._loop.run_in_executor(
-                None, self._read_preview_baseline, slug_to_name
+                None, self._registry_queries.do_read_preview_baseline, slug_to_name
             )
             # Enabled platforms lacking a completion stamp (#1416): a
             # late-ack-recovered platform is complete but unstamped, so the
@@ -304,7 +315,7 @@ class SyncOrchestrator:
             # 0-delta empty final chunk re-writes the stamp and records a fresh
             # SyncRun (the one-time re-walk ADR-0023 intends).
             restamp_platform_count = await self._loop.run_in_executor(
-                None, self._count_unstamped_platforms, set(slug_to_name)
+                None, self._registry_queries.do_count_unstamped_platforms, set(slug_to_name)
             )
             # Collapse to one entry per sibling group (ADR-0021) so the preview
             # counts games, not individual dumps: a multi-version game becomes one
@@ -853,104 +864,6 @@ class SyncOrchestrator:
             transition(run)
             uow.sync_runs.save(run)
 
-    def _read_preview_baseline(
-        self, slug_to_name: dict[str, str]
-    ) -> tuple[dict[str, dict[str, Any]], list[str], list[str]]:
-        """Read the classify baseline from SQLite in one short read UoW.
-
-        Returns ``(registry, last_synced_platforms, last_synced_collections)``
-        where ``registry`` is the ``classify_roms``-shaped dict (keyed by
-        ``str(rom_id)``) reconstructed from the bound ``roms`` rows, with
-        the platform display name resolved from *slug_to_name* (the live
-        work-queue) and falling back to the slug. Each entry also carries the
-        persisted ``cover_source`` fingerprint so the preview's cover-work
-        count (#1386) compares in memory against the same projection — no
-        second DB pass. The last-synced platform/collection lists come from
-        the newest completed ``SyncRun``.
-        """
-        with self._uow_factory() as uow:
-            registry: dict[str, dict[str, Any]] = {}
-            for rom in uow.roms.iter_all():
-                if rom.shortcut_app_id is None:
-                    continue
-                registry[str(rom.rom_id)] = {
-                    "app_id": rom.shortcut_app_id,
-                    "name": rom.name,
-                    "fs_name": rom.fs_name,
-                    "platform_name": slug_to_name.get(rom.platform_slug, rom.platform_slug),
-                    "platform_slug": rom.platform_slug,
-                    "sibling_group_key": rom.sibling_group_key,
-                    "applied_launch_options": rom.applied_launch_options,
-                    "cover_source": rom.cover_source,
-                }
-            latest = uow.sync_runs.get_latest_completed()
-            last_platforms = list(latest.platforms_completed or []) if latest is not None else []
-            last_collections = list(latest.collections_completed or []) if latest is not None else []
-        return registry, last_platforms, last_collections
-
-    def _count_unstamped_platforms(self, platform_slugs: set[str]) -> int:
-        """Count enabled platform slugs without a ``PlatformSyncState`` stamp.
-
-        A platform lacking a completion stamp has no wholesale-skip authority —
-        ``LibraryFetcher._try_unit_incremental_skip`` full-fetches it — so its
-        apply runs even at a zero shortcut delta and the empty final chunk
-        re-writes the stamp (the one-time re-walk ADR-0023 intends after a
-        late-ack recovery leaves a platform complete-but-unstamped). Surfaced as
-        the preview's ``restamp_platform_count`` so the frontend still offers
-        Apply on an otherwise-empty delta (#1416). One short read UoW.
-        """
-        with self._uow_factory() as uow:
-            return sum(1 for slug in platform_slugs if uow.platform_sync_state.get(slug) is None)
-
-    def _read_apply_registry(self, unit: WorkUnit) -> dict[str, dict[str, Any]]:
-        """Read the bound-row registry the per-unit group collapse diffs against.
-
-        Platform units scope to their own platform's rows (a sibling group is
-        per-platform, so a vanished bound sibling shares the platform); collection
-        units read the whole registry since their ROMs span platforms. A platform
-        unit's fetch is therefore a COMPLETE view of every group it touches (the
-        collapse may rebind); a collection unit's fetch is a PARTIAL view — the
-        whole registry surfaces bindings for groups the unit only partly fetched,
-        so the collapse must not treat those as vanished (it passes
-        ``complete_group_view=False`` and only grandfathers). Only bound rows (a
-        live ``shortcut_app_id``) are returned — an unbound sibling is not a
-        shortcut the collapse can grandfather or rebind. Each entry also carries
-        the persisted ``cover_source`` fingerprint, so the cover-cache
-        invalidation pass (#1386) scans against this same projection instead of
-        per-ROM DB lookups. The apply path did not read the registry before
-        group-aware sync (ADR-0021).
-        """
-        with self._uow_factory() as uow:
-            rows = (
-                uow.roms.iter_by_platform(unit.slug) if unit.type == "platform" and unit.slug else uow.roms.iter_all()
-            )
-            return {
-                str(rom.rom_id): {
-                    "app_id": rom.shortcut_app_id,
-                    "name": rom.name,
-                    "fs_name": rom.fs_name,
-                    "platform_slug": rom.platform_slug,
-                    "sibling_group_key": rom.sibling_group_key,
-                    "applied_launch_options": rom.applied_launch_options,
-                    "cover_source": rom.cover_source,
-                }
-                for rom in rows
-                if rom.shortcut_app_id is not None
-            }
-
-    def _read_resident_group_keys(self) -> dict[int, str]:
-        """Read every persisted non-null ``sibling_group_key`` (``rom_id → key``).
-
-        The preview builds one shortcut set over every enabled platform, so it
-        needs the DB's canonical summaries for a fresh member that edges into a
-        sibling on a skipped (incremental) platform, which the preview reconstructs
-        only its bound rows of. One short read UoW.
-        """
-        with self._uow_factory() as uow:
-            return {
-                rom.rom_id: rom.sibling_group_key for rom in uow.roms.iter_all() if rom.sibling_group_key is not None
-            }
-
     def _stamp_component_group_keys(self, roms: list[dict[str, Any]], resident_keys: dict[int, str]) -> None:
         """Stamp each fresh ROM's component sibling-group key onto its raw dict.
 
@@ -1072,7 +985,7 @@ class SyncOrchestrator:
         # Read the bound-row registry once, before the build: its persisted keys
         # seed the component keying (a fresh member edging into a DB-resident
         # sibling adopts its canonical summary) AND drive the group collapse below.
-        registry = await self._loop.run_in_executor(None, self._read_apply_registry, unit)
+        registry = await self._loop.run_in_executor(None, self._registry_queries.do_read_apply_registry, unit)
         resident_keys = {
             int(rom_id): entry["sibling_group_key"] for rom_id, entry in registry.items() if entry["sibling_group_key"]
         }
@@ -1662,7 +1575,7 @@ class SyncOrchestrator:
         # wrongly removed (#1036).
         if not cancelled:
             stale = await self._loop.run_in_executor(
-                None, self._scan_stale_roms, synced_rom_ids, set(self._sync_state.committed_app_ids)
+                None, self._registry_queries.do_scan_stale_roms, synced_rom_ids, set(self._sync_state.committed_app_ids)
             )
         else:
             stale = []
@@ -1710,31 +1623,6 @@ class SyncOrchestrator:
             restart_recommended=restart_recommended,
         )
 
-    def _scan_stale_roms(self, synced_rom_ids: set[int], synced_app_ids: set[int]) -> list[tuple[int, int]]:
-        """Return ``(rom_id, app_id)`` for bound ROMs not synced this run.
-
-        Unbound (stale) rows are skipped — they were already cleared on a
-        prior run and carry no Steam shortcut to remove. The ``app_id`` is
-        the still-live ``shortcut_app_id`` captured here, before the
-        reporter's finalize unbinds the row; the orchestrator threads it
-        into the ``sync_stale`` payload so the frontend removes the Steam
-        shortcut without re-resolving rom_id→app_id after the unbind.
-
-        Any candidate whose ``app_id`` is in *synced_app_ids* — an appId this
-        run bound to a freshly-synced ROM — is excluded by
-        :func:`select_stale_removals`: a new server-issued ``rom_id`` can reuse
-        an old appId (unchanged ``exe + name``), so the old colliding row looks
-        stale but its appId now belongs to the new row. Removing it would wipe
-        the shortcut the run just created/updated (#1036).
-        """
-        with self._uow_factory() as uow:
-            candidate_stale = [
-                (rom.rom_id, rom.shortcut_app_id)
-                for rom in uow.roms.iter_all()
-                if rom.shortcut_app_id is not None and rom.rom_id not in synced_rom_ids
-            ]
-        return select_stale_removals(candidate_stale, synced_app_ids)
-
     # ── Artwork delegation ───────────────────────────────────────
 
     async def _download_artwork(
@@ -1762,7 +1650,7 @@ class SyncOrchestrator:
     async def _refresh_changed_covers(self, unit_roms, registry, progress_step=4, progress_total_steps=6, label=""):
         """Delegate the #1386 cover-cache invalidation pass to the ArtworkManager.
 
-        ``registry`` is the unit's bound-row projection (``_read_apply_registry``)
+        ``registry`` is the unit's bound-row projection (``do_read_apply_registry``)
         the pass compares fingerprints against — the same read the group collapse
         already made. ``label`` is the unit's display name, threaded into the
         throttled "Refreshing covers for <label>" progress frames. Returns the
