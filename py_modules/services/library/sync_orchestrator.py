@@ -12,7 +12,7 @@ completes belongs in :class:`SyncReporter`; Steam's renderer memory belongs
 in :class:`SessionBudgetMonitor`; a single ROM's launch facts — where its
 file is and what runs it — belong in :class:`ShortcutBakeInputs`; reading
 the registry and the completion stamps into the projections these decisions
-are made against belongs in :class:`RegistryQueries`. What stayed here of that
+are made against belongs in :class:`LocalLibraryReader`. What stayed here of that
 last group is the platform stamp's DELETE — a write, and a step of the apply
 pipeline rather than a question a run weighs; its ordering is argued at its call
 site — and the pure component-key stamp, which does no I/O at all. Cached
@@ -66,7 +66,7 @@ if TYPE_CHECKING:
     from services.library._state import LibrarySyncStateBox
     from services.library.bake_inputs import ShortcutBakeInputs
     from services.library.fetcher import LibraryFetcher
-    from services.library.registry_queries import RegistryQueries
+    from services.library.local_library_reader import LocalLibraryReader
     from services.library.reporter import SyncReporter
     from services.protocols import (
         ArtworkManager,
@@ -135,11 +135,12 @@ class SyncOrchestratorConfig:
     ``bake_inputs`` peer answers the two per-ROM questions each shortcut bake
     needs — the disc-resolved installed path and the active emulator — which
     preview and the per-unit apply both hand straight to
-    :func:`build_shortcuts_data`. The ``registry_queries`` peer answers every
-    question the run asks of the local registry and the completion stamps —
-    the classify baseline, the per-unit bound-row projection, the unstamped-
-    platform count, the resident sibling-group keys, and the stale-row scan —
-    each in its own short read Unit of Work. The ``session_budget`` seam owns every
+    :func:`build_shortcuts_data`. The ``local_library_reader`` peer answers every
+    question the run asks of this device's own record of the library — the
+    classify baseline, the per-unit bound-row projection, the unstamped-platform
+    count, the resident sibling-group keys, and the stale-row scan — each in its
+    own short read Unit of Work, where the fetcher asks the same kinds of
+    question of RomM. The ``session_budget`` seam owns every
     renderer-heap reading and verdict: at each chunk boundary the orchestrator asks
     it whether applying the chunk would exhaust Steam's per-session heap budget, and
     the run pauses itself when it would (#1383).
@@ -159,7 +160,7 @@ class SyncOrchestratorConfig:
     reporter: LateBinding[SyncReporter]
     artwork: ArtworkManager
     bake_inputs: ShortcutBakeInputs
-    registry_queries: RegistryQueries
+    local_library_reader: LocalLibraryReader
     session_budget: SessionBudgetMonitor
 
 
@@ -199,7 +200,7 @@ class SyncOrchestrator:
         self._artwork = config.artwork
         self._reporter = config.reporter
         self._bake_inputs = config.bake_inputs
-        self._registry_queries = config.registry_queries
+        self._local_library_reader = config.local_library_reader
         self._session_budget = config.session_budget
 
     # ── Sync control ─────────────────────────────────────────────
@@ -298,13 +299,15 @@ class SyncOrchestrator:
             # the collapse below groups games, not dumps. The preview union is a
             # complete view of every enabled platform's groups; the DB's persisted
             # keys seed a member edging into a resident sibling on a skipped platform.
-            resident_keys = await self._loop.run_in_executor(None, self._registry_queries.do_read_resident_group_keys)
+            resident_keys = await self._loop.run_in_executor(
+                None, self._local_library_reader.do_read_resident_group_keys
+            )
             self._stamp_component_group_keys(all_roms, resident_keys)
             shortcuts_data = build_shortcuts_data(all_roms, self._plugin_dir, installed_paths, core_overrides)
             platform_name_set = {u.name for u in work_queue if u.type == "platform"}
             slug_to_name = {u.slug: u.name for u in work_queue if u.type == "platform" and u.slug}
             registry, last_synced_platforms, last_synced_collections = await self._loop.run_in_executor(
-                None, self._registry_queries.do_read_preview_baseline, slug_to_name
+                None, self._local_library_reader.do_read_preview_baseline, slug_to_name
             )
             # Enabled platforms lacking a completion stamp (#1416): a
             # late-ack-recovered platform is complete but unstamped, so the
@@ -314,7 +317,7 @@ class SyncOrchestrator:
             # 0-delta empty final chunk re-writes the stamp and records a fresh
             # SyncRun (the one-time re-walk ADR-0023 intends).
             restamp_platform_count = await self._loop.run_in_executor(
-                None, self._registry_queries.do_count_unstamped_platforms, set(slug_to_name)
+                None, self._local_library_reader.do_count_unstamped_platforms, set(slug_to_name)
             )
             # Collapse to one entry per sibling group (ADR-0021) so the preview
             # counts games, not individual dumps: a multi-version game becomes one
@@ -984,7 +987,7 @@ class SyncOrchestrator:
         # Read the bound-row registry once, before the build: its persisted keys
         # seed the component keying (a fresh member edging into a DB-resident
         # sibling adopts its canonical summary) AND drive the group collapse below.
-        registry = await self._loop.run_in_executor(None, self._registry_queries.do_read_apply_registry, unit)
+        registry = await self._loop.run_in_executor(None, self._local_library_reader.do_read_apply_registry, unit)
         resident_keys = {
             int(rom_id): entry["sibling_group_key"] for rom_id, entry in registry.items() if entry["sibling_group_key"]
         }
@@ -1574,7 +1577,10 @@ class SyncOrchestrator:
         # wrongly removed (#1036).
         if not cancelled:
             stale = await self._loop.run_in_executor(
-                None, self._registry_queries.do_scan_stale_roms, synced_rom_ids, set(self._sync_state.committed_app_ids)
+                None,
+                self._local_library_reader.do_scan_stale_roms,
+                synced_rom_ids,
+                set(self._sync_state.committed_app_ids),
             )
         else:
             stale = []

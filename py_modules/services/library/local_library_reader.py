@@ -1,13 +1,22 @@
-"""Read the registry and the completion stamps into the projections the sync's decisions are made against.
+"""What the plugin already knows about the library, read back out of the local database.
 
-Every method here answers a question the sync reasons about before it acts: what
-the bound ``roms`` rows looked like before this run (the classify baseline and
-the per-unit bound-row projection), which enabled platforms carry no completion
-stamp, which sibling-group keys the database already holds, and which bound rows
-this run never touched. Nothing here decides anything — the decisions live in
-``domain/`` and the moves live in
-:class:`~services.library.sync_orchestrator.SyncOrchestrator`. If a method would
-not fit the sentence above, it belongs elsewhere.
+The sync run needs two kinds of knowledge before it can decide anything: what
+RomM currently holds, and what this device recorded last time. The first is
+:class:`~services.library.fetcher.LibraryFetcher`'s — it reads outward, over
+HTTP. This module is its inward pair: every method here reads the plugin's own
+SQLite, and nothing here talks to RomM. That split is the reason the two exist
+separately, so a method that would have to ask the server does not belong here
+however well it fits the sentence below.
+
+What the local side knows is the ``Rom`` rows this device bound to Steam
+shortcuts, the per-platform completion stamps its runs left behind, the sibling
+group keys it persisted, and the last run that finished — shaped here into the
+projections a run's decisions are made against. The decisions themselves live in
+``domain/`` and the moves in
+:class:`~services.library.sync_orchestrator.SyncOrchestrator`; the reads are all
+this module does. It has no phase of its own — the baseline reads open a
+preview, the stale scan closes a run — so being local, not being early, is what
+holds it together.
 
 **The module is declared read-only**, and that is checked:
 ``scripts/check_read_only_module.py`` fails on any repository call here that is
@@ -24,7 +33,7 @@ tables through the same repositories:
 * ``_clear_platform_stamp_io`` **writes**. That alone rules it out of a
   read-only module, and it belongs with the apply pipeline that performs it
   rather than with the projections a run reasons about.
-  :meth:`RegistryQueries.do_count_unstamped_platforms` reads the same table and
+  :meth:`LocalLibraryReader.do_count_unstamped_platforms` reads the same table and
   answers a question the caller weighs; the delete is a step the pipeline takes.
   *When* it is taken — after the fetch, after the artwork, after the cancel
   guard, before the first chunk, so a crash in between leaves no stamp
@@ -52,21 +61,26 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class RegistryQueriesConfig:
-    """Frozen wiring bundle handed to ``RegistryQueries.__init__``.
+class LocalLibraryReaderConfig:
+    """Frozen wiring bundle handed to ``LocalLibraryReader.__init__``.
 
-    Holds the SQLite Unit-of-Work factory — the only dependency the reads have,
-    and the point of the grouping: a second one would mean the module answers
-    more than one kind of question and the boundary is drawn wrong.
+    Holds the SQLite Unit-of-Work factory, and only that. It is the whole
+    dependency surface on purpose: everything this module answers comes from the
+    local database, so a second dependency here would mean it had started
+    reading somewhere else.
     """
 
     uow_factory: UnitOfWorkFactory
 
 
-class RegistryQueries:
-    """The registry and completion-stamp reads the sync's decisions are made against."""
+class LocalLibraryReader:
+    """Reads this device's own record of the library out of SQLite.
 
-    def __init__(self, *, config: RegistryQueriesConfig) -> None:
+    The inward half of the pair :class:`~services.library.fetcher.LibraryFetcher`
+    completes: what was recorded here, never what RomM currently holds.
+    """
+
+    def __init__(self, *, config: LocalLibraryReaderConfig) -> None:
         self._uow_factory = config.uow_factory
 
     def do_read_preview_baseline(

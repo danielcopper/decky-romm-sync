@@ -2895,7 +2895,7 @@ class TestLateAckReconciliationWithStaleScan:
         # app 5000 for removal — it's a freshly-committed binding.
         stale = await plugin.loop.run_in_executor(
             None,
-            plugin._sync_service._registry_queries.do_scan_stale_roms,
+            plugin._sync_service._local_library_reader.do_scan_stale_roms,
             set(),  # synced_rom_ids — neither rom counts as synced for this scan
             set(box.committed_app_ids),
         )

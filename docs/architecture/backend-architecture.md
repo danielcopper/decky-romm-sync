@@ -278,16 +278,16 @@ continue unrelated groups.
 
 The library sync subsystem is a façade over six sub-services that coordinate through a shared `LibrarySyncStateBox`:
 
-| Module                 | Role                                                                                                                                                                                                                                                             |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `service.py`           | `LibraryService` façade — public callable surface; wires the sub-services and delegates                                                                                                                                                                          |
-| `fetcher.py`           | `LibraryFetcher` — read-only RomM roundtrips: list platforms/collections, the incremental/full pagination loop, per-unit work-queue construction                                                                                                                 |
-| `sync_orchestrator.py` | `SyncOrchestrator` — preview (read-only), the per-unit apply pipeline, cancel, the heartbeat clock, progress emission                                                                                                                                            |
-| `reporter.py`          | `SyncReporter` — post-apply finalisation (artwork filenames, per-unit `roms` upsert + `SyncRun` lifecycle) and the `roms`-derived queries                                                                                                                        |
-| `registry_queries.py`  | `RegistryQueries` — the local reads a run decides against: the classify baseline, the per-unit bound-row projection, the unstamped-platform count, the resident sibling-group keys, the stale-row scan. Declared read-only (`scripts/check_read_only_module.py`) |
-| `session_budget.py`    | `SessionBudgetMonitor` — Steam's per-session renderer-heap budget: the GC-settled RSS measurement, the chunk-boundary pause verdict, the post-preview prognosis, the run-start baseline, and the `get_session_budget_status` payload                             |
-| `bake_inputs.py`       | `ShortcutBakeInputs` — each ROM's launch facts for the shortcut bake: the disc-resolved installed path and the active emulator, both handed to `build_shortcuts_data`                                                                                            |
-| `_state.py`            | `LibrarySyncStateBox` — shared mutable in-flight sync state; single source of truth threaded through every sub-service, and the **sole owner** of the run-lifecycle pair (`sync_state` / `current_sync_id`) via its verb methods                                 |
+| Module                    | Role                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `service.py`              | `LibraryService` façade — public callable surface; wires the sub-services and delegates                                                                                                                                                                                                                                                    |
+| `fetcher.py`              | `LibraryFetcher` — read-only RomM roundtrips: list platforms/collections, the incremental/full pagination loop, per-unit work-queue construction. The outward half of the read pair below                                                                                                                                                  |
+| `local_library_reader.py` | `LocalLibraryReader` — the inward pair of `fetcher.py`: what THIS DEVICE recorded about the library, read back out of SQLite (the bound `Rom` rows, the completion stamps, the persisted sibling keys, the last finished run), shaped into the projections a run decides against. Declared read-only (`scripts/check_read_only_module.py`) |
+| `sync_orchestrator.py`    | `SyncOrchestrator` — preview (read-only), the per-unit apply pipeline, cancel, the heartbeat clock, progress emission                                                                                                                                                                                                                      |
+| `reporter.py`             | `SyncReporter` — post-apply finalisation (artwork filenames, per-unit `roms` upsert + `SyncRun` lifecycle) and the `roms`-derived queries                                                                                                                                                                                                  |
+| `session_budget.py`       | `SessionBudgetMonitor` — Steam's per-session renderer-heap budget: the GC-settled RSS measurement, the chunk-boundary pause verdict, the post-preview prognosis, the run-start baseline, and the `get_session_budget_status` payload                                                                                                       |
+| `bake_inputs.py`          | `ShortcutBakeInputs` — each ROM's launch facts for the shortcut bake: the disc-resolved installed path and the active emulator, both handed to `build_shortcuts_data`                                                                                                                                                                      |
+| `_state.py`               | `LibrarySyncStateBox` — shared mutable in-flight sync state; single source of truth threaded through every sub-service, and the **sole owner** of the run-lifecycle pair (`sync_state` / `current_sync_id`) via its verb methods                                                                                                           |
 
 The pipeline is split **fetch (read-only) / apply (owns persistence)**: the fetcher never mutates the `roms` registry or
 `rom_metadata`, and the reporter's per-unit commit upserts each acked ROM's `roms` row and stamps its cached
@@ -346,7 +346,7 @@ and a path change). Two compare layers run per unit, both in `ArtworkService`:
   BOUND fetched ROM whose stored fingerprint differs — delta-skipped ROMs included — it re-downloads the cache file
   (atomic tmp+rename), republishes the grid `{app_id}p.png` copy, persists the new fingerprint in a small write UoW (an
   observed server fact, deliberately NOT ack-coupled like `applied_launch_options`), and collects `{rom_id, app_id}`.
-  The pass scans against the unit's bound-row registry projection (`RegistryQueries.do_read_apply_registry`, which
+  The pass scans against the unit's bound-row registry projection (`LocalLibraryReader.do_read_apply_registry`, which
   carries `cover_source`) — the same read the group collapse diffs against, so it opens no per-ROM DB lookups. That list
   rides the unit's **first** `sync_apply_unit` chunk as `cover_refreshes`, clipped to the session-budget headroom left
   after the chunk's own projected cost (each refresh ≈ one transient cover, `COVER_TRANSIENT_KB`) — clipped, never
@@ -425,7 +425,7 @@ gate then full-fetches that platform on every future sync (no stamp = no skip au
 delta is otherwise empty — the QAM's preview would short-circuit on "no changes", so the re-walk that would re-stamp it
 never runs and the run's `interrupted` status lingers indefinitely (only an apply run records a fresh `SyncRun`).
 `sync_preview` therefore counts the enabled platforms lacking a `PlatformSyncState` stamp
-(`RegistryQueries.do_count_unstamped_platforms`, a side-effect-free read) and rides it as the additive summary field
+(`LocalLibraryReader.do_count_unstamped_platforms`, a side-effect-free read) and rides it as the additive summary field
 `restamp_platform_count` (absent/0 tolerated by old consumers). The frontend treats a restamp-only preview (all diffs
 zero, count > 0) as apply-able — "No changes — finishing an interrupted sync." with the normal Apply/Cancel confirm —
 mirroring the cover-only flow. The gated apply then runs the unstamped platform (the skip gate never skips it), and its
@@ -595,7 +595,7 @@ sibling row holding `shortcut_app_id` is the group's **active version**.
 - **The collapse happens at the same `build_shortcuts_data` boundary in both paths**
   (`domain/sync_diff.py::collapse_sibling_groups`). Preview and apply build the full per-ROM shortcut list, then
   collapse it to one entry per group against the bound-row registry (preview reads
-  `RegistryQueries.do_read_preview_baseline`, apply reads `RegistryQueries.do_read_apply_registry` per unit). The
+  `LocalLibraryReader.do_read_preview_baseline`, apply reads `LocalLibraryReader.do_read_apply_registry` per unit). The
   collapse takes an explicit `complete_group_view` flag: a sibling group is per-platform, so the whole-library
   **preview** union and each **platform** apply unit see a group's whole membership (`complete_group_view=True`) and
   collapse identically — the preview counts can never diverge from what those units create (the #1292 counts-vs-reality

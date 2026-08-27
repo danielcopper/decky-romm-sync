@@ -21,7 +21,7 @@ def rebind_loop(library_service, loop):
     Four of the façade's sub-services (fetcher, orchestrator, reporter,
     session-budget monitor) hold their own ctor-bound ``_loop``. Tests that
     swap in a mock loop must propagate it to all four so async calls land on
-    the override. ``ShortcutBakeInputs`` and ``RegistryQueries`` hold none —
+    the override. ``ShortcutBakeInputs`` and ``LocalLibraryReader`` hold none —
     their methods are synchronous workers the orchestrator offloads through
     *its* loop.
     """

@@ -10,8 +10,8 @@ lifecycle and safety heartbeat, :class:`SyncReporter` for post-apply
 finalisation and the ``roms``-derived callable queries,
 :class:`SessionBudgetMonitor` for Steam's renderer-heap budget,
 :class:`ShortcutBakeInputs` for each ROM's launch facts,
-:class:`RegistryQueries` for the registry/stamp reads a run's decisions are
-made against. The façade itself only wires the
+:class:`LocalLibraryReader` for what this device already recorded about the
+library. The façade itself only wires the
 pieces together and delegates — anything that touches RomM or mutates
 in-flight sync state belongs in a sub-service.
 """
@@ -25,7 +25,7 @@ from lib.late_binding import LateBinding
 from services.library._state import CollectionMembership, LibrarySyncStateBox
 from services.library.bake_inputs import ShortcutBakeInputs, ShortcutBakeInputsConfig
 from services.library.fetcher import LibraryFetcher, LibraryFetcherConfig
-from services.library.registry_queries import RegistryQueries, RegistryQueriesConfig
+from services.library.local_library_reader import LocalLibraryReader, LocalLibraryReaderConfig
 from services.library.reporter import SyncReporter, SyncReporterConfig
 from services.library.session_budget import SessionBudgetMonitor, SessionBudgetMonitorConfig
 from services.library.sync_orchestrator import SyncOrchestrator, SyncOrchestratorConfig
@@ -102,8 +102,8 @@ class LibraryService:
     (post-apply finalisation + the ``roms``-derived callable queries),
     :class:`SessionBudgetMonitor` (Steam's renderer-heap budget),
     :class:`ShortcutBakeInputs` (each ROM's installed path + active
-    emulator), and :class:`RegistryQueries` (the registry and
-    completion-stamp reads a run's decisions are made against) over a
+    emulator), and :class:`LocalLibraryReader` (this device's own record of
+    the library, read back out of SQLite) over a
     single shared :class:`LibrarySyncStateBox`. The façade itself owns the box and
     exposes the callable surface; every implementation method lives on
     one of the sub-services.
@@ -145,10 +145,11 @@ class LibraryService:
             )
         )
 
-        # Sub-service: RegistryQueries. Constructed before the
+        # Sub-service: LocalLibraryReader — the fetcher's inward pair, reading
+        # the local database where the fetcher reads RomM. Constructed before the
         # orchestrator, which holds it and offloads every one of its reads
         # through its own executor.
-        self._registry_queries = RegistryQueries(config=RegistryQueriesConfig(uow_factory=config.uow_factory))
+        self._local_library_reader = LocalLibraryReader(config=LocalLibraryReaderConfig(uow_factory=config.uow_factory))
 
         # Sub-service: session-budget monitor. Constructed before the
         # orchestrator, which holds it and calls it at every chunk boundary.
@@ -184,7 +185,7 @@ class LibraryService:
                 reporter=reporter_binding,
                 artwork=config.artwork,
                 bake_inputs=self._bake_inputs,
-                registry_queries=self._registry_queries,
+                local_library_reader=self._local_library_reader,
                 session_budget=self._session_budget,
             )
         )

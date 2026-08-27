@@ -66,9 +66,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Module path (relative to the repo root) -> why it is read-only, quoted in the
 # finding so the message carries the reason rather than only the rule.
 READ_ONLY_MODULES: dict[str, str] = {
-    "py_modules/services/library/registry_queries.py": (
-        "it reads the registry and the completion stamps into projections the sync decides against; "
-        "a write belongs with the pipeline that performs it"
+    "py_modules/services/library/local_library_reader.py": (
+        "it reads this device's own record of the library — the Rom rows, the completion stamps, "
+        "the last finished run — and nothing else; a write belongs with the pipeline that performs it"
     ),
 }
 

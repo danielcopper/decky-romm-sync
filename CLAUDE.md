@@ -203,8 +203,8 @@ Format: **invariant** — tier — enforced by.
   UoW, which is what putting the three methods on one class makes cheapest — is that gate's documented blind spot and
   passes green. On the budget side the confinement holds `session_budget`'s stated promise that no renderer-RSS reading
   is taken anywhere else in the package
-- **A module declared read-only calls no repository write — `services/library/registry_queries.py` to start** — check —
-  `scripts/check_read_only_module.py` (AST over the declared file's own calls, matching the two-attribute
+- **A module declared read-only calls no repository write — `services/library/local_library_reader.py` to start** —
+  check — `scripts/check_read_only_module.py` (AST over the declared file's own calls, matching the two-attribute
   `<...>.<repo>.<method>` shape against the eleven repositories the UoW exposes). Read or write is decided **by the
   name's shape** — `get` / `get_*` / `iter_*` / `count` plus the explicitly listed reads — and
   `tests/scripts/test_check_read_only_module.py` re-derives every method name from `services/protocols/repositories.py`

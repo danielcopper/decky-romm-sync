@@ -31,7 +31,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT_PATH = _REPO_ROOT / "scripts" / "check_read_only_module.py"
 _PROTOCOLS_PATH = _REPO_ROOT / "py_modules" / "services" / "protocols" / "repositories.py"
 
-_MODULE = "py_modules/services/library/registry_queries.py"
+_MODULE = "py_modules/services/library/local_library_reader.py"
 _REASON = "it only ever reads"
 
 # The classification the gate must produce for every method the repository

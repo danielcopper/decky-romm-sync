@@ -1,4 +1,4 @@
-"""Tests for RegistryQueries — the registry and completion-stamp reads a sync decides against.
+"""Tests for LocalLibraryReader — this device's own record of the library, read back out.
 
 Driven through the shared ``plugin`` fixture so every read runs against the same
 ``FakeUnitOfWork`` the rest of the library suite seeds, rather than a mock of the
@@ -37,7 +37,7 @@ class TestRegistryProjections:
         _seed_rom_row(plugin, 11, app_id=1011, platform_slug="n64", name="Null", fs_name="null.z64", cover_source=None)
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
-        registry = plugin._sync_service._registry_queries.do_read_apply_registry(unit)
+        registry = plugin._sync_service._local_library_reader.do_read_apply_registry(unit)
 
         assert registry["10"]["cover_source"] == self._OLD
         assert registry["11"]["cover_source"] is None
@@ -47,7 +47,7 @@ class TestRegistryProjections:
             plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64", cover_source=self._OLD
         )
 
-        registry, _platforms, _collections = plugin._sync_service._registry_queries.do_read_preview_baseline(
+        registry, _platforms, _collections = plugin._sync_service._local_library_reader.do_read_preview_baseline(
             {"n64": "N64"}
         )
 
@@ -61,6 +61,6 @@ class TestResidentGroupKeys:
         _seed_rom_row(plugin, 1, app_id=100, platform_slug="n64", sibling_group_key="igdb:5:1")
         _seed_rom_row(plugin, 2, app_id=None, platform_slug="n64", sibling_group_key=None)
 
-        keys = plugin._sync_service._registry_queries.do_read_resident_group_keys()
+        keys = plugin._sync_service._local_library_reader.do_read_resident_group_keys()
 
         assert keys == {1: "igdb:5:1"}
