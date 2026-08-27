@@ -36,7 +36,8 @@ utilities) / `models/` (data shapes). `import-linter` enforces direction. `[CP]`
   call time; no `decky.logger.info` to bypass log-level filtering.
 - `[ours]` God-class signal: services > ~1000 LOC — decompose into sub-services with constructor injection
   (`services/saves/` is the reference). Enforced by `scripts/check_module_size.py`: a new module may not cross the
-  threshold at all, and the modules that predate the gate are pinned at their exact size and may not grow.
+  threshold at all, and the modules that predate the gate are pinned at their exact size and may not grow. A pin goes up
+  only for a change that adds no code — a rename, a reformat — with the reason recorded at its `ALLOWLIST` entry.
 
 ## Reference shape for new service-level work
 

@@ -8,13 +8,15 @@ CLAUDE.md sets a decomposition threshold for every first-party backend tree —
 because nothing was watching.
 
 This gate watches. Every in-scope module above the threshold carries a ceiling
-in ``ALLOWLIST`` — the size it had when it was recorded. That buys the property
-the prose rule never had:
+in ``ALLOWLIST`` — the size it had when it was recorded, movable only under the
+narrow condition stated at that list. That buys the property the prose rule
+never had:
 
 * a **new** module cannot cross the threshold at all, because it is not listed;
-* a **listed** module cannot grow past its recorded ceiling;
-* a module that shrinks back under the threshold must leave the list, so the
-  list only ever gets shorter.
+* a **listed** module cannot grow past its ceiling, and that ceiling goes up
+  only for a change that adds no code, with the reason recorded at its entry;
+* a module that shrinks back under the threshold must leave the list, so an
+  entry never becomes permanent.
 
 Shrinking below the ceiling without reaching the threshold passes. Demanding an
 exact match would fail CI on any refactor that nets a single line; the gate
@@ -71,18 +73,17 @@ SCOPE_DIRS = (
 # pinned at the size it had that day. Entries come out when the module drops
 # back under the threshold; numbers go down when a refactor banks real slack.
 # A number goes up only where the change adds no code — a rename, a reformat —
-# or where the same change banks slack elsewhere in that module, and only with
-# the reason recorded at the entry below and argued in the PR. Never taken
-# silently: a number raised without that reasoning has retired the gate, and
-# that costs more than any module's size.
+# and only with the reason recorded at the entry below and argued in the PR.
+# Never taken silently: a number raised without that reasoning has retired the
+# gate, and that costs more than any module's size.
 ALLOWLIST = {
     "py_modules/services/downloads.py": 1119,
     "py_modules/services/library/fetcher.py": 1150,
     # Raised 1186 -> 1192 by #1777's rename of this module's launch-facts peer
     # to ShortcutLaunchResolver, for accuracy. The six lines are `ruff format`
     # re-wraps of three existing call sites that the longer identifier pushed
-    # past the line length; no code was added. Expected to leave this table
-    # entirely once #1777's remaining cuts take the module under the threshold.
+    # past the line length; no code was added. This entry has to be deleted once
+    # the module falls under the threshold — the gate fails until it is.
     "py_modules/services/library/sync_orchestrator.py": 1192,
 }
 
@@ -132,12 +133,14 @@ def main() -> int:
             failures.append(
                 f"{name}: {size} lines, up from its {ceiling}-line ceiling.\n"
                 f"      This module is already over the threshold; it may not grow.\n"
-                f"      Move the {size - ceiling} added line(s) into a new module."
+                f"      Move the {size - ceiling} added line(s) into a new module — or, if this\n"
+                f"      change adds no code (a rename, a reformat), raise the ceiling to {size}\n"
+                f"      and record why at its ALLOWLIST entry."
             )
         elif size <= THRESHOLD:
             failures.append(
                 f"{name}: {size} lines is back under the {THRESHOLD}-line threshold.\n"
-                f"      Drop its ALLOWLIST entry — the list only ever gets shorter."
+                f"      Drop its ALLOWLIST entry — entries only ever come out."
             )
         elif ceiling - size >= SLACK_ADVISORY:
             advisories.append(f"{name}: {size} lines vs. a {ceiling}-line ceiling — lower it to {size}.")

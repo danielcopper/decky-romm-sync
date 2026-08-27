@@ -188,7 +188,7 @@ class TestCompositionRoot:
                     "    renderer_gc: RendererGcFn\n\n"
                     "class LibraryService:\n"
                     "    def __init__(self, config):\n"
-                    "        self._bake = ShortcutLaunchResolver(\n"
+                    "        self._shortcut_launch_resolver = ShortcutLaunchResolver(\n"
                     "            config=ShortcutLaunchResolverConfig(\n"
                     "                active_core=config.active_core, disc_resolver=config.disc_resolver\n"
                     "            )\n"

@@ -243,8 +243,10 @@ Format: **invariant** — tier — enforced by.
   `scripts/check_cosmic_call_bans.sh`
 - **No module in `services/`, `bootstrap/`, `adapters/`, `domain/`, `lib/` or `models/` crosses the ~1000-LOC
   decomposition threshold, and the ones already over it may not grow** — check — `scripts/check_module_size.py` (the
-  modules that predate the gate are grandfathered at their exact size; that list only ever gets shorter. `main.py`,
-  `_vendor/`, `tests/`, `scripts/` and `src/` are out of scope, each for a reason recorded at `SCOPE_DIRS`)
+  modules that predate the gate are grandfathered at their exact size. A ceiling goes up only for a change that adds no
+  code — a rename, a reformat — and only with the reason recorded at its `ALLOWLIST` entry; a raise taken silently has
+  retired the gate. Entries only ever come out, when the module drops back under the threshold. `main.py`, `_vendor/`,
+  `tests/`, `scripts/` and `src/` are out of scope, each for a reason recorded at `SCOPE_DIRS`)
 - **Service-independence contract list stays complete** — check — `scripts/check_service_independence_contract.py`
 - **Layer import direction (services ↛ adapters, adapters ↛ services, …)** — check — `.importlinter` (`lint-imports`)
 - **Frontend direction: `src/utils/` and `src/api/` never import `src/components/`, and no `src/` module takes part in
