@@ -5581,7 +5581,8 @@ class TestSessionBudgetGate:
         # The distinct pause reason reaches the frontend via sync_complete so the
         # toast + QAM status read the resume-friendly guidance, not "cancelled".
         complete = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
-        assert complete and complete[-1].get("interrupt_reason") == SYNC_PAUSED_BUDGET
+        assert complete
+        assert complete[-1].get("interrupt_reason") == SYNC_PAUSED_BUDGET
         assert complete[-1].get("cancelled") is True
 
     @staticmethod
