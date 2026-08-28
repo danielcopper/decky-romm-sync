@@ -445,11 +445,11 @@ only representatives bound; Rom row then `rom_metadata`, FK-safe) over that chun
 crash-safe on its own and a mid-unit failure forfeits only the in-flight chunk. Chunks cut **only** at sibling-group
 boundaries (overflowing 200 to keep a game's dumps whole so they never straddle two commits); no-emit groups and
 unmatched leftovers ride chunk 0, and an empty unit is one empty chunk (the empty round-trip still commits its unbound
-rows). The whole-unit staging (`pending_sync` / `pending_all_roms` / `pending_cover_sources`) is set once; only the
-per-chunk coordination is re-armed each chunk. The motivating field crash is
-[#797](https://github.com/danielcopper/decky-romm-sync/issues/797): a 3084-shortcut unit emitted in one frame lost ~24
-minutes of work when `steamwebhelper` OOM-crashed before any ack — a 200-chunk caps both the bridge payload (~200 KB vs
-~3 MB) and the crash blast radius (~2 min vs 24+).
+rows). The whole-unit staging (`pending_sync` / `pending_all_roms` / `pending_cover_sources`) is set once by the
+dispatcher, before its first chunk goes out; only the per-chunk coordination is re-armed each chunk. The motivating
+field crash is [#797](https://github.com/danielcopper/decky-romm-sync/issues/797): a 3084-shortcut unit emitted in one
+frame lost ~24 minutes of work when `steamwebhelper` OOM-crashed before any ack — a 200-chunk caps both the bridge
+payload (~200 KB vs ~3 MB) and the crash blast radius (~2 min vs 24+).
 
 **Per-chunk wait: timeout vs. cancel.** The dispatcher emits each chunk's `sync_apply_unit`, then waits on
 `unit_complete_event` (heartbeat-clocked) for the frontend's `report_unit_results` ack. When the wait returns `None` the
