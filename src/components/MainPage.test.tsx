@@ -58,6 +58,7 @@ import { NEW_ITEM_SEC, UPDATED_ITEM_SEC, COVER_DOWNLOAD_SEC, FETCH_ALLOWANCE_SEC
 import { setDownloads } from "../utils/downloadStore";
 import { resetConnectionProbeForTests } from "../utils/connectionProbe";
 import { resetSyncStatsStoreForTests } from "../utils/syncStatsStore";
+import { resetPendingPreviewStoreForTests, adoptPreview } from "../utils/pendingPreviewStore";
 import { showModal } from "@decky/ui";
 import * as syncManager from "../utils/syncManager";
 import * as connectionState from "../utils/connectionState";
@@ -300,6 +301,10 @@ describe("MainPage", () => {
     // Same for the sync stats and session budget: both the stored answers and
     // any read still open outlive the render that issued them.
     resetSyncStatsStoreForTests();
+    // The pending preview outlives the panel by design — that is the whole point
+    // of the store — so a card one test leaves standing would render over the
+    // next test's idle page.
+    resetPendingPreviewStoreForTests();
     setSyncProgress({
       running: false,
       stage: "",
@@ -4007,14 +4012,14 @@ describe("MainPage", () => {
       expect(vi.mocked(backend.syncApplyDelta)).toHaveBeenCalledWith("preview-fresh");
     });
 
-    it("is dropped when a run started while the read was in flight", async () => {
+    it("waits for a run that started while the read was in flight, then shows", async () => {
       const held = deferred<{ success: boolean; preview: SyncPreview | null }>();
       vi.mocked(backend.getPendingPreview).mockReturnValue(held.promise);
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
 
       await act(async () => {
-        setSyncProgress({ running: true, stage: "fetching", message: "Fetching library..." });
+        setSyncProgress({ running: true, stage: "fetching", message: "Fetching library...", runId: "run-live" });
         await Promise.resolve();
       });
       await act(async () => {
@@ -4023,9 +4028,23 @@ describe("MainPage", () => {
         await Promise.resolve();
       });
 
-      // The run owns the panel — no card, and its progress rows stand.
+      // The run owns the panel — no card over its progress rows.
       expect(buttonByExactText(container, "Apply Sync")).toBeNull();
       expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
+
+      // But it is held, not dropped: the card is there the moment the run ends.
+      await act(async () => {
+        setSyncProgress({
+          running: false,
+          stage: "done",
+          current: 0,
+          total: 0,
+          message: "Sync complete",
+          runId: "run-live",
+        });
+        await Promise.resolve();
+      });
+      expect(buttonByExactText(container, "Apply Sync")).not.toBeNull();
     });
 
     it("counts down the time left and advances as the clock runs", async () => {
@@ -5322,22 +5341,24 @@ describe("MainPage", () => {
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to query RetroDECK status"));
     });
   });
+
   // ===========================================================================
-  // PHASE-1 DIAGNOSIS — device-observed defects, reproduced. EXPECTED TO FAIL.
-  // Remove or re-point these once the fix lands.
+  // The preview survives leaving the main page
   // ===========================================================================
-  describe("PHASE-1 DIAGNOSIS (expected to fail)", () => {
+  describe("the preview survives leaving the main page", () => {
     /** What handleSync writes into the module store the moment Sync Library is
-     *  pressed: running, no run id yet (the backend has not stamped one). */
+     *  pressed: running, and carrying no run id — the backend has not stamped
+     *  one yet, and will not until a reconcile and a round trip later. */
     function optimisticStart(): SyncProgress {
       return { running: true, stage: "fetching", current: 0, total: 0, message: "Fetching library..." };
     }
 
-    /** The backend's persisted snapshot after a PREVIOUS preview completed.
-     *  ``finish_run`` never resets ``sync_progress``, so this is what
-     *  ``get_sync_status`` keeps answering until the next run's first
-     *  ``emit_progress`` — and handleSync awaits reconcileStaleShortcuts before
-     *  it ever calls sync_preview, so that window is seconds wide. */
+    /** The frame a previous preview run left behind. It used to be what
+     *  `get_sync_status` answered with until the NEXT run overwrote it, so a
+     *  panel remounting during the start window read it as the state of the run
+     *  it was actually watching. The backend now resets the snapshot when a run
+     *  finishes; this is the same answer arriving from an older backend, or from
+     *  a run whose reset this read raced. */
     function lingeringDoneSnapshot(): SyncProgress {
       return {
         running: false,
@@ -5349,7 +5370,34 @@ describe("MainPage", () => {
       };
     }
 
-    it("A: a remount mid-start keeps the in-progress view (stale snapshot must not retract it)", async () => {
+    function previewWithChanges(id: string): SyncPreview {
+      return {
+        success: true,
+        summary: {
+          new_count: 2,
+          changed_count: 0,
+          unchanged_count: 0,
+          remove_count: 0,
+          disabled_platform_remove_count: 0,
+        },
+        new_names: ["a", "b"],
+        changed_names: [],
+        preview_id: id,
+      };
+    }
+
+    function cardChangesText(container: HTMLElement): string {
+      return container.querySelector('[data-testid="sync-changes"]')?.textContent ?? "";
+    }
+
+    /** Every control that offers to START a run. */
+    function startControls(container: HTMLElement): string[] {
+      return ["Sync Library", "Resume Sync", "Skip Preview", "Force Full Sync"].filter(
+        (label) => buttonByExactText(container, label) !== null,
+      );
+    }
+
+    it("a remount mid-start keeps the in-progress view", async () => {
       setSyncProgress(optimisticStart());
       vi.mocked(backend.getSyncStatus).mockResolvedValue(lingeringDoneSnapshot());
 
@@ -5359,24 +5407,46 @@ describe("MainPage", () => {
 
       await flushAsync();
 
-      // ...and then the stale snapshot lands and the panel falls back to idle.
-      expect(buttonByExactText(container, "Sync Library")).toBeNull();
+      // ...and the snapshot, which describes a run that is not the one the store
+      // is tracking, may not retract it.
+      expect(startControls(container)).toEqual([]);
       expect(container.querySelector('[data-testid="sync-stage"]')).not.toBeNull();
     });
 
-    it("C: a remount mid-start does not announce the PREVIOUS run's terminal frame", async () => {
+    it("a remount mid-start does not announce the previous run's terminal frame", async () => {
       setSyncProgress(optimisticStart());
       vi.mocked(backend.getSyncStatus).mockResolvedValue(lingeringDoneSnapshot());
 
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
 
-      const statusEl = container.querySelector('[data-testid="sync-status"]');
-      expect(statusEl?.textContent ?? null).not.toBe("Preview ready");
+      expect(container.querySelector('[data-testid="sync-status"]')?.textContent ?? null).not.toBe("Preview ready");
     });
 
-    it("B: a preview that finishes while the panel is back on screen puts its card up", async () => {
-      // Instance 1 starts the preview, then the user leaves the main page.
+    it("a snapshot that names the very run the store is tracking still ends it", async () => {
+      // The retraction is refused only where the answer cannot be shown to be
+      // about this run. One that names it is the panel's correction path — a run
+      // whose terminal frame the panel missed while it was away.
+      setSyncProgress({ running: true, stage: "fetching", message: "Fetching library...", runId: "run-live" });
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: false,
+        stage: "done",
+        current: 0,
+        total: 0,
+        message: "Sync complete: 4 games",
+        runId: "run-live",
+      });
+
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.querySelector('[data-testid="sync-stage"]')).toBeNull();
+      expect(container.querySelector('[data-testid="sync-status"]')?.textContent).toBe("Sync complete: 4 games");
+    });
+
+    it("a preview that finishes while the panel is back on screen puts its card up", async () => {
+      // Instance 1 starts the preview, then the user leaves the main page. The
+      // `sync_preview` promise stays with the instance that is about to die.
       const previewCall = deferred<SyncPreview>();
       vi.mocked(backend.syncPreview).mockReturnValue(previewCall.promise);
       const first = render(<MainPage onNavigate={vi.fn()} />);
@@ -5389,8 +5459,9 @@ describe("MainPage", () => {
       expect(getSyncProgress().running).toBe(true);
       first.unmount();
 
-      // The user comes back while the run is still going. The backend WITHHOLDS
-      // the staged preview while a run is in flight, so the mount read gets nothing.
+      // The user comes back while the run is still going. The backend withholds
+      // a staged preview while a run is in flight, so this mount read gets
+      // nothing — and there is nothing staged yet anyway.
       vi.mocked(backend.getPendingPreview).mockResolvedValue({ success: true, preview: null });
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
@@ -5404,21 +5475,9 @@ describe("MainPage", () => {
       await flushAsync();
       expect(second.container.querySelector('[data-testid="sync-stage"]')).not.toBeNull();
 
-      // The preview finishes HERE. Its promise belongs to the unmounted instance.
+      // The preview finishes HERE, and its answer goes to the dead instance.
       await act(async () => {
-        previewCall.resolve({
-          success: true,
-          summary: {
-            new_count: 2,
-            changed_count: 0,
-            unchanged_count: 0,
-            remove_count: 0,
-            disabled_platform_remove_count: 0,
-          },
-          new_names: ["a", "b"],
-          changed_names: [],
-          preview_id: "preview-finished-offscreen",
-        });
+        previewCall.resolve(previewWithChanges("preview-finished-offscreen"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -5435,9 +5494,126 @@ describe("MainPage", () => {
         await Promise.resolve();
       });
 
-      // What the device shows: the status line, and no card.
-      expect(second.container.querySelector('[data-testid="sync-status"]')?.textContent).toBe("Preview ready");
+      // The card is on screen for the instance that is actually mounted.
       expect(buttonByExactText(second.container, "Apply Sync")).not.toBeNull();
+      expect(startControls(second.container)).toEqual([]);
+      await act(async () => {
+        fireEvent.click(buttonByExactText(second.container, "Apply Sync")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.syncApplyDelta)).toHaveBeenCalledWith("preview-finished-offscreen");
+    });
+
+    it("asks the backend when a preview run ends having staged something this panel never saw", async () => {
+      // The other order: the run ends for a panel holding nothing — the answer to
+      // `sync_preview` was lost with the instance that asked for it (a QAM close,
+      // a reload). The terminal frame is the cue to go and ask.
+      vi.mocked(backend.getPendingPreview).mockResolvedValue({ success: true, preview: null });
+      setSyncProgress({ running: true, stage: "fetching", message: "Fetching library...", runId: "run-live" });
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "fetching",
+        current: 0,
+        total: 0,
+        message: "Fetching Game Boy...",
+        runId: "run-live",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      vi.mocked(backend.getPendingPreview).mockResolvedValue({
+        success: true,
+        preview: previewWithChanges("preview-staged-while-away"),
+      });
+      await act(async () => {
+        setSyncProgress({
+          running: false,
+          stage: "done",
+          current: 0,
+          total: 0,
+          message: "Preview ready",
+          runId: "run-live",
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(buttonByExactText(container, "Apply Sync")).not.toBeNull();
+      expect(cardChangesText(container)).toContain("Games: 2 new");
+    });
+
+    it("does not re-ask when the store already holds the run's preview", async () => {
+      setSyncProgress({ running: true, stage: "fetching", message: "Fetching library...", runId: "run-live" });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      vi.mocked(backend.getPendingPreview).mockClear();
+
+      await act(async () => {
+        adoptPreview(previewWithChanges("already-here"));
+        setSyncProgress({
+          running: false,
+          stage: "done",
+          current: 0,
+          total: 0,
+          message: "Preview ready",
+          runId: "run-live",
+        });
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.getPendingPreview)).not.toHaveBeenCalled();
+      expect(buttonByExactText(container, "Apply Sync")).not.toBeNull();
+    });
+
+    // -------------------------------------------------------------------------
+    // The rule, directly: neither a running preview nor a preview result may
+    // leave the panel offering to start another one.
+    // -------------------------------------------------------------------------
+    describe("the controls that start a preview never appear over one", () => {
+      it("not while a preview run is in flight, on a fresh mount", async () => {
+        setSyncProgress({ running: true, stage: "fetching", message: "Fetching library...", runId: "run-live" });
+        vi.mocked(backend.getSyncStatus).mockResolvedValue({
+          running: true,
+          stage: "fetching",
+          current: 0,
+          total: 0,
+          message: "Fetching Game Boy...",
+          runId: "run-live",
+        });
+
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        expect(startControls(container)).toEqual([]);
+        await flushAsync();
+        expect(startControls(container)).toEqual([]);
+        expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
+      });
+
+      it("not while a preview result stands, on a fresh mount", async () => {
+        vi.mocked(backend.getPendingPreview).mockResolvedValue({
+          success: true,
+          preview: previewWithChanges("held"),
+        });
+
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+
+        expect(startControls(container)).toEqual([]);
+        expect(buttonByExactText(container, "Apply Sync")).not.toBeNull();
+      });
+
+      it("not while a preview result stands that the panel adopted before this mount", async () => {
+        // Nothing to fetch and nothing in flight: the card is on screen at first
+        // paint because the store, not the instance, is holding it.
+        adoptPreview(previewWithChanges("held-across-mounts"));
+        vi.mocked(backend.getPendingPreview).mockResolvedValue({ success: true, preview: null });
+
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        expect(startControls(container)).toEqual([]);
+        expect(buttonByExactText(container, "Apply Sync")).not.toBeNull();
+        await flushAsync();
+        expect(startControls(container)).toEqual([]);
+      });
     });
   });
 });

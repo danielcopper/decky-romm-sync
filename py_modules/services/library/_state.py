@@ -114,6 +114,14 @@ class LibrarySyncStateBox:
     sync_state: SyncState = SyncState.IDLE
     current_sync_id: str | None = None
     sync_last_heartbeat: float = 0.0
+    # The latest progress frame, which ``get_sync_status`` hands a remounting
+    # QAM so it can recover a live run without waiting for the next event. It
+    # describes an IN-FLIGHT run only: ``finish_run`` puts it back to the idle
+    # default, because a finished run's terminal frame is an event the panel was
+    # already sent, and a panel that merely FINDS one on a later mount is
+    # required to ignore it (#1019) — so leaving it here answered every mount
+    # with a run that ended, message and run id included, for as long as the
+    # plugin stayed loaded.
     sync_progress: dict[str, Any] = field(default_factory=_default_progress)
     pending_sync: dict[int, dict[str, Any]] = field(default_factory=dict)
     # Every fetched ROM of the active unit (built shortcut-shape, keyed by
@@ -307,12 +315,20 @@ class LibrarySyncStateBox:
         Resets to IDLE + nulls ``current_sync_id`` only when ``run_id`` equals
         the active ``current_sync_id``; a late, foreign, or doubled terminal is
         a no-op and can never null a freshly-started run. Returns ``True`` when
-        it reset.
+        it reset. The progress snapshot goes back to the idle default with it,
+        so ``get_sync_status`` answers a finished run the way it answers a
+        plugin that has never run — see :attr:`sync_progress`.
         """
         if str(run_id) != str(self.current_sync_id):
             return False
         self.sync_state = SyncState.IDLE
         self.current_sync_id = None
+        # Ordering: every run emits its terminal frame before reaching the
+        # ``finally: finish_run(run_id)`` that lands here, so this drops a
+        # snapshot the frontend has already been sent as an event — never one it
+        # is still waiting for. Not itself a frame: nothing emits it, so no
+        # ``running: False`` reaches the panel mid-run from this line.
+        self.sync_progress = _default_progress()
         return True
 
     def is_in_flight(self) -> bool:

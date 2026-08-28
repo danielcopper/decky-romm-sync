@@ -21,7 +21,6 @@ import {
   syncPreview,
   syncApplyDelta,
   syncCancelPreview,
-  getPendingPreview,
   clearSyncCache,
   refreshMigrationState,
   getSyncStatus,
@@ -45,6 +44,13 @@ import {
   withinUnitFraction,
 } from "../utils/syncProgress";
 import { useDownloads } from "../utils/downloadStore";
+import {
+  usePendingPreview,
+  getPendingPreviewSnapshot,
+  adoptPreview,
+  clearPendingPreview,
+  refreshPendingPreview,
+} from "../utils/pendingPreviewStore";
 import {
   refreshSessionBudget,
   refreshSessionBudgetAfterChange,
@@ -503,16 +509,19 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // so the countdown ticks per frame exactly as before.
   const [liveEtaDisplay, setLiveEtaDisplay] = useState<number | null>(null);
   const [status, setStatus] = useState<TransientStatus | null>(null);
-  const [preview, setPreview] = useState<SyncPreview | null>(null);
+  // The preview lives in a module store, not here: the answer to `sync_preview`
+  // is delivered to the instance that pressed Sync, and leaving the main page
+  // mid-run unmounts that instance while the run carries on
+  // (`utils/pendingPreviewStore.ts` states the whole rule).
+  const preview = usePendingPreview();
   // Clock mirror for the preview card's expiry countdown, written from the
-  // interval below and from each site that adopts a preview — never read during
-  // render, same rule as the live-ETA row. `null` only until the first preview
-  // of this mount is adopted: nothing resets it afterwards, because the reset
-  // would have to live in the countdown effect and a setState there is a lint
-  // error (react-hooks/set-state-in-effect). That costs nothing while EVERY
-  // adopter stamps it first — the invariant a third adopter must keep — since it
-  // is read only through `previewSecondsLeft`, i.e. only while a preview is up,
-  // and the interval refreshes it every second from then on.
+  // interval below and from the handlers through which a preview can reach this
+  // instance — never read during render, same rule as the live-ETA row. `null`
+  // only until the first of those runs: nothing resets it afterwards, because
+  // the reset would have to live in the countdown effect and a setState there is
+  // a lint error (react-hooks/set-state-in-effect). That costs nothing, since it
+  // is read only through `previewSecondsLeft` — only while a preview is up — and
+  // the interval refreshes it every second from then on.
   const [previewNowMs, setPreviewNowMs] = useState<number | null>(null);
   const [skipPreview, setSkipPreview] = useState(false);
   const [retroarchWarning, setRetroarchWarning] = useState<{ warning: boolean; current?: string } | null>(null);
@@ -523,12 +532,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const saveSortMigration = useSaveSortMigrationState();
   const downloads = useDownloads();
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Whether the user has answered the preview question since this mount —
-  // dismissed the card, or pressed Sync (which asks the backend for a fresh
-  // preview and, on failure, has it discard the staged one). Read by the
-  // pending-preview restore, which cannot see any of that in state: an answered
-  // preview and one that never existed both leave `preview` null.
-  const previewAnsweredRef = useRef(false);
   // The run this panel is watching, by id, and whether its end has been handled.
   // Seeded at first render — BEFORE the subscription below exists, so the mount
   // seed's own write is measured against the state it replaced rather than against
@@ -583,31 +586,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // The backend holds a computed preview for 30 minutes, but this panel's card
     // dies with the render — leaving the main page for a submenu used to strand a
     // preview that was still perfectly appliable. Ask for it back on every mount.
-    getPendingPreview()
-      .then((answer) => {
-        if (!answer.success || !answer.preview) return;
-        const restored = answer.preview;
-        // Same reasoning as the getSyncStatus seed above: this answer describes
-        // the world as it was when the read was ISSUED, so anything the user did
-        // since outranks it. A preview they produced in that window is the one
-        // they are looking at (the functional update below lets the restored one
-        // lose), and a preview they have ANSWERED — dismissed, or superseded by a
-        // Sync press whose own preview failed — is one the backend has already
-        // been told to discard: restoring it would put back a card whose Apply
-        // can only answer stale_preview, which is the failure this whole change
-        // exists to remove. State cannot tell the two apart (both leave `cur`
-        // null), so the answer is recorded in a ref.
-        //
-        // The run check is belt-and-braces: the backend withholds a staged
-        // preview while a run is in flight, precisely because this store can be
-        // wrong here — an apply refused with sync_in_progress retracts the
-        // optimistic running flag while the backend keeps the delta (#1202).
-        if (previewAnsweredRef.current) return;
-        if (getSyncProgress().running) return;
-        setPreviewNowMs(Date.now());
-        setPreview((cur) => cur ?? restored);
-      })
-      .catch((e) => logError(`Failed to query pending preview: ${e}`));
+    // The store decides whether the answer still stands: it loses to anything the
+    // user answered while it was open, and its own failure is logged there.
+    // Stamping the countdown's clock is this side's job — an impure read, so it
+    // belongs in a handler rather than in render or in the interval's effect.
+    detach(refreshPendingPreview().then(() => setPreviewNowMs(Date.now())));
 
     // Cross-device playtime scope notice. The backend sets a durable flag when a
     // playtime reconcile is rejected for a token missing `roms.user.read`; it
@@ -638,6 +621,28 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         // it existed, so applying it would retract a run that has just started
         // (#751). The store's own frames then carry the run from here.
         if (!backendProgress.running && stored !== storeAtIssue) return;
+        // Nor over a run the store is tracking right now. The backend keeps
+        // answering with a snapshot until the NEXT run overwrites it, and the
+        // next run's first frame is a reconcile plus a round trip away — so
+        // between pressing Sync and the backend's first frame, this read answers
+        // with the PREVIOUS run: not running, and carrying that run's terminal
+        // stage and message. Adopting it retracted the run the panel was showing
+        // (idle buttons over a live preview) and handed the subscriber below a
+        // terminal stage it announced as this run's ending. A retraction is
+        // therefore allowed only from an answer that names the very run the store
+        // is tracking; the optimistic frame carries no run id, so during that
+        // window nothing can name it — which is correct, because in that window
+        // the store knows about a run the backend has not reported yet.
+        //
+        // The residual risk, stated honestly: if a run's terminal frame were ever
+        // missed entirely, the panel would go on believing the run is live rather
+        // than being corrected by the next mount. That is the better failure. A
+        // panel wrongly showing progress is corrected by the next frame or the
+        // next run and blocks nothing in the meantime; a panel wrongly showing
+        // the idle buttons invites a second run on top of a live one, which is
+        // the failure users actually hit.
+        const namesStoredRun = !!stored.runId && stored.runId === backendProgress.runId;
+        if (!backendProgress.running && stored.running && !namesStoredRun) return;
         const sameRun = backendProgress.runId && stored.runId ? backendProgress.runId === stored.runId : true;
         const isSameLiveRun = backendProgress.running && stored.running && sameRun;
         // Same live run: spread the store (keeping its fine fields + etaSeconds)
@@ -719,6 +724,17 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           // drain state (#1202, RC-B).
           setCancelling(false);
           showTransientStatus(progress.message || "Sync finished", terminalStatusTone(progress.stage));
+          // A preview run that just ended may have staged a card this panel never
+          // received: `sync_preview` answers the instance that pressed Sync, and
+          // that instance is gone whenever the user left the page mid-run. Ask
+          // for it — unless the store already has it, which is the same run
+          // answering through the other door. A run that staged nothing (an
+          // apply, a cancel, Skip Preview) is answered `preview: null` and the
+          // store is left as it stands. Stamp the countdown's clock either way:
+          // this is where a preview can appear without this instance adopting it,
+          // and the impure now-read belongs in a handler.
+          setPreviewNowMs(Date.now());
+          if (getPendingPreviewSnapshot() === null) detach(refreshPendingPreview());
           // Both re-reads are provoked by the run ending, so neither may join a
           // read issued while it was still going — see the two AfterChange
           // functions.
@@ -771,7 +787,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // deadline (older backend) and one with nothing to apply both show no
   // countdown, and a tick that nothing on screen can consume is a wasted
   // re-render of the whole page every second.
-  const previewCountdownDeadline = preview && previewHasChanges(preview) ? preview.expires_at : undefined;
+  // A run in flight owns the panel. A preview held while one is going is not
+  // dropped — the store keeps it and the card comes back the moment the run
+  // ends — but it must not render over the progress rows, which are the true
+  // state of the machine at that moment. The two only ever overlap for the
+  // instant between a preview being staged and its run's terminal frame.
+  const previewCard = syncing ? null : preview;
+  const previewCountdownDeadline = previewCard && previewHasChanges(previewCard) ? previewCard.expires_at : undefined;
   useEffect(() => {
     if (previewCountdownDeadline === undefined) return;
     const id = setInterval(() => setPreviewNowMs(Date.now()), PREVIEW_COUNTDOWN_TICK_MS);
@@ -825,10 +847,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     setCancelling(false);
     setStatus(null);
     // Pressing Sync answers the preview question too: the backend discards the
-    // staged snapshot the moment this run's own preview fails, and the retracted
-    // running flag leaves an in-flight mount read nothing else to notice that by.
-    previewAnsweredRef.current = true;
-    setPreview(null);
+    // staged snapshot the moment this run's own preview fails, and this answer
+    // outranks any pending-preview read still open, which would otherwise put the
+    // card the user just replaced back on screen.
+    clearPendingPreview();
     setStoredSyncProgress({ running: true, stage: "fetching", message: "Fetching library..." });
     try {
       // Reconcile shortcuts the user deleted via Steam's own UI BEFORE the work
@@ -867,7 +889,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       // Stamp the clock the card's expiry countdown reads from — an impure read,
       // so it belongs here rather than in render or in the interval's effect body.
       setPreviewNowMs(Date.now());
-      setPreview(result);
+      adoptPreview(result);
       // The preview run is over — retract the optimistic running:true rather than
       // waiting for the backend's own terminal frame for it. That frame can be
       // dropped or raced (the reason index.tsx also drives teardown from
@@ -900,7 +922,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // backend stamps the run id, which the backend treats as an unconditional
     // cancel (#1202).
     resetSyncCancel();
-    setPreview(null);
+    clearPendingPreview();
     // The preview's own "Preview ready" line is still armed for its 15s lifetime,
     // hidden only by the preview it belongs to; clearing the preview without it
     // would carry a finished run's status into this one's progress rows.
@@ -919,10 +941,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   };
 
   const handleDismiss = async () => {
-    // The user has answered the preview question: whatever the mount read is
-    // still holding is a snapshot the backend is being told to discard.
-    previewAnsweredRef.current = true;
-    setPreview(null);
+    // The user has answered the preview question: whatever a read still open is
+    // about to hand back is a snapshot the backend is being told to discard.
+    clearPendingPreview();
     setStatus(null);
     try {
       await syncCancelPreview();
@@ -1065,24 +1086,24 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   }
 
   let syncBody: ReactNode;
-  if (preview) {
-    const hasChanges = previewHasChanges(preview);
+  if (previewCard) {
+    const hasChanges = previewHasChanges(previewCard);
     // Walk cost, shared with the handleApply seed (previewApplySeconds) so the
     // approved number equals the run's seed. Delta-only pricing here read "2 min"
     // for a resume whose apply walked ~3100 items.
-    const applySeconds = previewApplySeconds(preview.summary);
+    const applySeconds = previewApplySeconds(previewCard.summary);
     const estimateText = formatDuration(applySeconds);
     // Coverage and duration each own a line — at the QAM width they wrapped as
     // one row anyway, and the break landed mid-phrase. An older backend that
     // omits the scope counts leaves scopeText empty; the duration line then
     // stands alone.
-    const scopeText = formatSyncScope(preview.summary);
+    const scopeText = formatSyncScope(previewCard.summary);
     // Time left before the backend stops accepting this preview. `null` when the
     // backend sent no deadline (older backend) — no countdown, no expiry, the
     // card behaves exactly as it did before. At zero the card STAYS: nothing is
     // allowed to disappear or move on its own, so the countdown is replaced by
     // the expired notice, Apply goes away, and only Dismiss remains.
-    const secondsLeft = previewNowMs === null ? null : previewSecondsLeft(preview, previewNowMs);
+    const secondsLeft = previewNowMs === null ? null : previewSecondsLeft(previewCard, previewNowMs);
     const expired = secondsLeft === 0;
     // The sleep-pause caveat is only worth the extra line for a genuinely long run.
     const hintText =
@@ -1100,7 +1121,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             description={
               <>
                 <div data-testid="sync-changes">
-                  <PreviewChanges summary={preview.summary} />
+                  <PreviewChanges summary={previewCard.summary} />
                 </div>
                 {hasChanges && scopeText && (
                   <div data-testid="sync-scope" style={{ marginTop: "4px" }}>
@@ -1125,7 +1146,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             </Focusable>
           </PanelSectionRow>
         )}
-        {preview.pause_likely ? (
+        {previewCard.pause_likely ? (
           <PanelSectionRow>
             <Focusable>
               <div
@@ -1534,7 +1555,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             is set by a path that has already ended its run — but a status OUTLIVES
             the run that set it (15s), so the two paths that start a run clear it
             rather than let it ride into the next one. */}
-        {status?.text && !preview && (
+        {status?.text && !previewCard && (
           <PanelSectionRow>
             <Field
               label={

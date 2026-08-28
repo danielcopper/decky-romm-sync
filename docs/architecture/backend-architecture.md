@@ -793,10 +793,24 @@ That third case is a backend guarantee rather than a frontend courtesy, because 
 own. It derives "a run is live" from the `sync_progress` store, and `abortOptimisticSync` retracts the optimistic
 `running: true` on **every** failed apply — including the `sync_in_progress` rejection, which is exactly the branch
 where the backend deliberately **keeps** the staged delta (#1202). The store therefore reads idle during a live run, and
-a panel remounting there would render the restored card over the run's own progress rows (its `preview` branch outranks
-its `syncing` branch), with the next Apply retracting the live run's UI a second time. A plugin reload mid-run reaches
-the same state through an empty store racing the `get_sync_status` seed. So the run-in-flight case is refused where the
-truth is: `LibrarySyncStateBox.read_restorable_preview`. The frontend keeps its own check as belt-and-braces.
+a panel that let the restored card decide the body would render it over the run's own progress rows, with the next Apply
+retracting the live run's UI a second time. A plugin reload mid-run reaches the same state through an empty store racing
+the `get_sync_status` seed. So the run-in-flight case is refused where the truth is:
+`LibrarySyncStateBox.read_restorable_preview`. The panel's own defence is a rendering rule rather than a second check on
+the read: a run in flight owns the body, so a preview held while one is going is **kept and not shown**, and its card
+appears the moment the run ends.
+
+**Frontend side: the pending preview is a module store, not panel state.** `src/utils/pendingPreviewStore.ts` owns it.
+The reason is the same lifetime mismatch from the other end — `sync_preview` is an awaited callable, so its answer is
+delivered to the closure of whichever `MainPage` pressed Sync, and leaving the main page unmounts that instance while
+the run carries on. The card then never appeared for the instance actually on screen: the panel showed the idle Sync
+buttons over a preview the backend was holding, and only the _next_ mount's `get_pending_preview` recovered it. The
+store is not a second source of truth — it holds the backend's answer verbatim, is only ever filled from `sync_preview`
+/ `get_pending_preview`, and never derives or repairs one. Its ordering rule (a write takes a ticket when its
+information was issued; an answer applies only if no later-issued write already has; a read only ever fills, because
+`preview: None` conflates three different situations) is stated in full in that module's docstring. Two triggers fill it
+— the panel's mount, and a preview run reaching its terminal stage with the store still empty — and, because both write
+to the same destination, the race between them is "who writes first", not "which copy wins".
 
 **Withheld, not discarded.** A run in flight suppresses the snapshot for the duration and nothing else — the same
 payload is handed back on the next mount after the run ends, as long as it is still inside its TTL. And the withholding
@@ -821,6 +835,23 @@ legitimate apply (#1202).
 **`sync_progress` carries `runId`.** Every `sync_progress` event (and the persisted `get_sync_status` snapshot) now
 includes an additive `runId: str` field — `str(current_sync_id or "")` — so the frontend reads the active run id from
 the authoritative backend store rather than minting or threading its own. The idle default snapshot carries `runId: ""`.
+
+**The snapshot describes an in-flight run only.** `finish_run` puts `sync_progress` back to the idle default as part of
+ending a run — after the terminal frame has been emitted, since every path emits it before reaching the
+`finally: finish_run(run_id)` that lands there. It exists so a remounting QAM can pick up a **live** run; a finished
+run's ending already reached the panel as an event, and a panel that merely _finds_ a terminal frame on a later mount is
+required to ignore it (#1019). Left in place, the frame answered every later mount with a run that had ended — message
+and run id included — and the panel took it for the state of the run it was actually watching: pressing Sync, then
+returning during the window before the new run's first frame, showed a green "Preview ready" over a preview that was
+still going, and dropped the panel back to the idle buttons in the meantime. The reset is not itself a frame: nothing
+emits it, so no `running: false` reaches the panel from it.
+
+The panel closes the same gap from its side, because the reset only helps a backend that has one: a `get_sync_status`
+answer reporting **nothing** in flight may not retract a run the module store is currently tracking unless it names that
+same run. The optimistic frame carries no run id, so nothing can name it during the start window — which is correct,
+because in that window the store knows about a run the backend has not reported yet. The residual risk is stated at the
+call site: a genuinely missed terminal frame leaves the panel believing a run is live until the next frame or the next
+run, which is the better failure — a panel wrongly showing the idle buttons invites a second run on top of a live one.
 
 The same `sync_plan` capture point also clears the frontend's per-run cancel flag (`_cancelRequested`). The per-unit
 handler resets that flag at its own start, but an incrementally-**skipped** unit never runs that handler, so a skip-only

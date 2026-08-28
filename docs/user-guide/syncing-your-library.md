@@ -49,11 +49,13 @@ the shortcuts. Only when there is truly nothing to do does the preview read "Eve
 
 A preview stays good for **30 minutes**, and it belongs to the plugin rather than to the page you are looking at: you
 can leave the main page for the settings or a submenu, come back, and the same preview is still there with **Apply
-Sync** ready. The card tells you how long that has left — "Expires in 26 min" just above the button, counting down. If
-you leave it sitting past the half hour, the card stays where it is and says "Expired — run the preview again"; the
-change list remains readable, **Apply Sync** goes away, and the card only disappears when you tap **Dismiss**. Nothing
-you were shown is discarded behind your back. Tapping **Sync Library** again works out a fresh preview against whatever
-your server holds now.
+Sync** ready. That holds while it is still being worked out, too — leave while the plugin is comparing your library and
+come back, and you get the progress bar for the comparison that is still running, then its card the moment it finishes,
+whether you were watching or not. The card tells you how long that has left — "Expires in 26 min" just above the button,
+counting down. If you leave it sitting past the half hour, the card stays where it is and says "Expired — run the
+preview again"; the change list remains readable, **Apply Sync** goes away, and the card only disappears when you tap
+**Dismiss**. Nothing you were shown is discarded behind your back. Tapping **Sync Library** again works out a fresh
+preview against whatever your server holds now.
 
 That starting estimate is **skip-aware**: when the run is planned, the plugin already knows which platforms haven't
 changed since their last sync and expects to skip them wholesale, so they don't inflate the number — an incremental

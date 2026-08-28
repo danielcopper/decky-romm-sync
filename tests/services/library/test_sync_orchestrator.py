@@ -225,6 +225,46 @@ class TestSyncPreview:
         assert "preview_id" in result
 
     @pytest.mark.asyncio
+    async def test_terminal_frame_is_emitted_before_the_snapshot_goes_idle(self, plugin, fake_romm_api):
+        """The run's ending reaches the panel as an EVENT; what it leaves behind is idle.
+
+        Ordering, not merely outcome: the terminal frame is emitted while the run
+        still owns the slot, and only the ``finally: finish_run`` that follows it
+        puts the snapshot back to the idle default. A panel remounting after this
+        run must not be handed its terminal frame as the state of whatever run it
+        is watching now — that frame's message and run id were what turned a live
+        preview into a green "Preview ready" over its own progress rows.
+        """
+        import decky
+
+        plugin.loop = asyncio.get_event_loop()
+        decky.emit.reset_mock()
+        _use_fake_romm(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "Game A", "fs_name": "a.z64"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        result = await plugin.sync_preview()
+        assert result["success"] is True
+
+        frames = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_progress"]
+        assert frames[-1]["stage"] == "done"
+        assert frames[-1]["message"] == "Preview ready"
+        assert frames[-1]["running"] is False
+        # ...and the run id it named is gone from what the next mount reads.
+        assert frames[-1]["runId"] != ""
+        status = plugin._sync_service.get_sync_status()
+        assert status["running"] is False
+        assert status["stage"] == ""
+        assert status["message"] == ""
+        assert status["runId"] == ""
+
+    @pytest.mark.asyncio
     async def test_populates_pending_delta(self, plugin, fake_romm_api):
         import decky
 
@@ -5771,7 +5811,9 @@ class TestProcessedGamesNumerator:
         complete = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
         assert complete[-1]["total_games"] == 3, "1 wholesale-skipped + 1 delta-skipped + 1 committed"
         assert complete[-1]["interrupted"] is True
-        progress = plugin._sync_service._sync_progress
+        # The terminal frame as EMITTED — the snapshot the box holds is back at
+        # the idle default by now, because the run has finished (``finish_run``).
+        progress = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_progress"][-1]
         assert progress["stage"] == "cancelled"
         assert progress["message"] == "Sync interrupted: 3 of 4 games processed"
         assert progress["current"] == 3

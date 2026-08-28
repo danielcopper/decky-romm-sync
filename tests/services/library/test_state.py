@@ -17,7 +17,12 @@ from __future__ import annotations
 import asyncio
 
 from domain.sync_state import SyncState
-from services.library._state import PREVIEW_MAX_AGE_SECONDS, AbandonedChunk, LibrarySyncStateBox
+from services.library._state import (
+    PREVIEW_MAX_AGE_SECONDS,
+    AbandonedChunk,
+    LibrarySyncStateBox,
+    _default_progress,
+)
 
 
 class TestTryBeginRun:
@@ -118,6 +123,37 @@ class TestFinishRun:
         assert box.finish_run("run-A") is False
         assert box.sync_state is SyncState.RUNNING
         assert box.current_sync_id == "run-B"
+
+    def test_owner_puts_the_progress_snapshot_back_to_the_idle_default(self):
+        """A finished run stops being answerable by ``get_sync_status``.
+
+        The snapshot exists so a remounting QAM can pick up an IN-FLIGHT run. A
+        terminal frame left in it answered every later mount with a run that
+        ended — message and run id included — which the panel then took for the
+        state of whatever run it was actually watching.
+        """
+        box = LibrarySyncStateBox()
+        box.try_begin_run("run-1")
+        box.sync_progress = {"running": False, "stage": "done", "message": "Preview ready", "runId": "run-1"}
+
+        assert box.finish_run("run-1") is True
+
+        assert box.sync_progress == _default_progress()
+        assert box.sync_progress["stage"] == ""
+        assert box.sync_progress["message"] == ""
+        assert box.sync_progress["runId"] == ""
+
+    def test_a_foreign_finish_leaves_the_live_run_s_snapshot_alone(self):
+        """The reset is the owner's alone — a late terminal from a previous run
+        must not blank the frame a remounting panel needs for the live one."""
+        box = LibrarySyncStateBox()
+        box.try_begin_run("run-B")
+        live = {"running": True, "stage": "fetching", "message": "Fetching GBA...", "runId": "run-B"}
+        box.sync_progress = live
+
+        assert box.finish_run("run-A") is False
+
+        assert box.sync_progress == live
 
     def test_try_begin_run_clears_a_prior_abandoned_chunk_stash(self):
         """A heartbeat-timed-out chunk whose late ack never arrived is dropped
