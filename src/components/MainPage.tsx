@@ -675,54 +675,57 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       .catch((e) => logError(`Failed to query sync status: ${e}`));
 
     /**
-     * The terminal half of the sync-progress subscriber: a run's once-per-run
-     * teardown, and — for the frame that follows it — the run's own account of how
-     * it ended. Called only from that subscriber, and only for a frame whose stage
-     * is terminal.
+     * The watched run has ended: everything that happens once per run.
      *
-     * WHICH of the two a frame is stays with the caller and is NOT re-derived
-     * here. Those verdicts are taken from the run refs before the refs move on and
-     * outside the caller's try, so a throw in here can never leave the panel
-     * believing a finished run is still live; recomputing them here would put that
-     * decision back inside the guarded region. The two cases are also never
-     * merged: the first frame ends the run, the second only replaces the text that
-     * ending left behind.
+     * Which of the three actions below a frame calls for is decided at the call
+     * site and never re-derived in any of them. Those verdicts are taken from the
+     * run refs before the refs move on and OUTSIDE the subscriber's try, so a
+     * throw in here can never leave the panel believing a finished run is still
+     * live; recomputing them inside would put that decision back into the guarded
+     * region. This is also why the run's ending and the correction that follows
+     * it are two functions rather than one with a mode: they are different
+     * actions, not one action told which way to behave.
      */
-    const applyTerminalFrame = (progress: SyncProgress, runEndedNow: boolean, laterTerminalFrame: boolean) => {
-      if (runEndedNow) {
-        // Tear down the run's live-ETA state (deadline included) so the next run
-        // measures fresh, and clear the display mirror.
-        resetEta();
-        setLiveEtaDisplay(null);
-        // True terminal reached — re-arm the button out of any "Cancelling…"
-        // drain state (#1202, RC-B).
-        setCancelling(false);
-        showTransientStatus(progress.message || "Sync finished", terminalStatusTone(progress.stage));
-        // A preview run that just ended may have staged a card this panel never
-        // received: `sync_preview` answers the instance that pressed Sync, and that
-        // instance is gone whenever the user left the page mid-run. Ask for it —
-        // unless the store already has it, which is the same run answering through
-        // the other door. A run that staged nothing (an apply, a cancel, Skip
-        // Preview) is answered `preview: null` and the store is left as it stands.
-        // Stamp the countdown's clock either way: this is where a preview can
-        // appear without this instance adopting it, and the impure now-read
-        // belongs in a handler.
-        setPreviewNowMs(Date.now());
-        if (getPendingPreviewSnapshot() === null) detach(refreshPendingPreview());
-        // Both re-reads are provoked by the run ending, so neither may join a read
-        // issued while it was still going — see the two AfterChange functions.
-        detach(refreshSyncStatsAfterChange());
-        // Refresh the live heap reading so the paused / high-heap banner reflects
-        // the run's end state (a pause leaves it high; a completed run may too).
-        detach(refreshSessionBudgetAfterChange());
-      } else if (laterTerminalFrame && progress.message) {
-        // The same run's second terminal signal. Everything above has already
-        // happened for this run; what this frame adds is the run's own account of
-        // how it ended, which replaces the text the merged sync_complete frame
-        // carried over from mid-run. A frame with no message of its own changes
-        // nothing rather than blanking the one already shown.
-        showTransientStatus(progress.message, terminalStatusTone(progress.stage));
-      }
+    const endWatchedRun = (progress: SyncProgress) => {
+      // Tear down the run's live-ETA state (deadline included) so the next run
+      // measures fresh, and clear the display mirror.
+      resetEta();
+      setLiveEtaDisplay(null);
+      // True terminal reached — re-arm the button out of any "Cancelling…"
+      // drain state (#1202, RC-B).
+      setCancelling(false);
+      showTransientStatus(progress.message || "Sync finished", terminalStatusTone(progress.stage));
+      // A preview run that just ended may have staged a card this panel never
+      // received: `sync_preview` answers the instance that pressed Sync, and that
+      // instance is gone whenever the user left the page mid-run. Ask for it —
+      // unless the store already has it, which is the same run answering through
+      // the other door. A run that staged nothing (an apply, a cancel, Skip
+      // Preview) is answered `preview: null` and the store is left as it stands.
+      // Stamp the countdown's clock either way: this is where a preview can
+      // appear without this instance adopting it, and the impure now-read
+      // belongs in a handler.
+      setPreviewNowMs(Date.now());
+      if (getPendingPreviewSnapshot() === null) detach(refreshPendingPreview());
+      // Both re-reads are provoked by the run ending, so neither may join a read
+      // issued while it was still going — see the two AfterChange functions.
+      detach(refreshSyncStatsAfterChange());
+      // Refresh the live heap reading so the paused / high-heap banner reflects
+      // the run's end state (a pause leaves it high; a completed run may too).
+      detach(refreshSessionBudgetAfterChange());
+    };
+
+    /**
+     * The same run's SECOND terminal signal, which ends nothing — {@link
+     * endWatchedRun} has already run for this run. What this frame adds is the
+     * run's own account of how it ended, replacing the text the merged
+     * sync_complete frame carried over from mid-run. A frame with no message of
+     * its own changes nothing rather than blanking what is already shown, which
+     * is why the message is a required argument: the caller's guard is the only
+     * place that decision is taken, and the signature makes calling without one
+     * impossible rather than merely wrong.
+     */
+    const correctTerminalWording = (message: string, stage: SyncProgress["stage"]) => {
+      showTransientStatus(message, terminalStatusTone(stage));
     };
 
     /**
@@ -796,13 +799,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       } else if (progress.message && (progress.total || progress.totalSteps)) {
         setCarriedFineDetail(progress.message);
       }
+      // A terminal frame that is neither verdict — the stored one a mount merely
+      // finds, watching nothing (#1019) — matches no arm and does nothing, which
+      // is the whole of what it should do.
       try {
-        if (terminal) {
-          // A terminal frame that is neither verdict — the stored one a mount
-          // merely finds, watching nothing (#1019) — reaches this call and does
-          // nothing, exactly as it fell out of the chain this replaced.
-          applyTerminalFrame(progress, runEndedNow, laterTerminalFrame);
-        } else {
+        if (runEndedNow) {
+          endWatchedRun(progress);
+        } else if (laterTerminalFrame && progress.message) {
+          correctTerminalWording(progress.message, progress.stage);
+        } else if (!terminal) {
           advanceLiveEta(progress);
         }
       } catch (e) {
