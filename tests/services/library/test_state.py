@@ -5,9 +5,11 @@ The box's four run-lifecycle verbs (``try_begin_run`` / ``request_cancel`` /
 pair (``sync_state`` / ``current_sync_id``). These tests pin the
 compare-and-swap admission, the run-scoped cancel routing, and the
 compare-and-reset terminal so a rapid Sync/Cancel can't leave a half-reset run
-id (#1202). The preview-snapshot verbs (``stage_preview`` /
-``read_fresh_preview`` / ``matches_preview`` / ``discard_preview``) are the
-only writers of ``pending_delta``, and carry the TTL with it.
+id (#1202). The preview-snapshot verbs cover the staged snapshot's whole
+lifetime — ``stage_preview`` / ``read_fresh_preview`` /
+``read_restorable_preview`` / ``matches_preview`` / ``discard_preview`` — of
+which the three that write ``pending_delta`` (stage, the age-dropping read,
+discard) are its only writers, and carry the TTL with it.
 """
 
 from __future__ import annotations
@@ -261,11 +263,14 @@ class TestAbandonedChunkStash:
 
 
 class TestPreviewSnapshot:
-    """The staged preview's whole lifetime: stage, read-if-fresh, match, discard.
+    """The staged preview's whole lifetime: stage, read-if-fresh, read-if-restorable, match, discard.
 
-    These four verbs are the only writers of ``pending_delta``. The TTL is the
-    box's (``PREVIEW_MAX_AGE_SECONDS``), applied against a caller-supplied
-    ``now`` so the box stays clock-free.
+    ``stage_preview``, ``read_fresh_preview`` (which drops an over-age
+    snapshot on its way out) and ``discard_preview`` are the only writers of
+    ``pending_delta``; ``read_restorable_preview`` reaches the field through
+    the fresh read, and ``matches_preview`` only reads. The TTL is the box's
+    (``PREVIEW_MAX_AGE_SECONDS``), applied against a caller-supplied ``now``
+    so the box stays clock-free.
     """
 
     _CREATED_AT = 1_700_000_000.0
@@ -362,13 +367,13 @@ class TestPreviewSnapshot:
 
         assert box.read_fresh_preview(self._CREATED_AT) is not None
 
-    def test_matches_is_identity_only_and_ignores_age(self):
+    def test_matches_is_identity_only_and_consumes_nothing(self):
         box = self._staged_box()
 
         assert box.matches_preview("pv-1") is True
         assert box.matches_preview("pv-other") is False
-        # Still a match long past the TTL — age is the read's verdict, not this one.
-        assert box.matches_preview("pv-1") is True
+        # The verb takes no ``now`` at all: age is the read's verdict, never
+        # this one's, so a match is a signature comparison and nothing else.
         assert box.pending_delta is not None
 
     def test_matches_is_false_when_nothing_staged(self):
