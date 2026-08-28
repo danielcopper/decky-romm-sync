@@ -245,8 +245,6 @@ class TestSyncPreview:
         assert plugin._sync_service._pending_delta is not None
         assert plugin._sync_service._pending_delta.preview_id == result["preview_id"]
         assert plugin._sync_service._pending_delta.created_at == plugin._sync_service._orchestrator._clock.time()
-        assert plugin._sync_service._pending_delta.platforms_count == 1
-        assert plugin._sync_service._pending_delta.total_roms == 1
 
     @pytest.mark.asyncio
     async def test_does_not_write_metadata(self, plugin, fake_romm_api):
@@ -566,8 +564,6 @@ class TestSyncApplyDelta:
         plugin._sync_service._box.stage_preview(
             preview_id=preview_id,
             created_at=plugin._sync_service._orchestrator._clock.time(),
-            platforms_count=1,
-            total_roms=3,
             answer={"success": True, "preview_id": preview_id},
         )
 
@@ -711,8 +707,6 @@ class TestSyncCancelPreview:
         plugin._sync_service._box.stage_preview(
             preview_id="some-id",
             created_at=plugin._sync_service._orchestrator._clock.time(),
-            platforms_count=0,
-            total_roms=0,
             answer={"success": True, "preview_id": "some-id"},
         )
         result = await plugin.sync_cancel_preview()

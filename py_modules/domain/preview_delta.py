@@ -27,11 +27,8 @@ class PreviewDelta:
     ``preview_id`` ties the snapshot to the frontend's apply call; mismatched
     ids cause the apply to be rejected as stale. ``created_at`` is the wall
     clock at preview time so apply can reject snapshots older than the TTL.
-    ``platforms_count`` and ``total_roms`` are persisted into ``sync_stats``
-    on apply so ``get_sync_stats`` and the stale-removal pass see the
-    apply's intended counts. The apply phase fetches ROM data live per
-    unit; this snapshot carries only the pre-flight counts, never ROM
-    payloads.
+    The apply phase rebuilds the work queue and fetches ROM data live per
+    unit, so this snapshot carries no counts and no ROM payloads.
 
     ``answer`` is the exact dict ``sync_preview`` returned to the frontend, so
     a panel that was navigated away from and remounted can be handed back what
@@ -41,8 +38,6 @@ class PreviewDelta:
 
     preview_id: str
     created_at: float
-    platforms_count: int
-    total_roms: int
     answer: Mapping[str, Any]
 
     def is_expired(self, now: float, max_age_seconds: float) -> bool:

@@ -410,8 +410,6 @@ class SyncOrchestrator:
             box.stage_preview(
                 preview_id=preview_id,
                 created_at=created_at,
-                platforms_count=platforms_count,
-                total_roms=len(all_roms),
                 answer=answer,
             )
 

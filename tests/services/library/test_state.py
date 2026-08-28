@@ -275,8 +275,6 @@ class TestPreviewSnapshot:
         box.stage_preview(
             preview_id=preview_id,
             created_at=self._CREATED_AT,
-            platforms_count=2,
-            total_roms=7,
             answer={"success": True, "preview_id": preview_id},
         )
         return box
@@ -288,8 +286,6 @@ class TestPreviewSnapshot:
         assert delta is not None
         assert delta.preview_id == "pv-1"
         assert delta.created_at == self._CREATED_AT
-        assert delta.platforms_count == 2
-        assert delta.total_roms == 7
         assert delta.answer == {"success": True, "preview_id": "pv-1"}
 
     def test_stage_replaces_an_earlier_snapshot(self):
@@ -298,8 +294,6 @@ class TestPreviewSnapshot:
         box.stage_preview(
             preview_id="pv-new",
             created_at=self._CREATED_AT,
-            platforms_count=0,
-            total_roms=0,
             answer={"success": True, "preview_id": "pv-new"},
         )
 

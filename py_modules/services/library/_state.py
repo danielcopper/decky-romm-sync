@@ -330,8 +330,6 @@ class LibrarySyncStateBox:
         *,
         preview_id: str,
         created_at: float,
-        platforms_count: int,
-        total_roms: int,
         answer: Mapping[str, Any],
     ) -> None:
         """Hold the computed preview for the apply — and for a panel that comes back to it.
@@ -343,8 +341,6 @@ class LibrarySyncStateBox:
         self.pending_delta = PreviewDelta(
             preview_id=preview_id,
             created_at=created_at,
-            platforms_count=platforms_count,
-            total_roms=total_roms,
             answer=answer,
         )
 

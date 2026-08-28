@@ -3,8 +3,7 @@
 The dataclass is pure data — its contract is "all fields are required,
 immutable, and exposed as typed attributes", plus the one TTL predicate the
 apply path and the pending-preview read share. Tests cover construction,
-frozen semantics, the zero-counts boundary case, and both sides of the TTL
-boundary.
+frozen semantics, equality, and both sides of the TTL boundary.
 """
 
 from __future__ import annotations
@@ -21,8 +20,6 @@ def _build(**overrides) -> PreviewDelta:
     defaults: dict[str, Any] = {
         "preview_id": "preview-abc",
         "created_at": 1_700_000_000.0,
-        "platforms_count": 2,
-        "total_roms": 3,
         "answer": {"success": True, "preview_id": "preview-abc"},
     }
     defaults.update(overrides)
@@ -33,8 +30,6 @@ def test_construction_exposes_all_fields_as_attributes() -> None:
     delta = _build()
     assert delta.preview_id == "preview-abc"
     assert delta.created_at == 1_700_000_000.0
-    assert delta.platforms_count == 2
-    assert delta.total_roms == 3
     assert delta.answer == {"success": True, "preview_id": "preview-abc"}
 
 
@@ -42,12 +37,6 @@ def test_is_frozen_attribute_rebinding_raises() -> None:
     delta = _build()
     with pytest.raises(FrozenInstanceError):
         delta.preview_id = "other"  # type: ignore[misc]
-
-
-def test_zero_counts_are_accepted() -> None:
-    delta = _build(platforms_count=0, total_roms=0)
-    assert delta.platforms_count == 0
-    assert delta.total_roms == 0
 
 
 def test_equality_by_field_values() -> None:
