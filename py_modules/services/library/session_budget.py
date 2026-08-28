@@ -2,7 +2,8 @@
 
 Owns every renderer-RSS **reading** the sync subsystem takes, and the verdicts
 drawn from one: the GC-settled measurement itself, the chunk-boundary pause
-decision, the post-preview prognosis, the run-start baseline behind the last-run
+decision, the trim of additive chunk work to whatever headroom that decision
+left, the post-preview prognosis, the run-start baseline behind the last-run
 delta, and the live reading the QAM banners poll. The pure arithmetic behind
 every one of those decisions is :mod:`domain.session_budget`; the ``/proc``
 reader and the CDP garbage-collect trigger are adapters reached through the
@@ -10,13 +11,11 @@ reader and the CDP garbage-collect trigger are adapters reached through the
 orchestration between the two — measure, ask the domain, record the verdict on
 the shared :class:`LibrarySyncStateBox`.
 
-Two sites in :mod:`services.library.sync_orchestrator` still price against the
-budget, from a reading this module handed them rather than one they took:
-``_clip_cover_refreshes`` (trimming the cover-refresh list to a chunk's leftover
-headroom) and the terminal ``session_memory_delta`` / ``post_run_advisory``
-computation in ``_finalize_per_unit``. They sit with the chunk loop and the
-finalize phase they belong to; what never happens outside this module is taking
-a reading.
+One site in :mod:`services.library.sync_orchestrator` still prices against the
+budget, from a reading this module handed it rather than one it took: the
+terminal ``session_memory_delta`` / ``post_run_advisory`` computation in
+``_finalize_per_unit``. It sits with the finalize phase it belongs to; what
+never happens outside this module is taking a reading.
 
 Fail-open is the contract of every path: an unavailable reading, or any seam
 error, degrades to "no verdict" (no pause, no warning, no number) and never
@@ -209,6 +208,40 @@ class SessionBudgetMonitor:
         except Exception as e:  # fail-open: the gate must never fail the run
             self._logger.debug(f"Session-budget gate skipped: {e}")
             return None
+
+    def clip_cover_refreshes(
+        self,
+        cover_refreshes: list[dict[str, int]],
+        *,
+        rss_kb: int | None,
+        creates: int,
+        updates: int,
+        limit_kb: int,
+    ) -> list[dict[str, int]]:
+        """Clip the #1386 cover-refresh list to the chunk's remaining budget headroom.
+
+        Each refresh is a ``SetCustomArtworkForApp`` push costing one transient
+        cover (:data:`domain.session_budget.COVER_TRANSIENT_KB`) of renderer heap
+        at the chunk's peak, on top of the chunk's own projected cost. The clip
+        keeps only as many refreshes as fit under ``limit_kb`` so the refreshes
+        can never push a chunk the gate just approved over the line; the
+        remainder is skipped gracefully — their grid files are already updated,
+        so a Steam restart shows them (the same degradation the budget gate uses
+        elsewhere). ``rss_kb`` ``None`` (measurement unavailable) fails open and
+        keeps the whole list, mirroring the gate itself.
+        """
+        if rss_kb is None:
+            return cover_refreshes
+        headroom_kb = limit_kb - rss_kb - chunk_worst_cost_kb(creates, updates)
+        allowance = max(0, headroom_kb // COVER_TRANSIENT_KB)
+        if allowance >= len(cover_refreshes):
+            return cover_refreshes
+        self._logger.info(
+            f"Session-budget headroom clips cover refreshes: applying {allowance} of "
+            f"{len(cover_refreshes)}; the remaining grid files are already updated and "
+            f"show after a Steam restart"
+        )
+        return cover_refreshes[:allowance]
 
     async def predict_pause_likely(self, *, new_items: int, changed_items: int) -> bool:
         """Whether a run of *new_items* creates + *changed_items* updates would cross the ceiling.

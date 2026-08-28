@@ -488,8 +488,8 @@ class SyncReporter:
         UoW upserts every ROM (Rom row first, cached metadata second — FK-safe),
         so a ROM and its metadata land atomically.
 
-        ``platform_stamp`` (set by the orchestrator on the final chunk of a
-        platform unit, ADR-0023) is saved inside that same write UoW, so the
+        ``platform_stamp`` (set by :class:`ChunkDispatcher` on the final chunk of
+        a platform unit, ADR-0023) is saved inside that same write UoW, so the
         per-platform completion stamp commits atomically with the chunk's rom
         upserts — the platform is stamped complete iff its last chunk is durable.
         ``collection_stamp`` is the collection sibling (#742), set on the final
@@ -670,7 +670,7 @@ class SyncReporter:
 
         * **Active chunk** — the ack matches the dispatched
           ``current_sync_id`` / ``active_unit_id`` / ``active_chunk_index``
-          (#1041). Record the rom_id→app_id mapping and, if the orchestrator is
+          (#1041). Record the rom_id→app_id mapping and, if the dispatcher is
           still waiting (``unit_complete_event`` live), signal the event so it
           drives the per-chunk commit. The happy path. A duplicate ack whose
           event was already consumed (identity still matches, event ``None``)
@@ -747,9 +747,10 @@ class SyncReporter:
     ):
         """Per-chunk commit: cover-path finalize then atomic ``roms`` + metadata upsert.
 
-        Called once the frontend has acked an apply chunk's shortcuts — by the
-        orchestrator on the happy path, or by :meth:`report_unit_results`
-        itself on the heartbeat-timeout late-ack path (#1052). ``unit_roms`` is
+        Called once the frontend has acked an apply chunk's shortcuts — by
+        :class:`ChunkDispatcher` on the happy path, or by
+        :meth:`report_unit_results` itself on the heartbeat-timeout late-ack
+        path (#1052). ``unit_roms`` is
         this chunk's slice of the live RomM fetch: a ``roms`` row is upserted for
         EVERY sibling in the slice (identity + version metadata, ADR-0021), but
         only the acked representatives carry a binding. The upsert and the
@@ -757,9 +758,9 @@ class SyncReporter:
         ``rom_metadata`` — FK-safe), so a ROM and its metadata are always
         consistent across a crash, and each committed chunk is durable on its own.
 
-        ``platform_stamp`` / ``collection_stamp`` are passed only by the
-        orchestrator on the **final chunk of a platform / user-smart-collection
-        unit** (ADR-0023, #742); the relevant one rides the same write UoW so the
+        ``platform_stamp`` / ``collection_stamp`` are passed only by
+        :class:`ChunkDispatcher` on the **final chunk of a platform /
+        user-smart-collection unit** (ADR-0023, #742); the relevant one rides the same write UoW so the
         completion stamp is atomic with the chunk's rom upserts. The
         heartbeat-timeout late-ack path never sets either — a timed-out unit is
         incomplete and must not be stamped.

@@ -79,12 +79,6 @@ SCOPE_DIRS = (
 ALLOWLIST = {
     "py_modules/services/downloads.py": 1119,
     "py_modules/services/library/fetcher.py": 1150,
-    # Raised 1186 -> 1192 by #1777's rename of this module's launch-facts peer
-    # to ShortcutLaunchResolver, for accuracy. The six lines are `ruff format`
-    # re-wraps of three existing call sites that the longer identifier pushed
-    # past the line length; no code was added. This entry has to be deleted once
-    # the module falls under the threshold — the gate fails until it is.
-    "py_modules/services/library/sync_orchestrator.py": 1192,
 }
 
 

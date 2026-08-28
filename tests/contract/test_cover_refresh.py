@@ -36,6 +36,10 @@ def _orchestrator(harness):
     return harness.plugin._sync_service._orchestrator
 
 
+def _dispatcher(harness):
+    return harness.plugin._sync_service._chunk_dispatcher
+
+
 def _box(harness):
     return harness.plugin._sync_service._box
 
@@ -124,7 +128,7 @@ async def test_changed_cover_ts_between_runs_re_downloads_and_emits_refresh_entr
     _seed_library(harness, cover=_COVER_OLD)
     harness.romm.download_payloads[f"cover:{_COVER_OLD}"] = b"old cover bytes"
     harness.romm.download_payloads[f"cover:{_COVER_NEW}"] = b"new cover bytes"
-    _orchestrator(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
+    _dispatcher(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
 
     # Run 1: the new ROM's cover downloads into the cache and the fingerprint
     # is recorded at commit.
@@ -164,7 +168,7 @@ async def test_changed_cover_ts_between_runs_re_downloads_and_emits_refresh_entr
 async def test_null_fingerprint_with_cache_adopts_without_download(harness):
     _make_grid_resolvable(harness)
     _seed_library(harness, cover=_COVER_NEW)
-    _orchestrator(harness)._wait_for_unit_complete = _ack_with({})
+    _dispatcher(harness)._wait_for_unit_complete = _ack_with({})
 
     # A pre-#1386 state: a bound row with NO fingerprint whose cache file exists.
     # Identity matches the fetch and the recorded applied "" matches the
@@ -216,7 +220,7 @@ async def test_cover_only_change_flows_from_preview_to_apply_via_callables(harne
     _seed_library(harness, cover=_COVER_OLD)
     harness.romm.download_payloads[f"cover:{_COVER_OLD}"] = b"old cover bytes"
     harness.romm.download_payloads[f"cover:{_COVER_NEW}"] = b"new cover bytes"
-    _orchestrator(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
+    _dispatcher(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
 
     # Seeding run: bind the shortcut and record the OLD fingerprint.
     await _run_sync(harness, "run-seed")
@@ -277,7 +281,7 @@ async def test_cover_asset_404_falls_back_to_url_cover_and_records_it(harness):
     # The RomM-local cover asset 404s; the external url_cover serves real bytes.
     harness.romm.download_cover_side_effect = RommNotFoundError("HTTP 404: Not Found")
     harness.romm.download_payloads[f"cover_url:{_URL_COVER}"] = b"cdn cover bytes"
-    _orchestrator(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
+    _dispatcher(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
 
     await _run_sync(harness, "run-fallback-1")
 
@@ -298,7 +302,7 @@ async def test_pure_no_changes_preview_keeps_zero_cover_count(harness):
     _make_grid_resolvable(harness)
     _seed_library(harness, cover=_COVER_OLD)
     harness.romm.download_payloads[f"cover:{_COVER_OLD}"] = b"old cover bytes"
-    _orchestrator(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
+    _dispatcher(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
     await _run_sync(harness, "run-seed-settled")
     harness.emit.reset_mock()
 
@@ -329,7 +333,7 @@ async def test_ts_only_rescan_revalidates_304_then_second_sync_does_zero_cover_w
     harness.romm.download_payloads[f"cover:{_COVER_OLD}"] = b"the cover bytes"
     # The validator is stable across ?ts= values (the live-probe fact).
     harness.romm.cover_etags[_COVER_ASSET] = '"etag-v1"'
-    _orchestrator(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
+    _dispatcher(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
 
     # Run 1: fresh download seeds the cache, the cover_source, AND the validator sidecar.
     await _run_sync(harness, "run-reval-1")

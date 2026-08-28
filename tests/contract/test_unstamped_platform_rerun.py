@@ -29,6 +29,10 @@ def _orchestrator(harness):
     return harness.plugin._sync_service._orchestrator
 
 
+def _dispatcher(harness):
+    return harness.plugin._sync_service._chunk_dispatcher
+
+
 def _ack_with(bindings):
     """A ``_wait_for_unit_complete`` stand-in acking with *bindings*."""
 
@@ -75,7 +79,7 @@ async def test_unstamped_platform_rerun_restamps_and_heals_run_status(harness):
     _seed_library(harness)
 
     # Seeding run at t0: the platform is stamped and the ROM bound.
-    _orchestrator(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
+    _dispatcher(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
     await _run_sync(harness, "run-seed")
     with harness.uow_factory() as uow:
         assert uow.platform_sync_state.get("n64") is not None
@@ -112,7 +116,7 @@ async def test_unstamped_platform_rerun_restamps_and_heals_run_status(harness):
 
     # The gated apply's empty chunk re-stamps the platform and records a fresh
     # completed SyncRun. The empty chunk acks nothing (no shortcut to bind).
-    _orchestrator(harness)._wait_for_unit_complete = _ack_with({})
+    _dispatcher(harness)._wait_for_unit_complete = _ack_with({})
     apply_result = await harness.plugin.sync_apply_delta(preview["preview_id"])
     assert apply_result == {"success": True, "message": "Applying changes"}
     await _drain_apply(harness)

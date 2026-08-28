@@ -134,7 +134,7 @@ class LibrarySyncStateBox:
     pending_platform_rom_ids: set[int] | None = None
     # Per-unit pipeline coordination. ``unit_complete_event`` is set by
     # :meth:`SyncReporter.report_unit_results` when the frontend acks the
-    # active chunk; the orchestrator awaits it (with a heartbeat-based
+    # active chunk; ``ChunkDispatcher`` awaits it (with a heartbeat-based
     # timeout) before dispatching the next chunk. Cleared back to None
     # between chunks and on either wait-give-up branch (user cancel and
     # heartbeat timeout). On a heartbeat timeout the abandoned chunk is moved
@@ -144,7 +144,7 @@ class LibrarySyncStateBox:
     unit_complete_event: asyncio.Event | None = None
     # Identity of the unit currently dispatched to the frontend: the
     # ``WorkUnit.id`` (a platform's numeric id or a collection's string id).
-    # Set by the orchestrator just before it emits ``sync_apply_unit`` and
+    # Set by ``ChunkDispatcher`` just before it emits ``sync_apply_unit`` and
     # cleared once the unit's ack is committed, the unit is cancelled, or the
     # chunk times out (its identity is moved into ``abandoned_chunk``).
     # ``SyncReporter.report_unit_results`` validates a live ack against this and
@@ -158,13 +158,13 @@ class LibrarySyncStateBox:
     # frontend. A unit's emitted shortcuts are split into chunks emitted +
     # committed one at a time (each chunk is a durable checkpoint); this stamps
     # which chunk is in flight so ``SyncReporter.report_unit_results`` can reject
-    # an ack for a stale chunk alongside the run/unit identity check. Set by the
-    # orchestrator before each chunk's ``sync_apply_unit`` emit and cleared to
+    # an ack for a stale chunk alongside the run/unit identity check. Set by
+    # ``ChunkDispatcher`` before each chunk's ``sync_apply_unit`` emit and cleared to
     # ``None`` once the unit's last chunk is committed, the unit is cancelled, or
     # the chunk times out (its identity is moved into ``abandoned_chunk``).
     active_chunk_index: int | None = None
     # Holds the frontend-supplied ``rom_id_to_app_id`` mapping reported
-    # for the active unit. Surfaces the result so the orchestrator can
+    # for the active unit. Surfaces the result so ``ChunkDispatcher`` can
     # accumulate the per-unit registry into the cross-run accumulators.
     last_unit_results: dict[str, int] | None = None
     # A heartbeat-timed-out apply chunk, stashed for its late

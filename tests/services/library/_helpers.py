@@ -7,7 +7,8 @@ used across :class:`TestFetchCollectionRoms`,
 collection tests, plus the shared-UoW seeders the sub-service test
 files drive their fixtures with — including ``_seed_rom_row``, which the
 orchestrator and registry-query suites both build their bound-row baselines
-from.
+from, and the fake-RomM seeders the orchestrator and chunk-dispatcher suites
+drive their end-to-end runs through.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -21,9 +22,10 @@ def rebind_loop(library_service, loop):
     Four of the façade's sub-services (fetcher, orchestrator, reporter,
     session-budget monitor) hold their own ctor-bound ``_loop``. Tests that
     swap in a mock loop must propagate it to all four so async calls land on
-    the override. ``ShortcutLaunchResolver`` and ``LocalLibraryReader`` hold
-    none — their methods are synchronous workers the orchestrator offloads
-    through *its* loop.
+    the override. ``ShortcutLaunchResolver``, ``LocalLibraryReader`` and
+    ``ChunkDispatcher`` hold none — the first two are synchronous workers the
+    orchestrator offloads through *its* loop, and the dispatcher offloads
+    nothing at all.
     """
     library_service._fetcher._loop = loop
     library_service._orchestrator._loop = loop
@@ -172,3 +174,50 @@ def _seed_rom_row(
     with plugin._uow:
         plugin._uow.roms.save(rom)
         plugin._uow.roms.set_applied_launch_options(rom_id, applied_launch_options)
+
+
+def _use_fake_romm(plugin, fake_romm_api):
+    """Swap the plugin's MagicMock ``_romm_api`` for the seeded fake.
+
+    The library-suite plugin fixture wires ``_romm_api`` as a
+    ``MagicMock()`` (kept for the test_fetcher.py tests that match
+    callables by identity). Each test that wants the end-to-end path
+    drives through this helper, which rebinds the fake onto every
+    sub-service holding a stale reference.
+    """
+    plugin._romm_api = fake_romm_api
+    plugin._sync_service._fetcher._romm_api = fake_romm_api
+    plugin._artwork_service._romm_api = fake_romm_api
+    plugin._shortcut_removal_service._romm_api = fake_romm_api
+    return fake_romm_api
+
+
+def _seed_platform(fake_romm_api, *, platform_id, name, slug, roms):
+    """Seed a platform plus its ROMs on the fake.
+
+    ROMs are dicts with at least ``id``/``name``; ``platform_id`` and
+    ``platform_slug``/``platform_name`` are stamped automatically so the
+    fetcher's enrichment loop sees consistent data.
+    """
+    fake_romm_api.platforms.append({"id": platform_id, "name": name, "slug": slug, "rom_count": len(roms)})
+    for rom in roms:
+        rom_id = rom["id"]
+        full_rom = {
+            "platform_id": platform_id,
+            "platform_name": name,
+            "platform_slug": slug,
+            **rom,
+        }
+        fake_romm_api.roms[rom_id] = full_rom
+
+
+async def _fake_wait_set_event(_unit, event):
+    """Default ``_wait_for_unit_complete`` stand-in: set the event and
+    return an empty rom_id_to_app_id map.
+
+    The frontend's ``report_unit_results`` callback never runs in tests.
+    The dispatcher's per-chunk loop requires the event to fire and a
+    mapping to come back — this helper provides both.
+    """
+    event.set()
+    return {}

@@ -293,3 +293,59 @@ class TestSessionBudgetMonitor:
 
         assert result["rss_kb"] == 1_234_000
         assert result["memory_delta_kb"] == 800_000
+
+
+class TestClipCoverRefreshes:
+    """Trimming a chunk's additive cover work to the headroom the gate left (#1386)."""
+
+    def test_clip_fails_open_when_rss_unavailable(self, plugin):
+        budget = plugin._sync_service._session_budget
+        refreshes = [{"rom_id": 1, "app_id": 10}, {"rom_id": 2, "app_id": 20}]
+        assert (
+            budget.clip_cover_refreshes(refreshes, rss_kb=None, creates=0, updates=0, limit_kb=1_000_000) == refreshes
+        )
+
+    def test_clip_keeps_all_with_headroom(self, plugin):
+        from domain.session_budget import COVER_TRANSIENT_KB, EFFECTIVE_CEILING_KB
+
+        budget = plugin._sync_service._session_budget
+        refreshes = [{"rom_id": 1, "app_id": 10}, {"rom_id": 2, "app_id": 20}]
+        rss = EFFECTIVE_CEILING_KB - 10 * COVER_TRANSIENT_KB
+        assert (
+            budget.clip_cover_refreshes(refreshes, rss_kb=rss, creates=0, updates=0, limit_kb=EFFECTIVE_CEILING_KB)
+            == refreshes
+        )
+
+    def test_clip_accounts_for_the_chunks_own_cost(self, plugin):
+        from domain.session_budget import EFFECTIVE_CEILING_KB, chunk_worst_cost_kb
+
+        budget = plugin._sync_service._session_budget
+        refreshes = [{"rom_id": i, "app_id": i * 10} for i in range(1, 6)]
+        # Headroom of exactly the chunk's own cost → zero left for refreshes.
+        rss = EFFECTIVE_CEILING_KB - chunk_worst_cost_kb(3, 2)
+        assert (
+            budget.clip_cover_refreshes(refreshes, rss_kb=rss, creates=3, updates=2, limit_kb=EFFECTIVE_CEILING_KB)
+            == []
+        )
+
+    def test_clip_negative_headroom_yields_empty(self, plugin):
+        from domain.session_budget import EFFECTIVE_CEILING_KB
+
+        budget = plugin._sync_service._session_budget
+        refreshes = [{"rom_id": 1, "app_id": 10}]
+        assert (
+            budget.clip_cover_refreshes(
+                refreshes, rss_kb=EFFECTIVE_CEILING_KB + 1, creates=0, updates=0, limit_kb=EFFECTIVE_CEILING_KB
+            )
+            == []
+        )
+
+    def test_clip_keeps_list_order(self, plugin):
+        from domain.session_budget import COVER_TRANSIENT_KB, EFFECTIVE_CEILING_KB
+
+        budget = plugin._sync_service._session_budget
+        refreshes = [{"rom_id": i, "app_id": i * 10} for i in range(1, 6)]
+        rss = EFFECTIVE_CEILING_KB - 2 * COVER_TRANSIENT_KB
+        assert budget.clip_cover_refreshes(
+            refreshes, rss_kb=rss, creates=0, updates=0, limit_kb=EFFECTIVE_CEILING_KB
+        ) == [{"rom_id": 1, "app_id": 10}, {"rom_id": 2, "app_id": 20}]

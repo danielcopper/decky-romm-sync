@@ -20,6 +20,10 @@ def _orchestrator(harness):
     return harness.plugin._sync_service._orchestrator
 
 
+def _dispatcher(harness):
+    return harness.plugin._sync_service._chunk_dispatcher
+
+
 async def _ack_immediately(_unit, event):
     """Stand-in for ``_wait_for_unit_complete``: ack with an empty map.
 
@@ -60,7 +64,7 @@ async def test_cancel_sync_stale_run_does_not_abort_fresh_run(harness):
     harness.plugin.settings["enabled_platforms"] = {"1": True}
 
     orch = _orchestrator(harness)
-    orch._wait_for_unit_complete = _ack_immediately
+    _dispatcher(harness)._wait_for_unit_complete = _ack_immediately
 
     # Run A: start through the real callable. The deterministic FakeUuidGen mints
     # a fixed id, so pin run A's id explicitly to model the cross-run race
@@ -137,7 +141,7 @@ async def test_apply_rejected_while_run_in_flight_emits_single_complete(harness)
     harness.plugin.settings["enabled_platforms"] = {"1": True}
 
     orch = _orchestrator(harness)
-    orch._wait_for_unit_complete = _ack_immediately
+    _dispatcher(harness)._wait_for_unit_complete = _ack_immediately
     box = harness.plugin._sync_service._box
 
     # A real preview stages a valid pending_delta (and finalizes to IDLE).

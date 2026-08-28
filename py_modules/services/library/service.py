@@ -10,6 +10,7 @@ lifecycle and safety heartbeat, :class:`SyncReporter` for post-apply
 finalisation and the ``roms``-derived callable queries,
 :class:`SessionBudgetMonitor` for Steam's renderer-heap budget,
 :class:`ShortcutLaunchResolver` for each ROM's launch facts,
+:class:`ChunkDispatcher` for one unit's emit → ack → commit round-trips,
 :class:`LocalLibraryReader` for what this device already recorded about the
 library. The façade itself only wires the
 pieces together and delegates — anything that touches RomM or mutates
@@ -23,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from lib.late_binding import LateBinding
 from services.library._state import CollectionMembership, LibrarySyncStateBox
+from services.library.chunk_dispatcher import ChunkDispatcher, ChunkDispatcherConfig
 from services.library.fetcher import LibraryFetcher, LibraryFetcherConfig
 from services.library.local_library_reader import LocalLibraryReader, LocalLibraryReaderConfig
 from services.library.reporter import SyncReporter, SyncReporterConfig
@@ -102,8 +104,9 @@ class LibraryService:
     (post-apply finalisation + the ``roms``-derived callable queries),
     :class:`SessionBudgetMonitor` (Steam's renderer-heap budget),
     :class:`ShortcutLaunchResolver` (each ROM's installed path + active
-    emulator), and :class:`LocalLibraryReader` (this device's own record of
-    the library, read back out of SQLite) over a
+    emulator), :class:`ChunkDispatcher` (one unit's apply, emitted and
+    committed a chunk at a time), and :class:`LocalLibraryReader` (this
+    device's own record of the library, read back out of SQLite) over a
     single shared :class:`LibrarySyncStateBox`. The façade itself owns the box and
     exposes the callable surface; every implementation method lives on
     one of the sub-services.
@@ -165,11 +168,28 @@ class LibraryService:
         )
 
         # The orchestrator dispatches the per-unit pipeline's finalize
-        # step (sync_collections + sync_complete) through the reporter,
-        # but the reporter doesn't exist yet at this point in __init__.
-        # Thread the forward reference through a LateBinding rather than
-        # writing to a sub-service private after the fact.
+        # step (sync_collections + sync_complete) through the reporter, and
+        # the chunk dispatcher commits every chunk through it, but the
+        # reporter doesn't exist yet at this point in __init__. Thread the
+        # forward reference through a LateBinding rather than writing to a
+        # sub-service private after the fact.
         reporter_binding: LateBinding[SyncReporter] = LateBinding("reporter")
+
+        # Sub-service: chunk dispatcher — one work unit's apply, emitted to the
+        # frontend and committed a chunk at a time. Constructed before the
+        # orchestrator, which holds it and hands it each unit's built delta.
+        self._chunk_dispatcher = ChunkDispatcher(
+            config=ChunkDispatcherConfig(
+                logger=config.logger,
+                emit=config.emit,
+                clock=config.clock,
+                sleeper=config.sleeper,
+                sync_state_box=self._box,
+                reporter=reporter_binding,
+                session_budget=self._session_budget,
+            )
+        )
+
         self._orchestrator = SyncOrchestrator(
             config=SyncOrchestratorConfig(
                 settings=config.settings,
@@ -179,7 +199,6 @@ class LibraryService:
                 emit=config.emit,
                 clock=config.clock,
                 uuid_gen=config.uuid_gen,
-                sleeper=config.sleeper,
                 uow_factory=config.uow_factory,
                 sync_state_box=self._box,
                 fetcher=self._fetcher,
@@ -188,6 +207,7 @@ class LibraryService:
                 shortcut_launch_resolver=self._shortcut_launch_resolver,
                 local_library_reader=self._local_library_reader,
                 session_budget=self._session_budget,
+                chunk_dispatcher=self._chunk_dispatcher,
             )
         )
 

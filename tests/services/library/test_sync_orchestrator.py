@@ -9,8 +9,9 @@ counts.
 
 Two production seams remain mockable per test:
 
-* ``_wait_for_unit_complete`` — waits on a frontend ``report_unit_results``
-  callback that no test exercises. Replaced with a ``fake_wait`` helper.
+* ``ChunkDispatcher._wait_for_unit_complete`` — waits on a frontend
+  ``report_unit_results`` callback that no test exercises. Replaced with a
+  ``fake_wait`` helper.
 * ``_download_artwork`` — delegates to the SteamGridDB pipeline; the
   orchestrator tests do not exercise artwork I/O. Replaced with an
   ``AsyncMock``.
@@ -41,44 +42,15 @@ from domain.work_unit import WorkUnit
 from lib.romm_paging import LIST_PAGE_SIZE
 
 # conftest.py patches decky before this import
-from tests.services.library._helpers import _seed_install, _seed_rom_row
+from tests.services.library._helpers import (
+    _fake_wait_set_event,
+    _seed_install,
+    _seed_platform,
+    _seed_rom_row,
+    _use_fake_romm,
+)
 
 # ── Test helpers ─────────────────────────────────────────────────
-
-
-def _use_fake_romm(plugin, fake_romm_api):
-    """Swap the plugin's MagicMock ``_romm_api`` for the seeded fake.
-
-    The library-suite plugin fixture wires ``_romm_api`` as a
-    ``MagicMock()`` (kept for the test_fetcher.py tests that match
-    callables by identity). Each orchestrator test that wants the
-    end-to-end path drives through this helper, which rebinds the fake
-    onto every sub-service holding a stale reference.
-    """
-    plugin._romm_api = fake_romm_api
-    plugin._sync_service._fetcher._romm_api = fake_romm_api
-    plugin._artwork_service._romm_api = fake_romm_api
-    plugin._shortcut_removal_service._romm_api = fake_romm_api
-    return fake_romm_api
-
-
-def _seed_platform(fake_romm_api, *, platform_id, name, slug, roms):
-    """Seed a platform plus its ROMs on the fake.
-
-    ROMs are dicts with at least ``id``/``name``; ``platform_id`` and
-    ``platform_slug``/``platform_name`` are stamped automatically so the
-    fetcher's enrichment loop sees consistent data.
-    """
-    fake_romm_api.platforms.append({"id": platform_id, "name": name, "slug": slug, "rom_count": len(roms)})
-    for rom in roms:
-        rom_id = rom["id"]
-        full_rom = {
-            "platform_id": platform_id,
-            "platform_name": name,
-            "platform_slug": slug,
-            **rom,
-        }
-        fake_romm_api.roms[rom_id] = full_rom
 
 
 def _seed_collection(
@@ -132,22 +104,10 @@ def _seed_platform_stamp(plugin, slug, *, at, rom_count):
         plugin._uow.platform_sync_state.save(PlatformSyncState.stamp(platform_slug=slug, at=at, rom_count=rom_count))
 
 
-async def _fake_wait_set_event(_unit, event):
-    """Default ``_wait_for_unit_complete`` stand-in: set the event and
-    return an empty rom_id_to_app_id map.
-
-    The frontend's ``report_unit_results`` callback never runs in tests.
-    The orchestrator's per-unit driver requires the event to fire and a
-    mapping to come back — this helper provides both.
-    """
-    event.set()
-    return {}
-
-
 class _ClockAdvancingSleeper:
     """A ``Sleeper`` that advances a ``FakeClock`` on each sleep, so the real
-    heartbeat-clocked ``_wait_for_unit_complete`` times out deterministically
-    without any wall-clock wait (#1367)."""
+    heartbeat-clocked ``ChunkDispatcher._wait_for_unit_complete`` times out
+    deterministically without any wall-clock wait (#1367)."""
 
     def __init__(self, clock, step: float) -> None:
         self._clock = clock
@@ -163,7 +123,8 @@ def _stash_abandoned_and_wind_down(plugin, *, run_id, unit_id, chunk_index, pend
     """Drive the box into the production post-heartbeat-timeout state via the
     real box verbs, then wind the run down — no hand-forced internals (#1367).
 
-    Mirrors exactly what ``_abandon_active_chunk`` (stash the chunk: null the
+    Mirrors exactly what ``ChunkDispatcher._abandon_active_chunk`` (stash the
+    chunk: null the
     event, clear the dispatch identity) followed by the run's terminal
     ``finally: finish_run(run_id)`` (null ``current_sync_id``) leave behind, so a
     late ``report_unit_results`` arriving now must recover the binding through
@@ -1218,7 +1179,7 @@ class TestDoSyncPerUnit:
         plugin.settings["enabled_platforms"] = {"1": True}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-plan"
 
@@ -1263,7 +1224,7 @@ class TestDoSyncPerUnit:
         plugin.settings["enabled_collections"] = {"standard": {"7": True}, "smart": {}, "virtual": {}}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-est"
 
@@ -1316,7 +1277,7 @@ class TestDoSyncPerUnit:
             assert uow.platform_sync_state.get("n64") is None
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-restamp"
 
@@ -1370,7 +1331,7 @@ class TestDoSyncPerUnit:
             event.set()
             return {str(_unit.id * 10): 9000 + int(_unit.id)}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -1412,7 +1373,7 @@ class TestDoSyncPerUnit:
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-abc"
@@ -1449,7 +1410,7 @@ class TestDoSyncPerUnit:
         _seed_install(plugin, 10, file_path="/roms/n64/installed.z64", platform_slug="n64")
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -1492,7 +1453,7 @@ class TestDoSyncPerUnit:
             plugin._uow.roms.set_emulator_override(10, "PCSX ReARMed")
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -1534,7 +1495,7 @@ class TestDoSyncPerUnit:
             plugin._uow.roms.set_emulator_override(10, "Removed Core")
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -1577,7 +1538,7 @@ class TestDoSyncPerUnit:
         download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._download_artwork = download_artwork
         wait_mock = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = wait_mock
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = wait_mock
         commit_mock = AsyncMock()
         plugin._sync_service._reporter.commit_unit_results = commit_mock  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
@@ -1634,7 +1595,7 @@ class TestDoSyncPerUnit:
         plugin.settings["enabled_platforms"] = {"1": True}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = AsyncMock(return_value={})
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = AsyncMock(return_value={})
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -1681,7 +1642,7 @@ class TestDoSyncPerUnit:
         plugin.settings["enabled_platforms"] = {"1": True}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = AsyncMock(return_value={})
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = AsyncMock(return_value={})
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -1731,7 +1692,7 @@ class TestDoSyncPerUnit:
             event.set()
             return {"2": 5000}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = ack_same_appid
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = ack_same_appid
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -1778,7 +1739,7 @@ class TestDoSyncPerUnit:
             event.set()
             return {"2": 5000}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = ack_same_appid
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = ack_same_appid
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -1822,7 +1783,7 @@ class TestDoSyncPerUnit:
             event.set()
             return {str(rid): 9000 + rid for rid in plugin._sync_service._box.pending_sync}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = ack_reps
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = ack_reps
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -1856,7 +1817,7 @@ class TestDoSyncPerUnit:
             event.set()
             return {str(rid): 9000 + rid for rid in plugin._sync_service._box.pending_sync}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = ack_reps
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = ack_reps
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1971,7 +1932,7 @@ class TestDoSyncPerUnit:
             # its rom_id — the emitted rebind entry is keyed to rom 1.
             return {str(rid): 5000 for rid in plugin._sync_service._box.pending_sync}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = ack_reuse
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = ack_reuse
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -2059,7 +2020,7 @@ class TestDoSyncPerUnit:
         )
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -2141,7 +2102,7 @@ class TestDoSyncPerUnit:
         )
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -2182,7 +2143,7 @@ class TestDoSyncPerUnit:
 
         download_artwork = AsyncMock(return_value={10: "/grid/a.png"})
         plugin._sync_service._orchestrator._download_artwork = download_artwork
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -2229,7 +2190,7 @@ class TestDoSyncPerUnit:
             plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return {}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -2260,7 +2221,7 @@ class TestDoSyncPerUnit:
         plugin.settings["enabled_platforms"] = {"1": True}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -2314,7 +2275,7 @@ class TestDoSyncPerUnit:
             plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return {}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -2348,7 +2309,7 @@ class TestSyncRunLifecycle:
             event.set()
             return {"10": 9001}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-clean"
 
@@ -2408,7 +2369,7 @@ class TestSyncRunLifecycle:
             plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return {}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-cancel"
 
@@ -2440,7 +2401,7 @@ class TestSyncRunLifecycle:
         async def wait_timeout(_u, _event):
             return
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = wait_timeout
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = wait_timeout
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-interrupted"
 
@@ -2497,7 +2458,7 @@ class TestSyncRunLifecycle:
             event.set()
             return {"10": 9001}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
 
         # The terminal completed-write raises (e.g. a SQLite lock during the
         # short write UoW) AFTER finalize has already nulled current_sync_id.
@@ -2540,43 +2501,6 @@ class TestSyncRunLifecycle:
         assert after.status == "completed"
         assert after.platforms_completed == ["N64"]
         assert after.collections_completed == []
-
-
-class TestWaitForUnitComplete:
-    """Heartbeat-based per-unit timeout."""
-
-    @pytest.mark.asyncio
-    async def test_returns_results_when_event_set(self, plugin):
-        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
-        event = asyncio.Event()
-        event.set()
-        plugin._sync_service._box.sync_state = SyncState.RUNNING
-        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._orchestrator._clock.monotonic()
-        plugin._sync_service._box.last_unit_results = {"10": 9000}
-
-        results = await plugin._sync_service._orchestrator._wait_for_unit_complete(unit, event)
-        assert results == {"10": 9000}
-
-    @pytest.mark.asyncio
-    async def test_returns_none_on_cancel(self, plugin):
-        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
-        event = asyncio.Event()
-        plugin._sync_service._box.sync_state = SyncState.CANCELLING
-        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._orchestrator._clock.monotonic()
-
-        results = await plugin._sync_service._orchestrator._wait_for_unit_complete(unit, event)
-        assert results is None
-
-    @pytest.mark.asyncio
-    async def test_returns_none_on_heartbeat_timeout(self, plugin):
-        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
-        event = asyncio.Event()
-        plugin._sync_service._box.sync_state = SyncState.RUNNING
-        # Heartbeat is way too old — should timeout immediately on first loop check
-        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._orchestrator._clock.monotonic() - 999.0
-
-        results = await plugin._sync_service._orchestrator._wait_for_unit_complete(unit, event)
-        assert results is None
 
 
 class TestReportUnitResults:
@@ -2909,8 +2833,8 @@ class TestRealOrchestratorLateAckRecovery:
     """The #1367 acceptance path end-to-end through the REAL orchestrator.
 
     Drives a real ``_do_sync_per_unit`` whose only frontend ack never arrives, so
-    the real heartbeat-clocked wait times out, the real ``_abandon_active_chunk``
-    stashes the chunk, and the run's terminal ``finally`` winds the run down
+    the real heartbeat-clocked wait times out, the real
+    ``ChunkDispatcher._abandon_active_chunk`` stashes the chunk, and the run's terminal ``finally`` winds the run down
     (``finish_run`` nulls ``current_sync_id``). Then the real
     ``report_unit_results`` — carrying the identity captured from the emitted
     ``sync_apply_unit`` event — recovers the stash and commits the binding. No box
@@ -2938,7 +2862,8 @@ class TestRealOrchestratorLateAckRecovery:
         # clock-advancing sleeper pushes it past the heartbeat timeout on the
         # second poll — a genuine timeout, no cancel, no stubbed wait.
         orch = plugin._sync_service._orchestrator
-        orch._sleeper = _ClockAdvancingSleeper(orch._clock, 999.0)
+        dispatcher = plugin._sync_service._chunk_dispatcher
+        dispatcher._sleeper = _ClockAdvancingSleeper(dispatcher._clock, 999.0)
 
         # Real run start (claims the slot + stamps current_sync_id).
         assert plugin._sync_service._box.try_begin_run("run-headline") is True
@@ -2998,7 +2923,8 @@ class TestRealOrchestratorLateAckRecovery:
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         orch = plugin._sync_service._orchestrator
-        orch._sleeper = _ClockAdvancingSleeper(orch._clock, 999.0)
+        dispatcher = plugin._sync_service._chunk_dispatcher
+        dispatcher._sleeper = _ClockAdvancingSleeper(dispatcher._clock, 999.0)
 
         assert plugin._sync_service._box.try_begin_run("run-1") is True
         plugin._sync_service._box.sync_last_heartbeat = orch._clock.monotonic()
@@ -3456,7 +3382,7 @@ class TestSyncOneUnitCollectionAndCancel:
         plugin.settings["enabled_collections"] = {"standard": {"7": True}, "smart": {}, "virtual": {}}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -3688,7 +3614,7 @@ class TestSyncOneUnitCollectionAndCancel:
             plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = wait_user_cancel
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = wait_user_cancel
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
@@ -3736,7 +3662,7 @@ class TestSyncOneUnitCollectionAndCancel:
         async def wait_timeout(_unit, _event):
             return
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = wait_timeout
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = wait_timeout
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
@@ -3762,287 +3688,6 @@ class TestSyncOneUnitCollectionAndCancel:
         assert box.abandoned_chunk is not None
         assert (box.abandoned_chunk.unit_id, box.abandoned_chunk.chunk_index) == (1, 0)
         assert [r["id"] for r in box.abandoned_chunk.chunk_rows] == [1]
-
-
-class TestApplyChunking:
-    """A unit's apply is split into durable commit chunks (#1025).
-
-    Each chunk is emitted → acked → committed on its own, so a mid-unit CEF
-    crash forfeits only the in-flight chunk. These tests drive ``_sync_one_unit``
-    directly with a shrunk ``_APPLY_CHUNK_SIZE`` so a handful of singleton ROMs
-    exercises the multi-chunk loop; the exact partition maths is pinned in
-    ``tests/domain/test_sync_chunking.py``.
-    """
-
-    @pytest.mark.asyncio
-    async def test_large_unit_emits_one_event_and_commit_per_chunk(self, plugin, fake_romm_api, monkeypatch):
-        """Five singletons at chunk size 2 → three ``sync_apply_unit`` events with
-        continuous unit-wide chunk fields, and one commit per chunk carrying only
-        that chunk's rows."""
-        import decky
-
-        from services.library import sync_orchestrator
-
-        decky.emit.reset_mock()
-        plugin.loop = asyncio.get_event_loop()
-        _use_fake_romm(plugin, fake_romm_api)
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
-
-        _seed_platform(
-            fake_romm_api,
-            platform_id=1,
-            name="N64",
-            slug="n64",
-            roms=[{"id": i, "name": f"Game {i}"} for i in range(1, 6)],
-        )
-
-        commit_rows: list[list[int]] = []
-
-        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None, collection_stamp=None, fetch_id=None):
-            commit_rows.append([r["id"] for r in chunk_rows])
-
-        plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
-        plugin._sync_service._box.sync_state = SyncState.RUNNING
-        plugin._sync_service._box.current_sync_id = "run-chunk"
-
-        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
-        await plugin._sync_service._orchestrator._sync_one_unit(
-            unit,
-            unit_index=0,
-            total_units=1,
-            synced_rom_ids=set(),
-            collection_memberships={},
-            platform_rom_ids=set(),
-        )
-
-        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
-        assert len(unit_events) == 3
-        assert [e["chunk_index"] for e in unit_events] == [0, 1, 2]
-        assert all(e["chunk_count"] == 3 for e in unit_events)
-        assert [e["chunk_offset"] for e in unit_events] == [0, 2, 4]
-        assert all(e["unit_total"] == 5 for e in unit_events)
-        assert [len(e["shortcuts"]) for e in unit_events] == [2, 2, 1]
-        # One commit per chunk, each with only its chunk's rows.
-        assert commit_rows == [[1, 2], [3, 4], [5]]
-
-    @pytest.mark.asyncio
-    async def test_small_unit_emits_exactly_one_chunk(self, plugin, fake_romm_api):
-        """A unit under the chunk size emits a single chunk — regression guard that
-        the chunk fields collapse to the today's one-shot behaviour."""
-        import decky
-
-        decky.emit.reset_mock()
-        plugin.loop = asyncio.get_event_loop()
-        _use_fake_romm(plugin, fake_romm_api)
-
-        _seed_platform(
-            fake_romm_api,
-            platform_id=1,
-            name="N64",
-            slug="n64",
-            roms=[{"id": i, "name": f"G{i}"} for i in range(1, 4)],
-        )
-
-        plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
-        plugin._sync_service._box.sync_state = SyncState.RUNNING
-        plugin._sync_service._box.current_sync_id = "run-single"
-
-        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
-        await plugin._sync_service._orchestrator._sync_one_unit(
-            unit,
-            unit_index=0,
-            total_units=1,
-            synced_rom_ids=set(),
-            collection_memberships={},
-            platform_rom_ids=set(),
-        )
-
-        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
-        assert len(unit_events) == 1
-        event = unit_events[0]
-        assert event["chunk_index"] == 0
-        assert event["chunk_count"] == 1
-        assert event["chunk_offset"] == 0
-        assert event["unit_total"] == 3
-        assert len(event["shortcuts"]) == 3
-
-    @pytest.mark.asyncio
-    async def test_user_cancel_between_chunks_keeps_committed_chunks(self, plugin, fake_romm_api, monkeypatch):
-        """A user cancel during chunk 1's wait discards the rest but leaves chunk 0
-        committed — the whole point of chunking (#1025)."""
-        from services.library import sync_orchestrator
-
-        plugin.loop = asyncio.get_event_loop()
-        _use_fake_romm(plugin, fake_romm_api)
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
-
-        _seed_platform(
-            fake_romm_api,
-            platform_id=1,
-            name="N64",
-            slug="n64",
-            roms=[{"id": i, "name": f"G{i}"} for i in range(1, 6)],
-        )
-
-        commit_rows: list[list[int]] = []
-
-        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None, collection_stamp=None, fetch_id=None):
-            commit_rows.append([r["id"] for r in chunk_rows])
-
-        plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        box = plugin._sync_service._box
-
-        async def wait(_unit, event):
-            if box.active_chunk_index == 0:
-                event.set()
-                return {}
-            box.sync_state = SyncState.CANCELLING  # user cancel during chunk 1
-            return None
-
-        plugin._sync_service._orchestrator._wait_for_unit_complete = wait
-        box.sync_state = SyncState.RUNNING
-        box.current_sync_id = "run-cancel-chunk"
-
-        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
-        await plugin._sync_service._orchestrator._sync_one_unit(
-            unit,
-            unit_index=0,
-            total_units=1,
-            synced_rom_ids=set(),
-            collection_memberships={},
-            platform_rom_ids=set(),
-        )
-
-        # Only chunk 0 committed; the cancel discarded chunk 1 onward.
-        assert commit_rows == [[1, 2]]
-        # Staging + chunk identity cleared so a stray late ack can't commit.
-        assert box.pending_sync == {}
-        assert box.unit_complete_event is None
-        assert box.active_chunk_index is None
-        assert box.abandoned_chunk is None
-
-    @pytest.mark.asyncio
-    async def test_cancel_in_inter_chunk_window_never_emits_next_chunk(self, plugin, fake_romm_api, monkeypatch):
-        """A cancel landing AFTER chunk 0's commit but BEFORE chunk 1's emit stops
-        the unit at the top of the loop: chunk 1 is never emitted, chunk 0's commit
-        persists, staging cleared. Complements
-        ``test_user_cancel_between_chunks_keeps_committed_chunks`` (cancel DURING
-        the wait) — this is the inter-chunk window, where an un-guarded loop would
-        still emit chunk 1 and leave ~200 shortcuts orphaned until the next sync
-        (#1025)."""
-        import decky
-
-        from services.library import sync_orchestrator
-
-        decky.emit.reset_mock()
-        plugin.loop = asyncio.get_event_loop()
-        _use_fake_romm(plugin, fake_romm_api)
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
-
-        _seed_platform(
-            fake_romm_api,
-            platform_id=1,
-            name="N64",
-            slug="n64",
-            roms=[{"id": i, "name": f"G{i}"} for i in range(1, 6)],
-        )
-
-        commit_rows: list[list[int]] = []
-        box = plugin._sync_service._box
-
-        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None, collection_stamp=None, fetch_id=None):
-            commit_rows.append([r["id"] for r in chunk_rows])
-            # Cancel lands the instant chunk 0's commit resolves — before the loop
-            # returns to the top to emit chunk 1.
-            if len(commit_rows) == 1:
-                box.sync_state = SyncState.CANCELLING
-
-        plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
-        box.sync_state = SyncState.RUNNING
-        box.current_sync_id = "run-inter-chunk"
-
-        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
-        await plugin._sync_service._orchestrator._sync_one_unit(
-            unit,
-            unit_index=0,
-            total_units=1,
-            synced_rom_ids=set(),
-            collection_memberships={},
-            platform_rom_ids=set(),
-        )
-
-        # Chunk 1 is never emitted — the loop stopped at its top before any emit —
-        # so the frontend has no orphaned chunk to churn and later fail the ack on.
-        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
-        assert len(unit_events) == 1
-        assert unit_events[0]["chunk_index"] == 0
-        # Chunk 0's commit persists.
-        assert commit_rows == [[1, 2]]
-        # Staging + chunk identity cleared so a stray late ack can't commit.
-        assert box.pending_sync == {}
-        assert box.pending_all_roms == {}
-        assert box.unit_complete_event is None
-        assert box.active_unit_id is None
-        assert box.active_chunk_index is None
-        assert box.abandoned_chunk is None
-
-    @pytest.mark.asyncio
-    async def test_heartbeat_timeout_on_chunk_stashes_only_that_chunk(self, plugin, fake_romm_api, monkeypatch):
-        """A heartbeat timeout on chunk 1 stashes ONLY chunk 1's rows (not the whole
-        unit) under chunk 1's identity, so a late ack commits just that chunk."""
-        from services.library import sync_orchestrator
-
-        plugin.loop = asyncio.get_event_loop()
-        _use_fake_romm(plugin, fake_romm_api)
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
-
-        _seed_platform(
-            fake_romm_api,
-            platform_id=1,
-            name="N64",
-            slug="n64",
-            roms=[{"id": i, "name": f"G{i}"} for i in range(1, 6)],
-        )
-
-        plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        box = plugin._sync_service._box
-
-        async def wait(_unit, event):
-            if box.active_chunk_index == 0:
-                event.set()
-                return {}
-            return None  # heartbeat timeout on chunk 1 (no cancel)
-
-        plugin._sync_service._orchestrator._wait_for_unit_complete = wait
-        box.sync_state = SyncState.RUNNING
-        box.current_sync_id = "run-timeout-chunk"
-
-        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
-        await plugin._sync_service._orchestrator._sync_one_unit(
-            unit,
-            unit_index=0,
-            total_units=1,
-            synced_rom_ids=set(),
-            collection_memberships={},
-            platform_rom_ids=set(),
-        )
-
-        assert box.abandoned_chunk is not None
-        # The dispatch identity is cleared; the chunk index lives on the stash.
-        assert box.active_chunk_index is None
-        assert box.abandoned_chunk.chunk_index == 1
-        # Only chunk 1's rows are stashed for the late ack, not the whole unit.
-        assert [r["id"] for r in box.abandoned_chunk.chunk_rows] == [3, 4]
-        # The timeout requested cancel so the outer loop stops.
-        assert box.sync_state == SyncState.CANCELLING
 
 
 class TestPerUnitMetadataStamping:
@@ -4080,7 +3725,7 @@ class TestPerUnitMetadataStamping:
             event.set()
             return {"10": 5001}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
@@ -4128,7 +3773,7 @@ class TestPerUnitMetadataStamping:
             event.set()
             return {"10": 5001}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
@@ -4180,7 +3825,7 @@ class TestPerUnitMetadataStamping:
             event.set()
             return {"1": 5001, "3": 5003, "5": 5005}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
@@ -4231,7 +3876,7 @@ class TestPlatformCompletionStamp:
             event.set()
             return {"1": 5001, "2": 5002}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
@@ -4255,11 +3900,11 @@ class TestPlatformCompletionStamp:
     async def test_stamp_only_on_final_chunk_carries_unit_rom_count(self, plugin, fake_romm_api, monkeypatch):
         """Across a multi-chunk platform, only the FINAL chunk's commit carries the
         stamp, and it records the unit's whole ``rom_count`` (not the chunk size)."""
-        from services.library import sync_orchestrator
+        from services.library import chunk_dispatcher
 
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 2)
 
         _seed_platform(
             fake_romm_api,
@@ -4276,7 +3921,7 @@ class TestPlatformCompletionStamp:
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
@@ -4301,11 +3946,11 @@ class TestPlatformCompletionStamp:
     async def test_no_stamp_on_user_cancel_mid_unit(self, plugin, fake_romm_api, monkeypatch):
         """A user cancel before a platform's last chunk leaves NO stamp — the platform
         is only partially applied, so the next run must re-fetch it."""
-        from services.library import sync_orchestrator
+        from services.library import chunk_dispatcher
 
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 2)
 
         _seed_platform(
             fake_romm_api,
@@ -4325,7 +3970,7 @@ class TestPlatformCompletionStamp:
             box.sync_state = SyncState.CANCELLING  # user cancel during chunk 1
             return None
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = wait
         box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
@@ -4361,7 +4006,7 @@ class TestPlatformCompletionStamp:
         async def timeout_wait(_unit, _event):
             return None  # heartbeat timeout — box is NOT cancelling
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = timeout_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = timeout_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
@@ -4405,7 +4050,7 @@ class TestPlatformCompletionStamp:
             event.set()
             return {"1": 5001, "2": 5002}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="collection", id="7", name="Favs", slug="favs", rom_count=2, collection_kind="standard")
@@ -4431,11 +4076,11 @@ class TestPlatformCompletionStamp:
         rows on a generation the stamp never names, so the next skip would count
         only the last chunk and wedge itself off permanently.
         """
-        from services.library import sync_orchestrator
+        from services.library import chunk_dispatcher
 
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 2)
 
         _seed_platform(
             fake_romm_api,
@@ -4452,7 +4097,7 @@ class TestPlatformCompletionStamp:
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-abc"
 
@@ -4502,7 +4147,7 @@ class TestPlatformCompletionStamp:
             event.set()
             return {"1": 5001, "2": 5002}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-abc"
 
@@ -4529,11 +4174,11 @@ class TestPlatformCompletionStamp:
         let the next sync skip the half-applied platform, dropping every game the
         cancelled run never re-bound.
         """
-        from services.library import sync_orchestrator
+        from services.library import chunk_dispatcher
 
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 2)
 
         _seed_platform(
             fake_romm_api,
@@ -4555,7 +4200,7 @@ class TestPlatformCompletionStamp:
             box.sync_state = SyncState.CANCELLING  # user cancel during chunk 1
             return None
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = wait
         box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
@@ -4593,7 +4238,7 @@ class TestPlatformCompletionStamp:
         async def timeout_wait(_unit, _event):
             return None  # heartbeat timeout — box is NOT cancelling
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = timeout_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = timeout_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
@@ -4631,7 +4276,7 @@ class TestPlatformCompletionStamp:
             event.set()
             return {"1": 5001, "2": 5002}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
@@ -4801,7 +4446,7 @@ class TestRegression738CacheCorruption:
             event.set()
             return {"1": 1001, "2": 1002, "3": 1003}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -4811,28 +4456,6 @@ class TestRegression738CacheCorruption:
         with plugin._uow as uow:
             for rid, meta in seeds.items():
                 assert uow.rom_metadata.get(rid) == meta
-
-
-class TestWaitForUnitCompleteCancelled:
-    """Tests for asyncio.CancelledError in _wait_for_unit_complete."""
-
-    @pytest.mark.asyncio
-    async def test_cancelled_error_during_sleep_is_logged_and_reraised(self, plugin):
-        """If the inner sleep is cancelled, log + re-raise so the outer loop sees the cancel."""
-
-        class _CancellingSleeper:
-            async def sleep(self, _seconds: float) -> None:
-                raise asyncio.CancelledError()
-
-        plugin._sync_service._orchestrator._sleeper = _CancellingSleeper()
-        plugin._sync_service._box.sync_state = SyncState.RUNNING
-        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._orchestrator._clock.monotonic()
-
-        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
-        event = asyncio.Event()  # never set — wait will enter the sleep path
-
-        with pytest.raises(asyncio.CancelledError):
-            await plugin._sync_service._orchestrator._wait_for_unit_complete(unit, event)
 
 
 class TestDownloadArtworkDelegation:
@@ -4895,7 +4518,7 @@ class TestFetchNarrationInterplay:
         _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "A"}])
         plugin.settings["enabled_platforms"] = {"1": True}
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -4925,7 +4548,7 @@ class TestFetchNarrationInterplay:
         )
         plugin.settings["enabled_platforms"] = {"1": True}
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -4976,7 +4599,7 @@ class TestComponentGroupKeyStamping:
         )
         plugin.settings["enabled_platforms"] = {"1": True}
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -5015,7 +4638,7 @@ class TestDeltaRestrictedApply:
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-delta"
 
@@ -5132,7 +4755,7 @@ class TestCoverRefreshPass:
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-cover"
 
@@ -5211,10 +4834,10 @@ class TestCoverRefreshPass:
     async def test_refreshes_ride_only_the_first_chunk(self, plugin, fake_romm_api, monkeypatch):
         # Four changed items at chunk size 2 → two chunks; rom 1's cover also
         # changed. The refresh entry rides chunk 0 only; chunk 1 carries [].
-        from services.library import sync_orchestrator
+        from services.library import chunk_dispatcher
 
         self._apply_setup(plugin, fake_romm_api)
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 2)
         _seed_platform(
             fake_romm_api,
             platform_id=1,
@@ -5289,57 +4912,6 @@ class TestCoverRefreshPass:
             assert uow.roms.get(1).cover_source == "/a.png?ts=2026-07-11 12:00:00"
             assert uow.roms.get(2).cover_source == "/b.png?ts=2026-07-11 12:00:00"
 
-    # ── _clip_cover_refreshes (the clip primitive) ───────────────
-
-    def test_clip_fails_open_when_rss_unavailable(self, plugin):
-        orch = plugin._sync_service._orchestrator
-        refreshes = [{"rom_id": 1, "app_id": 10}, {"rom_id": 2, "app_id": 20}]
-        assert orch._clip_cover_refreshes(refreshes, rss_kb=None, creates=0, updates=0, limit_kb=1_000_000) == refreshes
-
-    def test_clip_keeps_all_with_headroom(self, plugin):
-        from domain.session_budget import COVER_TRANSIENT_KB, EFFECTIVE_CEILING_KB
-
-        orch = plugin._sync_service._orchestrator
-        refreshes = [{"rom_id": 1, "app_id": 10}, {"rom_id": 2, "app_id": 20}]
-        rss = EFFECTIVE_CEILING_KB - 10 * COVER_TRANSIENT_KB
-        assert (
-            orch._clip_cover_refreshes(refreshes, rss_kb=rss, creates=0, updates=0, limit_kb=EFFECTIVE_CEILING_KB)
-            == refreshes
-        )
-
-    def test_clip_accounts_for_the_chunks_own_cost(self, plugin):
-        from domain.session_budget import EFFECTIVE_CEILING_KB, chunk_worst_cost_kb
-
-        orch = plugin._sync_service._orchestrator
-        refreshes = [{"rom_id": i, "app_id": i * 10} for i in range(1, 6)]
-        # Headroom of exactly the chunk's own cost → zero left for refreshes.
-        rss = EFFECTIVE_CEILING_KB - chunk_worst_cost_kb(3, 2)
-        assert (
-            orch._clip_cover_refreshes(refreshes, rss_kb=rss, creates=3, updates=2, limit_kb=EFFECTIVE_CEILING_KB) == []
-        )
-
-    def test_clip_negative_headroom_yields_empty(self, plugin):
-        from domain.session_budget import EFFECTIVE_CEILING_KB
-
-        orch = plugin._sync_service._orchestrator
-        refreshes = [{"rom_id": 1, "app_id": 10}]
-        assert (
-            orch._clip_cover_refreshes(
-                refreshes, rss_kb=EFFECTIVE_CEILING_KB + 1, creates=0, updates=0, limit_kb=EFFECTIVE_CEILING_KB
-            )
-            == []
-        )
-
-    def test_clip_keeps_list_order(self, plugin):
-        from domain.session_budget import COVER_TRANSIENT_KB, EFFECTIVE_CEILING_KB
-
-        orch = plugin._sync_service._orchestrator
-        refreshes = [{"rom_id": i, "app_id": i * 10} for i in range(1, 6)]
-        rss = EFFECTIVE_CEILING_KB - 2 * COVER_TRANSIENT_KB
-        assert orch._clip_cover_refreshes(
-            refreshes, rss_kb=rss, creates=0, updates=0, limit_kb=EFFECTIVE_CEILING_KB
-        ) == [{"rom_id": 1, "app_id": 10}, {"rom_id": 2, "app_id": 20}]
-
     # ── delegation ───────────────────────────────────────────────
 
     @pytest.mark.asyncio
@@ -5375,7 +4947,7 @@ class TestSessionBudgetGate:
     @staticmethod
     def _arm_two_chunk_apply(plugin, fake_romm_api, monkeypatch):
         """Seed a 2-ROM platform and force one shortcut per chunk (2 chunks)."""
-        from services.library import sync_orchestrator
+        from services.library import chunk_dispatcher
 
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
@@ -5388,13 +4960,13 @@ class TestSessionBudgetGate:
         )
         plugin.settings["enabled_platforms"] = {"1": True}
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 1)
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 1)
 
         async def fake_wait(_u, event):
             event.set()
             return {}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-budget"
 
@@ -5435,20 +5007,20 @@ class TestSessionBudgetGate:
     @staticmethod
     def _arm_single_chunk_apply(plugin, fake_romm_api, monkeypatch, *, run_id):
         """Seed a 1-ROM platform (→ one chunk = the run's first chunk)."""
-        from services.library import sync_orchestrator
+        from services.library import chunk_dispatcher
 
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
         _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "Solo"}])
         plugin.settings["enabled_platforms"] = {"1": True}
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 1)
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 1)
 
         async def fake_wait(_u, event):
             event.set()
             return {}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = run_id
 
@@ -5612,7 +5184,7 @@ class TestSessionBudgetGate:
             event.set()
             return {"10": 9001}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-restart"
 
@@ -5796,11 +5368,11 @@ class TestRunProgressCounters:
             event.set()
             return pending.pop(0) if pending else {}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
 
     @pytest.mark.asyncio
     async def test_committed_chunks_count_toward_done(self, plugin, fake_romm_api, monkeypatch):
-        from services.library import sync_orchestrator
+        from services.library import chunk_dispatcher
 
         # Two brand-new ROMs, one shortcut per chunk → two chunks, both acked and
         # committed. The plan's ROM total is the denominator.
@@ -5813,7 +5385,7 @@ class TestRunProgressCounters:
             roms=[{"id": 10, "name": "Alpha"}, {"id": 11, "name": "Beta"}],
         )
         plugin.settings["enabled_platforms"] = {"1": True}
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 1)
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 1)
         self._acks(plugin, {"10": 1010}, {"11": 1011})
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -5824,7 +5396,7 @@ class TestRunProgressCounters:
 
     @pytest.mark.asyncio
     async def test_emitted_but_uncommitted_chunk_does_not_count(self, plugin, fake_romm_api, monkeypatch):
-        from services.library import sync_orchestrator
+        from services.library import chunk_dispatcher
 
         # The first chunk is emitted, then the user cancels mid-wait: the wait gives
         # up (None), the chunk never commits, and its item must NOT be reported done.
@@ -5837,7 +5409,7 @@ class TestRunProgressCounters:
             roms=[{"id": 10, "name": "Alpha"}, {"id": 11, "name": "Beta"}],
         )
         plugin.settings["enabled_platforms"] = {"1": True}
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 1)
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 1)
         box = plugin._sync_service._box
 
         async def cancel_mid_wait(_unit, _event) -> dict[str, int] | None:
@@ -5845,7 +5417,7 @@ class TestRunProgressCounters:
             box.request_cancel()
             return None
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = cancel_mid_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = cancel_mid_wait
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -5854,7 +5426,7 @@ class TestRunProgressCounters:
 
     @pytest.mark.asyncio
     async def test_paused_run_counts_only_the_committed_chunk(self, plugin, fake_romm_api, monkeypatch):
-        from services.library import sync_orchestrator
+        from services.library import chunk_dispatcher
 
         # The session-budget gate pauses at the second chunk's boundary — before its
         # emit — so exactly one chunk committed. This is the banner's own scenario.
@@ -5867,7 +5439,7 @@ class TestRunProgressCounters:
             roms=[{"id": 10, "name": "Alpha"}, {"id": 11, "name": "Beta"}],
         )
         plugin.settings["enabled_platforms"] = {"1": True}
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 1)
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 1)
         self._acks(plugin, {"10": 1010}, {"11": 1011})
         plugin._renderer_gc.result = True
         plugin._renderer_rss.rss_kb = 2_199_000  # first chunk passes (vs cliff), second pauses
@@ -6019,7 +5591,7 @@ class TestProcessedGamesNumerator:
             event.set()
             return {"11": 1011}
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -6035,7 +5607,7 @@ class TestProcessedGamesNumerator:
         (and agrees with the paused banner's ``run_done_items``)."""
         import decky
 
-        from services.library import sync_orchestrator
+        from services.library import chunk_dispatcher
 
         self._arm(plugin, fake_romm_api, run_id="run-resume-interrupt")
 
@@ -6064,7 +5636,7 @@ class TestProcessedGamesNumerator:
         _seed_rom_row(plugin, 21, app_id=1021, platform_slug="gba", name="Old Name", fs_name="changed.gba")
         _seed_rom_row(plugin, 22, app_id=1022, platform_slug="gba", name="Old Other", fs_name="other.gba")
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
-        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 1)
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 1)
 
         acks: list[dict[str, int] | None] = [{"21": 1021}, None]
 
@@ -6075,7 +5647,7 @@ class TestProcessedGamesNumerator:
                 return ack
             return None  # heartbeat timeout — the box is still RUNNING
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = wait_ack_then_timeout
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = wait_ack_then_timeout
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 

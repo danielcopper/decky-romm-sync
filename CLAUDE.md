@@ -220,9 +220,11 @@ Format: **invariant** — tier — enforced by.
   rather than descriptive: these reads open their own short UoW and are offloaded to an executor at points chosen for
   cheapness, so a write among them would land at a moment nobody picked. The platform stamp's DELETE stayed in
   `sync_orchestrator.py` on those grounds — it is a write, so a read-only module cannot hold it, and it is cohesive with
-  the apply pipeline that performs it, not with the projections a run reasons about. **Why it sits exactly where it sits
-  in that pipeline is a property of its call site, not of its module** — after the fetch, after the artwork, after the
-  cancel guard, before the first chunk (ADR-0023 / #1025) — and that argument lives in full at the call site's own
+  the half of the apply pipeline that performs it: the DELETE stayed with `_sync_one_unit`, which builds a unit's delta,
+  while the re-stamp went to `ChunkDispatcher._build_final_platform_stamp` with the final chunk whose commit UoW it
+  rides, so the stamp's two ends now sit in two modules and each names the other. **Why the DELETE sits exactly where it
+  sits in that pipeline is a property of its call site, not of its module** — after the fetch, after the artwork, after
+  the cancel guard, before the first chunk (ADR-0023 / #1025) — and that argument lives in full at the call site's own
   comment, which is the only place a move could not have carried it away from
 - **An emitted `sync_progress` frame stops a run (`running: False`) only with a terminal stage, and a terminal stage is
   only ever emitted with the run stopped** — test — `tests/services/library/test_terminal_frame_contract.py`

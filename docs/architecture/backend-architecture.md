@@ -276,16 +276,17 @@ continue unrelated groups.
 
 #### LibraryService decomposition (`services/library/`)
 
-The library sync subsystem is a façade over six sub-services that coordinate through a shared `LibrarySyncStateBox`:
+The library sync subsystem is a façade over seven sub-services that coordinate through a shared `LibrarySyncStateBox`:
 
 | Module                        | Role                                                                                                                                                                                                                                                                                                                                       |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `service.py`                  | `LibraryService` façade — public callable surface; wires the sub-services and delegates                                                                                                                                                                                                                                                    |
 | `fetcher.py`                  | `LibraryFetcher` — read-only RomM roundtrips: list platforms/collections, the incremental/full pagination loop, per-unit work-queue construction. The outward half of the read pair below                                                                                                                                                  |
 | `local_library_reader.py`     | `LocalLibraryReader` — the inward pair of `fetcher.py`: what THIS DEVICE recorded about the library, read back out of SQLite (the bound `Rom` rows, the completion stamps, the persisted sibling keys, the last finished run), shaped into the projections a run decides against. Declared read-only (`scripts/check_read_only_module.py`) |
-| `sync_orchestrator.py`        | `SyncOrchestrator` — preview (read-only), the per-unit apply pipeline, cancel, the heartbeat clock, progress emission                                                                                                                                                                                                                      |
+| `sync_orchestrator.py`        | `SyncOrchestrator` — preview (read-only), the per-unit apply pipeline (fetch → collapse → delta, then hand the delta to the dispatcher), cancel, the run lifecycle, the heartbeat clock, progress emission                                                                                                                                 |
+| `chunk_dispatcher.py`         | `ChunkDispatcher` — one unit's apply as durable chunk round-trips: emit `sync_apply_unit`, wait out the heartbeat clock for the ack, commit the chunk through the reporter, and stash or discard a chunk whose ack never came. It opens no transaction, and the run's `try_begin_run` / `finish_run` stay with the orchestrator            |
 | `reporter.py`                 | `SyncReporter` — post-apply finalisation (artwork filenames, per-unit `roms` upsert + `SyncRun` lifecycle) and the `roms`-derived queries                                                                                                                                                                                                  |
-| `session_budget.py`           | `SessionBudgetMonitor` — Steam's per-session renderer-heap budget: the GC-settled RSS measurement, the chunk-boundary pause verdict, the post-preview prognosis, the run-start baseline, and the `get_session_budget_status` payload                                                                                                       |
+| `session_budget.py`           | `SessionBudgetMonitor` — Steam's per-session renderer-heap budget: the GC-settled RSS measurement, the chunk-boundary pause verdict, the headroom clip that trims a chunk's additive cover work to what that verdict left, the post-preview prognosis, the run-start baseline, and the `get_session_budget_status` payload                 |
 | `shortcut_launch_resolver.py` | `ShortcutLaunchResolver` — resolves each ROM's launch facts for the shortcut bake: the disc-resolved installed path and the active emulator, both handed to `build_shortcuts_data`                                                                                                                                                         |
 | `_state.py`                   | `LibrarySyncStateBox` — shared mutable in-flight sync state; single source of truth threaded through every sub-service, and the **sole owner** of the run-lifecycle pair (`sync_state` / `current_sync_id`) via its verb methods                                                                                                           |
 
@@ -436,20 +437,21 @@ the final-chunk-only rule).
 **Per-unit apply is chunked, durable per chunk
 ([ADR-0023](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0023-chunked-per-unit-apply.md)).** The
 delta emit list is split into fixed-size chunks (`_APPLY_CHUNK_SIZE`, 200) by the pure
-`domain/sync_chunking.py::build_unit_chunks`, and the orchestrator processes them one at a time: emit `sync_apply_unit`
-→ wait for the ack → commit that chunk's `roms` rows durably → next chunk. Each `sync_apply_unit` carries `chunk_index`
-/ `chunk_count` / `chunk_offset` / `unit_total`, and `shortcuts` is the chunk slice; the reporter's per-chunk commit is
-the same group-aware two-pass write (every fetched sibling upserted, only representatives bound; Rom row then
-`rom_metadata`, FK-safe) over that chunk's row subset, so a committed chunk is crash-safe on its own and a mid-unit
-failure forfeits only the in-flight chunk. Chunks cut **only** at sibling-group boundaries (overflowing 200 to keep a
-game's dumps whole so they never straddle two commits); no-emit groups and unmatched leftovers ride chunk 0, and an
-empty unit is one empty chunk (the empty round-trip still commits its unbound rows). The whole-unit staging
-(`pending_sync` / `pending_all_roms` / `pending_cover_sources`) is set once; only the per-chunk coordination is re-armed
-each chunk. The motivating field crash is [#797](https://github.com/danielcopper/decky-romm-sync/issues/797): a
-3084-shortcut unit emitted in one frame lost ~24 minutes of work when `steamwebhelper` OOM-crashed before any ack — a
-200-chunk caps both the bridge payload (~200 KB vs ~3 MB) and the crash blast radius (~2 min vs 24+).
+`domain/sync_chunking.py::build_unit_chunks`, and `ChunkDispatcher` (`services/library/chunk_dispatcher.py`) processes
+them one at a time: emit `sync_apply_unit` → wait for the ack → commit that chunk's `roms` rows durably → next chunk.
+Each `sync_apply_unit` carries `chunk_index` / `chunk_count` / `chunk_offset` / `unit_total`, and `shortcuts` is the
+chunk slice; the reporter's per-chunk commit is the same group-aware two-pass write (every fetched sibling upserted,
+only representatives bound; Rom row then `rom_metadata`, FK-safe) over that chunk's row subset, so a committed chunk is
+crash-safe on its own and a mid-unit failure forfeits only the in-flight chunk. Chunks cut **only** at sibling-group
+boundaries (overflowing 200 to keep a game's dumps whole so they never straddle two commits); no-emit groups and
+unmatched leftovers ride chunk 0, and an empty unit is one empty chunk (the empty round-trip still commits its unbound
+rows). The whole-unit staging (`pending_sync` / `pending_all_roms` / `pending_cover_sources`) is set once; only the
+per-chunk coordination is re-armed each chunk. The motivating field crash is
+[#797](https://github.com/danielcopper/decky-romm-sync/issues/797): a 3084-shortcut unit emitted in one frame lost ~24
+minutes of work when `steamwebhelper` OOM-crashed before any ack — a 200-chunk caps both the bridge payload (~200 KB vs
+~3 MB) and the crash blast radius (~2 min vs 24+).
 
-**Per-chunk wait: timeout vs. cancel.** The orchestrator emits each chunk's `sync_apply_unit`, then waits on
+**Per-chunk wait: timeout vs. cancel.** The dispatcher emits each chunk's `sync_apply_unit`, then waits on
 `unit_complete_event` (heartbeat-clocked) for the frontend's `report_unit_results` ack. When the wait returns `None` the
 teardown branches on the cause (#1052) — and either way, **every chunk committed before this one stays committed**:
 
@@ -457,7 +459,7 @@ teardown branches on the cause (#1052) — and either way, **every chunk committ
   the staging, null `unit_complete_event`, and clear `active_unit_id` + `active_chunk_index`. A stray late ack then
   no-ops.
 - **Heartbeat timeout** (still RUNNING) — the frontend has already created this chunk's Steam shortcuts and will fire a
-  late `report_unit_results`, but in production **after** the run has already wound down. The orchestrator moves the
+  late `report_unit_results`, but in production **after** the run has already wound down. The dispatcher moves the
   abandoned chunk into an `abandoned_chunk` stash on the box (`stash_abandoned_chunk`): its run/unit/chunk identity plus
   **this chunk's** ROMs (only the abandoned chunk, never the whole unit, the `metadatum` source), while it **keeps** the
   whole-unit staging (`pending_sync` / `pending_all_roms` / `pending_cover_sources`) live for the recovery commit to
@@ -478,7 +480,7 @@ teardown branches on the cause (#1052) — and either way, **every chunk committ
 Steam's `SharedJSContext` renderer OOM-crashes at ~2.45–2.53 GB RSS and never self-recovers within a session; each
 created shortcut costs 0.7–1.5 MB permanently (measured on-device). Chunking (ADR-0023) makes hitting that cliff a cheap
 resume; this gate stops the run _before_ it, at a chunk boundary, as a controlled pause. Every renderer reading and
-verdict below belongs to `SessionBudgetMonitor` (`services/library/session_budget.py`), which the orchestrator holds
+verdict below belongs to `SessionBudgetMonitor` (`services/library/session_budget.py`), which the chunk dispatcher holds
 directly — the fakeable seams are the two renderer adapters below, not the monitor. At each chunk boundary the monitor
 reads the renderer's RSS (`RendererRssFn`, `adapters/renderer_rss.py` — the max `VmRSS` across `steamwebhelper`
 processes from `/proc`) and, when that raw reading is at/above `GC_SKIP_BELOW_KB` (1.5 GB), forces a renderer GC
