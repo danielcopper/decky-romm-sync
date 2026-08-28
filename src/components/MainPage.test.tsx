@@ -5572,6 +5572,20 @@ describe("MainPage", () => {
     // -------------------------------------------------------------------------
     describe("the controls that start a preview never appear over one", () => {
       it("not while a preview run is in flight, on a fresh mount", async () => {
+        // The mount lands in the start window, where the backend has not yet
+        // reported the run the store already knows about — the device case that
+        // put the idle buttons over a live preview.
+        setSyncProgress(optimisticStart());
+        vi.mocked(backend.getSyncStatus).mockResolvedValue(lingeringDoneSnapshot());
+
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        expect(startControls(container)).toEqual([]);
+        await flushAsync();
+        expect(startControls(container)).toEqual([]);
+        expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
+      });
+
+      it("not while a preview run the backend confirms is in flight, on a fresh mount", async () => {
         setSyncProgress({ running: true, stage: "fetching", message: "Fetching library...", runId: "run-live" });
         vi.mocked(backend.getSyncStatus).mockResolvedValue({
           running: true,
