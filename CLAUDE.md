@@ -327,6 +327,14 @@ Format: **invariant** — tier — enforced by.
   mode is why the entry exists rather than being left to the comment: stamp after the emit and a fast ack is rejected as
   stray, the wait then stalls the full 60-second heartbeat window, and the run ends by stashing a chunk the frontend had
   already applied — slow, plausible-looking, and silent (#1052 / #1367)
+- **Every path on which the user answers the preview question leaves a live snapshot on neither side — the
+  pending-preview store (`src/utils/pendingPreviewStore.ts`) and the backend's `pending_delta`** — prompt-only — three
+  paths clear the store and tell the backend (`handleDismiss`, `handleApply`, a fresh `handleSync` press); the fourth is
+  the cancel that lands just after a preview was staged, which never adopted it into the store and so discharges the
+  rule by discarding server-side alone. Nothing mechanical can tell: an answer path is a `MainPage` handler, and neither
+  the store nor the backend can know that a call it never received was an answer. Forget the store and a card stands
+  over a decision already made; forget the backend and the terminal-stage re-ask fetches that card back a round trip
+  later
 - **A prune run's claim reservation and its refusal of every conflicting callable happen in one atomic gate hold (the
   preview rebuild does not), and frontend-owned Steam work holds a heartbeated, generation-tombstoned lease through
   every continuation's final write** — test + prompt-only — prune service/gate race tests + contract callable-entry
