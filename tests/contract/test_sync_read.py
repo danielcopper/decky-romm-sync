@@ -28,7 +28,12 @@ from ._seed import seed_platform_stamp, seed_rom
 
 
 async def test_get_sync_status_idle_shape(harness):
-    """Idle: every progress field present; running is False."""
+    """Idle: every progress field present; running is False; the lifecycle says so too.
+
+    ``inFlight`` is the run-lifecycle state carried alongside the frame, and the
+    frontend reads it as evidence rather than inferring "no run" from a frame
+    that may be a leftover — so it belongs in the pinned wire shape.
+    """
     result = await harness.plugin.get_sync_status()
     assert result == {
         "running": False,
@@ -39,6 +44,7 @@ async def test_get_sync_status_idle_shape(harness):
         "step": 0,
         "totalSteps": 0,
         "runId": "",
+        "inFlight": False,
     }
     assert result["running"] is False
     for key in ("current", "total", "step", "totalSteps"):

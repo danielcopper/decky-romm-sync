@@ -323,10 +323,15 @@ class LibrarySyncStateBox:
             return False
         self.sync_state = SyncState.IDLE
         self.current_sync_id = None
-        # Ordering: every run emits its terminal frame before reaching the
-        # ``finally: finish_run(run_id)`` that lands here, so this drops a
-        # snapshot the frontend has already been sent as an event — never one it
-        # is still waiting for. Not itself a frame: nothing emits it, so no
+        # Ordering: every run emits or SCHEDULES its terminal frame before
+        # reaching the ``finally: finish_run(run_id)`` that lands here, so this
+        # drops a snapshot the frontend has already been sent as an event — never
+        # one it is still waiting for. The per-unit error path schedules its emit
+        # through ``create_task``, which may run after this line; that is safe
+        # only because the coroutine binds the ERROR frame BY VALUE and this
+        # rebinds the attribute rather than mutating the dict it holds. A future
+        # in-place edit here would corrupt a frame already handed to a pending
+        # task. Not itself a frame either way: nothing emits this one, so no
         # ``running: False`` reaches the panel mid-run from this line.
         self.sync_progress = _default_progress()
         return True

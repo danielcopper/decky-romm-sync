@@ -613,7 +613,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // replace behavior (the store holds nothing worth preserving).
     const storeAtIssue = getSyncProgress();
     getSyncStatus()
-      .then((backendProgress) => {
+      .then(({ inFlight, ...backendProgress }) => {
         const stored = getSyncProgress();
         // An answer reporting nothing in flight has no authority over a write
         // that landed after the read was issued: a Sync click in that window
@@ -621,28 +621,35 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         // it existed, so applying it would retract a run that has just started
         // (#751). The store's own frames then carry the run from here.
         if (!backendProgress.running && stored !== storeAtIssue) return;
-        // Nor over a run the store is tracking right now. The backend keeps
-        // answering with a snapshot until the NEXT run overwrites it, and the
-        // next run's first frame is a reconcile plus a round trip away — so
-        // between pressing Sync and the backend's first frame, this read answers
-        // with the PREVIOUS run: not running, and carrying that run's terminal
-        // stage and message. Adopting it retracted the run the panel was showing
-        // (idle buttons over a live preview) and handed the subscriber below a
-        // terminal stage it announced as this run's ending. A retraction is
-        // therefore allowed only from an answer that names the very run the store
-        // is tracking; the optimistic frame carries no run id, so during that
-        // window nothing can name it — which is correct, because in that window
-        // the store knows about a run the backend has not reported yet.
+        // Retracting a run the store is tracking is a separate question from
+        // reading the frame, and the answer carries both. `inFlight` is the
+        // backend's run-lifecycle state; the frame is the last thing a run said.
+        // Between pressing Sync and the new run's first frame — a reconcile plus
+        // a round trip — the frame belongs to the PREVIOUS run, so taking it for
+        // this one both retracted the run the panel was showing (idle buttons
+        // over a live preview) and handed the subscriber below a terminal stage
+        // it announced as this run's ending.
         //
-        // The residual risk, stated honestly: if a run's terminal frame were ever
-        // missed entirely, the panel would go on believing the run is live rather
-        // than being corrected by the next mount. That is the better failure. A
-        // panel wrongly showing progress is corrected by the next frame or the
-        // next run and blocks nothing in the meantime; a panel wrongly showing
-        // the idle buttons invites a second run on top of a live one, which is
-        // the failure users actually hit.
+        // A retraction is therefore allowed only where the answer is evidence
+        // about the run the store is tracking, which is one of two things: the
+        // answer NAMES that run (its own ending, e.g. a terminal frame this panel
+        // missed while it was away), or the backend reports the lifecycle
+        // explicitly idle AND the store's run carries a backend-stamped id, so it
+        // is a run the backend has seen and is now telling us is over. That
+        // second clause is what keeps a lost terminal frame from wedging the
+        // panel on a run that is not running: the next mount corrects it.
+        //
+        // What is refused is an idle answer against the panel's OWN optimistic
+        // start, which carries no run id because the backend has not stamped one
+        // — there the backend is not silent about the run, it has not heard of it
+        // yet. That frame is not a wedge: the handler that wrote it always
+        // retracts it itself (a preview answered, a failure aborted, or a
+        // per-unit run whose frames stamp a real id), even from an instance the
+        // user has already navigated away from.
+        const backendRunIdle = inFlight === false;
         const namesStoredRun = !!stored.runId && stored.runId === backendProgress.runId;
-        if (!backendProgress.running && stored.running && !namesStoredRun) return;
+        const backendKnowsStoredRun = backendRunIdle && !!stored.runId;
+        if (!backendProgress.running && stored.running && !namesStoredRun && !backendKnowsStoredRun) return;
         const sameRun = backendProgress.runId && stored.runId ? backendProgress.runId === stored.runId : true;
         const isSameLiveRun = backendProgress.running && stored.running && sameRun;
         // Same live run: spread the store (keeping its fine fields + etaSeconds)
@@ -884,6 +891,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       // (so the next sync doesn't start pre-cancelled) and abort to idle.
       if (isCancelRequested()) {
         resetSyncCancel();
+        // The backend staged this snapshot before the cancel reached it, and a
+        // cancel that lands after the preview is computed never travels far
+        // enough to discard it. Say so explicitly: otherwise the terminal frame's
+        // re-ask fetches it a round trip later and puts up the card the user just
+        // cancelled, which reads as the plugin ignoring the press. Best-effort —
+        // a failed discard leaves a snapshot the user can only meet again by
+        // coming back to the page, and must not turn a cancel into an error.
+        detach(syncCancelPreview());
         abortOptimisticSync("Sync cancelled");
         return;
       }
@@ -954,10 +969,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   };
 
   const handleCancel = async () => {
-    if (preview) {
-      await handleDismiss();
-      return;
-    }
+    // No preview branch here. This handler is wired to one button — "Cancel
+    // Sync", in the body a run in flight owns — and that body renders only where
+    // `previewCard` is null, so a preview cannot be what the press is about. The
+    // card's own Cancel calls `handleDismiss` directly. A branch reading the
+    // STORE's preview would fire exactly where the store holds one while a run is
+    // going, dismissing the card and leaving the run untouched with no other way
+    // out of the syncing body.
+    //
     // RC-B (#1202): do NOT re-arm the Sync button here. The backend drains
     // RUNNING → CANCELLING → IDLE asynchronously; flipping back to enabled now
     // lets a quick re-press hit the sync_in_progress reject and look like an

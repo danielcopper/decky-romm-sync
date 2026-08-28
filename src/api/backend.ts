@@ -3,7 +3,7 @@ import { detach } from "../utils/detach";
 import type {
   PluginSettings,
   SyncStats,
-  SyncProgress,
+  SyncStatusAnswer,
   DownloadItem,
   InstalledRom,
   PlatformSyncSetting,
@@ -246,7 +246,7 @@ export const syncCancelPreview = callable<[], BackendResult>("sync_cancel_previe
  * snapshot past its 30-minute TTL, which the apply would refuse anyway.
  */
 export const getPendingPreview = callable<[], PendingPreviewAnswer>("get_pending_preview");
-export const getSyncStatus = callable<[], SyncProgress>("get_sync_status");
+export const getSyncStatus = callable<[], SyncStatusAnswer>("get_sync_status");
 export const getSessionBudgetStatus = callable<[], SessionBudgetStatus>("get_session_budget_status");
 export const clearSyncCache = callable<[], BackendResult>("clear_sync_cache");
 export const getSyncStats = callable<[], SyncStats>("get_sync_stats");

@@ -32,6 +32,13 @@
  * them. Between two reads the same rule holds: the one asked for last wins,
  * whichever answers first.
  *
+ * The answer verbs are not absolute, and must not be: a read ISSUED AFTER a
+ * discard legitimately outranks it, because by then the backend has been told
+ * and is answering about what it holds now — a fresh preview computed since, or
+ * nothing. So what protects a dismissal is not the verb being privileged, it is
+ * the ordering: no read that was already open when the user answered can apply.
+ * A verb that stopped taking a ticket would lose to every read in flight.
+ *
  * **A read only ever FILLS, never clears.** `get_pending_preview` answers
  * `preview: null` for three different situations — nothing is staged, the
  * snapshot aged out, and it is being withheld because a run is in flight — and

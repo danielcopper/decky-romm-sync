@@ -564,12 +564,23 @@ class SyncOrchestrator:
         await self._emit("sync_progress", self._sync_state.sync_progress)
 
     def get_sync_status(self) -> dict[str, Any]:
-        """Return the persisted progress snapshot — the authoritative sync state.
+        """Return the latest progress frame plus whether a run is actually in flight.
 
         Idle returns the default ``running: False`` snapshot; a live run
         returns the latest snapshot written by :meth:`emit_progress`.
+
+        ``inFlight`` is the run-lifecycle state itself, not a re-reading of the
+        frame, and it rides only this answer — never an emitted ``sync_progress``
+        event. The two can disagree, legitimately: during a cancel drain the
+        CANCELLED frame already says ``running: False`` while the slot is still
+        owned, and between ``try_begin_run`` and the run's first frame the
+        opposite holds. It exists because the frontend cannot tell "the backend
+        has no run" from "the backend has not said anything about this run yet"
+        by looking at a frame — and the difference decides whether a panel may
+        retract a run it believes is live. See ``src/components/MainPage.tsx``.
         """
-        return self._sync_state.sync_progress
+        box = self._sync_state
+        return {**box.sync_progress, "inFlight": box.is_in_flight()}
 
     # ── Sync termination ─────────────────────────────────────────
 

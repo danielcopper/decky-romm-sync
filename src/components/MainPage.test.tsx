@@ -66,6 +66,7 @@ import type {
   MigrationStatus,
   SaveSortMigrationStatus,
   SyncStats,
+  SyncStatusAnswer,
   SyncPreview,
   SyncPreviewSummary,
   SessionBudgetStatus,
@@ -5358,8 +5359,10 @@ describe("MainPage", () => {
      *  panel remounting during the start window read it as the state of the run
      *  it was actually watching. The backend now resets the snapshot when a run
      *  finishes; this is the same answer arriving from an older backend, or from
-     *  a run whose reset this read raced. */
-    function lingeringDoneSnapshot(): SyncProgress {
+     *  a run whose reset this read raced. `inFlight: false` is truthful here and
+     *  is the point: during the start window the backend genuinely has no run,
+     *  because `sync_preview` has not claimed the slot yet. */
+    function lingeringDoneSnapshot(): SyncStatusAnswer {
       return {
         running: false,
         stage: "done",
@@ -5367,6 +5370,23 @@ describe("MainPage", () => {
         total: 0,
         message: "Preview ready",
         runId: "run-previous",
+        inFlight: false,
+      };
+    }
+
+    /** Stats that let EVERY start control render, so an assertion that none of
+     *  them is on screen is carried by four absences rather than one. Without a
+     *  recorded attempt "Force Full Sync" is hidden anyway, and without an
+     *  incomplete one plus bound shortcuts the sync button reads "Sync Library"
+     *  rather than "Resume Sync". */
+    function statsWithEveryStartControl(): SyncStats {
+      return {
+        last_sync: null,
+        platforms: 1,
+        collections: 0,
+        roms: 12,
+        total_shortcuts: 12,
+        last_attempt: { finished_at: "2026-06-01T17:48:00", status: "cancelled" },
       };
     }
 
@@ -5390,14 +5410,35 @@ describe("MainPage", () => {
       return container.querySelector('[data-testid="sync-changes"]')?.textContent ?? "";
     }
 
-    /** Every control that offers to START a run. */
+    /**
+     * Every control on the idle body that offers to START a run. The sync button
+     * (labelled "Sync Library" or "Resume Sync") and "Force Full Sync" are
+     * ButtonItems; "Skip Preview" is a ToggleField, which the `@decky/ui` stub
+     * renders as a plain field, so it is matched by its label text rather than by
+     * role. `statsWithEveryStartControl` is what lets all four appear at once —
+     * `rendersEveryStartControl` below pins that the helper really sees them, so
+     * an empty result means absence rather than a query that cannot match.
+     */
     function startControls(container: HTMLElement): string[] {
-      return ["Sync Library", "Resume Sync", "Skip Preview", "Force Full Sync"].filter(
+      const buttons = ["Sync Library", "Resume Sync", "Force Full Sync"].filter(
         (label) => buttonByExactText(container, label) !== null,
       );
+      const skipPreview = container.textContent?.includes("Skip Preview") ? ["Skip Preview"] : [];
+      return [...buttons, ...skipPreview];
     }
 
+    it("the helper sees every start control when the idle body offers them", async () => {
+      // Guards the assertions below: an empty `startControls` has to mean the
+      // page is not offering a run, not that three of the four can never match.
+      vi.mocked(backend.getSyncStats).mockResolvedValue(statsWithEveryStartControl());
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      expect(startControls(container)).toEqual(["Resume Sync", "Force Full Sync", "Skip Preview"]);
+    });
+
     it("a remount mid-start keeps the in-progress view", async () => {
+      vi.mocked(backend.getSyncStats).mockResolvedValue(statsWithEveryStartControl());
       setSyncProgress(optimisticStart());
       vi.mocked(backend.getSyncStatus).mockResolvedValue(lingeringDoneSnapshot());
 
@@ -5442,6 +5483,96 @@ describe("MainPage", () => {
 
       expect(container.querySelector('[data-testid="sync-stage"]')).toBeNull();
       expect(container.querySelector('[data-testid="sync-status"]')?.textContent).toBe("Sync complete: 4 games");
+    });
+
+    it("recovers when a run's terminal frame was lost and the backend says nothing is running", async () => {
+      // The wedge the run-id rule alone would create. The store holds a live
+      // frame for a run that has really ended — its terminal frame never
+      // arrived — and the reset means the backend's own frame no longer names
+      // that run either. `inFlight: false` is the only thing left that can say
+      // so, and it has to be enough: no start control lives outside the idle
+      // body, "Cancel Sync" for an unknown run is answered "No sync in progress"
+      // with no terminal to follow, and DangerZone gates four more actions on the
+      // same flag — so a panel that cannot leave this state is stuck until a
+      // plugin reload.
+      vi.mocked(backend.getSyncStats).mockResolvedValue(statsWithEveryStartControl());
+      setSyncProgress({
+        running: true,
+        stage: "applying",
+        current: 40,
+        total: 100,
+        message: "GBA: 40/100",
+        runId: "run-lost",
+      });
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: false,
+        stage: "",
+        current: 0,
+        total: 0,
+        message: "",
+        runId: "",
+        inFlight: false,
+      });
+
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      expect(container.querySelector('[data-testid="sync-stage"]')).not.toBeNull();
+      await flushAsync();
+
+      expect(container.querySelector('[data-testid="sync-stage"]')).toBeNull();
+      expect(startControls(container)).toEqual(["Resume Sync", "Force Full Sync", "Skip Preview"]);
+      expect(getSyncProgress().running).toBe(false);
+    });
+
+    it("a cancel that lands after the preview was staged discards it server-side", async () => {
+      // RC-CANCEL-PREVIEW (#1202): the backend staged the snapshot just before
+      // the cancel reached it, so the run answers success and only the local flag
+      // knows the user pressed Cancel. Without telling the backend, the staged
+      // snapshot survives — and the terminal-stage re-ask would fetch it a round
+      // trip later and put up the card the user just cancelled.
+      vi.mocked(syncManager.isCancelRequested).mockReturnValue(true);
+      vi.mocked(backend.syncPreview).mockResolvedValue(previewWithChanges("staged-then-cancelled"));
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.syncCancelPreview)).toHaveBeenCalled();
+      expect(buttonByExactText(container, "Apply Sync")).toBeNull();
+      expect(container.querySelector('[data-testid="sync-status"]')?.textContent).toBe("Sync cancelled");
+    });
+
+    it("Cancel Sync cancels the run, even while the store is holding a preview", async () => {
+      // A run in flight hides the card but does not drop it, so the store can
+      // hold a preview while the syncing body is up. That body's only button is
+      // Cancel Sync, and it must cancel the RUN — dismissing the preview instead
+      // would leave the run going with nothing left on screen to stop it.
+      adoptPreview(previewWithChanges("held-under-a-run"));
+      setSyncProgress({ running: true, stage: "applying", message: "GBA: 1/2", runId: "run-live" });
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        current: 1,
+        total: 2,
+        message: "GBA: 1/2",
+        runId: "run-live",
+        inFlight: true,
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(buttonByExactText(container, "Apply Sync")).toBeNull();
+
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Cancel Sync")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.cancelSync)).toHaveBeenCalledWith("run-live");
+      expect(vi.mocked(backend.syncCancelPreview)).not.toHaveBeenCalled();
     });
 
     it("a preview that finishes while the panel is back on screen puts its card up", async () => {
@@ -5575,6 +5706,7 @@ describe("MainPage", () => {
         // The mount lands in the start window, where the backend has not yet
         // reported the run the store already knows about — the device case that
         // put the idle buttons over a live preview.
+        vi.mocked(backend.getSyncStats).mockResolvedValue(statsWithEveryStartControl());
         setSyncProgress(optimisticStart());
         vi.mocked(backend.getSyncStatus).mockResolvedValue(lingeringDoneSnapshot());
 
@@ -5586,6 +5718,7 @@ describe("MainPage", () => {
       });
 
       it("not while a preview run the backend confirms is in flight, on a fresh mount", async () => {
+        vi.mocked(backend.getSyncStats).mockResolvedValue(statsWithEveryStartControl());
         setSyncProgress({ running: true, stage: "fetching", message: "Fetching library...", runId: "run-live" });
         vi.mocked(backend.getSyncStatus).mockResolvedValue({
           running: true,
@@ -5604,6 +5737,7 @@ describe("MainPage", () => {
       });
 
       it("not while a preview result stands, on a fresh mount", async () => {
+        vi.mocked(backend.getSyncStats).mockResolvedValue(statsWithEveryStartControl());
         vi.mocked(backend.getPendingPreview).mockResolvedValue({
           success: true,
           preview: previewWithChanges("held"),
@@ -5619,6 +5753,7 @@ describe("MainPage", () => {
       it("not while a preview result stands that the panel adopted before this mount", async () => {
         // Nothing to fetch and nothing in flight: the card is on screen at first
         // paint because the store, not the instance, is holding it.
+        vi.mocked(backend.getSyncStats).mockResolvedValue(statsWithEveryStartControl());
         adoptPreview(previewWithChanges("held-across-mounts"));
         vi.mocked(backend.getPendingPreview).mockResolvedValue({ success: true, preview: null });
 

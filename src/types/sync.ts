@@ -272,6 +272,22 @@ export interface SyncPreview {
 }
 
 /**
+ * Answer of ``get_sync_status``: the latest progress frame, plus the backend's
+ * run-lifecycle state as a fact of its own.
+ *
+ * `inFlight` rides this answer only — never an emitted `sync_progress` event —
+ * and it is not a re-reading of the frame's `running`. The two disagree by
+ * design: during a cancel drain the terminal frame already reads
+ * `running: false` while the run still owns the slot. A panel needs the
+ * distinction because a frame cannot tell it "the backend has no run" apart from
+ * "the backend has not said anything about this run yet", and only the first of
+ * those licenses retracting a run the panel believes is live.
+ */
+export interface SyncStatusAnswer extends SyncProgress {
+  inFlight?: boolean;
+}
+
+/**
  * Answer of ``get_pending_preview`` — the preview the backend is still holding,
  * which is how a panel that was navigated away from gets its card back. A
  * ``null`` preview is the normal "nothing pending" answer (including a snapshot

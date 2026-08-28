@@ -837,21 +837,35 @@ includes an additive `runId: str` field — `str(current_sync_id or "")` — so 
 the authoritative backend store rather than minting or threading its own. The idle default snapshot carries `runId: ""`.
 
 **The snapshot describes an in-flight run only.** `finish_run` puts `sync_progress` back to the idle default as part of
-ending a run — after the terminal frame has been emitted, since every path emits it before reaching the
-`finally: finish_run(run_id)` that lands there. It exists so a remounting QAM can pick up a **live** run; a finished
-run's ending already reached the panel as an event, and a panel that merely _finds_ a terminal frame on a later mount is
-required to ignore it (#1019). Left in place, the frame answered every later mount with a run that had ended — message
-and run id included — and the panel took it for the state of the run it was actually watching: pressing Sync, then
-returning during the window before the new run's first frame, showed a green "Preview ready" over a preview that was
-still going, and dropped the panel back to the idle buttons in the meantime. The reset is not itself a frame: nothing
-emits it, so no `running: false` reaches the panel from it.
+ending a run — after the terminal frame has gone out, since every path emits **or schedules** it before reaching the
+`finally: finish_run(run_id)` that lands there. (The per-unit error path schedules its emit through `create_task`, so
+that one may run _after_ the reset; it is safe because the coroutine binds the ERROR frame by value and the reset
+rebinds the attribute rather than mutating the dict a pending task is holding.) It exists so a remounting QAM can pick
+up a **live** run; a finished run's ending already reached the panel as an event, and a panel that merely _finds_ a
+terminal frame on a later mount is required to ignore it (#1019). Left in place, the frame answered every later mount
+with a run that had ended — message and run id included — and the panel took it for the state of the run it was actually
+watching: pressing Sync, then returning during the window before the new run's first frame, showed a green "Preview
+ready" over a preview that was still going, and dropped the panel back to the idle buttons in the meantime. The reset is
+not itself a frame: nothing emits it, so no `running: false` reaches the panel from it.
 
-The panel closes the same gap from its side, because the reset only helps a backend that has one: a `get_sync_status`
-answer reporting **nothing** in flight may not retract a run the module store is currently tracking unless it names that
-same run. The optimistic frame carries no run id, so nothing can name it during the start window — which is correct,
-because in that window the store knows about a run the backend has not reported yet. The residual risk is stated at the
-call site: a genuinely missed terminal frame leaves the panel believing a run is live until the next frame or the next
-run, which is the better failure — a panel wrongly showing the idle buttons invites a second run on top of a live one.
+**`get_sync_status` answers with the run lifecycle too.** The payload carries an additive `inFlight: bool` —
+`box.is_in_flight()`, the lifecycle state itself, not a re-reading of the frame. It rides this answer only, never an
+emitted `sync_progress` event, and the two legitimately disagree: during a cancel drain the CANCELLED frame already
+reads `running: False` while the run still owns the slot.
+
+The panel needs it because a frame alone cannot separate two questions it must answer differently. When the module store
+says a run is live and the answer says nothing is running, retracting is right if the run really ended (its terminal
+frame was lost) and wrong if the backend simply has not heard of it yet — which is exactly the start window, where the
+panel has written an optimistic frame and `sync_preview` has not yet claimed the run slot. So the seed retracts only
+where the answer is evidence about _that_ run: either it names it, or `inFlight` is explicitly `false` **and** the
+store's run carries a backend-stamped id. An idle answer against the panel's own unstamped optimistic frame is refused,
+and that cannot wedge, because the handler that wrote that frame always retracts it itself — from a dead instance too.
+
+Inferring the lifecycle from the frame instead would wedge the panel: with the snapshot reset above, a finished run and
+a run that never started are the same answer, so a lost terminal frame would leave every later mount believing a run is
+live. Nothing recovers from that state — the start controls all live in the idle branch, "Cancel Sync" for an unknown
+run is answered `{"success": True, "message": "No sync in progress"}` with no terminal to follow, and DangerZone and
+RemovedGamesCleanup gate four more actions on the same flag.
 
 The same `sync_plan` capture point also clears the frontend's per-run cancel flag (`_cancelRequested`). The per-unit
 handler resets that flag at its own start, but an incrementally-**skipped** unit never runs that handler, so a skip-only

@@ -256,6 +256,9 @@ class TestSyncPreview:
         assert frames[-1]["stage"] == "done"
         assert frames[-1]["message"] == "Preview ready"
         assert frames[-1]["running"] is False
+        # The lifecycle flag rides the get_sync_status answer alone — an event
+        # carrying it would make the two look interchangeable, which they are not.
+        assert "inFlight" not in frames[-1]
         # ...and the run id it named is gone from what the next mount reads.
         assert frames[-1]["runId"] != ""
         status = plugin._sync_service.get_sync_status()
@@ -1026,12 +1029,52 @@ class TestGetSyncStatus:
             "totalSteps": 2,
         }
         plugin._sync_service._sync_progress = snapshot
+        plugin._sync_service._box.try_begin_run("run-live")
 
         status = plugin._sync_service.get_sync_status()
 
-        assert status == snapshot
+        assert status == {**snapshot, "inFlight": True}
         assert status["running"] is True
         assert status["stage"] == "applying"
+
+    def test_in_flight_is_the_lifecycle_not_a_reading_of_the_frame(self, plugin):
+        """The two answer different questions and are allowed to disagree.
+
+        A cancel drain is the standing example: ``_finish_sync`` writes the
+        CANCELLED frame — ``running: False`` — while the run still owns the slot,
+        so a frontend inferring "no run" from the frame would retract a run that
+        is still winding down. It reads ``inFlight`` instead.
+        """
+        box = plugin._sync_service._box
+        box.try_begin_run("run-1")
+        box.request_cancel("run-1")
+        plugin._sync_service._sync_progress = {
+            "running": False,
+            "stage": "cancelled",
+            "message": "Sync cancelled",
+            "runId": "run-1",
+        }
+
+        status = plugin._sync_service.get_sync_status()
+
+        assert status["running"] is False
+        assert status["inFlight"] is True
+
+    def test_in_flight_is_false_once_the_run_is_finished(self, plugin):
+        """And the panel's licence to retract: the run is over, said plainly.
+
+        Without this the reset above makes a finished run and one that never
+        started the same answer, so a lost terminal frame would leave every later
+        mount believing a run is live with nothing on the page to escape it.
+        """
+        box = plugin._sync_service._box
+        box.try_begin_run("run-1")
+        box.finish_run("run-1")
+
+        status = plugin._sync_service.get_sync_status()
+
+        assert status["inFlight"] is False
+        assert status["running"] is False
 
     @pytest.mark.asyncio
     async def test_emit_progress_sub_stage_rides_event_and_status(self, plugin):

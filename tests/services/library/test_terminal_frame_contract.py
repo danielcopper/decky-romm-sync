@@ -25,11 +25,21 @@ three of which exist today:
 Where the enforcement ends, stated plainly because the invariant register cites
 this file: the scan reads call sites and dict literals, so a frame assembled by
 a helper it cannot follow, or emitted through an aliased callable, is outside it.
-Two such indirections exist today and are inert rather than holes — the
-parameterized snapshot inside ``emit_progress`` itself (its ``running`` and
-``stage`` are its parameters, and every caller of it IS scanned) and the
-fetcher's late-bound proxy in ``services/library/service.py``, which forwards
-whatever its own — scanned — callers passed it.
+Three such indirections exist today and all are inert rather than holes:
+
+* the parameterized snapshot inside ``emit_progress`` itself (its ``running``
+  and ``stage`` are its parameters, and every caller of it IS scanned);
+* the fetcher's late-bound proxy in ``services/library/service.py``, which
+  forwards whatever its own — scanned — callers passed it;
+* ``finish_run``'s ``self.sync_progress = _default_progress()`` in
+  ``services/library/_state.py``. This one is a write to the very attribute
+  ``_snapshot_write_sites`` watches, and it is invisible only because the value
+  is a call rather than a dict literal. **Leave it that way.** It is not a frame:
+  nothing emits it, so nothing reaches the panel from it — it returns the
+  snapshot ``get_sync_status`` answers with to the idle default once a run is
+  over. Spelled as a literal it would read ``running: False`` with a non-terminal
+  stage and this scan would flag it, which would be a false positive: the rule is
+  about frames the panel is SENT, and no reader ever sees this one as an event.
 
 :class:`TestScanScope` pins the rest of the scope so it cannot shrink unnoticed:
 that the scan still reaches every module producing frames today, that no producer
