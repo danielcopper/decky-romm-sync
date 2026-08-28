@@ -5423,7 +5423,7 @@ describe("MainPage", () => {
       const buttons = ["Sync Library", "Resume Sync", "Force Full Sync"].filter(
         (label) => buttonByExactText(container, label) !== null,
       );
-      const skipPreview = container.textContent?.includes("Skip Preview") ? ["Skip Preview"] : [];
+      const skipPreview = container.textContent.includes("Skip Preview") ? ["Skip Preview"] : [];
       return [...buttons, ...skipPreview];
     }
 
