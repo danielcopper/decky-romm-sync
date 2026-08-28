@@ -778,21 +778,22 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     };
   }, []);
 
-  // Drive the preview card's expiry countdown. The deadline is absolute, so the
-  // only thing that has to tick is the current time — mirrored into state here
-  // rather than read in render, which must stay pure. The first value is stamped
-  // by whoever adopts the preview (both are handlers); this only keeps it moving,
-  // and is torn down when the preview goes away (dismissed, applied, or the panel
-  // unmounting). The condition is the countdown row's own: a preview without a
-  // deadline (older backend) and one with nothing to apply both show no
-  // countdown, and a tick that nothing on screen can consume is a wasted
-  // re-render of the whole page every second.
   // A run in flight owns the panel. A preview held while one is going is not
   // dropped — the store keeps it and the card comes back the moment the run
   // ends — but it must not render over the progress rows, which are the true
   // state of the machine at that moment. The two only ever overlap for the
   // instant between a preview being staged and its run's terminal frame.
   const previewCard = syncing ? null : preview;
+  // Drive the card's expiry countdown. The deadline is absolute, so the only
+  // thing that has to tick is the current time — mirrored into state here rather
+  // than read in render, which must stay pure. The first value is stamped by the
+  // handlers a preview can reach this instance through (the Sync press, the mount
+  // read, the terminal frame); this only keeps it moving, and is torn down when
+  // the card goes away (dismissed, applied, hidden by a run, or the panel
+  // unmounting). The condition is the countdown row's own: a preview without a
+  // deadline (older backend) and one with nothing to apply both show no
+  // countdown, and a tick that nothing on screen can consume is a wasted
+  // re-render of the whole page every second.
   const previewCountdownDeadline = previewCard && previewHasChanges(previewCard) ? previewCard.expires_at : undefined;
   useEffect(() => {
     if (previewCountdownDeadline === undefined) return;
