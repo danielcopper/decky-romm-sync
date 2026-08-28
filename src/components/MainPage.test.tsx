@@ -5322,4 +5322,122 @@ describe("MainPage", () => {
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to query RetroDECK status"));
     });
   });
+  // ===========================================================================
+  // PHASE-1 DIAGNOSIS — device-observed defects, reproduced. EXPECTED TO FAIL.
+  // Remove or re-point these once the fix lands.
+  // ===========================================================================
+  describe("PHASE-1 DIAGNOSIS (expected to fail)", () => {
+    /** What handleSync writes into the module store the moment Sync Library is
+     *  pressed: running, no run id yet (the backend has not stamped one). */
+    function optimisticStart(): SyncProgress {
+      return { running: true, stage: "fetching", current: 0, total: 0, message: "Fetching library..." };
+    }
+
+    /** The backend's persisted snapshot after a PREVIOUS preview completed.
+     *  ``finish_run`` never resets ``sync_progress``, so this is what
+     *  ``get_sync_status`` keeps answering until the next run's first
+     *  ``emit_progress`` — and handleSync awaits reconcileStaleShortcuts before
+     *  it ever calls sync_preview, so that window is seconds wide. */
+    function lingeringDoneSnapshot(): SyncProgress {
+      return {
+        running: false,
+        stage: "done",
+        current: 0,
+        total: 0,
+        message: "Preview ready",
+        runId: "run-previous",
+      };
+    }
+
+    it("A: a remount mid-start keeps the in-progress view (stale snapshot must not retract it)", async () => {
+      setSyncProgress(optimisticStart());
+      vi.mocked(backend.getSyncStatus).mockResolvedValue(lingeringDoneSnapshot());
+
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      // First paint is right — the seed reads the module store.
+      expect(container.querySelector('[data-testid="sync-stage"]')).not.toBeNull();
+
+      await flushAsync();
+
+      // ...and then the stale snapshot lands and the panel falls back to idle.
+      expect(buttonByExactText(container, "Sync Library")).toBeNull();
+      expect(container.querySelector('[data-testid="sync-stage"]')).not.toBeNull();
+    });
+
+    it("C: a remount mid-start does not announce the PREVIOUS run's terminal frame", async () => {
+      setSyncProgress(optimisticStart());
+      vi.mocked(backend.getSyncStatus).mockResolvedValue(lingeringDoneSnapshot());
+
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      const statusEl = container.querySelector('[data-testid="sync-status"]');
+      expect(statusEl?.textContent ?? null).not.toBe("Preview ready");
+    });
+
+    it("B: a preview that finishes while the panel is back on screen puts its card up", async () => {
+      // Instance 1 starts the preview, then the user leaves the main page.
+      const previewCall = deferred<SyncPreview>();
+      vi.mocked(backend.syncPreview).mockReturnValue(previewCall.promise);
+      const first = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(first.container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(getSyncProgress().running).toBe(true);
+      first.unmount();
+
+      // The user comes back while the run is still going. The backend WITHHOLDS
+      // the staged preview while a run is in flight, so the mount read gets nothing.
+      vi.mocked(backend.getPendingPreview).mockResolvedValue({ success: true, preview: null });
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "fetching",
+        current: 0,
+        total: 0,
+        message: "Fetching Game Boy...",
+        runId: "run-live",
+      });
+      const second = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(second.container.querySelector('[data-testid="sync-stage"]')).not.toBeNull();
+
+      // The preview finishes HERE. Its promise belongs to the unmounted instance.
+      await act(async () => {
+        previewCall.resolve({
+          success: true,
+          summary: {
+            new_count: 2,
+            changed_count: 0,
+            unchanged_count: 0,
+            remove_count: 0,
+            disabled_platform_remove_count: 0,
+          },
+          new_names: ["a", "b"],
+          changed_names: [],
+          preview_id: "preview-finished-offscreen",
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // ...followed by the backend's own terminal frame for the run.
+      await act(async () => {
+        setSyncProgress({
+          running: false,
+          stage: "done",
+          current: 0,
+          total: 0,
+          message: "Preview ready",
+          runId: "run-live",
+        });
+        await Promise.resolve();
+      });
+
+      // What the device shows: the status line, and no card.
+      expect(second.container.querySelector('[data-testid="sync-status"]')?.textContent).toBe("Preview ready");
+      expect(buttonByExactText(second.container, "Apply Sync")).not.toBeNull();
+    });
+  });
 });
