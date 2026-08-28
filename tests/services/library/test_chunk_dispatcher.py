@@ -440,3 +440,114 @@ class TestWholeUnitStaging:
         assert box.pending_sync == {}
         assert box.pending_all_roms == {}
         assert box.pending_cover_sources == {}
+
+
+class TestFinalChunkCollectionStamp:
+    """A standard/smart collection is stamped on its FINAL chunk only (#742).
+
+    Driven through ``apply_unit_in_chunks`` directly rather than the whole
+    pipeline: the condition reads only the unit and its position in the chunk
+    sequence, so a fetch and a collapse in front of it would add setup without
+    adding evidence. The stamp's atomicity with the chunk's row upserts is the
+    reporter's, and is pinned in ``tests/services/library/test_reporter.py``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stamp_rides_only_the_last_chunk(self, plugin, monkeypatch):
+        from services.library import chunk_dispatcher
+
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 1)
+        emitted = [
+            {"rom_id": 1, "sibling_group_key": None},
+            {"rom_id": 2, "sibling_group_key": None},
+        ]
+
+        stamps = []
+
+        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None, collection_stamp=None, fetch_id=None):
+            stamps.append(collection_stamp)
+
+        plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
+        box = plugin._sync_service._box
+        box.sync_state = SyncState.RUNNING
+        box.current_sync_id = "run-collection-stamp"
+
+        unit = WorkUnit(
+            type="collection",
+            id="7",
+            name="Faves",
+            slug="faves",
+            rom_count=2,
+            collection_kind="standard",
+            collection_updated_at="2025-01-01T00:00:00",
+        )
+        await plugin._sync_service._chunk_dispatcher.apply_unit_in_chunks(
+            unit,
+            unit_index=0,
+            total_units=1,
+            emitted=emitted,
+            shortcuts_data=list(emitted),
+            unit_roms=[{"id": 1}, {"id": 2}],
+            new_ids=set(),
+            confirmed_cover_sources={},
+            collection_member_ids=[1, 2],
+        )
+
+        assert len(stamps) == 2, "one commit per chunk"
+        assert stamps[0] is None, "an incomplete collection is never stamped"
+        assert stamps[1] is not None
+        assert stamps[1].collection_id == "7"
+        assert stamps[1].member_rom_ids == (1, 2), "the FULL membership, not the chunk's slice"
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_timeout_before_the_last_chunk_leaves_no_stamp(self, plugin, monkeypatch):
+        """The wait giving up returns before the final chunk, so nothing is stamped."""
+        from services.library import chunk_dispatcher
+
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 1)
+        emitted = [
+            {"rom_id": 1, "sibling_group_key": None},
+            {"rom_id": 2, "sibling_group_key": None},
+        ]
+
+        stamps = []
+        box = plugin._sync_service._box
+
+        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None, collection_stamp=None, fetch_id=None):
+            stamps.append(collection_stamp)
+
+        async def wait(_unit, event):
+            if box.active_chunk_index == 0:
+                event.set()
+                return {}
+            return None  # heartbeat timeout on the final chunk
+
+        plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = wait
+        box.sync_state = SyncState.RUNNING
+        box.current_sync_id = "run-collection-timeout"
+
+        unit = WorkUnit(
+            type="collection",
+            id="7",
+            name="Faves",
+            slug="faves",
+            rom_count=2,
+            collection_kind="standard",
+            collection_updated_at="2025-01-01T00:00:00",
+        )
+        await plugin._sync_service._chunk_dispatcher.apply_unit_in_chunks(
+            unit,
+            unit_index=0,
+            total_units=1,
+            emitted=emitted,
+            shortcuts_data=list(emitted),
+            unit_roms=[{"id": 1}, {"id": 2}],
+            new_ids=set(),
+            confirmed_cover_sources={},
+            collection_member_ids=[1, 2],
+        )
+
+        assert stamps == [None], "only the first chunk committed, and it carries no stamp"
+        assert box.abandoned_chunk is not None
