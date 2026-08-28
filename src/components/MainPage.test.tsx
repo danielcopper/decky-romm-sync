@@ -4153,6 +4153,38 @@ describe("MainPage", () => {
       expect(changesText(container)).toBe("");
     });
 
+    it("loses to a preview the user superseded with a Sync press whose own preview failed", async () => {
+      // The Sync press answers the preview question too: the backend discards
+      // the staged snapshot when this run's preview fails, and the retracted
+      // running flag leaves the late answer nothing else to notice that by — so
+      // restoring it would put back a card whose Apply can only answer
+      // stale_preview.
+      const held = deferred<{ success: boolean; preview: SyncPreview | null }>();
+      vi.mocked(backend.getPendingPreview).mockReturnValue(held.promise);
+      vi.mocked(backend.syncPreview).mockResolvedValue(
+        heldPreview({ success: false, message: "Cannot reach RomM server" }),
+      );
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // The failed preview retracted the optimistic run, so the panel is idle
+      // again — the state the late answer arrives into.
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
+
+      await act(async () => {
+        held.resolve({ success: true, preview: heldPreview({ preview_id: "preview-held" }) });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(buttonByExactText(container, "Apply Sync")).toBeNull();
+      expect(changesText(container)).toBe("");
+    });
+
     it("shows no countdown on a preview with nothing to apply, and arms no timer for it", async () => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
       try {

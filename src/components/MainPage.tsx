@@ -523,10 +523,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const saveSortMigration = useSaveSortMigrationState();
   const downloads = useDownloads();
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Whether the user has dismissed a preview since this mount. Read by the
-  // pending-preview restore, which cannot see the difference in state: a
-  // dismissed preview and one that never existed both leave `preview` null.
-  const previewDismissedRef = useRef(false);
+  // Whether the user has answered the preview question since this mount —
+  // dismissed the card, or pressed Sync (which asks the backend for a fresh
+  // preview and, on failure, has it discard the staged one). Read by the
+  // pending-preview restore, which cannot see any of that in state: an answered
+  // preview and one that never existed both leave `preview` null.
+  const previewAnsweredRef = useRef(false);
   // The run this panel is watching, by id, and whether its end has been handled.
   // Seeded at first render — BEFORE the subscription below exists, so the mount
   // seed's own write is measured against the state it replaced rather than against
@@ -589,17 +591,18 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         // the world as it was when the read was ISSUED, so anything the user did
         // since outranks it. A preview they produced in that window is the one
         // they are looking at (the functional update below lets the restored one
-        // lose), and a preview they DISMISSED is one the backend has already been
-        // told to discard — restoring it would put back a card whose Apply can
-        // only answer stale_preview, which is the failure this whole change
+        // lose), and a preview they have ANSWERED — dismissed, or superseded by a
+        // Sync press whose own preview failed — is one the backend has already
+        // been told to discard: restoring it would put back a card whose Apply
+        // can only answer stale_preview, which is the failure this whole change
         // exists to remove. State cannot tell the two apart (both leave `cur`
-        // null), so the dismissal is recorded in a ref.
+        // null), so the answer is recorded in a ref.
         //
         // The run check is belt-and-braces: the backend withholds a staged
         // preview while a run is in flight, precisely because this store can be
         // wrong here — an apply refused with sync_in_progress retracts the
         // optimistic running flag while the backend keeps the delta (#1202).
-        if (previewDismissedRef.current) return;
+        if (previewAnsweredRef.current) return;
         if (getSyncProgress().running) return;
         setPreviewNowMs(Date.now());
         setPreview((cur) => cur ?? restored);
@@ -821,6 +824,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // reads), not a shadowing local state.
     setCancelling(false);
     setStatus(null);
+    // Pressing Sync answers the preview question too: the backend discards the
+    // staged snapshot the moment this run's own preview fails, and the retracted
+    // running flag leaves an in-flight mount read nothing else to notice that by.
+    previewAnsweredRef.current = true;
     setPreview(null);
     setStoredSyncProgress({ running: true, stage: "fetching", message: "Fetching library..." });
     try {
@@ -914,7 +921,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const handleDismiss = async () => {
     // The user has answered the preview question: whatever the mount read is
     // still holding is a snapshot the backend is being told to discard.
-    previewDismissedRef.current = true;
+    previewAnsweredRef.current = true;
     setPreview(null);
     setStatus(null);
     try {
