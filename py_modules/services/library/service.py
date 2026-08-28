@@ -155,8 +155,10 @@ class LibraryService:
         # through its own executor.
         self._local_library_reader = LocalLibraryReader(config=LocalLibraryReaderConfig(uow_factory=config.uow_factory))
 
-        # Sub-service: session-budget monitor. Constructed before the
-        # orchestrator, which holds it and calls it at every chunk boundary.
+        # Sub-service: session-budget monitor. Constructed before both holders:
+        # the chunk dispatcher asks it at every chunk boundary, the orchestrator
+        # for the preview prognosis, the run-start baseline and the terminal
+        # memory delta.
         self._session_budget = SessionBudgetMonitor(
             config=SessionBudgetMonitorConfig(
                 loop=config.loop,

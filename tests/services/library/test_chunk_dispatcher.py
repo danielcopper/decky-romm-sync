@@ -551,3 +551,141 @@ class TestFinalChunkCollectionStamp:
 
         assert stamps == [None], "only the first chunk committed, and it carries no stamp"
         assert box.abandoned_chunk is not None
+
+
+class TestAckIdentityPrecedesTheEmit:
+    """The per-chunk ack identity is stamped BEFORE the frame goes out (#1041).
+
+    The reporter validates a frontend ack against ``current_sync_id`` /
+    ``active_unit_id`` / ``active_chunk_index`` and signals the wait through
+    ``unit_complete_event``. A frontend can ack within milliseconds of receiving
+    the frame, so all four have to be in place at the moment the emit is made:
+    stamp them after and a fast ack is rejected as stray, the event is never set,
+    and the chunk dies of a heartbeat timeout a silent minute later with the
+    shortcuts already applied.
+
+    Nothing else in the suite sees that ordering — every other test lets the emit
+    mock swallow the call — so this one wraps the dispatcher's own emitter and
+    records the box AT CALL TIME.
+    """
+
+    @pytest.mark.asyncio
+    async def test_identity_and_event_are_live_at_emit_time(self, plugin, monkeypatch):
+        from services.library import chunk_dispatcher
+
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 1)
+        dispatcher = plugin._sync_service._chunk_dispatcher
+        box = plugin._sync_service._box
+        emitted = [
+            {"rom_id": 1, "sibling_group_key": None},
+            {"rom_id": 2, "sibling_group_key": None},
+        ]
+
+        # What the reporter would see if an ack landed while the emit is in flight.
+        seen: list[tuple[str | None, int | str | None, int | None, bool]] = []
+        inner_emit = dispatcher._emit
+
+        async def recording_emit(event, payload):
+            seen.append(
+                (
+                    box.current_sync_id,
+                    box.active_unit_id,
+                    box.active_chunk_index,
+                    box.unit_complete_event is not None,
+                )
+            )
+            return await inner_emit(event, payload)
+
+        dispatcher._emit = recording_emit
+        plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
+        dispatcher._wait_for_unit_complete = _fake_wait_set_event
+        box.sync_state = SyncState.RUNNING
+        box.current_sync_id = "run-ack-identity"
+
+        unit = WorkUnit(type="platform", id=7, name="N64", slug="n64", rom_count=2)
+        await dispatcher.apply_unit_in_chunks(
+            unit,
+            unit_index=0,
+            total_units=1,
+            emitted=emitted,
+            shortcuts_data=list(emitted),
+            unit_roms=[{"id": 1}, {"id": 2}],
+            new_ids=set(),
+            confirmed_cover_sources={},
+        )
+
+        assert seen == [
+            ("run-ack-identity", 7, 0, True),
+            ("run-ack-identity", 7, 1, True),
+        ], "each chunk's ack identity and its event must already be live when its frame is emitted"
+
+
+class TestInterChunkCancelGuard:
+    """A cancel at a chunk boundary stays a cancel, not a budget pause.
+
+    The guard at the top of the loop runs BEFORE the session-budget gate, and
+    that ordering is what the run's terminal status depends on: the gate sets
+    ``run_paused`` + ``interrupt_reason`` before requesting its own cancel, so a
+    user cancel landing in the inter-chunk window while renderer RSS sits near
+    the ceiling would be recorded as a resumable ``paused`` run — the wrong
+    story, and a resumable one at that. Read through the terminal ``SyncRun``
+    because that is where the confusion would surface.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancel_near_the_ceiling_is_recorded_as_cancelled(self, plugin, fake_romm_api, monkeypatch):
+        import decky
+
+        from services.library import chunk_dispatcher
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "Alpha"}, {"id": 11, "name": "Beta"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 1)
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
+
+        # Just under the ceiling: the run's first chunk projects against the cliff
+        # and proceeds, a second chunk would project against the ceiling and pause.
+        plugin._renderer_gc.result = True
+        plugin._renderer_rss.rss_kb = 2_199_000
+
+        box = plugin._sync_service._box
+        commit = plugin._sync_service._reporter.commit_unit_results
+        commits = 0
+
+        async def cancel_after_first_commit(*args, **kwargs):
+            nonlocal commits
+            result = await commit(*args, **kwargs)
+            commits += 1
+            if commits == 1:
+                # The user's Cancel lands the instant chunk 0's commit resolves —
+                # before the loop returns to the top for chunk 1.
+                box.request_cancel()
+            return result
+
+        plugin._sync_service._reporter.commit_unit_results = cancel_after_first_commit  # type: ignore[method-assign]
+        box.sync_state = SyncState.RUNNING
+        box.current_sync_id = "run-cancel-near-ceiling"
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        with plugin._uow as uow:
+            run = uow.sync_runs.get("run-cancel-near-ceiling")
+        assert run is not None
+        assert run.status == "cancelled", "a user cancel must not be recorded as a resumable budget pause"
+        assert box.run_paused is False
+        assert box.interrupt_reason is None
+        # The guard returned at the top of the loop, so chunk 1 was never emitted
+        # and the gate it would have passed through never ran for it.
+        apply_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        assert len(apply_events) == 1
+        assert apply_events[0]["chunk_index"] == 0

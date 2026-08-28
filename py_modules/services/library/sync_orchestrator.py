@@ -1,14 +1,16 @@
-"""Preview / apply / per-unit sync lifecycle and the heartbeat clock.
+"""Preview / apply / per-unit sync lifecycle and progress emission.
 
 Owns every async path the user triggers from the QAM that mutates in-flight
 sync state: starting and cancelling syncs, computing a preview (read-only),
-and dispatching the per-unit sync pipeline on apply. The heartbeat clock is
-stamped here — when a run is admitted, and by the frontend's ``sync_heartbeat``
-route — while the wait that inspects it moved out with the chunk round-trip it
-guards. Progress emission also lives here — sub-services that need to
-surface progress receive the orchestrator's ``emit_progress`` callback
-through their config. Anything that fetches ROMs belongs in
-:class:`LibraryFetcher`; anything that finalises shortcuts after the apply
+and dispatching the per-unit sync pipeline on apply. Of the heartbeat clock
+this module holds only two of the three stamps — the one taken when a run is
+admitted, and the frontend's ``sync_heartbeat`` route. The stamp that opens a
+chunk's 60-second window, and the wait that measures against it, belong to
+:class:`ChunkDispatcher`, so the window a timeout is judged by starts at a
+chunk's emit rather than at run admission. Progress emission lives here —
+sub-services that need to surface progress receive the orchestrator's
+``emit_progress`` callback through their config. Anything that fetches ROMs
+belongs in :class:`LibraryFetcher`; anything that finalises shortcuts after the apply
 completes belongs in :class:`SyncReporter`; Steam's renderer memory belongs
 in :class:`SessionBudgetMonitor`; a single ROM's launch facts — where its
 file is and what runs it — belong in :class:`ShortcutLaunchResolver`; driving
@@ -1063,7 +1065,7 @@ class SyncOrchestrator:
         # heartbeat-timeout before the final chunk must leave NO stamp, so the
         # skip gate can't honour a stale one over a half-applied platform (the
         # #1025 silent-gap regression). The final chunk re-writes the stamp on a
-        # clean finish, and that half of the pair now lives one module over —
+        # clean finish; the other half of the pair is
         # ``ChunkDispatcher._build_final_platform_stamp``, which rides the final
         # chunk's commit UoW. A fetch that failed raised before here (fetch failure ≠
         # apply started) and a cancel during fetch/artwork returned at a guard

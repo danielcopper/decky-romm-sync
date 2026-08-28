@@ -23,10 +23,10 @@ heartbeat timeout does, so the loop above it stops), but ``try_begin_run`` and
 The per-platform completion stamp is built here, on a platform unit's final
 chunk, so "platform fully synced" ⟺ "stamp exists" is atomic on a crash. Its
 other half — the DELETE that invalidates the stamp the moment a fresh apply
-starts — stayed in ``SyncOrchestrator._sync_one_unit``
-(``_clear_platform_stamp_io``), because *where in the pipeline* that write is
-taken is a property of its call site; the argument for the ordering lives there
-in full.
+starts — is taken by ``SyncOrchestrator._sync_one_unit``
+(``_clear_platform_stamp_io``); *where in the pipeline* that write falls is a
+property of its call site, and the argument for the ordering lives there in
+full.
 """
 
 from __future__ import annotations
