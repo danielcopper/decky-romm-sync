@@ -4153,29 +4153,40 @@ describe("MainPage", () => {
       expect(changesText(container)).toBe("");
     });
 
-    it("shows no countdown on a preview with nothing to apply", async () => {
-      vi.mocked(backend.getPendingPreview).mockResolvedValue({
-        success: true,
-        preview: heldPreview({
-          summary: {
-            new_count: 0,
-            changed_count: 0,
-            unchanged_count: 4,
-            remove_count: 0,
-            disabled_platform_remove_count: 0,
-          },
-          new_names: [],
-          expires_at: 1800,
-        }),
-      });
-      const { container } = render(<MainPage onNavigate={vi.fn()} />);
-      await flushAsync();
+    it("shows no countdown on a preview with nothing to apply, and arms no timer for it", async () => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        vi.setSystemTime(0);
+        const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+        vi.mocked(backend.getPendingPreview).mockResolvedValue({
+          success: true,
+          preview: heldPreview({
+            summary: {
+              new_count: 0,
+              changed_count: 0,
+              unchanged_count: 4,
+              remove_count: 0,
+              disabled_platform_remove_count: 0,
+            },
+            new_names: [],
+            expires_at: 1800,
+          }),
+        });
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
 
-      // Nothing to apply, so there is no deadline worth counting down to —
-      // only the Dismiss the empty card already had.
-      expect(changesText(container)).toContain("Everything is up to date.");
-      expect(expiryText(container)).toBeNull();
-      expect(buttonByExactText(container, "Dismiss")).not.toBeNull();
+        // Nothing to apply, so there is no deadline worth counting down to —
+        // only the Dismiss the empty card already had.
+        expect(changesText(container)).toContain("Everything is up to date.");
+        expect(expiryText(container)).toBeNull();
+        expect(buttonByExactText(container, "Dismiss")).not.toBeNull();
+        // And nothing ticks for it: the panel's only 1 Hz timer is the
+        // countdown's, so an armed one would re-render the whole page every
+        // second with nothing on screen that could change.
+        expect(setIntervalSpy.mock.calls.filter((call) => call[1] === 1000)).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("tears the countdown timer down when the preview goes away, and on unmount", async () => {

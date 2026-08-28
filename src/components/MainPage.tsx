@@ -353,6 +353,29 @@ function formatLibraryLine(stats: SyncStats): string {
 const LONG_SYNC_HINT_THRESHOLD_SEC = 600;
 
 /**
+ * Whether *preview* has anything for Apply Sync to do — the condition the card's
+ * Apply button, its coverage/estimate lines and its expiry countdown all hang
+ * off. A preview with nothing to apply is still a card ("Everything is up to
+ * date."), just one with no work and therefore no deadline worth showing.
+ */
+function previewHasChanges(preview: SyncPreview): boolean {
+  const s = preview.summary;
+  return (
+    s.new_count + s.changed_count + s.remove_count > 0 ||
+    !!(s.collection_diff?.added.length || s.collection_diff?.removed.length) ||
+    !!s.platform_collection_diff?.has_changes ||
+    // Cover-only work (#1386): the refresh pass runs inside the apply, so an
+    // empty shortcut delta with pending cover updates must still offer Apply —
+    // the old "no changes" short-circuit stranded changed covers forever.
+    (s.cover_refresh_count ?? 0) > 0 ||
+    // Unstamped platforms (#1416): a late-ack-recovered platform needs a
+    // 0-delta apply run to re-stamp itself and heal the lingering
+    // "interrupted" status, so offer Apply even when every change count is zero.
+    (s.restamp_platform_count ?? 0) > 0
+  );
+}
+
+/**
  * Seconds left before the backend stops accepting *preview*, measured against
  * *nowMs*, or `null` when the preview carries no deadline (an older backend) —
  * the card then shows no countdown at all. Never negative: past the deadline it
@@ -741,13 +764,16 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // rather than read in render, which must stay pure. The first value is stamped
   // by whoever adopts the preview (both are handlers); this only keeps it moving,
   // and is torn down when the preview goes away (dismissed, applied, or the panel
-  // unmounting). A preview without a deadline (older backend) arms nothing.
-  const previewExpiresAt = preview?.expires_at;
+  // unmounting). The condition is the countdown row's own: a preview without a
+  // deadline (older backend) and one with nothing to apply both show no
+  // countdown, and a tick that nothing on screen can consume is a wasted
+  // re-render of the whole page every second.
+  const previewCountdownDeadline = preview && previewHasChanges(preview) ? preview.expires_at : undefined;
   useEffect(() => {
-    if (previewExpiresAt === undefined) return;
+    if (previewCountdownDeadline === undefined) return;
     const id = setInterval(() => setPreviewNowMs(Date.now()), PREVIEW_COUNTDOWN_TICK_MS);
     return () => clearInterval(id);
-  }, [previewExpiresAt]);
+  }, [previewCountdownDeadline]);
 
   // Poll the live renderer-heap reading while it can still change: during a sync (so
   // the "Steam memory" row tracks the climbing RSS mid-apply) AND while the last run
@@ -1033,18 +1059,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
 
   let syncBody: ReactNode;
   if (preview) {
-    const hasChanges =
-      preview.summary.new_count + preview.summary.changed_count + preview.summary.remove_count > 0 ||
-      !!(preview.summary.collection_diff?.added.length || preview.summary.collection_diff?.removed.length) ||
-      preview.summary.platform_collection_diff?.has_changes ||
-      // Cover-only work (#1386): the refresh pass runs inside the apply, so an
-      // empty shortcut delta with pending cover updates must still offer Apply —
-      // the old "no changes" short-circuit stranded changed covers forever.
-      (preview.summary.cover_refresh_count ?? 0) > 0 ||
-      // Unstamped platforms (#1416): a late-ack-recovered platform needs a
-      // 0-delta apply run to re-stamp itself and heal the lingering
-      // "interrupted" status, so offer Apply even when every change count is zero.
-      (preview.summary.restamp_platform_count ?? 0) > 0;
+    const hasChanges = previewHasChanges(preview);
     // Walk cost, shared with the handleApply seed (previewApplySeconds) so the
     // approved number equals the run's seed. Delta-only pricing here read "2 min"
     // for a resume whose apply walked ~3100 items.
