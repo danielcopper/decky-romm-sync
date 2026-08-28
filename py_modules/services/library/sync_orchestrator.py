@@ -17,10 +17,10 @@ file is and what runs it — belong in :class:`ShortcutLaunchResolver`; driving
 one unit's built delta to the frontend and back — emit a chunk, wait for its
 ack, commit it — belongs in :class:`ChunkDispatcher`; reading
 the registry and the completion stamps into the projections these decisions
-are made against belongs in :class:`LocalLibraryReader`. What stayed here of that
-last group is the platform stamp's DELETE — a write, and a step of the apply
-pipeline rather than a question a run weighs; its ordering is argued at its call
-site — and the pure component-key stamp, which does no I/O at all. Cached
+are made against belongs in :class:`LocalLibraryReader`. Two of that last group
+are this module's deliberately: the platform stamp's DELETE — a write, and a step
+of the apply pipeline rather than a question a run weighs; its ordering is argued
+at its call site — and the pure component-key stamp, which does no I/O at all. Cached
 ``rom_metadata`` is written by the reporter's per-unit commit (the same write
 UoW as the ``roms`` upsert), so preview never persists metadata and an
 interrupted apply leaves only already-committed units' metadata.

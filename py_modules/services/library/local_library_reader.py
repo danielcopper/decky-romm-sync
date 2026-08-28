@@ -27,8 +27,8 @@ declaration is worth having anyway: every method here opens its own short Unit
 of Work and is offloaded through the orchestrator's executor at points chosen
 for cheapness, so a write among them would land at a moment nobody picked.
 
-Two neighbours deliberately stayed with the orchestrator, both touching the same
-tables through the same repositories:
+Two neighbours belong to the orchestrator instead, deliberately, though both
+touch the same tables through the same repositories:
 
 * ``_clear_platform_stamp_io`` **writes**. That alone rules it out of a
   read-only module, and it belongs with the apply pipeline that performs it

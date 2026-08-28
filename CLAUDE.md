@@ -316,6 +316,17 @@ Format: **invariant** — tier — enforced by.
   is never mutated while the stash is pending (box IDLE) — every run-entry path passes `try_begin_run`, which clears the
   stash before any staging write** — prompt-only — the invariant holds today rather than being aspirational; mechanize
   via a staging-writer call-site audit
+- **An apply chunk's ack identity — `active_unit_id` / `active_chunk_index` and a fresh `unit_complete_event` — is
+  stamped on the box BEFORE that chunk's `sync_apply_unit` is emitted, with nothing awaited in between** — test +
+  prompt-only — `tests/services/library/test_chunk_dispatcher.py::TestAckIdentityPrecedesTheEmit`, which wraps
+  `ChunkDispatcher._emit` and records the box at call time over a two-chunk unit. The rule spans three modules and no
+  diff-scoped review sees it whole: `ChunkDispatcher` stamps, `services/library/_state.py` holds the fields and their
+  verbs, and `SyncReporter.report_unit_results` validates an incoming ack against them (#1041). **What the test pins is
+  the ordering inside the dispatcher, not the round-trip** — it observes a mock's call-time state, so a real frontend
+  ack racing a real emit is still unexercised, and every other suite lets the emit mock swallow the call. The failure
+  mode is why the entry exists rather than being left to the comment: stamp after the emit and a fast ack is rejected as
+  stray, the wait then stalls the full 60-second heartbeat window, and the run ends by stashing a chunk the frontend had
+  already applied — slow, plausible-looking, and silent (#1052 / #1367)
 - **A prune run's claim reservation and its refusal of every conflicting callable happen in one atomic gate hold (the
   preview rebuild does not), and frontend-owned Steam work holds a heartbeated, generation-tombstoned lease through
   every continuation's final write** — test + prompt-only — prune service/gate race tests + contract callable-entry
