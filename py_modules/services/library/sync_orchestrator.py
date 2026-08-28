@@ -1077,16 +1077,6 @@ class SyncOrchestrator:
         if unit.type == "platform" and unit.slug:
             await self._loop.run_in_executor(None, self._clear_platform_stamp_io, unit.slug)
 
-        # Stage the DELTA representatives for cover finalise + binding, and the
-        # full built set for the ack-independent identity + version persist (the
-        # reporter upserts a row for every sibling — skipped ones included — and
-        # binds only the delta's acked representatives). Staging stays whole-unit;
-        # the apply is chunked below, so a mid-unit CEF crash forfeits only the
-        # in-flight chunk, not every prior chunk.
-        box.pending_sync = {e["rom_id"]: e for e in apply_emitted}
-        box.pending_all_roms = {sd["rom_id"]: sd for sd in shortcuts_data}
-        box.pending_cover_sources = confirmed_cover_sources
-
         # A collection unit's final chunk stamps a CollectionSyncState over its
         # full membership (the accumulator just populated by the fetch, #742); a
         # platform unit passes None. The full set — not just the applied new_roms —
@@ -1106,6 +1096,7 @@ class SyncOrchestrator:
             shortcuts_data=shortcuts_data,
             unit_roms=unit_roms,
             new_ids=new_ids,
+            confirmed_cover_sources=confirmed_cover_sources,
             cover_refreshes=cover_refreshes,
             collection_member_ids=collection_member_ids,
         )

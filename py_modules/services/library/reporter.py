@@ -68,7 +68,7 @@ class SyncReporterConfig:
     the SQLite Unit-of-Work factory (the transactional seam over the
     ``roms`` / ``rom_installs`` / ``sync_runs`` / ``kv_config``
     repositories), the shared ``LibrarySyncStateBox`` (the reporter reads
-    the pending-sync dicts populated by the orchestrator; the run-lifecycle
+    the pending-sync dicts staged by :class:`ChunkDispatcher`; the run-lifecycle
     reset is owned by the orchestrator's terminal ``finally``, not here), an
     orchestrator-supplied ``emit_progress`` callback for the terminal "done"
     event, and the

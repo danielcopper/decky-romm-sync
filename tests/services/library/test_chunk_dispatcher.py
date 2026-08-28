@@ -30,7 +30,7 @@ from domain.sync_state import SyncState
 from domain.work_unit import WorkUnit
 
 # conftest.py patches decky before this import
-from tests.services.library._helpers import _fake_wait_set_event, _seed_platform, _use_fake_romm
+from tests.services.library._helpers import _fake_wait_set_event, _seed_platform, _seed_rom_row, _use_fake_romm
 
 
 class TestApplyChunking:
@@ -371,3 +371,72 @@ class TestWaitForUnitCompleteCancelled:
 
         with pytest.raises(asyncio.CancelledError):
             await plugin._sync_service._chunk_dispatcher._wait_for_unit_complete(unit, event)
+
+
+class TestWholeUnitStaging:
+    """The three whole-unit staging dicts the reporter's commit reads.
+
+    They are written here, once per unit, before the first chunk goes out — one
+    production writer module from the moment they are staged to
+    ``clear_active_unit``'s teardown. ``pending_sync`` and ``pending_all_roms``
+    hold deliberately different sets and are the same shape, so the swap is
+    silent everywhere except here: ``pending_sync`` is the DELTA the frontend
+    applies, ``pending_all_roms`` the FULL built set every sibling's identity row
+    is upserted from.
+    """
+
+    @pytest.mark.asyncio
+    async def test_delta_and_full_set_are_staged_into_their_own_fields(self, plugin, fake_romm_api):
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        # rom 10 is content-unchanged (skipped from the delta); rom 11 changed its
+        # name, so the delta is {11} while the built set is {10, 11}.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[
+                {"id": 10, "name": "Keep", "fs_name": "keep.z64"},
+                {"id": 11, "name": "New Name", "fs_name": "changed.z64", "path_cover_large": "cover-11.png"},
+            ],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64")
+        _seed_rom_row(plugin, 11, app_id=1011, platform_slug="n64", name="Old Name", fs_name="changed.z64")
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={11: "/covers/11.png"})
+        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
+        box = plugin._sync_service._box
+        box.sync_state = SyncState.RUNNING
+        box.current_sync_id = "run-staging"
+
+        # Snapshot the staging as the commit sees it — ``clear_active_unit`` wipes
+        # all three the moment the unit finishes.
+        staged: list[tuple[set[int], set[int], dict[int, str]]] = []
+        commit = plugin._sync_service._reporter.commit_unit_results
+
+        async def capture_commit(*args, **kwargs):
+            staged.append((set(box.pending_sync), set(box.pending_all_roms), dict(box.pending_cover_sources)))
+            return await commit(*args, **kwargs)
+
+        plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        assert len(staged) == 1
+        pending_sync, pending_all_roms, cover_sources = staged[0]
+        assert pending_sync == {11}, "pending_sync is the DELTA the frontend applies"
+        assert pending_all_roms == {10, 11}, "pending_all_roms is the FULL built set, skipped siblings included"
+        assert cover_sources == {11: "cover-11.png"}
+        # Teardown clears all three, so a late ack after the unit finished stages nothing.
+        assert box.pending_sync == {}
+        assert box.pending_all_roms == {}
+        assert box.pending_cover_sources == {}

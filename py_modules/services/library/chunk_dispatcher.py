@@ -119,6 +119,7 @@ class ChunkDispatcher:
         shortcuts_data: list[dict[str, Any]],
         unit_roms: list[dict[str, Any]],
         new_ids: set[int],
+        confirmed_cover_sources: dict[int, str],
         cover_refreshes: list[dict[str, int]] | None = None,
         collection_member_ids: list[int] | None = None,
     ) -> int:
@@ -138,11 +139,24 @@ class ChunkDispatcher:
         unit's FIRST chunk payload, clipped to the budget headroom left after
         that chunk's own projected cost — a big refresh list degrades to fewer
         in-session tile refreshes (the grid files are already updated; a Steam
-        restart shows the rest), never to a run pause. Returns the running
+        restart shows the rest), never to a run pause. ``confirmed_cover_sources``
+        is the unit's ``rom_id → applied cover source`` map — the third of the
+        whole-unit staging dicts the reporter's commit reads. Returns the running
         count of shortcuts applied — a cancel or heartbeat timeout returns early
         with the chunks committed so far.
         """
         box = self._sync_state
+        # Stage the DELTA representatives for cover finalise + binding, and the
+        # full built set for the ack-independent identity + version persist (the
+        # reporter upserts a row for every sibling — skipped ones included — and
+        # binds only the delta's acked representatives). Staging stays whole-unit;
+        # the apply is chunked below, so a mid-unit CEF crash forfeits only the
+        # in-flight chunk, not every prior chunk. Written here rather than by the
+        # caller so these three fields have one production writer module from the
+        # moment they are staged to ``clear_active_unit``'s teardown.
+        box.pending_sync = {e["rom_id"]: e for e in emitted}
+        box.pending_all_roms = {sd["rom_id"]: sd for sd in shortcuts_data}
+        box.pending_cover_sources = confirmed_cover_sources
         # One generation id per platform fetch. The run id serves: a platform is
         # fetched at most once per run, so it identifies this platform's fetch
         # uniquely, and every chunk of the unit shares it — unlike a clock reading,

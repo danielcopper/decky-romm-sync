@@ -110,7 +110,7 @@ class LibrarySyncStateBox:
     # rom_id), not just the emitted representatives in ``pending_sync``. The
     # per-unit commit upserts an identity + version-metadata row for ALL of them
     # (ADR-0021 group-aware persist) while only representatives carry a binding.
-    # Populated alongside ``pending_sync`` in ``_sync_one_unit`` and reset with
+    # Populated alongside ``pending_sync`` by ``ChunkDispatcher`` and reset with
     # it; kept across the heartbeat-timeout abandon window so a late ack can
     # still drive the full persist.
     pending_all_roms: dict[int, dict[str, Any]] = field(default_factory=dict)
@@ -119,8 +119,8 @@ class LibrarySyncStateBox:
     # per-ROM cover cache during this unit's cover download. The per-unit commit
     # merges these onto the upserted Rom rows (``Rom.adopt_cover_source``);
     # a rom absent here keeps its persisted fingerprint — a failed download
-    # never advances it (#1386). Populated alongside ``pending_sync`` in
-    # ``_sync_one_unit`` and reset with it; kept across the heartbeat-timeout
+    # never advances it (#1386). Populated alongside ``pending_sync`` by
+    # ``ChunkDispatcher`` and reset with it; kept across the heartbeat-timeout
     # abandon window so a late ack still stamps the confirmed values.
     pending_cover_sources: dict[int, str] = field(default_factory=dict)
     pending_delta: PreviewDelta | None = None
