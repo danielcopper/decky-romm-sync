@@ -1386,67 +1386,149 @@ def _stamp_collection(uow, collection_id: str, kind: str = "standard") -> None:
         )
 
 
-class TestGetSyncStatsStampCounts:
-    """``stamped_platforms`` / ``stamped_collections`` — the surviving completion
-    stamps the panel derives its "Resume Sync" offer from (#1789).
+def _record_launch_options(uow, rom_id: int, launch_options: str = "flatpak run app 'game.zip'") -> None:
+    """Record the launch command a sync ack-commit would have written for this ROM."""
+    with uow:
+        rom = uow.roms.get(rom_id)
+        rom.record_applied_launch_options(launch_options)
+        uow.roms.set_applied_launch_options(rom_id, rom.applied_launch_options)
 
-    The run history cannot carry that offer: Force Full Sync clears every stamp
-    while deliberately preserving the history (#1318), so a history-derived offer
-    outlives the progress it promises to continue."""
+
+class TestGetSyncStatsResumeInputs:
+    """``resumable_games`` / ``has_completion_stamp`` — the two kinds of durable
+    progress the panel's "Resume Sync" offer reads (#1789).
+
+    A completion stamp makes the next run pass over a whole platform or collection
+    at fetch time; a recorded launch command makes it pass over one game at apply
+    time. Both survive a stopped run and both are cleared together by Force Full
+    Sync — which is why the run history, deliberately preserved by that clear
+    (#1318), cannot carry the offer."""
 
     @pytest.mark.asyncio
-    async def test_reports_zero_on_a_pristine_install(self, plugin):
+    async def test_pristine_install_has_neither(self, plugin):
         stats = await plugin.get_sync_stats()
-        assert stats["stamped_platforms"] == 0
-        assert stats["stamped_collections"] == 0
+        assert stats["resumable_games"] == 0
+        assert stats["has_completion_stamp"] is False
 
     @pytest.mark.asyncio
-    async def test_counts_each_kind_of_stamp_separately(self, plugin):
+    async def test_counts_bound_roms_carrying_a_recorded_launch_command(self, plugin):
         uow = plugin._uow
-        _stamp_platform(uow, "n64")
-        _stamp_platform(uow, "snes")
-        _stamp_collection(uow, "7")
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64")
+        _seed_rom(uow, 20, app_id=1002, platform_slug="n64")
+        _record_launch_options(uow, 10)
+        _record_launch_options(uow, 20)
 
         stats = await plugin.get_sync_stats()
-        assert stats["stamped_platforms"] == 2
-        assert stats["stamped_collections"] == 1
+        assert stats["resumable_games"] == 2
 
     @pytest.mark.asyncio
-    async def test_counts_collections_of_every_stampable_kind(self, plugin):
-        """A standard and a smart collection are both stampable and both count.
+    async def test_a_bound_rom_with_no_recorded_command_is_not_resumable(self, plugin):
+        """A NULL recorded value never matches a target, so that row is always re-applied."""
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64")
 
-        Collections carry their own completion stamps and are part of a sync's
-        enabled scope exactly as platforms are, so a library synced only through
-        collections still has something to resume from.
+        stats = await plugin.get_sync_stats()
+        assert stats["roms"] == 1
+        assert stats["resumable_games"] == 0
+
+    @pytest.mark.asyncio
+    async def test_the_uninstalled_placeholder_still_counts(self, plugin):
+        """An empty string is a recorded value (the uninstall placeholder, #1146), not a missing one.
+
+        The shortcut it describes carries an empty launch command and is correct as
+        it stands, so the next run skips it exactly as it skips a full command.
         """
         uow = plugin._uow
-        _stamp_collection(uow, "7", "standard")
-        _stamp_collection(uow, "9", "smart")
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64")
+        _record_launch_options(uow, 10, "")
 
         stats = await plugin.get_sync_stats()
-        assert stats["stamped_platforms"] == 0
-        assert stats["stamped_collections"] == 2
+        assert stats["resumable_games"] == 1
 
     @pytest.mark.asyncio
-    async def test_a_platform_whose_stamp_was_dropped_stops_counting(self, plugin):
-        """The stamps are counted live, not cached — an apply-start clear shows up at once."""
+    async def test_an_unbound_rom_is_not_resumable_however_it_was_recorded(self, plugin):
+        """Removing every shortcut must drop the offer, and unbinding KEEPS the row.
+
+        ``Rom.unbind_shortcut`` clears only ``shortcut_app_id`` (ADR-0007), so the
+        recorded command survives a DangerZone remove-all. It is not skip authority
+        there: ``classify_sync_roms`` sends an unbound row down the NEW branch
+        before it reads the recorded value, because the next run has to mint the
+        shortcut regardless. A count over every row would keep offering to resume
+        shortcuts that no longer exist.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64")
+        _record_launch_options(uow, 10)
+        assert (await plugin.get_sync_stats())["resumable_games"] == 1
+
+        await plugin.report_removal_results([10], None)
+
+        stats = await plugin.get_sync_stats()
+        assert stats["roms"] == 0
+        assert stats["resumable_games"] == 0
+        with uow:
+            assert uow.roms.get(10).applied_launch_options is not None
+
+    @pytest.mark.asyncio
+    async def test_a_cancel_inside_the_first_platform_is_still_a_resume(self, plugin):
+        """The case the stamp-only rule got wrong.
+
+        A run cancelled before any unit reached its final chunk leaves no stamp,
+        but its committed chunks wrote shortcuts and recorded their launch
+        commands. The next run genuinely does less work, so this is a resume.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64")
+        _record_launch_options(uow, 10)
+
+        stats = await plugin.get_sync_stats()
+        assert stats["resumable_games"] == 1
+        assert stats["has_completion_stamp"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_platform_stamp_alone_is_still_a_resume(self, plugin):
+        """The mirror case: stamps with no recorded game.
+
+        A row predating migration 015 carries a NULL recorded value while its
+        platform's stamp survives, so an upgraded install can hold stamps and no
+        recorded games — and those platforms still skip wholesale at fetch time.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64")
+        _stamp_platform(uow, "n64")
+
+        stats = await plugin.get_sync_stats()
+        assert stats["resumable_games"] == 0
+        assert stats["has_completion_stamp"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_collection_stamp_alone_answers_the_same_way(self, plugin):
+        """A library synced only through collections holds no platform stamp at all."""
+        uow = plugin._uow
+        _stamp_collection(uow, "7", "smart")
+
+        stats = await plugin.get_sync_stats()
+        assert stats["has_completion_stamp"] is True
+
+    @pytest.mark.asyncio
+    async def test_the_stamp_flag_follows_a_dropped_stamp(self, plugin):
+        """Read live, not cached — an apply-start clear shows up at once."""
         uow = plugin._uow
         _stamp_platform(uow, "n64")
-        _stamp_platform(uow, "snes")
+        assert (await plugin.get_sync_stats())["has_completion_stamp"] is True
         with uow:
             uow.platform_sync_state.delete("n64")
 
-        stats = await plugin.get_sync_stats()
-        assert stats["stamped_platforms"] == 1
+        assert (await plugin.get_sync_stats())["has_completion_stamp"] is False
 
     @pytest.mark.asyncio
-    async def test_force_full_sync_zeroes_both_counts_while_the_attempt_survives(self, plugin):
-        """The #1789 case end to end: the clear takes the stamps and leaves the history.
+    async def test_force_full_sync_takes_both_while_the_attempt_survives(self, plugin):
+        """The #1789 case end to end: the clear takes both skip authorities, not the history.
 
-        Before the clear the panel holds an incomplete attempt AND surviving
-        stamps — a genuine resume. Afterwards the attempt is still there (it feeds
-        the "Last sync" display, #1318) but both counts are zero, which is what
-        drops the button back to "Sync Library".
+        Before the clear the panel holds an incomplete attempt, recorded games AND
+        a stamp — a genuine resume. Afterwards the attempt is still there (it feeds
+        the "Last sync" display, #1318) while both authorities are gone, which is
+        what drops the button back to "Sync Library".
         """
         from domain.sync_run import SyncRun
 
@@ -1455,17 +1537,22 @@ class TestGetSyncStatsStampCounts:
         interrupted.mark_interrupted("2025-01-01T00:05:00", reason="external death")
         with uow:
             uow.sync_runs.save(interrupted)
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64")
+        _record_launch_options(uow, 10)
         _stamp_platform(uow, "n64")
         _stamp_collection(uow, "7")
 
         before = await plugin.get_sync_stats()
-        assert (before["stamped_platforms"], before["stamped_collections"]) == (1, 1)
+        assert before["resumable_games"] == 1
+        assert before["has_completion_stamp"] is True
 
         plugin._sync_service.clear_sync_cache()
 
         after = await plugin.get_sync_stats()
-        assert after["stamped_platforms"] == 0
-        assert after["stamped_collections"] == 0
+        assert after["resumable_games"] == 0
+        assert after["has_completion_stamp"] is False
+        # The shortcuts themselves are untouched — only the skip authority went.
+        assert after["roms"] == 1
         assert after["last_attempt"] == {"finished_at": "2025-01-01T00:05:00", "status": "interrupted"}
 
 

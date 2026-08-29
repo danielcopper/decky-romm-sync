@@ -149,16 +149,21 @@ complete the job.
   "Never". The end-of-run toast and the sync status line make the same distinction: a run stopped by a crash or Steam
   reload reads "Sync interrupted — … so far." rather than blaming a Cancel you never pressed, and the status line
   compares progress against the run's planned total (e.g. "3 of 10 games processed").
-- **The Sync button becomes "Resume Sync".** When a run was cancelled, interrupted, or paused, left games in your
-  library, and left at least one platform or collection synced in full, the **Sync Library** button changes to **Resume
-  Sync**. Pressing it completes the library: the platforms that already synced in full are skipped, and even in the
-  platform that stopped, only the games it hadn't finished are processed — the ones already correct are skipped, so a
-  resume finishes quickly and the counter shows just the remaining work. This is true whether or not you restart Steam
-  in between. Once a run finishes in full, the button goes back to **Sync Library**.
-  - **The line under the button says what a resume would skip** — for example "3 platforms · 1 collection already synced
-    in full". Those are the platforms and collections whose last run finished, so the next one passes straight over
-    them. It is a count of what is already done, not of what is left: the plugin can only know the finished side without
-    asking your server, so no total is shown.
+- **The Sync button becomes "Resume Sync".** When a run was cancelled, interrupted, or paused and left work the next run
+  can skip, the **Sync Library** button changes to **Resume Sync**. Pressing it completes the library: the platforms
+  that already synced in full are skipped, and even in the platform that stopped, only the games it hadn't finished are
+  processed — the ones already correct are skipped, so a resume finishes quickly and the counter shows just the
+  remaining work. This is true whether or not you restart Steam in between. Once a run finishes in full, the button goes
+  back to **Sync Library**.
+  - **A run that stopped early still counts.** Even a run cancelled inside its very first platform had already added
+    games and would skip them next time, so that is a resume too. The button only stays **Sync Library** when nothing
+    survives for the next run to skip — a first run stopped before a single game was added, or a **Force Full Sync**
+    since (see below).
+  - **The line under the button says how much a resume would skip** — for example "1200 games already synced — a resume
+    continues from there." It counts what is already done, not what is left: the plugin can only know the finished side
+    without asking your server, so no total is shown. It is left out in the one case where the plugin knows a resume is
+    possible but cannot put a number on it — a library synced before the plugin started recording per-game progress,
+    where whole platforms are skipped but no individual game is counted.
 - **Force Full Sync starts over from scratch.** Under the sync buttons, **Force Full Sync** clears the plugin's record
   of what it has already synced and re-fetches every platform and collection from RomM on the next run — and that run
   also rewrites every shortcut instead of skipping the ones that look correct, so it repairs anything that drifted on
@@ -170,10 +175,12 @@ complete the job.
     dropping back to "Never". The next preview names the full re-sync explicitly: above the change line it reads **"Full
     re-sync — all platforms re-fetched."**, so a big "Games: … updated" count reads as the intended rebuild rather than
     a surprise. The button stays put after you press it — pressing it again simply re-arms the same fresh start.
-  - **"Resume Sync" goes back to "Sync Library".** Force Full Sync discards exactly the record a resume would continue
-    from, so nothing is left to resume: the button reads **Sync Library** again even when your last run was cancelled or
-    interrupted, and the line naming what would be skipped goes with it. Whichever button you press next, the run is a
-    full one — the label now says so rather than promising otherwise.
+  - **"Resume Sync" goes back to "Sync Library".** Force Full Sync discards exactly the records a resume would continue
+    from — both what it knows about finished platforms and what it knows about each already-correct game — so nothing is
+    left to resume: the button reads **Sync Library** again even when your last run was cancelled or interrupted, and
+    the line naming what would be skipped goes with it. Your games stay in Steam; it is only the plugin's record of what
+    is already correct that goes, which is what makes the next run redo all of it. Whichever button you press next, the
+    run is a full one — the label now says so rather than promising otherwise.
 
 ## Multiple versions of a game
 

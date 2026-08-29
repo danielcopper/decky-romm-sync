@@ -341,25 +341,19 @@ function formatSyncScope(s: SyncPreviewSummary): string {
 }
 
 /**
- * The line under "Resume Sync" — what a resume would SKIP, in the same
- * "N platforms · M collections" shape as the preview's scope line.
+ * The line under "Resume Sync" — how much of a resume there is, counted in the
+ * unit the user recognises: games whose shortcut the next run can pass over.
  *
- * It names what is already done rather than what is left, because only the done
- * side can be proved offline: the stamps are keyed by platform slug and the
- * enabled-platform setting by RomM platform id, with nothing persisted bridging
- * the two, so the remainder would take a server round-trip on every panel mount.
- * Hence no total and no "N of M" — a figure the panel cannot know must not be
- * implied. Collections carry their own completion stamps and are part of a sync's
- * enabled scope exactly as platforms are, so they are counted here for the same
- * reason they count towards the offer itself.
+ * It states what is already done, never what is left, and carries no total: the
+ * remainder needs the server's library, and this line renders on every panel
+ * mount. "already synced" is a claim about these games only — the clause that
+ * follows is what keeps it from reading as a claim that the library is complete.
+ *
+ * Omitted entirely when the count is zero, which a resume on a surviving
+ * completion stamp alone can be. Honest silence beats "0 games".
  */
-function formatResumeScope(stats: SyncStats): string {
-  const parts: string[] = [];
-  const platforms = stats.stamped_platforms ?? 0;
-  const collections = stats.stamped_collections ?? 0;
-  if (platforms > 0) parts.push(pluralize(platforms, "platform"));
-  if (collections > 0) parts.push(pluralize(collections, "collection"));
-  return `${parts.join(" · ")} already synced in full — a resume continues with the rest.`;
+function formatResumeScope(resumableGames: number): string {
+  return `${pluralize(resumableGames, "game")} already synced — a resume continues from there.`;
 }
 
 /**
@@ -1133,35 +1127,42 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // started — both gate the Sync buttons off.
   const connectionUnavailable = connected === false || connected === "backend_failed";
 
-  // The stamp/chunk sync model makes every re-sync an effective resume: a
-  // cancelled or interrupted run's committed chunks survive on disk, so the next
-  // run's incremental skip picks up where it stopped. ``last_attempt`` is
-  // non-null exactly when the newest terminal run did NOT complete. "errored"
-  // stays "Sync Library": an errored run often fails before applying anything
-  // (e.g. a config error), so "resume" isn't the right mental model. A completed
-  // sync clears last_attempt on the stats refresh, flipping the label back.
+  // ``last_attempt`` is non-null exactly when the newest terminal run did NOT
+  // complete. "errored" stays "Sync Library": an errored run often fails before
+  // applying anything (e.g. a config error), so "resume" isn't the right mental
+  // model. A completed sync clears last_attempt on the stats refresh, flipping the
+  // label back.
   //
-  // But "resume" only holds while partial progress actually exists on disk. If
-  // the user removed all shortcuts after an incomplete run (e.g. DangerZone
-  // "remove all"), there are zero bound shortcuts and the next run is a full
-  // fresh import — nothing to resume — so the button must honestly read "Sync
-  // Library" again. ``stats.roms`` is the bound-shortcut count (registry-derived).
+  // An incomplete attempt alone is not enough, and the half that used to stand in
+  // for "progress survives" was measuring the wrong thing: it asked whether
+  // SHORTCUTS exist, and Force Full Sync does not delete shortcuts — it deletes
+  // the completion stamps and the recorded launch commands. So the offer survived
+  // a clear that had just discarded everything it offered to continue (#1789).
   //
-  // And the offer is derived from the surviving completion stamps, never from
-  // ``last_attempt`` alone: Force Full Sync clears every stamp while deliberately
-  // preserving the run history (#1318), so the history outlives the progress it
-  // would offer to continue and kept the button promising a resume that could no
-  // longer happen (#1789).
+  // What a resume actually rests on is skip authority, of which this plugin keeps
+  // two kinds and clears both together in that one place: a completion stamp
+  // (whole platform or collection skipped at fetch time) or a recorded launch
+  // command (one game skipped at apply time). Either is a real resume — a run
+  // cancelled inside its first platform has written shortcuts and recorded their
+  // commands without reaching a stamp, and the next run genuinely does less work.
   const incompleteAttempt =
     stats?.last_attempt?.status === "interrupted" ||
     stats?.last_attempt?.status === "cancelled" ||
     stats?.last_attempt?.status === "paused";
   // ``incompleteAttempt`` being true narrows ``stats`` non-null (it dereferenced
   // stats.last_attempt), and ``roms`` is a required number — no ``?.``/``??`` needed.
-  const stampedUnits = (stats?.stamped_platforms ?? 0) + (stats?.stamped_collections ?? 0);
-  const canResume = incompleteAttempt && stats.roms > 0 && stampedUnits > 0;
+  const resumableGames = stats?.resumable_games ?? 0;
+  const skipAuthoritySurvives = resumableGames > 0 || (stats?.has_completion_stamp ?? false);
+  // ``roms > 0`` is belt-and-braces TODAY — it is implied by both branches, since
+  // a recorded game is counted only while bound and the destructive flows delete a
+  // platform's stamp in the same write UoW as the unbind. It stays because it
+  // states a rule in its own right: a run that stopped before a single shortcut was
+  // written starts from the beginning and must read "Sync Library". Move the
+  // stamp-clearing out of that transaction and this is what still catches the
+  // wipe; delete it as redundant and nothing does.
+  const canResume = incompleteAttempt && stats.roms > 0 && skipAuthoritySurvives;
   const syncButtonLabel = canResume ? "Resume Sync" : "Sync Library";
-  const resumeScopeText = canResume ? formatResumeScope(stats) : null;
+  const resumeScopeText = canResume && resumableGames > 0 ? formatResumeScope(resumableGames) : null;
 
   if (versionError) {
     return <VersionErrorCard message={versionError} compact />;

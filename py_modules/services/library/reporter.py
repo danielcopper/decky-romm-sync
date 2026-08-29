@@ -94,8 +94,8 @@ class _SyncStatsReading:
     last_sync: str | None
     last_attempt: dict[str, str] | None
     rom_count: int
-    stamped_platforms: int
-    stamped_collections: int
+    resumable_games: int
+    has_completion_stamp: bool
 
 
 class SyncReporter:
@@ -853,10 +853,12 @@ class SyncReporter:
         collections/platforms as "unchanged" (they exist in Steam; membership
         did not change), which is correct.
 
-        What the preserved history does **not** carry is a resumable run. The
-        panel's "Resume Sync" offer reads the surviving stamps this clear has
-        just taken away, never the history, so the sync button falls back to
-        "Sync Library" here — see :meth:`_read_sync_stats_io` (#1789).
+        What the preserved history does **not** carry is a resumable run. This
+        clear takes away BOTH kinds of skip authority — every completion stamp and
+        every recorded launch command — and the panel's "Resume Sync" offer reads
+        those, never the history, so the sync button falls back to "Sync Library"
+        here. That the two are cleared together is what makes the offer's rule
+        hold; see :meth:`_read_sync_stats_io` (#1789).
         """
         with self._uow_factory() as uow:
             uow.platform_sync_state.clear()
@@ -883,47 +885,71 @@ class SyncReporter:
             "collections": enabled_collection_count,
             "roms": stats.rom_count,
             "total_shortcuts": stats.rom_count,
-            "stamped_platforms": stats.stamped_platforms,
-            "stamped_collections": stats.stamped_collections,
+            "resumable_games": stats.resumable_games,
+            "has_completion_stamp": stats.has_completion_stamp,
         }
 
     def _read_sync_stats_io(self) -> _SyncStatsReading:
-        """Read the run history, the bound-ROM count and the surviving stamps from SQLite.
+        """Read the run history, the bound-ROM count and the surviving skip authority from SQLite.
 
         ``last_sync`` is the ``finished_at`` of the latest completed ``SyncRun``;
         ``last_attempt`` surfaces the newest cancelled/interrupted/paused/errored run when
         it is newer than that (see :meth:`_last_attempt`); the ROM count is the
         bound-shortcut count in ``roms``.
 
-        The two stamp counts are what makes the panel's "Resume Sync" offer
-        honest. A resume resumes FROM a completion stamp, and the run history
-        stops implying one the moment Force Full Sync runs: it clears every stamp
-        while deliberately preserving the history (#1318), so deriving the offer
-        from the history alone kept offering to continue a run whose progress had
-        just been discarded (#1789).
+        The last two are what makes the panel's "Resume Sync" offer honest, and
+        they are two facts rather than one because this plugin keeps **two** kinds
+        of durable progress. A **completion stamp** makes the next run pass over a
+        whole platform or collection at fetch time; a **recorded launch command**
+        makes it pass over one game at apply time. Both survive a stopped run and
+        both are cleared together by Force Full Sync, which is the entire #1789
+        defect: the offer used to be derived from the run history, which Force
+        Full Sync deliberately preserves (#1318), so it outlived the progress it
+        promised to continue.
 
-        Collections are counted alongside platforms deliberately, not by
-        oversight: a collection carries its own completion stamp and is part of a
-        sync's enabled scope exactly as a platform is, so a library synced only
-        through collections holds no platform stamp at all — a platforms-only
-        count would silently withdraw the resume offer from that user.
+        Neither fact subsumes the other, so the offer reads both. A run cancelled
+        inside its very first platform unit has written shortcuts and recorded
+        their launch commands but reached no final chunk, so it holds recorded
+        games and no stamp — and it is a genuine resume, because the next run
+        really does less work. In the other direction, a row predating migration
+        015 carries a NULL recorded value while its platform's stamp survives, so
+        an upgraded install can hold stamps with zero recorded games and still
+        skip those platforms wholesale. Counting only one kind declares one of
+        these two a fresh start when it is not.
 
-        Both counts ride along in the same read UoW as the ``roms`` scan already
-        performed here; each is one ``COUNT(*)`` over a leaf table holding one row
-        per synced unit, so the panel mount pays nothing measurable for them.
+        Everything here rides in the read UoW that already scans ``roms``: the
+        recorded-game count is one more condition inside that same loop (``iter_all``
+        already selects ``applied_launch_options``), and each stamp probe is a
+        ``SELECT 1 … LIMIT 1`` over a leaf table. The panel mount pays nothing
+        measurable for any of it.
         """
         with self._uow_factory() as uow:
             completed = uow.sync_runs.get_latest_completed()
             terminal = uow.sync_runs.get_latest_terminal()
-            rom_count = sum(1 for rom in uow.roms.iter_all() if rom.shortcut_app_id is not None)
-            stamped_platforms = uow.platform_sync_state.count()
-            stamped_collections = uow.collection_sync_state.count()
+            rom_count = 0
+            resumable_games = 0
+            for rom in uow.roms.iter_all():
+                if rom.shortcut_app_id is None:
+                    continue
+                rom_count += 1
+                # Bound AND recorded, never recorded alone. ``classify_sync_roms``
+                # sends an unbound row down the NEW branch before it ever looks at
+                # the recorded value, so a recorded command with no shortcut is not
+                # skip authority — the next run has to mint the shortcut regardless.
+                # Requiring the binding is therefore what makes this count fall to
+                # zero after a DangerZone remove-all by construction: unbinding
+                # keeps the row and its recorded command on purpose (ADR-0007), so
+                # a count over all rows would keep offering a resume of shortcuts
+                # that no longer exist. Do not "simplify" this to every row.
+                if rom.applied_launch_options is not None:
+                    resumable_games += 1
+            has_completion_stamp = uow.platform_sync_state.has_any() or uow.collection_sync_state.has_any()
         return _SyncStatsReading(
             last_sync=completed.finished_at if completed is not None else None,
             last_attempt=self._last_attempt(completed, terminal),
             rom_count=rom_count,
-            stamped_platforms=stamped_platforms,
-            stamped_collections=stamped_collections,
+            resumable_games=resumable_games,
+            has_completion_stamp=has_completion_stamp,
         )
 
     @staticmethod

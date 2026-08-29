@@ -189,27 +189,31 @@ export interface SyncStats {
   roms: number;
   total_shortcuts: number;
   /**
-   * Platforms that currently carry a completion stamp — the units a resume would
-   * skip because their last apply ran to completion. This, not ``last_attempt``,
-   * is what makes a resume a resume: Force Full Sync clears every stamp while
-   * deliberately preserving the run history (#1318), so an offer derived from the
-   * history alone outlived the progress it offered to continue (#1789).
+   * Bound ROMs carrying a recorded launch command — the games the next run can
+   * pass over at apply time, and the number the resume line states.
    *
-   * It is a count of what is DONE, never of what is left: the enabled-platform
-   * set is keyed by RomM platform id and the stamps by slug, with no local bridge
-   * between them, so the remainder cannot be named without asking the server.
-   * Absent from an older backend, which reads as "no stamps" and so as no resume
-   * — the safe direction, since the label then understates rather than promises.
+   * Bound AND recorded, never recorded alone: an unbound row is classified NEW
+   * before its recorded value is read, so a recorded command with no shortcut is
+   * not skip authority. That is what makes this fall to zero after a
+   * remove-all, where the rows (and their recorded commands) deliberately
+   * survive.
+   *
+   * Absent from an older backend, which reads as no recorded games — the safe
+   * direction, since the offer then understates rather than promises.
    */
-  stamped_platforms?: number;
+  resumable_games?: number;
   /**
-   * Collections that currently carry a completion stamp. Counted alongside
-   * ``stamped_platforms`` by decision, not by accident: a collection is part of a
-   * sync's enabled scope exactly as a platform is and carries its own stamp, so a
-   * library synced only through collections holds no platform stamp at all and a
-   * platforms-only rule would silently withdraw its resume offer.
+   * Whether ANY platform or collection still carries a completion stamp — the
+   * other kind of durable progress, which makes the next run pass over a whole
+   * unit at fetch time.
+   *
+   * A separate fact rather than an optimisation of {@link resumable_games},
+   * because neither implies the other. A run cancelled inside its first platform
+   * unit has recorded games and no stamp; a row predating migration 015 carries a
+   * NULL recorded value while its platform's stamp survives, so an upgraded
+   * install can hold stamps and no recorded games. Both are genuine resumes.
    */
-  stamped_collections?: number;
+  has_completion_stamp?: boolean;
 }
 
 export interface RegistryPlatform {

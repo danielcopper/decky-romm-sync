@@ -364,13 +364,15 @@ class PlatformSyncStateRepository(Protocol):
         """
         ...
 
-    def count(self) -> int:
-        """Return how many platforms currently carry a completion stamp.
+    def has_any(self) -> bool:
+        """Return whether ANY platform currently carries a completion stamp.
 
-        Backs the panel's resume offer: the stamps are what a resume resumes
-        FROM, so a non-zero count is what makes "Resume Sync" honest after an
-        incomplete run — the run history alone does not, since Force Full Sync
-        preserves it while clearing every stamp (#1789). (library/reporter.py)
+        One of the two skip authorities the panel's resume offer reads: a
+        surviving stamp means the next run passes over that whole platform at
+        fetch time, so there is something to resume even when no individual game
+        carries a recorded launch command (a row predating migration 015). The run
+        history cannot answer this — Force Full Sync preserves it while clearing
+        every stamp (#1789). (library/reporter.py)
         """
         ...
 
@@ -419,13 +421,13 @@ class CollectionSyncStateRepository(Protocol):
         """
         ...
 
-    def count(self) -> int:
-        """Return how many collections currently carry a completion stamp.
+    def has_any(self) -> bool:
+        """Return whether ANY collection currently carries a completion stamp.
 
-        The collection sibling of ``PlatformSyncStateRepository.count`` and read
+        The collection sibling of ``PlatformSyncStateRepository.has_any`` and read
         with it: a collection unit is part of a sync's enabled scope exactly as a
-        platform unit is, so its surviving stamp counts towards the panel's
-        resume offer the same way (#1789). (library/reporter.py)
+        platform unit is, so its surviving stamp answers the resume offer the same
+        way (#1789). (library/reporter.py)
         """
         ...
 

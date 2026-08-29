@@ -108,32 +108,30 @@ class TestIterAll:
         assert list(uow.collection_sync_state.iter_all()) == []
 
 
-class TestCount:
-    def test_count_is_zero_when_no_stamps(self, uow: SqliteUnitOfWork):
-        assert uow.collection_sync_state.count() == 0
+class TestHasAny:
+    def test_false_when_no_stamps(self, uow: SqliteUnitOfWork):
+        assert uow.collection_sync_state.has_any() is False
 
-    def test_count_reports_one_per_stamped_collection(self, uow: SqliteUnitOfWork):
-        uow.collection_sync_state.save(_stamp("7", kind="standard"))
-        uow.collection_sync_state.save(_stamp("9", kind="smart"))
-
-        assert uow.collection_sync_state.count() == 2
-
-    def test_same_id_under_two_kinds_counts_twice(self, uow: SqliteUnitOfWork):
-        """Identity is the composite ``(collection_id, collection_kind)`` — two rows, two stamps."""
-        uow.collection_sync_state.save(_stamp("7", kind="standard"))
+    def test_true_once_any_collection_is_stamped(self, uow: SqliteUnitOfWork):
         uow.collection_sync_state.save(_stamp("7", kind="smart"))
 
-        assert uow.collection_sync_state.count() == 2
+        assert uow.collection_sync_state.has_any() is True
 
-    def test_count_follows_delete_and_clear(self, uow: SqliteUnitOfWork):
+    def test_follows_delete_down_to_the_last_stamp(self, uow: SqliteUnitOfWork):
         uow.collection_sync_state.save(_stamp("7", kind="standard"))
         uow.collection_sync_state.save(_stamp("9", kind="smart"))
 
         uow.collection_sync_state.delete("7", "standard")
-        assert uow.collection_sync_state.count() == 1
+        assert uow.collection_sync_state.has_any() is True
 
+        uow.collection_sync_state.delete("9", "smart")
+        assert uow.collection_sync_state.has_any() is False
+
+    def test_false_after_clear(self, uow: SqliteUnitOfWork):
+        uow.collection_sync_state.save(_stamp("7", kind="standard"))
         uow.collection_sync_state.clear()
-        assert uow.collection_sync_state.count() == 0
+
+        assert uow.collection_sync_state.has_any() is False
 
 
 class TestClear:

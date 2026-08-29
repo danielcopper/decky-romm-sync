@@ -1396,16 +1396,16 @@ describe("MainPage", () => {
       rssKb: number | null,
       resumeReady: boolean | null = null,
       counts: { done: number | null; total: number | null } = { done: null, total: null },
-      stampedPlatforms = 3,
+      resumableGames = 30,
     ): Promise<HTMLElement> {
       vi.mocked(backend.getSyncStats).mockResolvedValue({
         ...defaultStats(),
         roms: 42,
-        // A surviving stamp by default, so the paused banner describes the resume
+        // Surviving progress by default, so the paused banner describes the resume
         // situation it was written for. Pass 0 for the post-Force-Full-Sync state,
         // where the run is still paused but the button beside it is not a resume.
-        stamped_platforms: stampedPlatforms,
-        stamped_collections: 0,
+        resumable_games: resumableGames,
+        has_completion_stamp: false,
         last_attempt: lastAttemptStatus
           ? { finished_at: "2026-07-11T17:48:00", status: lastAttemptStatus as "paused" }
           : null,
@@ -1580,7 +1580,7 @@ describe("MainPage", () => {
         vi.mocked(backend.getSyncStats).mockResolvedValue({
           ...defaultStats(),
           roms: 42,
-          stamped_platforms: 3,
+          resumable_games: 30,
           last_attempt: { finished_at: "2026-07-11T17:48:00", status: "paused" },
         });
         // Before the restart: high RSS, resume would re-pause. After (poll tick):
@@ -3270,15 +3270,18 @@ describe("MainPage", () => {
   });
 
   describe("sync button label (resume vs fresh)", () => {
-    /** The stamp counts a resume situation needs: something on disk to continue
-     *  from. Without them the offer is off whatever the run history says (#1789). */
+    /** A resume situation: shortcuts on disk, and games the next run can pass
+     *  over. Recorded launch commands are the ordinary carrier — every stopped
+     *  run has committed chunks — so they, not a completion stamp, are the
+     *  default here. Without either kind the offer is off whatever the run
+     *  history says (#1789). */
     function resumeStats(overrides: Partial<SyncStats> = {}): SyncStats {
       return {
         ...defaultStats(),
         roms: 42,
         last_attempt: { finished_at: "2026-06-01T17:48:00", status: "interrupted" },
-        stamped_platforms: 3,
-        stamped_collections: 0,
+        resumable_games: 30,
+        has_completion_stamp: false,
         ...overrides,
       };
     }
@@ -3287,82 +3290,85 @@ describe("MainPage", () => {
       return Array.from(container.querySelectorAll('[data-testid="button-desc"]')).map((el) => el.textContent);
     }
 
-    // roms > 0 = shortcuts on disk, a surviving stamp = progress the next run
-    // will skip. Every non-completed, non-errored terminal status resumes:
-    // interrupted, cancelled, and the #1383 session-budget pause.
+    async function renderStats(stats: SyncStats): Promise<HTMLElement> {
+      vi.mocked(backend.getSyncStats).mockResolvedValue(stats);
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      return container;
+    }
+
+    // Every non-completed, non-errored terminal status resumes: interrupted,
+    // cancelled, and the #1383 session-budget pause.
     it.each(["interrupted", "cancelled", "paused"] as const)(
-      "reads 'Resume Sync' when the newest attempt was %s with bound shortcuts and a surviving stamp",
+      "reads 'Resume Sync' when the newest attempt was %s and progress survives",
       async (status) => {
-        vi.mocked(backend.getSyncStats).mockResolvedValue(
-          resumeStats({ last_attempt: { finished_at: "2026-06-01T17:48:00", status } }),
-        );
-        const { container } = render(<MainPage onNavigate={vi.fn()} />);
-        await flushAsync();
-        expect(buttonByExactText(container, "Resume Sync")).not.toBeNull();
-        expect(buttonByExactText(container, "Sync Library")).toBeNull();
+        const c = await renderStats(resumeStats({ last_attempt: { finished_at: "2026-06-01T17:48:00", status } }));
+        expect(buttonByExactText(c, "Resume Sync")).not.toBeNull();
+        expect(buttonByExactText(c, "Sync Library")).toBeNull();
       },
     );
 
-    it("reads 'Sync Library' when an incomplete attempt has NO surviving stamp (post-Force-Full-Sync)", async () => {
-      // The #1789 regression. Force Full Sync clears every completion stamp but
-      // deliberately preserves the run history (#1318), so the incomplete attempt
-      // and the bound shortcuts both survive while the progress they described is
-      // gone. Whichever button is pressed the next run is a full one, so offering
-      // to resume promises something that can no longer happen.
-      vi.mocked(backend.getSyncStats).mockResolvedValue(resumeStats({ stamped_platforms: 0, stamped_collections: 0 }));
-      const { container } = render(<MainPage onNavigate={vi.fn()} />);
-      await flushAsync();
-      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
-      expect(buttonByExactText(container, "Resume Sync")).toBeNull();
-      expect(buttonDescriptions(container).join(" ")).not.toContain("already synced in full");
+    it("reads 'Sync Library' once a force-clear left NEITHER kind of progress", async () => {
+      // The #1789 regression. Force Full Sync deletes the completion stamps and
+      // the recorded launch commands but not the shortcuts, and it deliberately
+      // preserves the run history (#1318) — so the incomplete attempt and the
+      // bound shortcuts both survive while everything the next run could skip is
+      // gone. Whichever button is pressed the next run is a full one.
+      const c = await renderStats(resumeStats({ resumable_games: 0, has_completion_stamp: false }));
+      expect(buttonByExactText(c, "Sync Library")).not.toBeNull();
+      expect(buttonByExactText(c, "Resume Sync")).toBeNull();
+      expect(buttonDescriptions(c).join(" ")).not.toContain("already synced");
     });
 
-    it("reads 'Resume Sync' on collection stamps alone (no platform ever stamped)", async () => {
-      // A library synced only through collections holds no platform stamp at all;
-      // a platforms-only rule would silently withdraw its resume offer.
-      vi.mocked(backend.getSyncStats).mockResolvedValue(resumeStats({ stamped_platforms: 0, stamped_collections: 2 }));
-      const { container } = render(<MainPage onNavigate={vi.fn()} />);
-      await flushAsync();
-      expect(buttonByExactText(container, "Resume Sync")).not.toBeNull();
-      expect(buttonDescriptions(container)).toContain(
-        "2 collections already synced in full — a resume continues with the rest.",
-      );
+    it("reads 'Resume Sync' on recorded games alone — a cancel inside the first platform", async () => {
+      // No unit reached its final chunk, so no stamp exists; the committed chunks
+      // still wrote shortcuts and recorded their launch commands, and the next run
+      // passes over every one of them. Keying the offer on stamps alone called
+      // this a fresh start, which it is not.
+      const c = await renderStats(resumeStats({ resumable_games: 12, has_completion_stamp: false }));
+      expect(buttonByExactText(c, "Resume Sync")).not.toBeNull();
+      expect(buttonDescriptions(c)).toContain("12 games already synced — a resume continues from there.");
     });
 
-    it("names both kinds of stamped unit under the button, each correctly pluralized", async () => {
-      vi.mocked(backend.getSyncStats).mockResolvedValue(resumeStats({ stamped_platforms: 1, stamped_collections: 4 }));
-      const { container } = render(<MainPage onNavigate={vi.fn()} />);
-      await flushAsync();
-      expect(buttonDescriptions(container)).toContain(
-        "1 platform · 4 collections already synced in full — a resume continues with the rest.",
-      );
+    it("reads 'Resume Sync' on a completion stamp alone, and says nothing under it", async () => {
+      // The mirror case: rows predating migration 015 carry no recorded command
+      // while their platform's stamp survives, so an upgraded install can hold
+      // stamps and zero recorded games — those platforms still skip wholesale.
+      // With no number to state, the line is omitted rather than reading "0 games".
+      const c = await renderStats(resumeStats({ resumable_games: 0, has_completion_stamp: true }));
+      expect(buttonByExactText(c, "Resume Sync")).not.toBeNull();
+      expect(buttonDescriptions(c).join(" ")).not.toContain("already synced");
+    });
+
+    it("counts the resume line in games, singular at one", async () => {
+      const c = await renderStats(resumeStats({ resumable_games: 1 }));
+      expect(buttonDescriptions(c)).toContain("1 game already synced — a resume continues from there.");
     });
 
     it("omits the line entirely when the button reads 'Sync Library'", async () => {
-      // No resume, nothing to describe — a stale count under a fresh-sync button
-      // would name progress the run is not going to skip.
-      const { container } = render(<MainPage onNavigate={vi.fn()} />);
-      await flushAsync();
-      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
-      expect(buttonDescriptions(container).join(" ")).not.toContain("already synced in full");
+      // No resume, nothing to describe — a count under a fresh-sync button would
+      // name progress the run is not going to skip.
+      const c = await renderStats(defaultStats());
+      expect(buttonByExactText(c, "Sync Library")).not.toBeNull();
+      expect(buttonDescriptions(c).join(" ")).not.toContain("already synced");
     });
 
     it("reads 'Sync Library' when an interrupted attempt left ZERO bound shortcuts (all removed — nothing to resume)", async () => {
-      // The regression: after an interrupted run the user removed every shortcut
-      // (DangerZone "remove all"), so roms is 0 — the next run is a full fresh
-      // import, and the label must not falsely promise a resume. The stamps are
-      // left standing so the zero shortcut count is what carries the assertion.
-      vi.mocked(backend.getSyncStats).mockResolvedValue(resumeStats({ roms: 0 }));
-      const { container } = render(<MainPage onNavigate={vi.fn()} />);
-      await flushAsync();
-      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
-      expect(buttonByExactText(container, "Resume Sync")).toBeNull();
+      // After an interrupted run the user removed every shortcut (DangerZone
+      // "remove all"), so roms is 0 and the next run is a full fresh import. Both
+      // kinds of progress are left standing in the fixture so the zero shortcut
+      // count is what carries the assertion — this is the rule `roms > 0` states
+      // in its own right, and what would still catch the wipe if the destructive
+      // flows ever stopped clearing a platform's stamp alongside the unbind.
+      const c = await renderStats(resumeStats({ roms: 0, resumable_games: 30, has_completion_stamp: true }));
+      expect(buttonByExactText(c, "Sync Library")).not.toBeNull();
+      expect(buttonByExactText(c, "Resume Sync")).toBeNull();
     });
 
     it("keeps 'Sync Library' when the newest attempt errored (resume isn't the model)", async () => {
       // An errored run often failed before applying anything (config error, etc.),
-      // so "resume" would mislead — the fresh label stays. Stamps and shortcuts
-      // are present, so only the status can be what withholds the offer.
+      // so "resume" would mislead — the fresh label stays. Shortcuts and both
+      // kinds of progress are present, so only the status can withhold the offer.
       vi.mocked(backend.getSyncStats).mockResolvedValue(
         resumeStats({ last_attempt: { finished_at: "2026-06-01T17:48:00", status: "errored" } }),
       );
@@ -3373,8 +3379,8 @@ describe("MainPage", () => {
     });
 
     it("keeps 'Sync Library' when there is no last attempt (clean state)", async () => {
-      // Stamps survive every completed run, so a fully-synced library carries
-      // plenty of them — the absent last_attempt is what has to withhold the offer.
+      // A fully-synced library carries recorded launch commands for every game, so
+      // the absent last_attempt is what has to withhold the offer.
       vi.mocked(backend.getSyncStats).mockResolvedValue(resumeStats({ last_attempt: null }));
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
@@ -3407,26 +3413,27 @@ describe("MainPage", () => {
       // Two things a force-clear does, deliberately opposite, and they are easy to
       // merge into one. The run HISTORY is preserved (#1318) so the Last-sync line
       // and this button both stay put — the button is idempotent, pressing it
-      // again just re-clears already-cleared stamps. The completion STAMPS are
-      // gone, and the resume offer reads those, so the label must NOT survive the
-      // clear: the next run is a full one either way, and continuing to offer a
-      // resume promises progress that has just been discarded (#1789).
+      // again just re-clears what is already cleared. The SHORTCUTS survive too.
+      // What goes is both kinds of skip authority, which is what the resume offer
+      // reads, so the label must NOT survive the clear: the next run is a full one
+      // either way, and continuing to offer a resume promises progress that has
+      // just been discarded (#1789).
       vi.mocked(backend.getSyncStats)
         .mockResolvedValueOnce({
           ...defaultStats(),
           roms: 42,
           last_sync: null,
           last_attempt: { finished_at: "2026-06-01T17:48:00", status: "interrupted" },
-          stamped_platforms: 3,
-          stamped_collections: 1,
+          resumable_games: 30,
+          has_completion_stamp: true,
         })
         .mockResolvedValue({
           ...defaultStats(),
           roms: 42,
           last_sync: null,
           last_attempt: { finished_at: "2026-06-01T17:48:00", status: "interrupted" },
-          stamped_platforms: 0,
-          stamped_collections: 0,
+          resumable_games: 0,
+          has_completion_stamp: false,
         });
       vi.mocked(backend.clearSyncCache).mockResolvedValue({ success: true, message: "Cleared" });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
@@ -3436,7 +3443,7 @@ describe("MainPage", () => {
       expect(buttonByExactText(container, "Force Full Sync")).not.toBeNull();
 
       // Press Force Full Sync → clearSyncCache succeeds → the stats refresh reads
-      // the preserved history with every stamp gone.
+      // the preserved history with both skip authorities gone.
       await act(async () => {
         fireEvent.click(buttonByExactText(container, "Force Full Sync")!);
         await Promise.resolve();
@@ -5482,8 +5489,8 @@ describe("MainPage", () => {
     /** Stats that let EVERY start control render, so an assertion that none of
      *  them is on screen is carried by four absences rather than one. Without a
      *  recorded attempt "Force Full Sync" is hidden anyway, and without an
-     *  incomplete one plus bound shortcuts plus a surviving completion stamp the
-     *  sync button reads "Sync Library" rather than "Resume Sync". */
+     *  incomplete one plus bound shortcuts plus surviving progress the sync button
+     *  reads "Sync Library" rather than "Resume Sync". */
     function statsWithEveryStartControl(): SyncStats {
       return {
         last_sync: null,
@@ -5492,8 +5499,7 @@ describe("MainPage", () => {
         roms: 12,
         total_shortcuts: 12,
         last_attempt: { finished_at: "2026-06-01T17:48:00", status: "cancelled" },
-        stamped_platforms: 1,
-        stamped_collections: 0,
+        resumable_games: 12,
       };
     }
 

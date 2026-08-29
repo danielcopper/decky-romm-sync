@@ -752,18 +752,36 @@ which is the entire full-re-fetch + full-re-apply arm — the stamps are the fet
 `sync_runs` history is deliberately **preserved** (#1318): it feeds no skip gate and is the source of the "Last sync"
 display, so deleting it forced nothing and only blanked the panel to "Never" right after a reset.
 
-That preservation is also why the panel's **"Resume Sync" offer is derived from the surviving stamps, not from the run
-history** (#1789). A resume is a resume because a completion stamp survives for the next run to skip; the history says
-only that a run ended without completing, and after a Force Full Sync it says that while every stamp it implied is gone
-— so a history-derived offer promised to continue progress that had just been discarded. `get_sync_stats` therefore
-carries two additive counts alongside the display fields, `stamped_platforms` and `stamped_collections`
-(`PlatformSyncStateRepository.count` / `CollectionSyncStateRepository.count`, both read in the read UoW that already
-scans `roms`, so the panel mount pays nothing measurable). Collections count exactly as platforms do: a collection unit
-is part of a sync's enabled scope and carries its own stamp, so a library synced only through collections holds no
-platform stamp at all and a platforms-only rule would withdraw its resume offer. The counts are of what is **done**,
-never of what is left: `enabled_platforms` is keyed by RomM platform id and the stamps by slug, and nothing persisted
-bridges the two, so naming the remainder would take a server round-trip on every panel mount — the QAM line under the
-button states what a resume would skip instead.
+That preservation is also why the panel's **"Resume Sync" offer is derived from the surviving skip authority, not from
+the run history** (#1789). The history says only that a run ended without completing, and after a Force Full Sync it
+says that while everything it implied is gone — so a history-derived offer promised to continue progress that had just
+been discarded. The condition it replaced measured the wrong thing in the same way: it paired the incomplete attempt
+with "bound shortcuts exist", but Force Full Sync does not delete shortcuts, it deletes the stamps and the recorded
+launch options.
+
+A resume rests on **skip authority**, and this plugin keeps two kinds, cleared together by that one reset: a
+**completion stamp** (whole platform or collection skipped at fetch time, ADR-0023) or a **recorded
+`applied_launch_options`** (one game skipped at apply time, ADR-0025). Neither subsumes the other, so the offer reads
+both. A run cancelled inside its first platform unit reached no final chunk and holds no stamp, but its committed chunks
+wrote shortcuts and recorded their launch commands — the next run genuinely does less work, so that is a resume. A row
+predating migration 015 carries a NULL recorded value while its platform's stamp survives, so an upgraded install can
+hold stamps and zero recorded games and still skip those platforms wholesale.
+
+`get_sync_stats` therefore carries two additive fields alongside the display ones: `resumable_games` (bound rows with a
+non-NULL `applied_launch_options`) and `has_completion_stamp` (`PlatformSyncStateRepository.has_any()` or
+`CollectionSyncStateRepository.has_any()`). Both ride in the read UoW that already scans `roms` — the game count is one
+more condition inside that loop, since `iter_all` already selects the column, and each stamp probe is a
+`SELECT 1 … LIMIT 1` over a leaf table — so the panel mount pays nothing measurable.
+
+**The game count is bound-AND-recorded, never recorded alone.** `classify_sync_roms` sends an unbound row down the NEW
+branch before it reads the recorded value, because the next run has to mint the shortcut regardless. Requiring the
+binding is what makes the count fall to zero after a DangerZone remove-all, where unbinding deliberately keeps the row
+and its recorded command (ADR-0007) — a count over every row would keep offering to resume shortcuts that no longer
+exist. The panel keeps `roms > 0` as a conjunct on top: implied by both branches today, but it states the rule that a
+run stopped before a single shortcut was written begins from scratch, and it is what would still catch the wipe if the
+destructive flows ever stopped deleting a platform's stamp in the same write UoW as the unbind. `resumable_games` is a
+count of what is **done**, never of what is left — naming the remainder needs the server's library — so the QAM line
+under the button states what a resume would skip, and is omitted when the count is zero.
 
 **Single-owner run lifecycle (#1202).** The run-lifecycle pair — `sync_state` (idle/running/cancelling) and
 `current_sync_id` — is mutated **only** through four verb methods on `LibrarySyncStateBox`, never by direct field

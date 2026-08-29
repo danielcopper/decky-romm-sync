@@ -72,13 +72,14 @@ async def test_get_sync_stats_shape(harness):
         "collections",
         "roms",
         "total_shortcuts",
-        "stamped_platforms",
-        "stamped_collections",
+        "resumable_games",
+        "has_completion_stamp",
     }
     assert result["last_sync"] is None
     assert result["last_attempt"] is None
-    for key in ("platforms", "collections", "roms", "total_shortcuts", "stamped_platforms", "stamped_collections"):
+    for key in ("platforms", "collections", "roms", "total_shortcuts", "resumable_games"):
         assert isinstance(result[key], int)
+    assert result["has_completion_stamp"] is False
 
 
 async def test_get_sync_stats_surfaces_cancelled_attempt(harness):
@@ -144,41 +145,38 @@ async def test_clear_sync_cache_preserves_last_sync(harness):
     assert stats["last_attempt"] == {"finished_at": "2025-06-01T18:05:00", "status": "cancelled"}
 
 
-async def test_clear_sync_cache_zeroes_the_stamp_counts(harness):
-    """The counterpart to the history the clear preserves: the stamps it takes.
+async def test_clear_sync_cache_takes_both_skip_authorities(harness):
+    """The counterpart to the history the clear preserves: the skip authority it takes.
 
-    The panel's "Resume Sync" offer reads these two counts, so over the real
-    SQLite stack the clear has to move them from a genuine resume situation to
-    zero — otherwise the button keeps offering to continue a run whose progress
-    has just been discarded (#1789).
+    The panel's "Resume Sync" offer reads both kinds of durable progress — the
+    per-unit completion stamps and the per-ROM recorded launch commands — so over
+    the real SQLite stack the clear has to move both from a genuine resume
+    situation to nothing, while leaving the shortcuts themselves alone. Otherwise
+    the button keeps offering to continue a run whose progress has just been
+    discarded (#1789).
     """
-    from domain.collection_sync_state import CollectionSyncState
     from domain.platform_sync_state import PlatformSyncState
 
+    seed_rom(harness, 11, platform_slug="snes")
     with harness.uow_factory() as uow:
+        rom = uow.roms.get(11)
+        rom.record_applied_launch_options("flatpak run app 'game.zip'")
+        uow.roms.set_applied_launch_options(11, rom.applied_launch_options)
         uow.platform_sync_state.save(
             PlatformSyncState.stamp(platform_slug="snes", at="2025-06-01T17:10:00", rom_count=3)
         )
-        uow.collection_sync_state.save(
-            CollectionSyncState.stamp(
-                collection_id="7",
-                collection_kind="standard",
-                updated_at="2025-06-01T17:00:00",
-                completed_at="2025-06-01T17:10:00",
-                rom_count=1,
-                member_rom_ids=(11,),
-            )
-        )
 
     before = await harness.plugin.get_sync_stats()
-    assert before["stamped_platforms"] == 1
-    assert before["stamped_collections"] == 1
+    assert before["resumable_games"] == 1
+    assert before["has_completion_stamp"] is True
 
     await harness.plugin.clear_sync_cache()
 
     after = await harness.plugin.get_sync_stats()
-    assert after["stamped_platforms"] == 0
-    assert after["stamped_collections"] == 0
+    assert after["resumable_games"] == 0
+    assert after["has_completion_stamp"] is False
+    # The shortcut survives the clear — only what the next run could skip is gone.
+    assert after["roms"] == 1
 
 
 # ── get_platforms ────────────────────────────────────────────────────────

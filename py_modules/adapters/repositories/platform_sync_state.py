@@ -48,8 +48,8 @@ class SqlitePlatformSyncStateRepository(BaseRepository):
     def delete(self, platform_slug: str) -> None:
         self._conn.execute("DELETE FROM platform_sync_state WHERE platform_slug = ?", (platform_slug,))
 
-    def count(self) -> int:
-        return int(self._conn.execute("SELECT COUNT(*) FROM platform_sync_state").fetchone()[0])
+    def has_any(self) -> bool:
+        return self._conn.execute("SELECT 1 FROM platform_sync_state LIMIT 1").fetchone() is not None
 
     def clear(self) -> None:
         self._conn.execute("DELETE FROM platform_sync_state")

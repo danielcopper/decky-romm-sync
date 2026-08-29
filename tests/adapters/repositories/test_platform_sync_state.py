@@ -68,32 +68,30 @@ class TestDelete:
         assert uow.platform_sync_state.get("nope") is None
 
 
-class TestCount:
-    def test_count_is_zero_when_no_stamps(self, uow: SqliteUnitOfWork):
-        assert uow.platform_sync_state.count() == 0
+class TestHasAny:
+    def test_false_when_no_stamps(self, uow: SqliteUnitOfWork):
+        assert uow.platform_sync_state.has_any() is False
 
-    def test_count_reports_one_per_stamped_platform(self, uow: SqliteUnitOfWork):
-        uow.platform_sync_state.save(_stamp("n64"))
-        uow.platform_sync_state.save(_stamp("snes"))
-
-        assert uow.platform_sync_state.count() == 2
-
-    def test_re_stamping_the_same_slug_does_not_double_count(self, uow: SqliteUnitOfWork):
-        """The upsert replaces the row, so a platform re-synced twice is still one stamp."""
-        uow.platform_sync_state.save(_stamp("n64"))
+    def test_true_once_any_platform_is_stamped(self, uow: SqliteUnitOfWork):
         uow.platform_sync_state.save(_stamp("n64"))
 
-        assert uow.platform_sync_state.count() == 1
+        assert uow.platform_sync_state.has_any() is True
 
-    def test_count_follows_delete_and_clear(self, uow: SqliteUnitOfWork):
+    def test_follows_delete_down_to_the_last_stamp(self, uow: SqliteUnitOfWork):
         uow.platform_sync_state.save(_stamp("n64"))
         uow.platform_sync_state.save(_stamp("snes"))
 
         uow.platform_sync_state.delete("n64")
-        assert uow.platform_sync_state.count() == 1
+        assert uow.platform_sync_state.has_any() is True
 
+        uow.platform_sync_state.delete("snes")
+        assert uow.platform_sync_state.has_any() is False
+
+    def test_false_after_clear(self, uow: SqliteUnitOfWork):
+        uow.platform_sync_state.save(_stamp("n64"))
         uow.platform_sync_state.clear()
-        assert uow.platform_sync_state.count() == 0
+
+        assert uow.platform_sync_state.has_any() is False
 
 
 class TestClear:

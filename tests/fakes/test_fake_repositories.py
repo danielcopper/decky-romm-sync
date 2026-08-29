@@ -376,16 +376,18 @@ class TestFakePlatformSyncStateRepository:
         assert repo.get("snes") is not None
         repo.delete("nope")  # absent slug is a no-op
 
-    def test_count_matches_the_stamped_slugs_not_the_saves(self):
-        """Keyed by slug like the SQLite table, so a re-stamp replaces rather than adds."""
+    def test_has_any_tracks_the_stored_stamps_not_the_saves(self):
+        """Keyed by slug like the SQLite table, so deleting the last slug empties it."""
         repo = FakePlatformSyncStateRepository()
-        assert repo.count() == 0
+        assert repo.has_any() is False
         repo.save(PlatformSyncState.stamp(platform_slug="n64", at="2026-01-01T00:00:00+00:00", rom_count=100))
         repo.save(PlatformSyncState.stamp(platform_slug="n64", at="2026-02-01T00:00:00+00:00", rom_count=105))
+        assert repo.has_any() is True
+        repo.delete("n64")
+        assert repo.has_any() is False
         repo.save(PlatformSyncState.stamp(platform_slug="snes", at="2026-01-01T00:00:00+00:00", rom_count=200))
-        assert repo.count() == 2
         repo.clear()
-        assert repo.count() == 0
+        assert repo.has_any() is False
 
 
 class TestFakeKvConfigRepository:
