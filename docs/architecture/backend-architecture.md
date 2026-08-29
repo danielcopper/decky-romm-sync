@@ -752,6 +752,19 @@ which is the entire full-re-fetch + full-re-apply arm — the stamps are the fet
 `sync_runs` history is deliberately **preserved** (#1318): it feeds no skip gate and is the source of the "Last sync"
 display, so deleting it forced nothing and only blanked the panel to "Never" right after a reset.
 
+That preservation is also why the panel's **"Resume Sync" offer is derived from the surviving stamps, not from the run
+history** (#1789). A resume is a resume because a completion stamp survives for the next run to skip; the history says
+only that a run ended without completing, and after a Force Full Sync it says that while every stamp it implied is gone
+— so a history-derived offer promised to continue progress that had just been discarded. `get_sync_stats` therefore
+carries two additive counts alongside the display fields, `stamped_platforms` and `stamped_collections`
+(`PlatformSyncStateRepository.count` / `CollectionSyncStateRepository.count`, both read in the read UoW that already
+scans `roms`, so the panel mount pays nothing measurable). Collections count exactly as platforms do: a collection unit
+is part of a sync's enabled scope and carries its own stamp, so a library synced only through collections holds no
+platform stamp at all and a platforms-only rule would withdraw its resume offer. The counts are of what is **done**,
+never of what is left: `enabled_platforms` is keyed by RomM platform id and the stamps by slug, and nothing persisted
+bridges the two, so naming the remainder would take a server round-trip on every panel mount — the QAM line under the
+button states what a resume would skip instead.
+
 **Single-owner run lifecycle (#1202).** The run-lifecycle pair — `sync_state` (idle/running/cancelling) and
 `current_sync_id` — is mutated **only** through four verb methods on `LibrarySyncStateBox`, never by direct field
 assignment from a sub-service. Confining those two writes to the box makes run admission, cancellation, and termination

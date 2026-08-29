@@ -68,5 +68,8 @@ class SqliteCollectionSyncStateRepository(BaseRepository):
         for row in self._conn.execute(f"SELECT {_COLUMNS} FROM collection_sync_state").fetchall():
             yield self._row_to_state(row)
 
+    def count(self) -> int:
+        return int(self._conn.execute("SELECT COUNT(*) FROM collection_sync_state").fetchone()[0])
+
     def clear(self) -> None:
         self._conn.execute("DELETE FROM collection_sync_state")

@@ -108,6 +108,34 @@ class TestIterAll:
         assert list(uow.collection_sync_state.iter_all()) == []
 
 
+class TestCount:
+    def test_count_is_zero_when_no_stamps(self, uow: SqliteUnitOfWork):
+        assert uow.collection_sync_state.count() == 0
+
+    def test_count_reports_one_per_stamped_collection(self, uow: SqliteUnitOfWork):
+        uow.collection_sync_state.save(_stamp("7", kind="standard"))
+        uow.collection_sync_state.save(_stamp("9", kind="smart"))
+
+        assert uow.collection_sync_state.count() == 2
+
+    def test_same_id_under_two_kinds_counts_twice(self, uow: SqliteUnitOfWork):
+        """Identity is the composite ``(collection_id, collection_kind)`` — two rows, two stamps."""
+        uow.collection_sync_state.save(_stamp("7", kind="standard"))
+        uow.collection_sync_state.save(_stamp("7", kind="smart"))
+
+        assert uow.collection_sync_state.count() == 2
+
+    def test_count_follows_delete_and_clear(self, uow: SqliteUnitOfWork):
+        uow.collection_sync_state.save(_stamp("7", kind="standard"))
+        uow.collection_sync_state.save(_stamp("9", kind="smart"))
+
+        uow.collection_sync_state.delete("7", "standard")
+        assert uow.collection_sync_state.count() == 1
+
+        uow.collection_sync_state.clear()
+        assert uow.collection_sync_state.count() == 0
+
+
 class TestClear:
     def test_clear_removes_every_stamp(self, uow: SqliteUnitOfWork):
         uow.collection_sync_state.save(_stamp("7", kind="standard"))

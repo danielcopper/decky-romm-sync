@@ -87,6 +87,17 @@ class SyncReporterConfig:
     artwork: ArtworkManager
 
 
+@dataclass(frozen=True)
+class _SyncStatsReading:
+    """One read of everything ``get_sync_stats`` takes from SQLite."""
+
+    last_sync: str | None
+    last_attempt: dict[str, str] | None
+    rom_count: int
+    stamped_platforms: int
+    stamped_collections: int
+
+
 class SyncReporter:
     """Post-apply reporter + the ``roms``-derived queries + cache reset."""
 
@@ -841,6 +852,11 @@ class SyncReporter:
         after a reset (#1318). Keeping it means a post-force preview shows
         collections/platforms as "unchanged" (they exist in Steam; membership
         did not change), which is correct.
+
+        What the preserved history does **not** carry is a resumable run. The
+        panel's "Resume Sync" offer reads the surviving stamps this clear has
+        just taken away, never the history, so the sync button falls back to
+        "Sync Library" here — see :meth:`_read_sync_stats_io` (#1789).
         """
         with self._uow_factory() as uow:
             uow.platform_sync_state.clear()
@@ -859,30 +875,56 @@ class SyncReporter:
             )
         else:
             enabled_collection_count = 0
-        last_sync, last_attempt, rom_count = self._read_sync_stats_io()
+        stats = self._read_sync_stats_io()
         return {
-            "last_sync": last_sync,
-            "last_attempt": last_attempt,
+            "last_sync": stats.last_sync,
+            "last_attempt": stats.last_attempt,
             "platforms": enabled_platform_count,
             "collections": enabled_collection_count,
-            "roms": rom_count,
-            "total_shortcuts": rom_count,
+            "roms": stats.rom_count,
+            "total_shortcuts": stats.rom_count,
+            "stamped_platforms": stats.stamped_platforms,
+            "stamped_collections": stats.stamped_collections,
         }
 
-    def _read_sync_stats_io(self) -> tuple[str | None, dict[str, str] | None, int]:
-        """Read ``(last_sync_iso, last_attempt, bound_rom_count)`` from SQLite.
+    def _read_sync_stats_io(self) -> _SyncStatsReading:
+        """Read the run history, the bound-ROM count and the surviving stamps from SQLite.
 
         ``last_sync`` is the ``finished_at`` of the latest completed ``SyncRun``;
         ``last_attempt`` surfaces the newest cancelled/interrupted/paused/errored run when
         it is newer than that (see :meth:`_last_attempt`); the ROM count is the
         bound-shortcut count in ``roms``.
+
+        The two stamp counts are what makes the panel's "Resume Sync" offer
+        honest. A resume resumes FROM a completion stamp, and the run history
+        stops implying one the moment Force Full Sync runs: it clears every stamp
+        while deliberately preserving the history (#1318), so deriving the offer
+        from the history alone kept offering to continue a run whose progress had
+        just been discarded (#1789).
+
+        Collections are counted alongside platforms deliberately, not by
+        oversight: a collection carries its own completion stamp and is part of a
+        sync's enabled scope exactly as a platform is, so a library synced only
+        through collections holds no platform stamp at all — a platforms-only
+        count would silently withdraw the resume offer from that user.
+
+        Both counts ride along in the same read UoW as the ``roms`` scan already
+        performed here; each is one ``COUNT(*)`` over a leaf table holding one row
+        per synced unit, so the panel mount pays nothing measurable for them.
         """
         with self._uow_factory() as uow:
             completed = uow.sync_runs.get_latest_completed()
             terminal = uow.sync_runs.get_latest_terminal()
             rom_count = sum(1 for rom in uow.roms.iter_all() if rom.shortcut_app_id is not None)
-        last_sync = completed.finished_at if completed is not None else None
-        return last_sync, self._last_attempt(completed, terminal), rom_count
+            stamped_platforms = uow.platform_sync_state.count()
+            stamped_collections = uow.collection_sync_state.count()
+        return _SyncStatsReading(
+            last_sync=completed.finished_at if completed is not None else None,
+            last_attempt=self._last_attempt(completed, terminal),
+            rom_count=rom_count,
+            stamped_platforms=stamped_platforms,
+            stamped_collections=stamped_collections,
+        )
 
     @staticmethod
     def _last_attempt(completed: SyncRun | None, terminal: SyncRun | None) -> dict[str, str] | None:

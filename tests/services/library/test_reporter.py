@@ -1361,6 +1361,114 @@ class TestClearSyncCache:
             assert uow.collection_sync_state.get("9", "smart") is None
 
 
+def _stamp_platform(uow, slug: str) -> None:
+    from domain.platform_sync_state import PlatformSyncState
+
+    with uow:
+        uow.platform_sync_state.save(
+            PlatformSyncState.stamp(platform_slug=slug, at="2025-01-01T00:00:00", rom_count=10)
+        )
+
+
+def _stamp_collection(uow, collection_id: str, kind: str = "standard") -> None:
+    from domain.collection_sync_state import CollectionSyncState
+
+    with uow:
+        uow.collection_sync_state.save(
+            CollectionSyncState.stamp(
+                collection_id=collection_id,
+                collection_kind=kind,
+                updated_at="2025-01-01T00:00:00",
+                completed_at="2025-01-01T00:05:00",
+                rom_count=1,
+                member_rom_ids=(1,),
+            )
+        )
+
+
+class TestGetSyncStatsStampCounts:
+    """``stamped_platforms`` / ``stamped_collections`` — the surviving completion
+    stamps the panel derives its "Resume Sync" offer from (#1789).
+
+    The run history cannot carry that offer: Force Full Sync clears every stamp
+    while deliberately preserving the history (#1318), so a history-derived offer
+    outlives the progress it promises to continue."""
+
+    @pytest.mark.asyncio
+    async def test_reports_zero_on_a_pristine_install(self, plugin):
+        stats = await plugin.get_sync_stats()
+        assert stats["stamped_platforms"] == 0
+        assert stats["stamped_collections"] == 0
+
+    @pytest.mark.asyncio
+    async def test_counts_each_kind_of_stamp_separately(self, plugin):
+        uow = plugin._uow
+        _stamp_platform(uow, "n64")
+        _stamp_platform(uow, "snes")
+        _stamp_collection(uow, "7")
+
+        stats = await plugin.get_sync_stats()
+        assert stats["stamped_platforms"] == 2
+        assert stats["stamped_collections"] == 1
+
+    @pytest.mark.asyncio
+    async def test_counts_collections_of_every_stampable_kind(self, plugin):
+        """A standard and a smart collection are both stampable and both count.
+
+        Collections carry their own completion stamps and are part of a sync's
+        enabled scope exactly as platforms are, so a library synced only through
+        collections still has something to resume from.
+        """
+        uow = plugin._uow
+        _stamp_collection(uow, "7", "standard")
+        _stamp_collection(uow, "9", "smart")
+
+        stats = await plugin.get_sync_stats()
+        assert stats["stamped_platforms"] == 0
+        assert stats["stamped_collections"] == 2
+
+    @pytest.mark.asyncio
+    async def test_a_platform_whose_stamp_was_dropped_stops_counting(self, plugin):
+        """The stamps are counted live, not cached — an apply-start clear shows up at once."""
+        uow = plugin._uow
+        _stamp_platform(uow, "n64")
+        _stamp_platform(uow, "snes")
+        with uow:
+            uow.platform_sync_state.delete("n64")
+
+        stats = await plugin.get_sync_stats()
+        assert stats["stamped_platforms"] == 1
+
+    @pytest.mark.asyncio
+    async def test_force_full_sync_zeroes_both_counts_while_the_attempt_survives(self, plugin):
+        """The #1789 case end to end: the clear takes the stamps and leaves the history.
+
+        Before the clear the panel holds an incomplete attempt AND surviving
+        stamps — a genuine resume. Afterwards the attempt is still there (it feeds
+        the "Last sync" display, #1318) but both counts are zero, which is what
+        drops the button back to "Sync Library".
+        """
+        from domain.sync_run import SyncRun
+
+        uow = plugin._uow
+        interrupted = SyncRun.start(id="run-i", at="2025-01-01T00:00:00", platforms_planned=1, roms_planned=1)
+        interrupted.mark_interrupted("2025-01-01T00:05:00", reason="external death")
+        with uow:
+            uow.sync_runs.save(interrupted)
+        _stamp_platform(uow, "n64")
+        _stamp_collection(uow, "7")
+
+        before = await plugin.get_sync_stats()
+        assert (before["stamped_platforms"], before["stamped_collections"]) == (1, 1)
+
+        plugin._sync_service.clear_sync_cache()
+
+        after = await plugin.get_sync_stats()
+        assert after["stamped_platforms"] == 0
+        assert after["stamped_collections"] == 0
+        assert after["last_attempt"] == {"finished_at": "2025-01-01T00:05:00", "status": "interrupted"}
+
+
 class TestFinalizePerUnitRun:
     """SyncReporter.finalize_per_unit_run (stale unbind + sync_collections) and the
     separate emit_sync_complete (terminal sync_complete + progress frame, emitted

@@ -65,10 +65,19 @@ async def test_sync_heartbeat_shape(harness):
 async def test_get_sync_stats_shape(harness):
     """Stats dict: every count key present and an int; last_sync + last_attempt None when never synced."""
     result = await harness.plugin.get_sync_stats()
-    assert set(result.keys()) == {"last_sync", "last_attempt", "platforms", "collections", "roms", "total_shortcuts"}
+    assert set(result.keys()) == {
+        "last_sync",
+        "last_attempt",
+        "platforms",
+        "collections",
+        "roms",
+        "total_shortcuts",
+        "stamped_platforms",
+        "stamped_collections",
+    }
     assert result["last_sync"] is None
     assert result["last_attempt"] is None
-    for key in ("platforms", "collections", "roms", "total_shortcuts"):
+    for key in ("platforms", "collections", "roms", "total_shortcuts", "stamped_platforms", "stamped_collections"):
         assert isinstance(result[key], int)
 
 
@@ -133,6 +142,43 @@ async def test_clear_sync_cache_preserves_last_sync(harness):
     stats = await harness.plugin.get_sync_stats()
     assert stats["last_sync"] == "2025-06-01T17:10:00"
     assert stats["last_attempt"] == {"finished_at": "2025-06-01T18:05:00", "status": "cancelled"}
+
+
+async def test_clear_sync_cache_zeroes_the_stamp_counts(harness):
+    """The counterpart to the history the clear preserves: the stamps it takes.
+
+    The panel's "Resume Sync" offer reads these two counts, so over the real
+    SQLite stack the clear has to move them from a genuine resume situation to
+    zero — otherwise the button keeps offering to continue a run whose progress
+    has just been discarded (#1789).
+    """
+    from domain.collection_sync_state import CollectionSyncState
+    from domain.platform_sync_state import PlatformSyncState
+
+    with harness.uow_factory() as uow:
+        uow.platform_sync_state.save(
+            PlatformSyncState.stamp(platform_slug="snes", at="2025-06-01T17:10:00", rom_count=3)
+        )
+        uow.collection_sync_state.save(
+            CollectionSyncState.stamp(
+                collection_id="7",
+                collection_kind="standard",
+                updated_at="2025-06-01T17:00:00",
+                completed_at="2025-06-01T17:10:00",
+                rom_count=1,
+                member_rom_ids=(11,),
+            )
+        )
+
+    before = await harness.plugin.get_sync_stats()
+    assert before["stamped_platforms"] == 1
+    assert before["stamped_collections"] == 1
+
+    await harness.plugin.clear_sync_cache()
+
+    after = await harness.plugin.get_sync_stats()
+    assert after["stamped_platforms"] == 0
+    assert after["stamped_collections"] == 0
 
 
 # ── get_platforms ────────────────────────────────────────────────────────

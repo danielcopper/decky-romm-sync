@@ -26,6 +26,9 @@ class FakePlatformSyncStateRepository:
     def delete(self, platform_slug: str) -> None:
         self._stamps.pop(platform_slug, None)
 
+    def count(self) -> int:
+        return len(self._stamps)
+
     def clear(self) -> None:
         self._stamps = {}
 

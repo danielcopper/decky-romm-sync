@@ -341,6 +341,28 @@ function formatSyncScope(s: SyncPreviewSummary): string {
 }
 
 /**
+ * The line under "Resume Sync" — what a resume would SKIP, in the same
+ * "N platforms · M collections" shape as the preview's scope line.
+ *
+ * It names what is already done rather than what is left, because only the done
+ * side can be proved offline: the stamps are keyed by platform slug and the
+ * enabled-platform setting by RomM platform id, with nothing persisted bridging
+ * the two, so the remainder would take a server round-trip on every panel mount.
+ * Hence no total and no "N of M" — a figure the panel cannot know must not be
+ * implied. Collections carry their own completion stamps and are part of a sync's
+ * enabled scope exactly as platforms are, so they are counted here for the same
+ * reason they count towards the offer itself.
+ */
+function formatResumeScope(stats: SyncStats): string {
+  const parts: string[] = [];
+  const platforms = stats.stamped_platforms ?? 0;
+  const collections = stats.stamped_collections ?? 0;
+  if (platforms > 0) parts.push(pluralize(platforms, "platform"));
+  if (collections > 0) parts.push(pluralize(collections, "collection"));
+  return `${parts.join(" · ")} already synced in full — a resume continues with the rest.`;
+}
+
+/**
  * The Library row's one-line summary — "N games · M platforms · K collections" —
  * each part correctly singular/plural, zero parts omitted. Games is always
  * present (the row renders only when ``roms > 0``).
@@ -1124,14 +1146,22 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // "remove all"), there are zero bound shortcuts and the next run is a full
   // fresh import — nothing to resume — so the button must honestly read "Sync
   // Library" again. ``stats.roms`` is the bound-shortcut count (registry-derived).
+  //
+  // And the offer is derived from the surviving completion stamps, never from
+  // ``last_attempt`` alone: Force Full Sync clears every stamp while deliberately
+  // preserving the run history (#1318), so the history outlives the progress it
+  // would offer to continue and kept the button promising a resume that could no
+  // longer happen (#1789).
   const incompleteAttempt =
     stats?.last_attempt?.status === "interrupted" ||
     stats?.last_attempt?.status === "cancelled" ||
     stats?.last_attempt?.status === "paused";
   // ``incompleteAttempt`` being true narrows ``stats`` non-null (it dereferenced
   // stats.last_attempt), and ``roms`` is a required number — no ``?.``/``??`` needed.
-  const canResume = incompleteAttempt && stats.roms > 0;
+  const stampedUnits = (stats?.stamped_platforms ?? 0) + (stats?.stamped_collections ?? 0);
+  const canResume = incompleteAttempt && stats.roms > 0 && stampedUnits > 0;
   const syncButtonLabel = canResume ? "Resume Sync" : "Sync Library";
+  const resumeScopeText = canResume ? formatResumeScope(stats) : null;
 
   if (versionError) {
     return <VersionErrorCard message={versionError} compact />;
@@ -1400,6 +1430,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               detach(handleSync());
             }}
             disabled={connectionUnavailable}
+            description={resumeScopeText ?? undefined}
           >
             {syncButtonLabel}
           </ButtonItem>

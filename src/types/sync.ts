@@ -188,6 +188,28 @@ export interface SyncStats {
   collections?: number;
   roms: number;
   total_shortcuts: number;
+  /**
+   * Platforms that currently carry a completion stamp — the units a resume would
+   * skip because their last apply ran to completion. This, not ``last_attempt``,
+   * is what makes a resume a resume: Force Full Sync clears every stamp while
+   * deliberately preserving the run history (#1318), so an offer derived from the
+   * history alone outlived the progress it offered to continue (#1789).
+   *
+   * It is a count of what is DONE, never of what is left: the enabled-platform
+   * set is keyed by RomM platform id and the stamps by slug, with no local bridge
+   * between them, so the remainder cannot be named without asking the server.
+   * Absent from an older backend, which reads as "no stamps" and so as no resume
+   * — the safe direction, since the label then understates rather than promises.
+   */
+  stamped_platforms?: number;
+  /**
+   * Collections that currently carry a completion stamp. Counted alongside
+   * ``stamped_platforms`` by decision, not by accident: a collection is part of a
+   * sync's enabled scope exactly as a platform is and carries its own stamp, so a
+   * library synced only through collections holds no platform stamp at all and a
+   * platforms-only rule would silently withdraw its resume offer.
+   */
+  stamped_collections?: number;
 }
 
 export interface RegistryPlatform {
