@@ -276,15 +276,16 @@ continue unrelated groups.
 
 #### LibraryService decomposition (`services/library/`)
 
-The library sync subsystem is a façade over seven sub-services that coordinate through a shared `LibrarySyncStateBox`:
+The library sync subsystem is a façade over eight sub-services that coordinate through a shared `LibrarySyncStateBox`:
 
 | Module                        | Role                                                                                                                                                                                                                                                                                                                                       |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `service.py`                  | `LibraryService` façade — public callable surface; wires the sub-services and delegates                                                                                                                                                                                                                                                    |
 | `fetcher.py`                  | `LibraryFetcher` — read-only RomM roundtrips: list platforms/collections, the incremental/full pagination loop, per-unit work-queue construction. The outward half of the read pair below                                                                                                                                                  |
 | `local_library_reader.py`     | `LocalLibraryReader` — the inward pair of `fetcher.py`: what THIS DEVICE recorded about the library, read back out of SQLite (the bound `Rom` rows, the completion stamps, the persisted sibling keys, the last finished run), shaped into the projections a run decides against. Declared read-only (`scripts/check_read_only_module.py`) |
-| `sync_orchestrator.py`        | `SyncOrchestrator` — preview (read-only), the per-unit apply pipeline (fetch → collapse → delta, then hand the delta to the dispatcher), cancel, the run lifecycle, the heartbeat clock, progress emission                                                                                                                                 |
+| `sync_orchestrator.py`        | `SyncOrchestrator` — preview (read-only), the per-unit apply pipeline (fetch → collapse → delta, then hand the delta to the dispatcher), cancel, the run lifecycle, the heartbeat clock, progress emission. Holds no `ArtworkManager`: the run's artwork surface is `cover_preparer.py`'s                                                  |
 | `chunk_dispatcher.py`         | `ChunkDispatcher` — one unit's apply as durable chunk round-trips: emit `sync_apply_unit`, wait out the heartbeat clock for the ack, commit the chunk through the reporter, and stash or discard a chunk whose ack never came. It opens no transaction, and the run's `try_begin_run` / `finish_run` stay with the orchestrator            |
+| `cover_preparer.py`           | `CoverPreparer` — one unit's covers, readied before its shortcuts are emitted: the `refresh_changed_covers` invalidation pass, the download for the ROMs getting a shortcut, and each emitted entry's `cover_path`. Delegated to `ArtworkService` through the `ArtworkManager` seam, with the run's progress and cancel signals bound in   |
 | `reporter.py`                 | `SyncReporter` — post-apply finalisation (artwork filenames, per-unit `roms` upsert + `SyncRun` lifecycle) and the `roms`-derived queries                                                                                                                                                                                                  |
 | `session_budget.py`           | `SessionBudgetMonitor` — Steam's per-session renderer-heap budget: the GC-settled RSS measurement, the chunk-boundary pause verdict, the headroom clip that trims a chunk's additive cover work to what that verdict left, the post-preview prognosis, the run-start baseline, and the `get_session_budget_status` payload                 |
 | `shortcut_launch_resolver.py` | `ShortcutLaunchResolver` — resolves each ROM's launch facts for the shortcut bake: the disc-resolved installed path and the active emulator, both handed to `build_shortcuts_data`                                                                                                                                                         |
@@ -343,17 +344,18 @@ and a path change). Two compare layers run per unit, both in `ArtworkService`:
 
 - **Apply-path covers** (`_resolve_cached_cover`): a stored fingerprint that differs from the fresh one blocks both the
   cache-hit reuse and the grid→cache seed, forcing a fresh download.
-- **The invalidation pass** (`refresh_changed_covers`, called by `_sync_one_unit` before the cover download): for every
-  BOUND fetched ROM whose stored fingerprint differs — delta-skipped ROMs included — it re-downloads the cache file
-  (atomic tmp+rename), republishes the grid `{app_id}p.png` copy, persists the new fingerprint in a small write UoW (an
-  observed server fact, deliberately NOT ack-coupled like `applied_launch_options`), and collects `{rom_id, app_id}`.
-  The pass scans against the unit's bound-row registry projection (`LocalLibraryReader.do_read_apply_registry`, which
-  carries `cover_source`) — the same read the group collapse diffs against, so it opens no per-ROM DB lookups. That list
-  rides the unit's **first** `sync_apply_unit` chunk as `cover_refreshes`, clipped to the session-budget headroom left
-  after the chunk's own projected cost (each refresh ≈ one transient cover, `COVER_TRANSIENT_KB`) — clipped, never
-  pausing the run: the grid files are already updated, a Steam restart shows the rest. The frontend re-applies each
-  entry via `SetCustomArtworkForApp` at the 50 ms cadence before the chunk ack — without that push the tile stays stale
-  in-session, since `rt_custom_image_mtime` only bumps through `SetCustomArtworkForApp` or a client restart.
+- **The invalidation pass** (`refresh_changed_covers`, reached through `CoverPreparer` from `_sync_one_unit` before the
+  cover download): for every BOUND fetched ROM whose stored fingerprint differs — delta-skipped ROMs included — it
+  re-downloads the cache file (atomic tmp+rename), republishes the grid `{app_id}p.png` copy, persists the new
+  fingerprint in a small write UoW (an observed server fact, deliberately NOT ack-coupled like
+  `applied_launch_options`), and collects `{rom_id, app_id}`. The pass scans against the unit's bound-row registry
+  projection (`LocalLibraryReader.do_read_apply_registry`, which carries `cover_source`) — the same read the group
+  collapse diffs against, so it opens no per-ROM DB lookups. That list rides the unit's **first** `sync_apply_unit`
+  chunk as `cover_refreshes`, clipped to the session-budget headroom left after the chunk's own projected cost (each
+  refresh ≈ one transient cover, `COVER_TRANSIENT_KB`) — clipped, never pausing the run: the grid files are already
+  updated, a Steam restart shows the rest. The frontend re-applies each entry via `SetCustomArtworkForApp` at the 50 ms
+  cadence before the chunk ack — without that push the tile stays stale in-session, since `rt_custom_image_mtime` only
+  bumps through `SetCustomArtworkForApp` or a client restart.
 - **The preview-side count** (`sync_preview` → `domain/cover_refresh.py::count_cover_refreshes`): `classify_roms` is
   deliberately cover-blind (ADR-0025), so a cover-only server change yields an empty shortcut delta — and the QAM's
   preview flow used to short-circuit on "no changes", meaning the apply (and with it the invalidation pass) never ran
