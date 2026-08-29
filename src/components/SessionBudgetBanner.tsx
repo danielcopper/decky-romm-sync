@@ -141,8 +141,9 @@ interface SessionBudgetBannerProps {
  * Persistent QAM banner for the session-budget UX (#1383). Renders a BLUE/info
  * banner while the last run is ``paused`` — restart Steam, then press whatever the
  * sync button currently says ({@link SyncButton}) — or a YELLOW/warning banner
- * when the live renderer heap is high after a completed run. A paused run takes precedence (it is high-heap anyway). Returns nothing
- * when neither applies. When ``rssKb`` is ``null`` (measurement unavailable) the
+ * when the live renderer heap is high after a completed run. A paused run takes
+ * precedence (it is high-heap anyway). Returns nothing when neither applies.
+ * When ``rssKb`` is ``null`` (measurement unavailable) the
  * live number is dropped but the guidance text stays. Both banners offer a
  * **Restart Steam now** button — a deterministic full client restart that resets
  * the renderer's per-session heap budget — disabled while a game is running.

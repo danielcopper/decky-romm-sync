@@ -3355,11 +3355,12 @@ describe("MainPage", () => {
 
     it("reads 'Sync Library' when an interrupted attempt left ZERO bound shortcuts (all removed — nothing to resume)", async () => {
       // After an interrupted run the user removed every shortcut (DangerZone
-      // "remove all"), so roms is 0 and the next run is a full fresh import. Both
-      // kinds of progress are left standing in the fixture so the zero shortcut
-      // count is what carries the assertion — this is the rule `roms > 0` states
-      // in its own right, and what would still catch the wipe if the destructive
-      // flows ever stopped clearing a platform's stamp alongside the unbind.
+      // "remove all"), so roms is 0 and the next run is a full fresh import. A
+      // surviving stamp alongside zero shortcuts is a REAL state, not a contrived
+      // fixture: removal invalidates only the platform slugs its removed rows name,
+      // and prune deletes rows without touching platform stamps, so a platform
+      // RomM dropped keeps a stamp no remaining row can point the removal at.
+      // `roms > 0` is the only thing that catches it.
       const c = await renderStats(resumeStats({ roms: 0, resumable_games: 30, has_completion_stamp: true }));
       expect(buttonByExactText(c, "Sync Library")).not.toBeNull();
       expect(buttonByExactText(c, "Resume Sync")).toBeNull();

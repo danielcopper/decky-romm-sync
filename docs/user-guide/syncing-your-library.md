@@ -156,9 +156,10 @@ complete the job.
   remaining work. This is true whether or not you restart Steam in between. Once a run finishes in full, the button goes
   back to **Sync Library**.
   - **A run that stopped early still counts.** Even a run cancelled inside its very first platform had already added
-    games and would skip them next time, so that is a resume too. The button only stays **Sync Library** when nothing
-    survives for the next run to skip — a first run stopped before a single game was added, or a **Force Full Sync**
-    since (see below).
+    games and would skip them next time, so that is a resume too. The button stays **Sync Library** whenever there is
+    nothing for the next run to skip — for instance a first run stopped before a single game was added, a **Force Full
+    Sync** since (see below), or removing your shortcuts in the meantime. A run that ended in an **error** also keeps
+    the plain label: those usually fail before adding anything, so "resume" would be the wrong word for it.
   - **The line under the button says how much a resume would skip** — for example "1200 games already synced — a resume
     continues from there." It counts what is already done, not what is left: the plugin can only know the finished side
     without asking your server, so no total is shown. It is left out in the one case where the plugin knows a resume is

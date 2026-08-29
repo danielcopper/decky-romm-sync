@@ -155,16 +155,12 @@ async def test_clear_sync_cache_takes_both_skip_authorities(harness):
     the button keeps offering to continue a run whose progress has just been
     discarded (#1789).
     """
-    from domain.platform_sync_state import PlatformSyncState
-
     seed_rom(harness, 11, platform_slug="snes")
+    seed_platform_stamp(harness, "snes", rom_count=3)
     with harness.uow_factory() as uow:
         rom = uow.roms.get(11)
         rom.record_applied_launch_options("flatpak run app 'game.zip'")
         uow.roms.set_applied_launch_options(11, rom.applied_launch_options)
-        uow.platform_sync_state.save(
-            PlatformSyncState.stamp(platform_slug="snes", at="2025-06-01T17:10:00", rom_count=3)
-        )
 
     before = await harness.plugin.get_sync_stats()
     assert before["resumable_games"] == 1

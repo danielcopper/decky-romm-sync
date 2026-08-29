@@ -1153,13 +1153,18 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // stats.last_attempt), and ``roms`` is a required number — no ``?.``/``??`` needed.
   const resumableGames = stats?.resumable_games ?? 0;
   const skipAuthoritySurvives = resumableGames > 0 || (stats?.has_completion_stamp ?? false);
-  // ``roms > 0`` is belt-and-braces TODAY — it is implied by both branches, since
-  // a recorded game is counted only while bound and the destructive flows delete a
-  // platform's stamp in the same write UoW as the unbind. It stays because it
-  // states a rule in its own right: a run that stopped before a single shortcut was
-  // written starts from the beginning and must read "Sync Library". Move the
-  // stamp-clearing out of that transaction and this is what still catches the
-  // wipe; delete it as redundant and nothing does.
+  // ``roms > 0`` is LOAD-BEARING, not a belt-and-braces restatement of the two
+  // branches. ``has_completion_stamp`` is a global "any stamp anywhere", while the
+  // removal path is surgical: it deletes only the platform slugs its removed rows
+  // name, and only the collection stamps whose member set intersects those rows. A
+  // stamp naming nothing the ``roms`` table still holds therefore outlives a
+  // remove-all. Prune is the reachable path — it deletes ``roms`` rows and never
+  // touches ``platform_sync_state`` (services/prune/registry.py ``delete_rows``),
+  // so a platform whose games RomM dropped keeps its stamp with no rows left to
+  // name it; the next remove-all cannot see that slug to invalidate it. Without
+  // this conjunct that state offers "Resume Sync" over zero shortcuts. It is also
+  // the rule in its own right: a run that stopped before a single shortcut was
+  // written starts from the beginning and must read "Sync Library".
   const canResume = incompleteAttempt && stats.roms > 0 && skipAuthoritySurvives;
   const syncButtonLabel = canResume ? "Resume Sync" : "Sync Library";
   const resumeScopeText = canResume && resumableGames > 0 ? formatResumeScope(resumableGames) : null;

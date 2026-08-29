@@ -932,10 +932,11 @@ class SyncReporter:
                 if rom.shortcut_app_id is None:
                     continue
                 rom_count += 1
-                # Bound AND recorded, never recorded alone. ``classify_sync_roms``
-                # sends an unbound row down the NEW branch before it ever looks at
+                # Bound AND recorded, never recorded alone. ``classify_roms``
+                # (``domain/sync_diff.py``) sends an unbound row down the NEW branch
+                # — ``if not reg or not reg.get("app_id")`` — before it ever reads
                 # the recorded value, so a recorded command with no shortcut is not
-                # skip authority — the next run has to mint the shortcut regardless.
+                # skip authority: the next run has to mint the shortcut regardless.
                 # Requiring the binding is therefore what makes this count fall to
                 # zero after a DangerZone remove-all by construction: unbinding
                 # keeps the row and its recorded command on purpose (ADR-0007), so

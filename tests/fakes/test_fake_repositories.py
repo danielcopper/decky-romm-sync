@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from domain.bios_file import BiosFile
+from domain.collection_sync_state import CollectionSyncState
 from domain.firmware_cache import FirmwareCacheEntry
 from domain.platform_sync_state import PlatformSyncState
 from domain.playtime import Playtime
@@ -22,6 +23,7 @@ from domain.rom_metadata import RomMetadata
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.sync_run import SyncRun
 from fakes.fake_bios_file_repository import FakeBiosFileRepository
+from fakes.fake_collection_sync_state_repository import FakeCollectionSyncStateRepository
 from fakes.fake_firmware_cache_repository import FakeFirmwareCacheRepository
 from fakes.fake_kv_config_repository import FakeKvConfigRepository
 from fakes.fake_platform_sync_state_repository import FakePlatformSyncStateRepository
@@ -386,6 +388,38 @@ class TestFakePlatformSyncStateRepository:
         repo.delete("n64")
         assert repo.has_any() is False
         repo.save(PlatformSyncState.stamp(platform_slug="snes", at="2026-01-01T00:00:00+00:00", rom_count=200))
+        repo.clear()
+        assert repo.has_any() is False
+
+
+def _collection_stamp(collection_id: str, kind: str, *, members: tuple[int, ...] = (1,)) -> CollectionSyncState:
+    return CollectionSyncState.stamp(
+        collection_id=collection_id,
+        collection_kind=kind,
+        updated_at="2026-01-01T00:00:00+00:00",
+        completed_at="2026-01-01T00:05:00+00:00",
+        rom_count=len(members),
+        member_rom_ids=members,
+    )
+
+
+class TestFakeCollectionSyncStateRepository:
+    def test_has_any_tracks_the_stored_stamps_not_the_saves(self):
+        """The twin of the platform fake's probe — identity is ``(id, kind)``, so the
+        same id under two kinds is two stamps and the last delete empties it."""
+        repo = FakeCollectionSyncStateRepository()
+        assert repo.has_any() is False
+        repo.save(_collection_stamp("7", "standard"))
+        repo.save(_collection_stamp("7", "smart"))
+        assert repo.has_any() is True
+        repo.delete("7", "standard")
+        assert repo.has_any() is True
+        repo.delete("7", "smart")
+        assert repo.has_any() is False
+
+    def test_clear_empties_it(self):
+        repo = FakeCollectionSyncStateRepository()
+        repo.save(_collection_stamp("7", "standard"))
         repo.clear()
         assert repo.has_any() is False
 
