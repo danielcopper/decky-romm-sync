@@ -47,6 +47,7 @@ _EXPECTED_READS = frozenset(
         "get_latest_completed",
         "get_latest_terminal",
         "get_running",
+        "has_any",
         "iter_all",
         "iter_by_group_key",
         "iter_by_platform",

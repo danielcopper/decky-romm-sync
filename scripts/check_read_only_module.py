@@ -97,7 +97,7 @@ REPOSITORY_ATTRS: frozenset[str] = frozenset(
 READ_PREFIXES: tuple[str, ...] = ("get_", "iter_")
 # Reads whose names carry neither prefix. Exact names, not prefixes, so a
 # hypothetical ``count_and_prune`` would not inherit the exemption.
-READ_METHODS: frozenset[str] = frozenset({"get", "count", "rom_ids_with_pending_device"})
+READ_METHODS: frozenset[str] = frozenset({"get", "count", "has_any", "rom_ids_with_pending_device"})
 
 
 def _is_read(method: str) -> bool:
