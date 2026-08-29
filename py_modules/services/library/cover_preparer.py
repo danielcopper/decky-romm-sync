@@ -1,15 +1,23 @@
 """One work unit's covers, made ready before its shortcuts are emitted.
 
-Everything the sync does *with* artwork for a single unit lives here: the
-invalidation pass that re-downloads the covers whose server source changed, the
-download for the shortcuts the unit is about to emit, and the ``cover_path``
-each emitted entry carries to the frontend. Artwork itself — the per-ROM cover
-cache, the grid publish, the conditional revalidation, every byte read or
-written — belongs to :class:`~services.artwork.ArtworkService` behind the
-``ArtworkManager`` seam, and stays there: this module supplies what only a run
-knows (which ROMs a unit is emitting a shortcut for, where the unit sits in the
-progress bar, and whether the run is cancelling) and reads back what only the
-commit needs (the confirmed cover fingerprints).
+The **apply path's** cover work for one unit: the invalidation pass that
+re-downloads the covers whose server source changed, the download for the
+shortcuts the unit is about to emit, and the ``cover_path`` each emitted entry
+carries to the frontend. Artwork itself — the per-ROM cover cache, the grid
+publish, the conditional revalidation, every byte read or written — belongs to
+:class:`~services.artwork.ArtworkService` behind the ``ArtworkManager`` seam,
+and stays there: this module supplies what only a run knows (which ROMs a unit
+is emitting a shortcut for, where the unit sits in the progress bar, and whether
+the run is cancelling) and reads back what only the commit needs (the confirmed
+cover fingerprints).
+
+**This is not the run's only artwork holder.** :class:`~services.library.
+reporter.SyncReporter` holds the same seam for a different question — turning a
+staged cover path into the published grid name at each chunk's commit
+(``finalize_cover_path``) — so the package's ``artwork`` confinement names two
+owners, and ``scripts/check_seam_owner.py`` enforces exactly that pair. What the
+cut settled is narrower and complete: :class:`~services.library.
+sync_orchestrator.SyncOrchestrator` holds no ``ArtworkManager`` at all.
 
 **The direction of that split is the reason this is not part of the artwork
 service.** The delta vocabulary a cover decision is made in here —

@@ -11,11 +11,10 @@ finalisation and the ``roms``-derived callable queries,
 :class:`SessionBudgetMonitor` for Steam's renderer-heap budget,
 :class:`ShortcutLaunchResolver` for each ROM's launch facts,
 :class:`ChunkDispatcher` for one unit's emit → ack → commit round-trips,
-:class:`CoverPreparer` for a unit's covers,
-:class:`LocalLibraryReader` for what this device already recorded about the
-library. The façade itself only wires the
-pieces together and delegates — anything that touches RomM or mutates
-in-flight sync state belongs in a sub-service.
+:class:`CoverPreparer` for a unit's covers, :class:`LocalLibraryReader` for what
+this device already recorded about the library. The façade itself only wires the
+pieces together and delegates — anything that touches RomM or mutates in-flight
+sync state belongs in a sub-service.
 """
 
 from __future__ import annotations
@@ -101,19 +100,17 @@ class LibraryService:
     """Façade for the library sync pipeline.
 
     Composes :class:`LibraryFetcher` (platform/collection roundtrips +
-    metadata-cache stamping), :class:`SyncOrchestrator` (preview/apply
-    lifecycle + safety heartbeat), :class:`SyncReporter`
-    (post-apply finalisation + the ``roms``-derived callable queries),
-    :class:`SessionBudgetMonitor` (Steam's renderer-heap budget),
-    :class:`ShortcutLaunchResolver` (each ROM's installed path + active
-    emulator), :class:`ChunkDispatcher` (one unit's apply, emitted and
-    committed a chunk at a time), :class:`CoverPreparer` (a unit's covers,
+    metadata-cache stamping), :class:`SyncOrchestrator` (preview/apply lifecycle
+    + safety heartbeat), :class:`SyncReporter` (post-apply finalisation + the
+    ``roms``-derived callable queries), :class:`SessionBudgetMonitor` (Steam's
+    renderer-heap budget), :class:`ShortcutLaunchResolver` (each ROM's installed
+    path + active emulator), :class:`ChunkDispatcher` (one unit's apply, emitted
+    and committed a chunk at a time), :class:`CoverPreparer` (a unit's covers,
     refreshed and downloaded before its shortcuts are emitted), and
-    :class:`LocalLibraryReader` (this
-    device's own record of the library, read back out of SQLite) over a
-    single shared :class:`LibrarySyncStateBox`. The façade itself owns the box and
-    exposes the callable surface; every implementation method lives on
-    one of the sub-services.
+    :class:`LocalLibraryReader` (this device's own record of the library, read
+    back out of SQLite) over a single shared :class:`LibrarySyncStateBox`. The
+    façade itself owns the box and exposes the callable surface; every
+    implementation method lives on one of the sub-services.
     """
 
     def __init__(self, *, config: LibraryServiceConfig) -> None:
@@ -196,10 +193,12 @@ class LibraryService:
             )
         )
 
-        # Sub-service: cover preparer — the run's whole artwork surface, bound to
-        # this run's progress and cancel signals. Constructed before the
-        # orchestrator, which asks it for each unit's covers before the delta is
-        # handed to the dispatcher.
+        # Sub-service: cover preparer — the apply path's covers, bound to this
+        # run's progress and cancel signals. Constructed before the orchestrator,
+        # which asks it for each unit's covers before the delta is handed to the
+        # dispatcher. It is one of the two modules the ``artwork`` seam is
+        # confined to; the reporter below is the other, for commit-time
+        # cover-path finalisation.
         self._cover_preparer = CoverPreparer(
             config=CoverPreparerConfig(
                 artwork=config.artwork,

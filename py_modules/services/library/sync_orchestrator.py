@@ -124,8 +124,9 @@ class SyncOrchestratorConfig:
     boundary — whether applying the chunk would exhaust Steam's per-session heap
     budget, and how much headroom is left for the chunk's additive cover work
     (#1383); the terminal memory delta this module reports is drawn from the same
-    seam. The ``cover_preparer`` peer holds the run's whole artwork surface — it
-    is why no ``ArtworkManager`` appears here.
+    seam. The ``cover_preparer`` peer holds the apply path's covers, and the
+    reporter holds the same ``artwork`` seam for commit-time cover-path
+    finalisation — between them, no ``ArtworkManager`` is owed here.
     """
 
     settings: dict[str, Any]
