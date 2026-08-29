@@ -10,6 +10,14 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { toaster } from "@decky/api";
 import { SessionBudgetBanner, formatGb, formatSignedGb, memoryLevelColor, HIGH_HEAP_KB } from "./SessionBudgetBanner";
+import type { SyncButton } from "./SessionBudgetBanner";
+
+/** The two sync buttons the panel can be offering. The banner is told which one it
+ *  is pointing at; it may never work that out for itself, so every render below
+ *  states it. Tests not about the instruction line take the resume situation, which
+ *  is the one the paused banner was written for. */
+const RESUME_BUTTON: SyncButton = { label: "Resume Sync", resumes: true };
+const FRESH_BUTTON: SyncButton = { label: "Sync Library", resumes: false };
 
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement | null {
   return (Array.from(container.querySelectorAll("button")).find((b) => b.textContent === text) ??
@@ -48,7 +56,9 @@ describe("memoryLevelColor", () => {
 
 describe("SessionBudgetBanner — paused (blue)", () => {
   it("shows the blue paused banner with the live number when last run is paused", () => {
-    const { queryByTestId } = render(<SessionBudgetBanner lastAttemptStatus="paused" rssKb={2199000} />);
+    const { queryByTestId } = render(
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="paused" rssKb={2199000} />,
+    );
     const banner = queryByTestId("budget-paused-banner");
     expect(banner).not.toBeNull();
     expect(banner!.textContent).toContain("Steam memory is full (2.2 GB). Restart Steam, then Resume Sync.");
@@ -63,7 +73,9 @@ describe("SessionBudgetBanner — paused (blue)", () => {
   });
 
   it("drops the number but keeps the guidance when rssKb is null", () => {
-    const { queryByTestId } = render(<SessionBudgetBanner lastAttemptStatus="paused" rssKb={null} />);
+    const { queryByTestId } = render(
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="paused" rssKb={null} />,
+    );
     const banner = queryByTestId("budget-paused-banner");
     expect(banner).not.toBeNull();
     expect(banner!.textContent).toContain("Steam memory is full. Restart Steam, then Resume Sync.");
@@ -71,7 +83,9 @@ describe("SessionBudgetBanner — paused (blue)", () => {
   });
 
   it("takes precedence over the high-heap banner even at a high heap", () => {
-    const { queryByTestId } = render(<SessionBudgetBanner lastAttemptStatus="paused" rssKb={HIGH_HEAP_KB + 500000} />);
+    const { queryByTestId } = render(
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="paused" rssKb={HIGH_HEAP_KB + 500000} />,
+    );
     expect(queryByTestId("budget-paused-banner")).not.toBeNull();
     expect(queryByTestId("budget-high-heap-banner")).toBeNull();
   });
@@ -80,7 +94,13 @@ describe("SessionBudgetBanner — paused (blue)", () => {
 describe("SessionBudgetBanner — run progress ('X of Y games done')", () => {
   it("reports how far the paused run got when both counts are known", () => {
     const { queryByTestId } = render(
-      <SessionBudgetBanner lastAttemptStatus="paused" rssKb={2300000} runDoneItems={1200} runTotalItems={2001} />,
+      <SessionBudgetBanner
+        syncButton={RESUME_BUTTON}
+        lastAttemptStatus="paused"
+        rssKb={2300000}
+        runDoneItems={1200}
+        runTotalItems={2001}
+      />,
     );
     expect(queryByTestId("budget-paused-banner")!.textContent).toContain(
       "Steam memory is full (2.3 GB). 1200 of 2001 games done. Restart Steam, then Resume Sync.",
@@ -90,6 +110,7 @@ describe("SessionBudgetBanner — run progress ('X of Y games done')", () => {
   it("reports progress on the resume-ready branch too", () => {
     const { queryByTestId } = render(
       <SessionBudgetBanner
+        syncButton={RESUME_BUTTON}
         lastAttemptStatus="paused"
         rssKb={440000}
         resumeReady={true}
@@ -104,7 +125,13 @@ describe("SessionBudgetBanner — run progress ('X of Y games done')", () => {
 
   it("omits the sentence entirely when the counts are unknown (a backend reload wiped them)", () => {
     const { queryByTestId } = render(
-      <SessionBudgetBanner lastAttemptStatus="paused" rssKb={2300000} runDoneItems={null} runTotalItems={null} />,
+      <SessionBudgetBanner
+        syncButton={RESUME_BUTTON}
+        lastAttemptStatus="paused"
+        rssKb={2300000}
+        runDoneItems={null}
+        runTotalItems={null}
+      />,
     );
     const text = queryByTestId("budget-paused-banner")!.textContent;
     expect(text).toContain("Steam memory is full (2.3 GB). Restart Steam, then Resume Sync.");
@@ -113,21 +140,39 @@ describe("SessionBudgetBanner — run progress ('X of Y games done')", () => {
 
   it("omits the sentence when only one of the two counts is known (never a placeholder)", () => {
     const { queryByTestId } = render(
-      <SessionBudgetBanner lastAttemptStatus="paused" rssKb={2300000} runDoneItems={1200} runTotalItems={null} />,
+      <SessionBudgetBanner
+        syncButton={RESUME_BUTTON}
+        lastAttemptStatus="paused"
+        rssKb={2300000}
+        runDoneItems={1200}
+        runTotalItems={null}
+      />,
     );
     expect(queryByTestId("budget-paused-banner")!.textContent).not.toContain("1200");
   });
 
   it("omits the sentence when the total is zero (never '0 of 0 games done')", () => {
     const { queryByTestId } = render(
-      <SessionBudgetBanner lastAttemptStatus="paused" rssKb={2300000} runDoneItems={0} runTotalItems={0} />,
+      <SessionBudgetBanner
+        syncButton={RESUME_BUTTON}
+        lastAttemptStatus="paused"
+        rssKb={2300000}
+        runDoneItems={0}
+        runTotalItems={0}
+      />,
     );
     expect(queryByTestId("budget-paused-banner")!.textContent).not.toContain("games done");
   });
 
   it("renders a zero done count against a real total (a run that paused before its first chunk)", () => {
     const { queryByTestId } = render(
-      <SessionBudgetBanner lastAttemptStatus="paused" rssKb={2300000} runDoneItems={0} runTotalItems={2001} />,
+      <SessionBudgetBanner
+        syncButton={RESUME_BUTTON}
+        lastAttemptStatus="paused"
+        rssKb={2300000}
+        runDoneItems={0}
+        runTotalItems={2001}
+      />,
     );
     expect(queryByTestId("budget-paused-banner")!.textContent).toContain("0 of 2001 games done.");
   });
@@ -140,7 +185,7 @@ describe("SessionBudgetBanner — paused, resume ready (#38)", () => {
 
   it("flips to 'memory is free' and hides the restart button when resumeReady is true", () => {
     const { queryByTestId, container } = render(
-      <SessionBudgetBanner lastAttemptStatus="paused" rssKb={500000} resumeReady={true} />,
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="paused" rssKb={500000} resumeReady={true} />,
     );
     const banner = queryByTestId("budget-paused-banner");
     expect(banner).not.toBeNull();
@@ -152,7 +197,7 @@ describe("SessionBudgetBanner — paused, resume ready (#38)", () => {
 
   it("keeps the restart guidance + button when resumeReady is false (still high)", () => {
     const { queryByTestId, container } = render(
-      <SessionBudgetBanner lastAttemptStatus="paused" rssKb={2199000} resumeReady={false} />,
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="paused" rssKb={2199000} resumeReady={false} />,
     );
     const banner = queryByTestId("budget-paused-banner");
     expect(banner!.textContent).toContain("Steam memory is full (2.2 GB). Restart Steam, then Resume Sync.");
@@ -162,16 +207,92 @@ describe("SessionBudgetBanner — paused, resume ready (#38)", () => {
 
   it("keeps the restart guidance + button when resumeReady is null (undecidable → conservative)", () => {
     const { queryByTestId, container } = render(
-      <SessionBudgetBanner lastAttemptStatus="paused" rssKb={2199000} resumeReady={null} />,
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="paused" rssKb={2199000} resumeReady={null} />,
     );
     expect(queryByTestId("budget-paused-banner")!.textContent).toContain("Restart Steam, then Resume Sync.");
     expect(restartButton(container)).not.toBeNull();
   });
 });
 
+describe("SessionBudgetBanner — names the button it is told about (#1789)", () => {
+  // A paused run stays paused after a Force Full Sync — the clear takes the
+  // completion stamps, not the run's status — so this banner keeps rendering while
+  // the button beside it has dropped back to "Sync Library". Naming the button from
+  // the paused status alone therefore sent the user to press something that was no
+  // longer on screen.
+  /** The paused banner's body, scoped to this render — two banners in one test
+   *  would both sit under document.body and make a global query ambiguous. */
+  function pausedBody(syncButton: SyncButton, resumeReady?: boolean): string {
+    const { container } = render(
+      <SessionBudgetBanner
+        syncButton={syncButton}
+        lastAttemptStatus="paused"
+        rssKb={resumeReady === true ? 440000 : 2300000}
+        resumeReady={resumeReady ?? null}
+        runDoneItems={1200}
+        runTotalItems={2001}
+      />,
+    );
+    return container.querySelector('[data-testid="budget-paused-banner"]')!.textContent;
+  }
+
+  it("names the resume button on the restart branch while a resume is on offer", () => {
+    expect(pausedBody(RESUME_BUTTON)).toContain(
+      "Steam memory is full (2.3 GB). 1200 of 2001 games done. Restart Steam, then Resume Sync.",
+    );
+  });
+
+  it("names the resume button on the memory-freed branch while a resume is on offer", () => {
+    expect(pausedBody(RESUME_BUTTON, true)).toContain(
+      "Steam memory is free again (0.4 GB). 1200 of 2001 games done. Press Resume Sync to continue.",
+    );
+  });
+
+  it("names the plain sync button on the restart branch once nothing can be resumed", () => {
+    const text = pausedBody(FRESH_BUTTON);
+    expect(text).toContain("Steam memory is full (2.3 GB). Restart Steam, then Sync Library.");
+    expect(text).not.toContain("Resume Sync");
+  });
+
+  it("names the plain sync button on the memory-freed branch once nothing can be resumed", () => {
+    const text = pausedBody(FRESH_BUTTON, true);
+    expect(text).toContain("Steam memory is free again (0.4 GB). Press Sync Library to start over.");
+    expect(text).not.toContain("Resume Sync");
+  });
+
+  it("drops the progress sentence once nothing can be resumed", () => {
+    // "1200 of 2001 games done" promises the next run will not redo those 1200.
+    // With the stamps cleared it redoes all of them, so the sentence would be the
+    // same false head start the button label no longer offers.
+    const { queryByTestId } = render(
+      <SessionBudgetBanner
+        syncButton={FRESH_BUTTON}
+        lastAttemptStatus="paused"
+        rssKb={2300000}
+        runDoneItems={1200}
+        runTotalItems={2001}
+      />,
+    );
+    const text = queryByTestId("budget-paused-banner")!.textContent;
+    expect(text).not.toContain("games done");
+    expect(text).not.toContain("1200");
+  });
+
+  it("still offers the restart button when nothing can be resumed but memory is full", () => {
+    // The memory problem is real either way — a full re-sync needs the headroom
+    // just as a resume does — so the restart guidance must not go with the resume.
+    const { container } = render(
+      <SessionBudgetBanner syncButton={FRESH_BUTTON} lastAttemptStatus="paused" rssKb={2300000} />,
+    );
+    expect(buttonByText(container, "Restart Steam now")).not.toBeNull();
+  });
+});
+
 describe("SessionBudgetBanner — high heap (yellow)", () => {
   it("shows the yellow banner when the live heap is above the threshold after a non-paused run", () => {
-    const { queryByTestId } = render(<SessionBudgetBanner lastAttemptStatus="completed" rssKb={1900000} />);
+    const { queryByTestId } = render(
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="completed" rssKb={1900000} />,
+    );
     const banner = queryByTestId("budget-high-heap-banner");
     expect(banner).not.toBeNull();
     expect(banner!.textContent).toContain(
@@ -182,13 +303,17 @@ describe("SessionBudgetBanner — high heap (yellow)", () => {
   });
 
   it("shows nothing when heap is at or below the threshold", () => {
-    const { queryByTestId } = render(<SessionBudgetBanner lastAttemptStatus="completed" rssKb={HIGH_HEAP_KB} />);
+    const { queryByTestId } = render(
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="completed" rssKb={HIGH_HEAP_KB} />,
+    );
     expect(queryByTestId("budget-high-heap-banner")).toBeNull();
     expect(queryByTestId("budget-paused-banner")).toBeNull();
   });
 
   it("shows nothing when the reading is unavailable and the run was not paused", () => {
-    const { queryByTestId } = render(<SessionBudgetBanner lastAttemptStatus="cancelled" rssKb={null} />);
+    const { queryByTestId } = render(
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="cancelled" rssKb={null} />,
+    );
     expect(queryByTestId("budget-high-heap-banner")).toBeNull();
     expect(queryByTestId("budget-paused-banner")).toBeNull();
   });
@@ -203,7 +328,9 @@ describe("SessionBudgetBanner — Restart Steam now button (#35)", () => {
   });
 
   it("renders the restart button on the paused banner and restarts Steam on click", () => {
-    const { container } = render(<SessionBudgetBanner lastAttemptStatus="paused" rssKb={2199000} />);
+    const { container } = render(
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="paused" rssKb={2199000} />,
+    );
     const btn = buttonByText(container, "Restart Steam now");
     expect(btn).not.toBeNull();
     fireEvent.click(btn!);
@@ -211,7 +338,9 @@ describe("SessionBudgetBanner — Restart Steam now button (#35)", () => {
   });
 
   it("renders the restart button on the high-heap banner too", () => {
-    const { container } = render(<SessionBudgetBanner lastAttemptStatus="completed" rssKb={1900000} />);
+    const { container } = render(
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="completed" rssKb={1900000} />,
+    );
     const btn = buttonByText(container, "Restart Steam now");
     expect(btn).not.toBeNull();
     fireEvent.click(btn!);
@@ -219,12 +348,16 @@ describe("SessionBudgetBanner — Restart Steam now button (#35)", () => {
   });
 
   it("disables the button when restartDisabled is true", () => {
-    const { container } = render(<SessionBudgetBanner lastAttemptStatus="paused" rssKb={2199000} restartDisabled />);
+    const { container } = render(
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="paused" rssKb={2199000} restartDisabled />,
+    );
     expect(buttonByText(container, "Restart Steam now")!.disabled).toBe(true);
   });
 
   it("carries NO description on the enabled button (the banner body already says why)", () => {
-    const { queryByTestId } = render(<SessionBudgetBanner lastAttemptStatus="paused" rssKb={2199000} />);
+    const { queryByTestId } = render(
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="paused" rssKb={2199000} />,
+    );
     // The ButtonItem mock renders a description into "button-desc" when one is
     // passed, so its absence is a real assertion, not a dropped prop.
     expect(queryByTestId("button-desc")).toBeNull();
@@ -232,7 +365,9 @@ describe("SessionBudgetBanner — Restart Steam now button (#35)", () => {
 
   it("disables the button while a game is running, and says why (the one kept description)", () => {
     vi.stubGlobal("SteamUIStore", { RunningApps: [{ appid: 123, display_name: "Game" }] });
-    const { container, queryByTestId } = render(<SessionBudgetBanner lastAttemptStatus="paused" rssKb={2199000} />);
+    const { container, queryByTestId } = render(
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="paused" rssKb={2199000} />,
+    );
     expect(buttonByText(container, "Restart Steam now")!.disabled).toBe(true);
     expect(queryByTestId("button-desc")!.textContent).toBe(
       "Close your running game first — restarting Steam would close it.",
@@ -241,7 +376,9 @@ describe("SessionBudgetBanner — Restart Steam now button (#35)", () => {
 
   it("hard-guards the click so a game that started after render can't be killed", () => {
     // Rendered with no game → button enabled.
-    const { container } = render(<SessionBudgetBanner lastAttemptStatus="paused" rssKb={2199000} />);
+    const { container } = render(
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="paused" rssKb={2199000} />,
+    );
     const btn = buttonByText(container, "Restart Steam now")!;
     expect(btn.disabled).toBe(false);
     // A game starts before the click lands — the click-time guard must win.
@@ -254,7 +391,9 @@ describe("SessionBudgetBanner — Restart Steam now button (#35)", () => {
   });
 
   it("shows no restart button when no banner is shown", () => {
-    const { container } = render(<SessionBudgetBanner lastAttemptStatus="completed" rssKb={440000} />);
+    const { container } = render(
+      <SessionBudgetBanner syncButton={RESUME_BUTTON} lastAttemptStatus="completed" rssKb={440000} />,
+    );
     expect(buttonByText(container, "Restart Steam now")).toBeNull();
   });
 });

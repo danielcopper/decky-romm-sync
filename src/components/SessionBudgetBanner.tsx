@@ -82,16 +82,42 @@ function bannerCard(accent: string, background: string, testId: string, title: s
   );
 }
 
+/**
+ * The panel's sync button as the rest of the panel is TOLD it, never as anything
+ * re-derives it. One value carries both halves because they are one fact: a
+ * consumer holding only the label would have to read the resume question back out
+ * of the text, and a consumer holding only the flag would have to spell the name a
+ * second time. That second spelling is exactly how the banner came to say "then
+ * Resume Sync" while the button said "Sync Library" (#1789) — it decided the name
+ * from ``last_attempt`` alone, which stopped implying a resume the moment Force
+ * Full Sync cleared the completion stamps.
+ */
+export interface SyncButton {
+  /** Exactly the text on the panel's sync button — quote it, never reconstruct it. */
+  label: string;
+  /** Whether pressing it continues an incomplete run or starts a full one. */
+  resumes: boolean;
+}
+
 interface SessionBudgetBannerProps {
   /** ``stats.last_attempt?.status`` — a ``"paused"`` last run shows the blue resume banner. */
   lastAttemptStatus?: string | undefined;
+  /**
+   * The sync button this banner points the user at. Required, and deliberately not
+   * defaulted: a banner that guessed would be free to guess wrong, which is the
+   * defect it exists to prevent. Pausedness and resumability are different facts —
+   * a paused run stays paused after a Force Full Sync, it just has nothing left to
+   * resume from — so this does not replace {@link lastAttemptStatus}.
+   */
+  syncButton: SyncButton;
   /** Live renderer RSS in KB from ``get_session_budget_status``; ``null`` when unreadable. */
   rssKb: number | null;
   /**
    * ``resume_ready`` from ``get_session_budget_status`` — ``true`` once the live
    * reading is low enough that resuming a paused run would proceed (e.g. after a
-   * Steam restart). Flips the paused banner to "memory is free, press Resume Sync"
-   * and hides the restart button. ``false``/``null`` keeps the restart guidance.
+   * Steam restart). Flips the paused banner from "restart Steam first" to "memory
+   * is free, press the sync button" and hides the restart button.
+   * ``false``/``null`` keeps the restart guidance.
    */
   resumeReady?: boolean | null | undefined;
   /**
@@ -113,9 +139,9 @@ interface SessionBudgetBannerProps {
 
 /**
  * Persistent QAM banner for the session-budget UX (#1383). Renders a BLUE/info
- * banner while the last run is ``paused`` (restart Steam, then Resume Sync), or a
- * YELLOW/warning banner when the live renderer heap is high after a completed
- * run. A paused run takes precedence (it is high-heap anyway). Returns nothing
+ * banner while the last run is ``paused`` — restart Steam, then press whatever the
+ * sync button currently says ({@link SyncButton}) — or a YELLOW/warning banner
+ * when the live renderer heap is high after a completed run. A paused run takes precedence (it is high-heap anyway). Returns nothing
  * when neither applies. When ``rssKb`` is ``null`` (measurement unavailable) the
  * live number is dropped but the guidance text stays. Both banners offer a
  * **Restart Steam now** button — a deterministic full client restart that resets
@@ -123,6 +149,7 @@ interface SessionBudgetBannerProps {
  */
 export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({
   lastAttemptStatus,
+  syncButton,
   rssKb,
   resumeReady,
   restartDisabled,
@@ -143,13 +170,24 @@ export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({
   // reload wipes them (in-memory, by design). Then, and whenever the total is
   // unknown or zero, the sentence is dropped entirely rather than rendered with
   // placeholders or zeros.
+  //
+  // It is also dropped when nothing can be resumed. "1200 of 2001 games done" is a
+  // statement about work the NEXT run will not repeat, and once the completion
+  // stamps are gone the next run repeats all of it — so after a Force Full Sync the
+  // sentence would claim exactly the false head start the button no longer offers.
   const progressSentence =
-    runDoneItems != null && runTotalItems != null && runTotalItems > 0
+    syncButton.resumes && runDoneItems != null && runTotalItems != null && runTotalItems > 0
       ? ` ${runDoneItems} of ${runTotalItems} games done.`
       : "";
+  // The instruction names the button by quoting what the panel put on it. Both
+  // branches must name SOMETHING pressable: the memory reading is the banner's
+  // subject, but the action is why the user is reading it.
+  const pressInstruction = syncButton.resumes
+    ? `Press ${syncButton.label} to continue.`
+    : `Press ${syncButton.label} to start over.`;
   const pausedBody = memoryFreedForResume
-    ? `Steam memory is free again${liveReadingSuffix}.${progressSentence} Press Resume Sync to continue.`
-    : `Steam memory is full${liveReadingSuffix}.${progressSentence} Restart Steam, then Resume Sync.`;
+    ? `Steam memory is free again${liveReadingSuffix}.${progressSentence} ${pressInstruction}`
+    : `Steam memory is full${liveReadingSuffix}.${progressSentence} Restart Steam, then ${syncButton.label}.`;
 
   const card = paused
     ? bannerCard("#3d9df6", "rgba(61, 157, 246, 0.15)", "budget-paused-banner", "Sync paused", pausedBody)

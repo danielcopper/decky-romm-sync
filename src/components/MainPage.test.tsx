@@ -1396,10 +1396,16 @@ describe("MainPage", () => {
       rssKb: number | null,
       resumeReady: boolean | null = null,
       counts: { done: number | null; total: number | null } = { done: null, total: null },
+      stampedPlatforms = 3,
     ): Promise<HTMLElement> {
       vi.mocked(backend.getSyncStats).mockResolvedValue({
         ...defaultStats(),
         roms: 42,
+        // A surviving stamp by default, so the paused banner describes the resume
+        // situation it was written for. Pass 0 for the post-Force-Full-Sync state,
+        // where the run is still paused but the button beside it is not a resume.
+        stamped_platforms: stampedPlatforms,
+        stamped_collections: 0,
         last_attempt: lastAttemptStatus
           ? { finished_at: "2026-07-11T17:48:00", status: lastAttemptStatus as "paused" }
           : null,
@@ -1433,6 +1439,18 @@ describe("MainPage", () => {
       expect(banner).not.toBeNull();
       expect(banner?.textContent).toContain("Resume Sync");
       expect(banner?.textContent).not.toContain("GB");
+    });
+
+    it("points the paused banner at the plain sync button once a force-clear left nothing to resume", async () => {
+      // The panel-level half of #1789: the banner is handed the button rather than
+      // deciding its name from the paused status, which survives the clear that the
+      // resume does not. Without the wiring the panel says "Sync Library" on the
+      // button and "Resume Sync" in the banner directly above it.
+      const c = await renderIdle("paused", 2_299_000, false, { done: 1200, total: 2001 }, 0);
+      const banner = c.querySelector('[data-testid="budget-paused-banner"]');
+      expect(banner?.textContent).toContain("Steam memory is full (2.3 GB). Restart Steam, then Sync Library.");
+      expect(banner?.textContent).not.toContain("Resume Sync");
+      expect(buttonByExactText(c, "Sync Library")).not.toBeNull();
     });
 
     it("shows the yellow high-heap banner after a completed run with a high live heap", async () => {
@@ -1562,6 +1580,7 @@ describe("MainPage", () => {
         vi.mocked(backend.getSyncStats).mockResolvedValue({
           ...defaultStats(),
           roms: 42,
+          stamped_platforms: 3,
           last_attempt: { finished_at: "2026-07-11T17:48:00", status: "paused" },
         });
         // Before the restart: high RSS, resume would re-pause. After (poll tick):

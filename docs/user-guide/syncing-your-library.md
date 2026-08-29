@@ -121,6 +121,11 @@ A few things worth knowing for a large library:
   button, so you know a resume will actually work now rather than pausing again. Nothing is lost, and you are never
   forced out of what you were doing. After a big run finishes with memory still high, a **yellow banner** recommends a
   Steam restart before your next large sync; it clears itself once you restart.
+  - **The banner names whichever button is actually there.** If you press **Force Full Sync** while a paused run is
+    showing, there is no longer anything to resume — so the banner stops saying "Resume Sync" and names **Sync Library**
+    instead ("Restart Steam, then Sync Library.", or "Press Sync Library to start over." once memory is free). It also
+    drops the "1200 of 2001 games done" sentence there, because that head start is exactly what the force-clear
+    discarded: the next run does all of it again.
 - **Tap "Restart Steam now" to free the memory.** Both banners include a **Restart Steam now** button. It restarts the
   Steam client (Steam closes and reopens) — the reliable way to reset its memory — and you can Resume Sync once it comes
   back. The button is disabled while a game is running (a restart would close your game), so close your game first; it

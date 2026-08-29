@@ -1411,11 +1411,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     syncBody = (
       <>
         {/* Persistent session-budget banner (#1383): blue while the last run was
-            paused (restart Steam, then Resume Sync), or yellow when the live heap
-            is high after a completed run. Only in the idle state, so it clears the
-            moment a resume/new sync starts. */}
+            paused (restart Steam, then press the sync button), or yellow when the
+            live heap is high after a completed run. Only in the idle state, so it
+            clears the moment a resume/new sync starts. It is HANDED the sync
+            button rather than working the name out from the same inputs — the
+            banner named it from a paused ``last_attempt`` alone, which survives a
+            Force Full Sync that the resume itself does not (#1789). */}
         <SessionBudgetBanner
           lastAttemptStatus={stats?.last_attempt?.status}
+          syncButton={{ label: syncButtonLabel, resumes: canResume }}
           rssKb={budgetStatus?.rss_kb ?? null}
           resumeReady={budgetStatus?.resume_ready ?? null}
           restartDisabled={connectionUnavailable}
