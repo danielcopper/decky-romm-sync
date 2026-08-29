@@ -123,8 +123,13 @@ class CoverPreparer:
         }
 
     async def _download_artwork(
-        self, all_roms, progress_step=4, progress_total_steps=6, label="", applied_sources=None
-    ):
+        self,
+        all_roms: list[dict[str, Any]],
+        progress_step: int = 4,
+        progress_total_steps: int = 6,
+        label: str = "",
+        applied_sources: dict[int, str] | None = None,
+    ) -> dict[int, str]:
         """Delegate artwork download to ArtworkService callback.
 
         ``label`` is the unit's display name, threaded into the cover-download
@@ -144,7 +149,14 @@ class CoverPreparer:
             applied_sources=applied_sources,
         )
 
-    async def refresh_changed_covers(self, unit_roms, registry, progress_step=4, progress_total_steps=6, label=""):
+    async def refresh_changed_covers(
+        self,
+        unit_roms: list[dict[str, Any]],
+        registry: dict[str, dict[str, Any]],
+        progress_step: int = 4,
+        progress_total_steps: int = 6,
+        label: str = "",
+    ) -> list[dict[str, int]]:
         """Delegate the #1386 cover-cache invalidation pass to the ArtworkManager.
 
         ``registry`` is the unit's bound-row projection (``do_read_apply_registry``)
