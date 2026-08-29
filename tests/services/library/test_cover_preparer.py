@@ -5,10 +5,12 @@ The preparer is reached through the library façade
 instance the orchestrator holds, over the shared state box the cancel signal
 lands on.
 
-Two levels are covered. The **delegation** tests call the preparer directly
-against a mocked ``ArtworkManager`` and pin what the run binds into each call —
-the progress position, the unit label, and an ``is_cancelling`` closure that
-tracks the live sync state rather than a snapshot of it. The **invalidation
+Two levels are covered. The **delegation** and **attach** tests call the
+preparer directly against a mocked download: the first pins what the run binds
+into each call — the progress position, the unit label, and an ``is_cancelling``
+closure that tracks the live sync state rather than a snapshot of it — and the
+second which ROMs a unit's delta asks covers for, what each emitted entry
+carries away, and which fingerprints the commit gets back. The **invalidation
 pass** is driven end-to-end through ``SyncOrchestrator._do_sync_per_unit``
 against the real ``ArtworkService`` (real cover-cache file I/O under
 ``tmp_path``) and the seeded ``FakeRommApi``, because what the pass is for is
@@ -25,7 +27,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from domain.sync_diff import BIND_ROM_ID_KEY
 from domain.sync_state import SyncState
+from domain.work_unit import WorkUnit
 
 # conftest.py patches decky before this import
 from tests.services.library._helpers import _fake_wait_set_event, _seed_platform, _seed_rom_row, _use_fake_romm
@@ -70,6 +74,110 @@ class TestDownloadArtworkDelegation:
         )
 
         assert fake_download.call_args.kwargs["label"] == "Game Boy Advance"
+
+
+class TestAttachUnitCoverPaths:
+    """Tests for attach_unit_cover_paths — what the download is asked for, what
+    the emitted entries carry away from it, and what the commit gets back.
+
+    ``_download_artwork`` is mocked here: the question is which ROMs are handed
+    to it and how its answer is distributed, not what it fetches.
+    """
+
+    _UNIT = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
+
+    @staticmethod
+    def _preparer(plugin, cover_paths):
+        preparer = plugin._sync_service._cover_preparer
+        preparer._download_artwork = AsyncMock(return_value=cover_paths)
+        return preparer
+
+    @pytest.mark.asyncio
+    async def test_stamps_each_emitted_entry_with_its_downloaded_cover(self, plugin):
+        """Every emitted entry carries the downloaded path; a ROM the download did
+        not resolve carries the empty string, never a missing key."""
+        preparer = self._preparer(plugin, {10: "/cache/10.png"})
+        unit_roms = [{"id": 10, "name": "A"}, {"id": 11, "name": "B"}]
+        emitted = [{"rom_id": 10}, {"rom_id": 11}]
+
+        await preparer.attach_unit_cover_paths(self._UNIT, unit_roms, emitted, unit_index=2, total_units=5)
+
+        assert emitted == [{"rom_id": 10, "cover_path": "/cache/10.png"}, {"rom_id": 11, "cover_path": ""}]
+
+    @pytest.mark.asyncio
+    async def test_fetches_only_the_roms_that_get_a_shortcut(self, plugin):
+        """A fetched ROM with no emitted entry is never downloaded — no eager covers
+        for versions with no shortcut — and the unit's progress position rides along."""
+        preparer = self._preparer(plugin, {})
+        unit_roms = [{"id": 10, "name": "A"}, {"id": 11, "name": "B"}]
+
+        await preparer.attach_unit_cover_paths(self._UNIT, unit_roms, [{"rom_id": 11}], unit_index=2, total_units=5)
+
+        assert preparer._download_artwork.call_args.args[0] == [{"id": 11, "name": "B"}]
+        kwargs = preparer._download_artwork.call_args.kwargs
+        assert (kwargs["progress_step"], kwargs["progress_total_steps"], kwargs["label"]) == (3, 5, "N64")
+
+    @pytest.mark.asyncio
+    async def test_rebind_entry_takes_the_representative_cover(self, plugin):
+        """A rebind entry's cover comes from the representative it binds
+        (``BIND_ROM_ID_KEY``), which is also the ROM the download is asked for."""
+        preparer = self._preparer(plugin, {10: "/cache/10.png"})
+        unit_roms = [{"id": 10, "name": "A (USA)"}, {"id": 11, "name": "A (JP)"}]
+        emitted = [{"rom_id": 11, BIND_ROM_ID_KEY: 10}]
+
+        await preparer.attach_unit_cover_paths(self._UNIT, unit_roms, emitted, unit_index=0, total_units=1)
+
+        assert preparer._download_artwork.call_args.args[0] == [{"id": 10, "name": "A (USA)"}]
+        assert emitted[0]["cover_path"] == "/cache/10.png"
+
+    @pytest.mark.asyncio
+    async def test_empty_delta_downloads_nothing(self, plugin):
+        preparer = self._preparer(plugin, {})
+
+        assert (
+            await preparer.attach_unit_cover_paths(
+                self._UNIT, [{"id": 10, "name": "A"}], [], unit_index=0, total_units=1
+            )
+            == {}
+        )
+        preparer._download_artwork.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_confirmed_fingerprints_cover_only_resolved_roms(self, plugin):
+        """The commit gets back the source for every ROM the download resolved —
+        the small cover when there is no large one — and nothing for a ROM whose
+        download failed (#1386)."""
+        preparer = self._preparer(plugin, {10: "/cache/10.png", 11: "/cache/11.png"})
+        unit_roms = [
+            {"id": 10, "name": "A", "path_cover_large": "/big.png?ts=1"},
+            {"id": 11, "name": "B", "path_cover_small": "/small.png?ts=2"},
+            {"id": 12, "name": "C", "path_cover_large": "/big.png?ts=3"},
+        ]
+        emitted = [{"rom_id": 10}, {"rom_id": 11}, {"rom_id": 12}]
+
+        confirmed = await preparer.attach_unit_cover_paths(self._UNIT, unit_roms, emitted, unit_index=0, total_units=1)
+
+        assert confirmed == {10: "/big.png?ts=1", 11: "/small.png?ts=2"}
+
+    @pytest.mark.asyncio
+    async def test_applied_source_overrides_the_roms_own_cover_source(self, plugin):
+        """When ArtworkService applied a different source than the ROM's fresh
+        ``path_cover`` — the #1450 ``url_cover`` fallback — the accumulator's value
+        is what the commit persists."""
+        preparer = plugin._sync_service._cover_preparer
+
+        async def download(_roms, *, applied_sources: dict[int, str], **_kwargs):
+            applied_sources[10] = "https://cdn.example/fallback.png"
+            return {10: "/cache/10.png"}
+
+        preparer._download_artwork = download
+        unit_roms = [{"id": 10, "name": "A", "path_cover_large": "/big.png?ts=1"}]
+
+        confirmed = await preparer.attach_unit_cover_paths(
+            self._UNIT, unit_roms, [{"rom_id": 10}], unit_index=0, total_units=1
+        )
+
+        assert confirmed == {10: "https://cdn.example/fallback.png"}
 
 
 class TestCoverRefreshPass:
