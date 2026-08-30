@@ -44,13 +44,14 @@ class VersionMetadata:
     def __post_init__(self) -> None:
         """Reject an empty-string ``sibling_group_key``.
 
-        The empty string is the one value that is neither a key nor a state, and
-        raises ``ValueError`` — "no group derived yet" stays ``None`` (unknown),
-        never an empty string. Exactly that one value: no format or whitespace
-        rule is applied, so a key is stored as given. This is the only route by
-        which a **new** key enters the ``Rom`` aggregate (loading a stored row
-        via ``_row_to_rom`` validates nothing), so guarding the write direction
-        here is what lets the residency readers ask ``is not None`` and mean it.
+        The empty string names no state, and raises ``ValueError`` — "no group
+        derived yet" stays ``None`` (unknown), never an empty string. Exactly
+        that one value: no format or whitespace rule is applied, so a key is
+        stored as given. This is the only route by which a **new** key enters
+        the ``Rom`` aggregate (loading a stored row via
+        ``adapters.repositories.rom._row_to_rom`` validates nothing), so
+        guarding the write direction here is what lets the residency readers ask
+        ``is not None`` and mean it.
         """
         if self.sibling_group_key == "":
             raise ValueError("sibling_group_key must not be empty")
