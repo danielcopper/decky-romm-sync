@@ -223,6 +223,17 @@ class TestGetVersionList:
         assert result["bound_version"]["active"] is True
         assert result["bound_version"]["is_default"] is True
 
+    def test_null_group_key_is_a_solo_group(self, event_loop, service, uow, romm):
+        # An unbackfilled row is its own group, not a bucket every keyless row
+        # shares: rom 2 is equally keyless and must not be listed as a version.
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID, group_key=None)
+        _seed_rom(uow, rom_id=2, app_id=None, group_key=None)
+        romm.roms[1] = {"id": 1, "sibling_roms": []}
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+
+        assert result["multi_version"] is False
+        assert result["bound_version"]["rom_id"] == 1
+
     def test_local_members_listed_with_markers(self, event_loop, service, uow, romm):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID, regions=("USA",))
         _seed_rom(uow, rom_id=2, app_id=None, regions=("Japan",), is_main_sibling=True)
