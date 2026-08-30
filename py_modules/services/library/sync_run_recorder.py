@@ -32,9 +32,12 @@ that may never have been opened at all (a work-queue build that failed before th
 line it is on.
 
 What the dependency surface does **not** carry is the contract. No event emitter:
-this module tells nobody, because the terminal progress frame and
-``sync_complete`` are emitted by the orchestrator only once this write has landed
-(#39). No state box: the run id arrives as an argument, which keeps the write a
+this module tells nobody. On the paths that finish or stop a run, the
+orchestrator emits the terminal progress frame and ``sync_complete`` only once
+this write has landed (#39). The error path is not one of them and does not need
+to be: it schedules its ERROR frame before awaiting this write, and emits no
+``sync_complete`` at all, so there is no refetch of the run there to race.
+No state box: the run id arrives as an argument, which keeps the write a
 function of what the caller handed over rather than of what the box happens to
 hold by the time the executor gets round to it — the orchestrator captures its
 run id once, at the top of the run, and hands that same value to every write

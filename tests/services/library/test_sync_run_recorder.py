@@ -7,10 +7,12 @@ baseline and the QAM's "Last sync" line read.
 
 **Which** terminal a stopped run earns is the orchestrator's branch, not this
 module's — a session-budget pause over a heartbeat timeout over the user's own
-Cancel — and it is covered where that branch lives (``TestSyncRunLifecycle`` in
-``tests/services/library/test_sync_orchestrator.py``). What is pinned here is
-that each transition writes the status, reason and timestamp it names, and that
-the three ways a write must decline to happen all decline silently.
+Cancel — and it is covered where that branch lives, which is two places in
+``tests/services/library/test_sync_orchestrator.py``: ``TestSyncRunLifecycle``
+for the cancel, the timeout and the error, and ``TestSessionBudgetGate`` for the
+pause, next to the gate that triggers it. What is pinned here is that each
+transition writes the status, reason and timestamp it names, and that the three
+ways a write must decline to happen all decline silently.
 """
 
 import pytest
@@ -149,14 +151,19 @@ class TestTheWriteThatDeclines:
             assert uow.sync_runs.get("run-never-opened") is None
 
     @pytest.mark.parametrize("run_id", [None, ""])
-    def test_a_falsy_run_id_is_a_noop(self, plugin, run_id):
-        # The error path passes ``run_id or box.current_sync_id``, which is
-        # falsy when neither exists; it must not have to know that.
+    def test_a_falsy_run_id_opens_no_transaction_at_all(self, plugin, run_id):
         _seed_running(plugin, "run-untouched")
-        before = plugin._uow.sync_runs.save_count
+        opens_before = plugin._uow.enter_count
+        saves_before = plugin._uow.sync_runs.save_count
 
         _recorder(plugin).do_mark_cancelled(run_id, "Sync cancelled")
 
-        assert plugin._uow.sync_runs.save_count == before
+        # The transaction count is what pins the ``if not run_id`` guard, and
+        # nothing else does: delete it and the load guard below still catches
+        # the miss — ``get(None)`` finds no row, in this fake and in the real
+        # adapter alike — so a row-only assertion passes with the guard gone.
+        # What the guard buys is that the no-op costs no write transaction.
+        assert plugin._uow.enter_count == opens_before
+        assert plugin._uow.sync_runs.save_count == saves_before
         with plugin._uow as uow:
             assert uow.sync_runs.get("run-untouched").status == "running"

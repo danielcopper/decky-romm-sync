@@ -25,9 +25,9 @@ are made against belongs in :class:`LocalLibraryReader`. Two of that last group
 are this module's deliberately: the platform stamp's DELETE — a write, and a step
 of the apply pipeline rather than a question a run weighs; its ordering is argued
 at its call site — and the pure component-key stamp, which does no I/O at all.
-**Which** terminal status a stopped run is recorded with stays here: the priority
+**Which** terminal status a stopped run is recorded with belongs here: the priority
 a pause, a heartbeat timeout and the user's Cancel are read in follows from what
-this pipeline observed while it ran, and only the writing of the answer moved. Cached
+this pipeline observed while it ran. The recorder writes that answer, never picks it. Cached
 ``rom_metadata`` is written by the reporter's per-unit commit (the same write
 UoW as the ``roms`` upsert), so preview never persists metadata and an
 interrupted apply leaves only already-committed units' metadata.
@@ -105,7 +105,7 @@ class SyncOrchestratorConfig:
 
     Holds runtime infrastructure (loop, logger), event emitter, the
     Clock/UuidGen test seams, the SQLite Unit-of-Work factory
-    (which now opens exactly one transaction from this module: the platform
+    (which opens exactly one transaction from this module: the platform
     stamp's DELETE at a unit's apply start), the plugin-dir reference for
     shortcut data construction, the shared
     :class:`LibrarySyncStateBox`, and the :class:`LibraryFetcher` peer the
@@ -133,8 +133,8 @@ class SyncOrchestratorConfig:
     reporter holds the same ``artwork`` seam for commit-time cover-path
     finalisation — between them, no ``ArtworkManager`` is owed here. The
     ``sync_run_recorder`` peer writes the run's ``SyncRun`` row: this module
-    still decides which terminal status a stopped run earns, and hands that
-    decision over as a method call.
+    decides which terminal status a stopped run earns, and hands that decision
+    over as a method call.
     """
 
     settings: dict[str, Any]
@@ -605,8 +605,11 @@ class SyncOrchestrator:
         end a run and none of them can stand in for another: this one tells the
         panel, ``LibrarySyncStateBox.finish_run`` releases the slot the next
         Sync press needs, and
-        :meth:`SyncRunRecorder.do_mark_cancelled` writes the row the next
-        preview reads its baseline out of.
+        :meth:`SyncRunRecorder.do_mark_cancelled` writes the row the QAM's
+        last-attempt line reads (``get_latest_terminal``). Note which row that
+        is: the preview's baseline comes from ``get_latest_completed``, which a
+        cancelled row is not and never becomes — the zero-unit carve-out below
+        exists because a **completed** row resets that baseline.
         """
         box = self._sync_state
         box.sync_progress = {
@@ -679,6 +682,12 @@ class SyncOrchestrator:
         # into the single ``finally: box.finish_run(run_id)`` — a run-scoped
         # compare-and-reset that no-ops if a fresher run already owns the slot,
         # so a rapid Sync/Cancel can't leave a half-reset run id (#1202).
+        # The capture is what every write below reads instead of the box: the
+        # error path runs before that ``finally``, but a clear moving ahead of
+        # it would leave the live id null there, and a terminal write handed a
+        # null id no-ops — recording nothing and leaving the run ``running``
+        # for good. Reading the box at each write would make that a one-line
+        # change away; reading the capture makes it impossible.
         run_id = box.current_sync_id
 
         try:
@@ -841,18 +850,12 @@ class SyncOrchestrator:
                 "runId": str(box.current_sync_id or ""),
             }
             self._loop.create_task(self._emit("sync_progress", box.sync_progress))
-            # Use the captured ``run_id`` rather than the box's live one: it
-            # keeps this write independent of where the run id is cleared. The
-            # two are the same value today — ``finish_run`` clears it in the
-            # ``finally`` below, after this line — so the fallback is insurance
-            # against a clear moving back ahead of the error path, which is
-            # where reading the live id would silently no-op and leave the run
-            # ``running``. ``do_mark_errored`` no-ops gracefully on a falsy id
-            # either way (pre-``do_open_run`` failures, where the run was never
-            # opened).
-            await self._loop.run_in_executor(
-                None, self._sync_run_recorder.do_mark_errored, run_id or box.current_sync_id, _msg
-            )
+            # The captured ``run_id``, for the reason given where it is taken.
+            # This path is reached by every failure inside the run, including
+            # the ones before ``do_open_run`` ever wrote a row; those carry a
+            # perfectly good id and no row, which ``_terminate_run`` no-ops on
+            # when its load comes back empty.
+            await self._loop.run_in_executor(None, self._sync_run_recorder.do_mark_errored, run_id, _msg)
         finally:
             # Single run-scoped termination point for every exit path (success,
             # cancel, error, zero-unit) — resets to IDLE only if ``run_id``

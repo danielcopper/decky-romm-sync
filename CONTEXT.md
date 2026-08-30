@@ -336,8 +336,11 @@ run.
 ### SyncRun
 
 One library-sync operation modelled as a first-class aggregate (`domain/sync_run.py`, `sync_runs` table) — a `running` →
-`completed` / `cancelled` / `errored` state machine carrying `started_at` / `finished_at`, the planned platform/ROM
-counts, and the lists of platforms/collections actually completed. Replaces the scattered JSON scalars `last_sync`,
+`completed` / `cancelled` / `interrupted` / `paused` / `errored` state machine carrying `started_at` / `finished_at`,
+the planned platform/ROM counts, and the lists of platforms/collections actually completed. The terminal transition
+happens exactly once and is irreversible, and the four stopped terminals are deliberately distinct: `cancelled` is the
+user's own Cancel, `interrupted` an external death (the frontend stopped responding), `paused` a deliberate
+session-budget stop at a chunk boundary, and `errored` a failure. Replaces the scattered JSON scalars `last_sync`,
 `sync_stats`, `last_synced_platforms`, `last_synced_collections`. One row per sync (inserted at apply-start, finalized
 at the end). The "how many ROMs" figure is **not** stored on it — that is a live `len(registry)` count computed at read
 time.

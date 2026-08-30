@@ -2491,11 +2491,16 @@ class TestDoSyncPerUnit:
 class TestSyncRunLifecycle:
     """The SyncRun record persisted by ``_do_sync_per_unit`` across its outcomes.
 
-    What is under test here is the branch, not the write: which of the five
-    outcomes each way a run can end resolves to. Each test drives a real run to
-    its ending, seeds ``box.current_sync_id``, and asserts the persisted
-    ``uow.sync_runs`` row, so a branch that picked the wrong terminal — blaming
-    a frontend crash on the user's Cancel, say — fails here.
+    What is under test here is the branch, not the write. Each test drives a
+    real run to its ending, seeds ``box.current_sync_id``, and asserts the
+    persisted ``uow.sync_runs`` row, so a branch that picked the wrong terminal
+    — blaming a frontend crash on the user's Cancel, say — fails here. Four
+    terminals are covered: ``completed``, ``cancelled``, ``interrupted`` and
+    ``errored``, plus the zero-unit run that must write no row at all. The
+    fifth, ``paused``, is NOT here — it is the highest-priority arm of that
+    ladder and it is covered where its trigger lives, in
+    :class:`TestSessionBudgetGate`.
+
     :class:`SyncRunRecorder` performs the write and is covered on its own in
     ``tests/services/library/test_sync_run_recorder.py``.
     """
