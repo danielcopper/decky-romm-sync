@@ -16,8 +16,8 @@ called directly, because its whole behaviour is a function of the clock and the
 box.
 
 ``_wait_for_unit_complete`` stands in for a frontend ``report_unit_results``
-callback no test exercises; ``_download_artwork`` stands in for the SteamGridDB
-pipeline. The exact chunk partition maths is pinned in
+callback no test exercises; ``CoverPreparer._download_artwork`` stands in for
+the SteamGridDB pipeline. The exact chunk partition maths is pinned in
 ``tests/domain/test_sync_chunking.py``.
 """
 
@@ -71,7 +71,7 @@ class TestApplyChunking:
             commit_rows.append([r["id"] for r in chunk_rows])
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-chunk"
@@ -115,7 +115,7 @@ class TestApplyChunking:
         )
 
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-single"
@@ -163,7 +163,7 @@ class TestApplyChunking:
             commit_rows.append([r["id"] for r in chunk_rows])
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         box = plugin._sync_service._box
 
         async def wait(_unit, event):
@@ -232,7 +232,7 @@ class TestApplyChunking:
                 box.sync_state = SyncState.CANCELLING
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         box.sync_state = SyncState.RUNNING
         box.current_sync_id = "run-inter-chunk"
@@ -281,7 +281,7 @@ class TestApplyChunking:
         )
 
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         box = plugin._sync_service._box
 
         async def wait(_unit, event):
@@ -404,7 +404,7 @@ class TestWholeUnitStaging:
         plugin.settings["enabled_platforms"] = {"1": True}
         _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64")
         _seed_rom_row(plugin, 11, app_id=1011, platform_slug="n64", name="Old Name", fs_name="changed.z64")
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={11: "/covers/11.png"})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={11: "/covers/11.png"})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         box = plugin._sync_service._box
         box.sync_state = SyncState.RUNNING
@@ -649,7 +649,7 @@ class TestInterChunkCancelGuard:
             roms=[{"id": 10, "name": "Alpha"}, {"id": 11, "name": "Beta"}],
         )
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 1)
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
 

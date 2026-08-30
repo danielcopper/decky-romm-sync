@@ -7,8 +7,8 @@ module the decomposition quietly reverses — the module that "does not do that
 any more" grows a second reason to open the same resource, and the boundary the
 split was for stops being checkable by reading one file.
 
-Two confinements are enforced here, each recording a promise a module docstring
-already makes:
+Three confinements are enforced here, each recording a promise a module
+docstring already makes:
 
 * ``active_core`` / ``disc_resolver`` belong to ``shortcut_launch_resolver.py``.
   They are the only reason the sync ever resolves a ROM's emulator or its
@@ -19,6 +19,14 @@ already makes:
   contract is that no renderer-RSS **reading** is taken anywhere else in the
   package — every other budget site prices against a reading that module handed
   it (:mod:`services.library.session_budget`).
+* ``artwork`` belongs to ``cover_preparer.py`` **and** ``reporter.py``, and to
+  nothing else. The pair is the point: the preparer asks the artwork service for
+  a unit's covers on the apply path, the reporter asks it to finalise a cover
+  path at each chunk's commit, and those are the only two moments a sync run has
+  an artwork question. A **two**-owner entry is weaker than a one-owner entry and
+  is not a licence to add a third — the seam was held in three modules until the
+  orchestrator's cover work moved out, and this entry is what stops it drifting
+  back (:mod:`services.library.cover_preparer`).
 
 The scan is AST-shaped and covers the two ways a module takes hold of a seam:
 
@@ -80,6 +88,7 @@ SEAM_OWNERS: dict[str, frozenset[str]] = {
     "disc_resolver": frozenset({"shortcut_launch_resolver.py"}),
     "renderer_rss": frozenset({"session_budget.py"}),
     "renderer_gc": frozenset({"session_budget.py"}),
+    "artwork": frozenset({"cover_preparer.py", "reporter.py"}),
 }
 
 # Protocol type name -> the seam it types, so an annotation is attributed to
@@ -89,6 +98,7 @@ SEAM_PROTOCOLS: dict[str, str] = {
     "DiscResolver": "disc_resolver",
     "RendererRssFn": "renderer_rss",
     "RendererGcFn": "renderer_gc",
+    "ArtworkManager": "artwork",
 }
 
 # The one config class ``bootstrap`` delivers a seam into. A seam annotation on

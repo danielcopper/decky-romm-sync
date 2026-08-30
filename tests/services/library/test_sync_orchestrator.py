@@ -12,9 +12,9 @@ Two production seams remain mockable per test:
 * ``ChunkDispatcher._wait_for_unit_complete`` — waits on a frontend
   ``report_unit_results`` callback that no test exercises. Replaced with a
   ``fake_wait`` helper.
-* ``_download_artwork`` — delegates to the SteamGridDB pipeline; the
-  orchestrator tests do not exercise artwork I/O. Replaced with an
-  ``AsyncMock``.
+* ``CoverPreparer._download_artwork`` — delegates to the SteamGridDB
+  pipeline; the orchestrator tests do not exercise artwork I/O. Replaced
+  with an ``AsyncMock``.
 
 ``emit_progress`` is intentionally **not** mocked when the test asserts on
 ``decky.emit.call_args_list`` — driving real emissions keeps the
@@ -1378,7 +1378,7 @@ class TestDoSyncPerUnit:
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 2}]
         plugin.settings["enabled_platforms"] = {"1": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-plan"
@@ -1423,7 +1423,7 @@ class TestDoSyncPerUnit:
         _seed_collection(fake_romm_api, collection_id=7, name="Faves", rom_ids=[20, 21, 22])
         plugin.settings["enabled_collections"] = {"standard": {"7": True}, "smart": {}, "virtual": {}}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-est"
@@ -1476,7 +1476,7 @@ class TestDoSyncPerUnit:
         with plugin._uow as uow:
             assert uow.platform_sync_state.get("n64") is None
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-restamp"
@@ -1525,7 +1525,7 @@ class TestDoSyncPerUnit:
         )
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_unit, event):
             event.set()
@@ -1572,7 +1572,7 @@ class TestDoSyncPerUnit:
         )
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
@@ -1609,7 +1609,7 @@ class TestDoSyncPerUnit:
         # rom 10 has an install record; rom 11 does not.
         _seed_install(plugin, 10, file_path="/roms/n64/installed.z64", platform_slug="n64")
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
@@ -1652,7 +1652,7 @@ class TestDoSyncPerUnit:
         with plugin._uow:
             plugin._uow.roms.set_emulator_override(10, "PCSX ReARMed")
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
@@ -1694,7 +1694,7 @@ class TestDoSyncPerUnit:
         with plugin._uow:
             plugin._uow.roms.set_emulator_override(10, "Removed Core")
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
@@ -1736,7 +1736,7 @@ class TestDoSyncPerUnit:
         plugin.settings["enabled_platforms"] = {"1": True}
 
         download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._download_artwork = download_artwork
+        plugin._sync_service._cover_preparer._download_artwork = download_artwork
         wait_mock = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = wait_mock
         commit_mock = AsyncMock()
@@ -1794,7 +1794,7 @@ class TestDoSyncPerUnit:
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
         plugin.settings["enabled_platforms"] = {"1": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = AsyncMock(return_value={})
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
@@ -1841,7 +1841,7 @@ class TestDoSyncPerUnit:
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
         plugin.settings["enabled_platforms"] = {"1": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = AsyncMock(return_value={})
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
@@ -1883,7 +1883,7 @@ class TestDoSyncPerUnit:
         )
         plugin.settings["enabled_platforms"] = {"1": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         # The frontend re-uses the same appId (CRC32 of unchanged exe+name) and
         # acks it for the new rom_id. The REAL commit runs so committed_app_ids
@@ -1933,7 +1933,7 @@ class TestDoSyncPerUnit:
         )
         plugin.settings["enabled_platforms"] = {"1": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def ack_same_appid(_unit, event):
             event.set()
@@ -1977,7 +1977,7 @@ class TestDoSyncPerUnit:
             ],
         )
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def ack_reps(_unit, event):
             event.set()
@@ -2011,7 +2011,7 @@ class TestDoSyncPerUnit:
         _use_fake_romm(plugin, fake_romm_api)
         _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=roms)
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def ack_reps(_unit, event):
             event.set()
@@ -2124,7 +2124,7 @@ class TestDoSyncPerUnit:
             ],
         )
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def ack_reuse(_unit, event):
             event.set()
@@ -2219,7 +2219,7 @@ class TestDoSyncPerUnit:
             sibling_group_key="igdb:100:1",
         )
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -2301,7 +2301,7 @@ class TestDoSyncPerUnit:
             sibling_group_key="igdb:100:1",
         )
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -2342,7 +2342,7 @@ class TestDoSyncPerUnit:
         plugin.settings["enabled_platforms"] = {"1": True}
 
         download_artwork = AsyncMock(return_value={10: "/grid/a.png"})
-        plugin._sync_service._orchestrator._download_artwork = download_artwork
+        plugin._sync_service._cover_preparer._download_artwork = download_artwork
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -2382,7 +2382,7 @@ class TestDoSyncPerUnit:
         )
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
             event.set()
@@ -2420,7 +2420,7 @@ class TestDoSyncPerUnit:
         )
         plugin.settings["enabled_platforms"] = {"1": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -2468,7 +2468,7 @@ class TestDoSyncPerUnit:
         )
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
             event.set()
@@ -2503,7 +2503,7 @@ class TestSyncRunLifecycle:
 
         _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "A"}])
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
             event.set()
@@ -2562,7 +2562,7 @@ class TestSyncRunLifecycle:
         _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "A"}])
         _seed_platform(fake_romm_api, platform_id=2, name="GBA", slug="gba", roms=[{"id": 20, "name": "B"}])
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
             event.set()
@@ -2594,7 +2594,7 @@ class TestSyncRunLifecycle:
 
         _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "A"}])
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         # Heartbeat timeout: the wait gives up (None) while the box is still
         # RUNNING — _sync_one_unit flags run_interrupted and requests the cancel.
@@ -2652,7 +2652,7 @@ class TestSyncRunLifecycle:
 
         _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "A"}])
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
             event.set()
@@ -3057,7 +3057,7 @@ class TestRealOrchestratorLateAckRecovery:
         )
         plugin.settings["enabled_platforms"] = {"1": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         # The frontend never acks, so the REAL _wait_for_unit_complete runs; the
         # clock-advancing sleeper pushes it past the heartbeat timeout on the
         # second poll — a genuine timeout, no cancel, no stubbed wait.
@@ -3121,7 +3121,7 @@ class TestRealOrchestratorLateAckRecovery:
         )
         plugin.settings["enabled_platforms"] = {"1": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         orch = plugin._sync_service._orchestrator
         dispatcher = plugin._sync_service._chunk_dispatcher
         dispatcher._sleeper = _ClockAdvancingSleeper(dispatcher._clock, 999.0)
@@ -3405,7 +3405,7 @@ class TestDoSyncPerUnitErrors:
         # finalize gracefully for the WRONG reason.
         fake_romm_api.list_roms = MagicMock(side_effect=SyncCancelled("Sync cancelled"))
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-mid-fetch-cancel"
 
@@ -3468,7 +3468,7 @@ class TestDoSyncPerUnitErrors:
         # below pins that the real cancel originated from the per-unit fetch.
         fake_romm_api.list_roms = MagicMock(side_effect=asyncio.CancelledError("real task cancel"))
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-real-cancel"
 
@@ -3538,7 +3538,7 @@ class TestDoSyncPerUnitErrors:
         ]
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._box.sync_state = SyncState.CANCELLING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -3581,7 +3581,7 @@ class TestSyncOneUnitCollectionAndCancel:
         plugin.settings["enabled_platforms"] = {}
         plugin.settings["enabled_collections"] = {"standard": {"7": True}, "smart": {}, "virtual": {}}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -3694,7 +3694,7 @@ class TestSyncOneUnitCollectionAndCancel:
             plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return {}
 
-        plugin._sync_service._orchestrator._download_artwork = cancel_during_artwork
+        plugin._sync_service._cover_preparer._download_artwork = cancel_during_artwork
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
@@ -3735,7 +3735,7 @@ class TestSyncOneUnitCollectionAndCancel:
             plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return {}
 
-        plugin._sync_service._orchestrator._download_artwork = cancel_during_artwork
+        plugin._sync_service._cover_preparer._download_artwork = cancel_during_artwork
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
@@ -3772,7 +3772,7 @@ class TestSyncOneUnitCollectionAndCancel:
             plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return []
 
-        plugin._sync_service._orchestrator._refresh_changed_covers = cancel_during_cover_refresh
+        plugin._sync_service._cover_preparer.refresh_changed_covers = cancel_during_cover_refresh
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
@@ -3807,7 +3807,7 @@ class TestSyncOneUnitCollectionAndCancel:
             roms=[{"id": 1, "name": "A"}],
         )
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         # The wait observes a user cancel: flip CANCELLING, then give up (None).
         async def wait_user_cancel(_unit, _event):
@@ -3856,7 +3856,7 @@ class TestSyncOneUnitCollectionAndCancel:
             roms=[{"id": 1, "name": "A"}],
         )
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         # Heartbeat timeout: the wait gives up (None) WITHOUT a user cancel.
         async def wait_timeout(_unit, _event):
@@ -3919,7 +3919,7 @@ class TestPerUnitMetadataStamping:
             )
 
         plugin._sync_service._reporter.commit_unit_results = tracked_commit  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
             event.set()
@@ -3967,7 +3967,7 @@ class TestPerUnitMetadataStamping:
 
         commit_mock = AsyncMock()
         plugin._sync_service._reporter.commit_unit_results = commit_mock  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
             event.set()
@@ -4018,7 +4018,7 @@ class TestPerUnitMetadataStamping:
             commit_calls.append((rid_to_aid, unit_roms))
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         # Frontend ack's only 3 out of 5 ROMs.
         async def fake_wait(_u, event):
@@ -4070,7 +4070,7 @@ class TestPlatformCompletionStamp:
             roms=[{"id": 1, "name": "A"}, {"id": 2, "name": "B"}],
         )
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
             event.set()
@@ -4120,7 +4120,7 @@ class TestPlatformCompletionStamp:
             stamps.append(platform_stamp)
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -4160,7 +4160,7 @@ class TestPlatformCompletionStamp:
             roms=[{"id": i, "name": f"G{i}"} for i in range(1, 6)],
         )
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         box = plugin._sync_service._box
 
         async def wait(_unit, event):
@@ -4201,7 +4201,7 @@ class TestPlatformCompletionStamp:
             roms=[{"id": 1, "name": "A"}, {"id": 2, "name": "B"}],
         )
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def timeout_wait(_unit, _event):
             return None  # heartbeat timeout — box is NOT cancelling
@@ -4244,7 +4244,7 @@ class TestPlatformCompletionStamp:
             stamps.append(platform_stamp)
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
             event.set()
@@ -4296,7 +4296,7 @@ class TestPlatformCompletionStamp:
             seen.append((fetch_id, platform_stamp))
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-abc"
@@ -4341,7 +4341,7 @@ class TestPlatformCompletionStamp:
             seen.append(fetch_id)
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
             event.set()
@@ -4390,7 +4390,7 @@ class TestPlatformCompletionStamp:
         # A stale completion stamp left by a prior fully-synced run.
         _seed_platform_stamp(plugin, "n64", at="2020-01-01T00:00:00+00:00", rom_count=5)
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         box = plugin._sync_service._box
 
         async def wait(_unit, event):
@@ -4433,7 +4433,7 @@ class TestPlatformCompletionStamp:
         )
         _seed_platform_stamp(plugin, "n64", at="2020-01-01T00:00:00+00:00", rom_count=2)
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def timeout_wait(_unit, _event):
             return None  # heartbeat timeout — box is NOT cancelling
@@ -4470,7 +4470,7 @@ class TestPlatformCompletionStamp:
         )
         _seed_platform_stamp(plugin, "n64", at="2020-01-01T00:00:00+00:00", rom_count=99)
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
             event.set()
@@ -4507,7 +4507,7 @@ class TestPlatformCompletionStamp:
         _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A", fs_name="a.z64")
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -4640,7 +4640,7 @@ class TestRegression738CacheCorruption:
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
         plugin.settings["enabled_platforms"] = {"1": True}
 
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
             event.set()
@@ -4656,47 +4656,6 @@ class TestRegression738CacheCorruption:
         with plugin._uow as uow:
             for rid, meta in seeds.items():
                 assert uow.rom_metadata.get(rid) == meta
-
-
-class TestDownloadArtworkDelegation:
-    """Tests for _download_artwork."""
-
-    @pytest.mark.asyncio
-    async def test_delegates_to_artwork_manager(self, plugin):
-        """When _artwork is bound, the call is forwarded with progress + cancel hooks."""
-        fake_download = AsyncMock(return_value={1: "/path/a.png", 2: "/path/b.png"})
-        plugin._sync_service._orchestrator._artwork = MagicMock()
-        plugin._sync_service._orchestrator._artwork.download_artwork = fake_download
-
-        roms = [{"id": 1, "name": "A"}, {"id": 2, "name": "B"}]
-        result = await plugin._sync_service._orchestrator._download_artwork(
-            roms, progress_step=3, progress_total_steps=7
-        )
-
-        assert result == {1: "/path/a.png", 2: "/path/b.png"}
-        fake_download.assert_called_once()
-        call_kwargs = fake_download.call_args.kwargs
-        assert call_kwargs["progress_step"] == 3
-        assert call_kwargs["progress_total_steps"] == 7
-        # is_cancelling closure reflects the live sync_state.
-        is_cancelling = call_kwargs["is_cancelling"]
-        plugin._sync_service._box.sync_state = SyncState.RUNNING
-        assert is_cancelling() is False
-        plugin._sync_service._box.sync_state = SyncState.CANCELLING
-        assert is_cancelling() is True
-
-    @pytest.mark.asyncio
-    async def test_forwards_unit_label_to_artwork(self, plugin):
-        """The unit display name is threaded through as the cover-progress label."""
-        fake_download = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._artwork = MagicMock()
-        plugin._sync_service._orchestrator._artwork.download_artwork = fake_download
-
-        await plugin._sync_service._orchestrator._download_artwork(
-            [{"id": 1, "name": "A"}], progress_step=1, progress_total_steps=1, label="Game Boy Advance"
-        )
-
-        assert fake_download.call_args.kwargs["label"] == "Game Boy Advance"
 
 
 class TestFetchNarrationInterplay:
@@ -4717,7 +4676,7 @@ class TestFetchNarrationInterplay:
         _use_fake_romm(plugin, fake_romm_api)
         _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "A"}])
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -4747,7 +4706,7 @@ class TestFetchNarrationInterplay:
             roms=[{"id": 10, "name": "A"}, {"id": 11, "name": "B"}],
         )
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -4798,7 +4757,7 @@ class TestComponentGroupKeyStamping:
             ],
         )
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
@@ -4837,7 +4796,7 @@ class TestDeltaRestrictedApply:
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-delta"
@@ -4936,209 +4895,6 @@ class TestDeltaRestrictedApply:
         assert [s["rom_id"] for s in events[0]["shortcuts"]] == [10], "NULL recorded state forces a re-apply"
 
 
-class TestCoverRefreshPass:
-    """The #1386 cover-cache invalidation pass wired through the per-unit apply.
-
-    Drives the real ArtworkService (real cover-cache file I/O under tmp_path)
-    against the seeded FakeRommApi, and asserts the refresh list rides the
-    unit's first ``sync_apply_unit`` chunk while the fingerprints persist.
-    """
-
-    _OLD = "/cover/big.png?ts=2026-01-01 00:00:00"
-    _NEW = "/cover/big.png?ts=2026-07-11 12:00:00"
-
-    @staticmethod
-    def _apply_setup(plugin, fake_romm_api):
-        import decky
-
-        decky.emit.reset_mock()
-        plugin.loop = asyncio.get_event_loop()
-        _use_fake_romm(plugin, fake_romm_api)
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = _fake_wait_set_event
-        plugin._sync_service._box.sync_state = SyncState.RUNNING
-        plugin._sync_service._box.current_sync_id = "run-cover"
-
-    @staticmethod
-    def _apply_unit_events():
-        import decky
-
-        return [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
-
-    @staticmethod
-    def _cache_file(plugin, rom_id):
-        from pathlib import Path
-
-        return Path(plugin._artwork_service._cover_cache_dir) / f"{rom_id}.png"
-
-    @pytest.mark.asyncio
-    async def test_changed_cover_on_delta_skipped_rom_rides_first_chunk(self, plugin, fake_romm_api):
-        # rom 10 is content-unchanged (delta-skipped: no shortcut emitted) but its
-        # server cover source changed. The pass re-downloads the cache, persists
-        # the fresh fingerprint, and the {rom_id, app_id} entry rides chunk 0 so
-        # the frontend re-applies the tile.
-        self._apply_setup(plugin, fake_romm_api)
-        _seed_platform(
-            fake_romm_api,
-            platform_id=1,
-            name="N64",
-            slug="n64",
-            roms=[{"id": 10, "name": "Keep", "fs_name": "keep.z64", "path_cover_large": self._NEW}],
-        )
-        fake_romm_api.download_payloads[f"cover:{self._NEW}"] = b"fresh cover bytes"
-        plugin.settings["enabled_platforms"] = {"1": True}
-        _seed_rom_row(
-            plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64", cover_source=self._OLD
-        )
-
-        await plugin._sync_service._orchestrator._do_sync_per_unit()
-
-        events = self._apply_unit_events()
-        assert len(events) == 1
-        assert events[0]["shortcuts"] == [], "the item stays delta-skipped — a cover change never re-applies it"
-        assert events[0]["cover_refreshes"] == [{"rom_id": 10, "app_id": 1010}]
-        # The cache file holds the fresh bytes and the fingerprint advanced.
-        assert self._cache_file(plugin, 10).read_bytes() == b"fresh cover bytes"
-        with plugin._uow as uow:
-            assert uow.roms.get(10).cover_source == self._NEW
-
-    @pytest.mark.asyncio
-    async def test_null_fingerprint_adopts_without_refresh_entry(self, plugin, fake_romm_api):
-        # A pre-#1386 row (fingerprint NULL) with an existing cache file adopts
-        # the fresh fingerprint silently: no download, no refresh entry.
-        self._apply_setup(plugin, fake_romm_api)
-        _seed_platform(
-            fake_romm_api,
-            platform_id=1,
-            name="N64",
-            slug="n64",
-            roms=[{"id": 10, "name": "Keep", "fs_name": "keep.z64", "path_cover_large": self._NEW}],
-        )
-        plugin.settings["enabled_platforms"] = {"1": True}
-        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64", cover_source=None)
-        cache = self._cache_file(plugin, 10)
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_bytes(b"pre-existing cache")
-
-        await plugin._sync_service._orchestrator._do_sync_per_unit()
-
-        events = self._apply_unit_events()
-        assert len(events) == 1
-        assert events[0]["cover_refreshes"] == []
-        assert cache.read_bytes() == b"pre-existing cache", "NULL-adopt never re-downloads"
-        assert all(name != "download_cover" for name, _a, _k in fake_romm_api.call_log)
-        with plugin._uow as uow:
-            assert uow.roms.get(10).cover_source == self._NEW
-
-    @pytest.mark.asyncio
-    async def test_refreshes_ride_only_the_first_chunk(self, plugin, fake_romm_api, monkeypatch):
-        # Four changed items at chunk size 2 → two chunks; rom 1's cover also
-        # changed. The refresh entry rides chunk 0 only; chunk 1 carries [].
-        from services.library import chunk_dispatcher
-
-        self._apply_setup(plugin, fake_romm_api)
-        monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 2)
-        _seed_platform(
-            fake_romm_api,
-            platform_id=1,
-            name="N64",
-            slug="n64",
-            roms=[
-                {
-                    "id": i,
-                    "name": f"New {i}",
-                    "fs_name": f"g{i}.z64",
-                    **({"path_cover_large": self._NEW} if i == 1 else {}),
-                }
-                for i in range(1, 5)
-            ],
-        )
-        plugin.settings["enabled_platforms"] = {"1": True}
-        for i in range(1, 5):
-            # Old names → every item classifies "changed" and is emitted.
-            _seed_rom_row(
-                plugin,
-                i,
-                app_id=1000 + i,
-                platform_slug="n64",
-                name=f"Old {i}",
-                fs_name=f"g{i}.z64",
-                cover_source=self._OLD if i == 1 else None,
-            )
-
-        await plugin._sync_service._orchestrator._do_sync_per_unit()
-
-        events = self._apply_unit_events()
-        assert len(events) == 2
-        assert events[0]["cover_refreshes"] == [{"rom_id": 1, "app_id": 1001}]
-        assert events[1]["cover_refreshes"] == []
-
-    @pytest.mark.asyncio
-    async def test_headroom_clips_refresh_list_before_emit(self, plugin, fake_romm_api):
-        # A live RSS reading leaves headroom for exactly ONE transient cover after
-        # the (empty) chunk's own cost: two refreshes clip to one — never a pause.
-        from domain.session_budget import CLIFF_KB, COVER_TRANSIENT_KB
-
-        self._apply_setup(plugin, fake_romm_api)
-        # The run's FIRST chunk projects against the cliff; leave headroom for one
-        # cover plus half of another so the allowance floor-divides to exactly 1.
-        plugin._renderer_rss.rss_kb = CLIFF_KB - COVER_TRANSIENT_KB - COVER_TRANSIENT_KB // 2
-        _seed_platform(
-            fake_romm_api,
-            platform_id=1,
-            name="N64",
-            slug="n64",
-            roms=[
-                {"id": 1, "name": "A", "fs_name": "a.z64", "path_cover_large": "/a.png?ts=2026-07-11 12:00:00"},
-                {"id": 2, "name": "B", "fs_name": "b.z64", "path_cover_large": "/b.png?ts=2026-07-11 12:00:00"},
-            ],
-        )
-        plugin.settings["enabled_platforms"] = {"1": True}
-        _seed_rom_row(
-            plugin, 1, app_id=1001, platform_slug="n64", name="A", fs_name="a.z64", cover_source="/a.png?ts=old"
-        )
-        _seed_rom_row(
-            plugin, 2, app_id=1002, platform_slug="n64", name="B", fs_name="b.z64", cover_source="/b.png?ts=old"
-        )
-
-        await plugin._sync_service._orchestrator._do_sync_per_unit()
-
-        events = self._apply_unit_events()
-        assert len(events) == 1, "the refreshes must never pause the run"
-        assert events[0]["cover_refreshes"] == [{"rom_id": 1, "app_id": 1001}], "clipped to the headroom allowance"
-        # Both grid-side caches were still refreshed backend-side; only the
-        # in-session tile push was clipped.
-        with plugin._uow as uow:
-            assert uow.roms.get(1).cover_source == "/a.png?ts=2026-07-11 12:00:00"
-            assert uow.roms.get(2).cover_source == "/b.png?ts=2026-07-11 12:00:00"
-
-    # ── delegation ───────────────────────────────────────────────
-
-    @pytest.mark.asyncio
-    async def test_refresh_delegates_to_artwork_manager(self, plugin):
-        fake_refresh = AsyncMock(return_value=[{"rom_id": 1, "app_id": 10}])
-        plugin._sync_service._orchestrator._artwork = MagicMock()
-        plugin._sync_service._orchestrator._artwork.refresh_changed_covers = fake_refresh
-
-        registry = {"1": {"app_id": 10, "cover_source": "/old.png?ts=1"}}
-        result = await plugin._sync_service._orchestrator._refresh_changed_covers(
-            [{"id": 1, "name": "A"}], registry, progress_step=3, progress_total_steps=7, label="N64"
-        )
-
-        assert result == [{"rom_id": 1, "app_id": 10}]
-        assert fake_refresh.call_args.args == ([{"id": 1, "name": "A"}], registry)
-        call_kwargs = fake_refresh.call_args.kwargs
-        assert call_kwargs["progress_step"] == 3
-        assert call_kwargs["progress_total_steps"] == 7
-        assert call_kwargs["label"] == "N64"
-        # is_cancelling closure reflects the live sync_state.
-        is_cancelling = call_kwargs["is_cancelling"]
-        plugin._sync_service._box.sync_state = SyncState.RUNNING
-        assert is_cancelling() is False
-        plugin._sync_service._box.sync_state = SyncState.CANCELLING
-        assert is_cancelling() is True
-
-
 class TestSessionBudgetGate:
     """The session-budget gate as a real sync run drives it end-to-end (#1383)."""
 
@@ -5159,7 +4915,7 @@ class TestSessionBudgetGate:
             roms=[{"id": 10, "name": "Alpha"}, {"id": 11, "name": "Beta"}],
         )
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 1)
 
         async def fake_wait(_u, event):
@@ -5213,7 +4969,7 @@ class TestSessionBudgetGate:
         _use_fake_romm(plugin, fake_romm_api)
         _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "Solo"}])
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         monkeypatch.setattr(chunk_dispatcher, "_APPLY_CHUNK_SIZE", 1)
 
         async def fake_wait(_u, event):
@@ -5377,7 +5133,7 @@ class TestSessionBudgetGate:
         _use_fake_romm(plugin, fake_romm_api)
         _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "A"}])
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._renderer_rss.rss_kb = 1_900_000  # > 1.8M post-run advisory floor
 
         async def fake_wait(_u, event):
@@ -5479,7 +5235,7 @@ class TestSessionBudgetGate:
         _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A", fs_name="a.z64")
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._renderer_rss.rss_kb = 1_200_000  # below the GC-skip floor → raw both ends
         # A stale delta from a prior run — the fresh no-op run must overwrite it, not
         # leave it and not wipe it to None.
@@ -5555,7 +5311,7 @@ class TestRunProgressCounters:
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = run_id
 
@@ -5762,7 +5518,7 @@ class TestProcessedGamesNumerator:
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._cover_preparer._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = run_id
 

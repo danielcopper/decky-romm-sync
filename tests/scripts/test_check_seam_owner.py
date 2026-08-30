@@ -5,9 +5,10 @@ The check is loaded via ``importlib`` because ``scripts/`` is not on
 ``py_modules/services/library/`` tree under ``tmp_path`` so the check walks it
 with its real file discovery.
 
-Coverage centres on the confinement rule (a seam is held only by the module its
-``SEAM_OWNERS`` entry names), the two shapes of "holding" the scan sees (an
-attribute named after the seam, an annotation naming its Protocol), the
+Coverage centres on the confinement rule (a seam is held only by the module —
+or, for ``artwork``, the two modules — its ``SEAM_OWNERS`` entry names), the two
+shapes of "holding" the scan sees (an attribute named after the seam, an
+annotation naming its Protocol), the
 per-seam nature of ownership (owning one seam grants nothing about another),
 the composition root's narrow licence to **pass** a seam without **using** one,
 and the documented blind spots.
@@ -47,6 +48,7 @@ _OWNERS = {
     "disc_resolver": frozenset({"shortcut_launch_resolver.py"}),
     "renderer_rss": frozenset({"session_budget.py"}),
     "renderer_gc": frozenset({"session_budget.py"}),
+    "artwork": frozenset({"cover_preparer.py", "reporter.py"}),
 }
 
 
@@ -81,6 +83,18 @@ class TestFindViolations:
         assert "sync_orchestrator.py" in findings[0]
         assert "active_core" in findings[0]
         assert "shortcut_launch_resolver.py" in findings[0]  # the message names the owner
+
+    def test_two_owner_seam_admits_both_owners_and_flags_a_third(self, patched_check):
+        # ``artwork`` is the one confinement with two owners — the apply path's
+        # covers and the commit's cover-path finalisation are separate questions
+        # asked at separate points of a unit. Two owners is a named pair, not
+        # "anywhere in the package": a third holder is still a finding, and the
+        # message names both owners so the reader knows which one to route through.
+        holder = "class H:\n    def __init__(self, config):\n        self._a = config.artwork\n"
+        findings = patched_check({"cover_preparer.py": holder, "reporter.py": holder, "sync_orchestrator.py": holder})
+        assert len(findings) == 1
+        assert "sync_orchestrator.py" in findings[0]
+        assert "cover_preparer.py / reporter.py" in findings[0]
 
     def test_flags_protocol_annotation_in_a_foreign_module(self, patched_check):
         findings = patched_check(
@@ -143,8 +157,8 @@ class TestFindViolations:
         findings = patched_check(
             {
                 "reporter.py": (
-                    "class Config:\n    artwork: ArtworkManager\n\n"
-                    "def go(config):\n    return config.artwork, config.active_core_label\n"
+                    "class Config:\n    steam_config: SteamConfigStore\n\n"
+                    "def go(config):\n    return config.steam_config, config.active_core_label\n"
                 ),
             }
         )

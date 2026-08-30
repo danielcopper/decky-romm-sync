@@ -15,7 +15,9 @@ completes belongs in :class:`SyncReporter`; Steam's renderer memory belongs
 in :class:`SessionBudgetMonitor`; a single ROM's launch facts — where its
 file is and what runs it — belong in :class:`ShortcutLaunchResolver`; driving
 one unit's built delta to the frontend and back — emit a chunk, wait for its
-ack, commit it — belongs in :class:`ChunkDispatcher`; reading
+ack, commit it — belongs in :class:`ChunkDispatcher`; a unit's covers — the
+invalidation pass, the download, and the ``cover_path`` stamped onto each
+emitted entry — belong in :class:`CoverPreparer`; reading
 the registry and the completion stamps into the projections these decisions
 are made against belongs in :class:`LocalLibraryReader`. Two of that last group
 are this module's deliberately: the platform stamp's DELETE — a write, and a step
@@ -59,12 +61,12 @@ if TYPE_CHECKING:
     from lib.late_binding import LateBinding
     from services.library._state import LibrarySyncStateBox
     from services.library.chunk_dispatcher import ChunkDispatcher
+    from services.library.cover_preparer import CoverPreparer
     from services.library.fetcher import LibraryFetcher
     from services.library.local_library_reader import LocalLibraryReader
     from services.library.reporter import SyncReporter
     from services.library.shortcut_launch_resolver import ShortcutLaunchResolver
     from services.protocols import (
-        ArtworkManager,
         Clock,
         EventEmitter,
         UnitOfWorkFactory,
@@ -101,10 +103,8 @@ class SyncOrchestratorConfig:
     (the transactional seam over the ``roms`` / ``sync_runs`` repositories
     the lifecycle writes through), the plugin-dir reference for shortcut
     data construction, the shared
-    :class:`LibrarySyncStateBox`, and two peer references the
-    orchestrator drives at runtime: the :class:`LibraryFetcher` it
-    delegates per-unit fetches to and an :class:`ArtworkManager` for the
-    apply-phase artwork download. The ``reporter``
+    :class:`LibrarySyncStateBox`, and the :class:`LibraryFetcher` peer the
+    orchestrator delegates per-unit fetches to. The ``reporter``
     field is a :class:`LateBinding` because :class:`LibraryService`
     constructs the orchestrator before the reporter exists; the façade
     plugs the reader in via ``set()`` once the reporter is built. The
@@ -124,7 +124,9 @@ class SyncOrchestratorConfig:
     boundary — whether applying the chunk would exhaust Steam's per-session heap
     budget, and how much headroom is left for the chunk's additive cover work
     (#1383); the terminal memory delta this module reports is drawn from the same
-    seam.
+    seam. The ``cover_preparer`` peer holds the apply path's covers, and the
+    reporter holds the same ``artwork`` seam for commit-time cover-path
+    finalisation — between them, no ``ArtworkManager`` is owed here.
     """
 
     settings: dict[str, Any]
@@ -138,11 +140,11 @@ class SyncOrchestratorConfig:
     sync_state_box: LibrarySyncStateBox
     fetcher: LibraryFetcher
     reporter: LateBinding[SyncReporter]
-    artwork: ArtworkManager
     shortcut_launch_resolver: ShortcutLaunchResolver
     local_library_reader: LocalLibraryReader
     session_budget: SessionBudgetMonitor
     chunk_dispatcher: ChunkDispatcher
+    cover_preparer: CoverPreparer
 
 
 @dataclass(frozen=True)
@@ -177,12 +179,12 @@ class SyncOrchestrator:
         self._uow_factory = config.uow_factory
         self._sync_state = config.sync_state_box
         self._fetcher = config.fetcher
-        self._artwork = config.artwork
         self._reporter = config.reporter
         self._shortcut_launch_resolver = config.shortcut_launch_resolver
         self._local_library_reader = config.local_library_reader
         self._session_budget = config.session_budget
         self._chunk_dispatcher = config.chunk_dispatcher
+        self._cover_preparer = config.cover_preparer
 
     # ── Sync control ─────────────────────────────────────────────
 
@@ -1069,7 +1071,7 @@ class SyncOrchestrator:
         # rides the unit's first apply chunk so the frontend re-applies each cover
         # to the EXISTING shortcut via SetCustomArtworkForApp — without that push
         # the Steam tile stays stale in-session until a client restart.
-        cover_refreshes = await self._refresh_changed_covers(
+        cover_refreshes = await self._cover_preparer.refresh_changed_covers(
             unit_roms, registry, progress_step=unit_index + 1, progress_total_steps=total_units, label=unit.name
         )
 
@@ -1080,7 +1082,7 @@ class SyncOrchestrator:
         # delta entry's cover path in place (a no-op when the delta is empty).
         # Returns the confirmed cover fingerprints (rom_id → fresh source) the
         # per-unit commit persists onto the upserted rows (#1386).
-        confirmed_cover_sources = await self._attach_unit_cover_paths(
+        confirmed_cover_sources = await self._cover_preparer.attach_unit_cover_paths(
             unit, unit_roms, apply_emitted, unit_index=unit_index, total_units=total_units
         )
 
@@ -1133,53 +1135,6 @@ class SyncOrchestrator:
             collection_member_ids=collection_member_ids,
         )
         return len(skip_ids) + applied_count
-
-    async def _attach_unit_cover_paths(
-        self,
-        unit: WorkUnit,
-        unit_roms: list[dict[str, Any]],
-        emitted: list[dict[str, Any]],
-        *,
-        unit_index: int,
-        total_units: int,
-    ) -> dict[int, str]:
-        """Download artwork for the shortcuts about to be emitted and stamp each
-        emitted entry's ``cover_path`` in place.
-
-        Only the ROMs that actually get a shortcut (representatives + grandfathered
-        siblings) are fetched — no eager covers for versions with no shortcut. A
-        rebind entry pulls its cover from the representative it binds
-        (``BIND_ROM_ID_KEY``), whose raw dict is the one present in *unit_roms*.
-        A no-op when nothing is emitted.
-
-        Returns the confirmed cover fingerprints — ``rom_id → applied cover
-        source`` for every ROM whose cache the download resolved (fresh
-        download, reuse, or grid seed all confirm; a failed download does not) —
-        which the per-unit commit persists as ``roms.cover_source`` (#1386). The
-        source is the one ArtworkService *actually* applied: the fresh
-        ``path_cover`` normally, or the ROM's ``url_cover`` when the RomM asset
-        404s and the external fallback wins (#1450), reported through the
-        ``applied_sources`` accumulator.
-        """
-        if not emitted:
-            return {}
-        artwork_ids = {int(e.get(BIND_ROM_ID_KEY, e["rom_id"])) for e in emitted}
-        artwork_roms = [rom for rom in unit_roms if rom["id"] in artwork_ids]
-        applied_sources: dict[int, str] = {}
-        cover_paths = await self._download_artwork(
-            artwork_roms,
-            progress_step=unit_index + 1,
-            progress_total_steps=total_units,
-            label=unit.name,
-            applied_sources=applied_sources,
-        )
-        for e in emitted:
-            e["cover_path"] = cover_paths.get(int(e.get(BIND_ROM_ID_KEY, e["rom_id"])), "")
-        return {
-            int(rom["id"]): applied_sources.get(int(rom["id"])) or source
-            for rom in artwork_roms
-            if int(rom["id"]) in cover_paths and (source := rom.get("path_cover_large") or rom.get("path_cover_small"))
-        }
 
     async def _sync_platform_unit(
         self,
@@ -1314,49 +1269,4 @@ class SyncOrchestrator:
             romm_collection_app_ids=romm_collection_app_ids,
             interrupt_reason=interrupt_reason,
             restart_recommended=restart_recommended,
-        )
-
-    # ── Artwork delegation ───────────────────────────────────────
-
-    async def _download_artwork(
-        self, all_roms, progress_step=4, progress_total_steps=6, label="", applied_sources=None
-    ):
-        """Delegate artwork download to ArtworkService callback.
-
-        ``label`` is the unit's display name, threaded into the cover-download
-        progress frames ("Preparing covers for <label>"). ``applied_sources`` is
-        the optional accumulator ArtworkService fills with the cover source
-        actually applied per ROM (``url_cover`` on a 404 fallback, #1450), so the
-        per-unit commit persists a truthful ``cover_source`` fingerprint.
-        """
-        box = self._sync_state
-        return await self._artwork.download_artwork(
-            all_roms,
-            emit_progress=self.emit_progress,
-            is_cancelling=box.is_cancelling,
-            progress_step=progress_step,
-            progress_total_steps=progress_total_steps,
-            label=label,
-            applied_sources=applied_sources,
-        )
-
-    async def _refresh_changed_covers(self, unit_roms, registry, progress_step=4, progress_total_steps=6, label=""):
-        """Delegate the #1386 cover-cache invalidation pass to the ArtworkManager.
-
-        ``registry`` is the unit's bound-row projection (``do_read_apply_registry``)
-        the pass compares fingerprints against — the same read the group collapse
-        already made. ``label`` is the unit's display name, threaded into the
-        throttled "Refreshing covers for <label>" progress frames. Returns the
-        refreshed ``{rom_id, app_id}`` list the first apply chunk carries to the
-        frontend.
-        """
-        box = self._sync_state
-        return await self._artwork.refresh_changed_covers(
-            unit_roms,
-            registry,
-            emit_progress=self.emit_progress,
-            is_cancelling=box.is_cancelling,
-            progress_step=progress_step,
-            progress_total_steps=progress_total_steps,
-            label=label,
         )

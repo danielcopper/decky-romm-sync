@@ -59,7 +59,7 @@ class FakeArtworkManager:
         )
         # The real service fills ``applied_sources`` per resolved ROM (#1450); the
         # canned fake records only the return dict, so the accumulator is left as
-        # the caller passed it — the orchestrator then derives ``cover_source``
+        # the caller passed it — the cover preparer then derives ``cover_source``
         # from the rom dict, matching pre-fallback behaviour under test.
         return dict(self.canned_download)
 
