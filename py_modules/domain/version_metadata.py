@@ -42,12 +42,15 @@ class VersionMetadata:
     is_main_sibling: bool = False
 
     def __post_init__(self) -> None:
-        """Reject an empty ``sibling_group_key``, the one value that names no state.
+        """Reject an empty-string ``sibling_group_key``.
 
-        An empty key is meaningless and raises ``ValueError`` — "no group derived
-        yet" stays ``None`` (unknown), never an empty adopted key. This is the
-        single route by which a key reaches the ``Rom`` aggregate, so refusing it
-        here is what lets every residency reader ask ``is not None`` and mean it.
+        The empty string is the one value that is neither a key nor a state, and
+        raises ``ValueError`` — "no group derived yet" stays ``None`` (unknown),
+        never an empty string. Exactly that one value: no format or whitespace
+        rule is applied, so a key is stored as given. This is the only route by
+        which a **new** key enters the ``Rom`` aggregate (loading a stored row
+        via ``_row_to_rom`` validates nothing), so guarding the write direction
+        here is what lets the residency readers ask ``is not None`` and mean it.
         """
         if self.sibling_group_key == "":
             raise ValueError("sibling_group_key must not be empty")
@@ -61,7 +64,8 @@ class VersionMetadata:
         degrades to its neutral value rather than raising. *sibling_group_key*
         overrides the mapping's key when it is a real key (the version-switch
         case, where the target adopts its bound group's key); an empty or missing
-        key on either side degrades to ``None`` rather than tripping the
+        override falls back to the mapping's own key. Only when neither side
+        carries a key does it degrade to ``None``, rather than tripping the
         empty-key invariant.
         """
         return cls(

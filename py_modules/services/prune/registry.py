@@ -67,7 +67,9 @@ class PruneRegistry:
             row = uow.roms.get(rom_id)
             if row is None:
                 return []
-            return list(uow.roms.iter_by_group_key(row.sibling_group_key)) if row.sibling_group_key else [row]
+            if row.sibling_group_key is None:
+                return [row]
+            return list(uow.roms.iter_by_group_key(row.sibling_group_key))
 
     def validate_deletion_state(
         self,
