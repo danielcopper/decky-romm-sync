@@ -17,12 +17,17 @@ file is and what runs it — belong in :class:`ShortcutLaunchResolver`; driving
 one unit's built delta to the frontend and back — emit a chunk, wait for its
 ack, commit it — belongs in :class:`ChunkDispatcher`; a unit's covers — the
 invalidation pass, the download, and the ``cover_path`` stamped onto each
-emitted entry — belong in :class:`CoverPreparer`; reading
+emitted entry — belong in :class:`CoverPreparer`; the run's own ``SyncRun`` row
+— opened at the plan, closed once by the status that ended the run — belongs in
+:class:`SyncRunRecorder`; reading
 the registry and the completion stamps into the projections these decisions
 are made against belongs in :class:`LocalLibraryReader`. Two of that last group
 are this module's deliberately: the platform stamp's DELETE — a write, and a step
 of the apply pipeline rather than a question a run weighs; its ordering is argued
-at its call site — and the pure component-key stamp, which does no I/O at all. Cached
+at its call site — and the pure component-key stamp, which does no I/O at all.
+**Which** terminal status a stopped run is recorded with stays here: the priority
+a pause, a heartbeat timeout and the user's Cancel are read in follows from what
+this pipeline observed while it ran, and only the writing of the answer moved. Cached
 ``rom_metadata`` is written by the reporter's per-unit commit (the same write
 UoW as the ``roms`` upsert), so preview never persists metadata and an
 interrupted apply leaves only already-committed units' metadata.
@@ -46,7 +51,6 @@ from domain.sync_diff import (
     compute_collection_diff,
     compute_platform_collection_diff,
 )
-from domain.sync_run import SyncRun
 from domain.sync_stage import SyncStage
 from domain.sync_state import SyncCancelled
 from lib.errors import classify_error
@@ -66,6 +70,7 @@ if TYPE_CHECKING:
     from services.library.local_library_reader import LocalLibraryReader
     from services.library.reporter import SyncReporter
     from services.library.shortcut_launch_resolver import ShortcutLaunchResolver
+    from services.library.sync_run_recorder import SyncRunRecorder
     from services.protocols import (
         Clock,
         EventEmitter,
@@ -100,9 +105,9 @@ class SyncOrchestratorConfig:
 
     Holds runtime infrastructure (loop, logger), event emitter, the
     Clock/UuidGen test seams, the SQLite Unit-of-Work factory
-    (the transactional seam over the ``roms`` / ``sync_runs`` repositories
-    the lifecycle writes through), the plugin-dir reference for shortcut
-    data construction, the shared
+    (which now opens exactly one transaction from this module: the platform
+    stamp's DELETE at a unit's apply start), the plugin-dir reference for
+    shortcut data construction, the shared
     :class:`LibrarySyncStateBox`, and the :class:`LibraryFetcher` peer the
     orchestrator delegates per-unit fetches to. The ``reporter``
     field is a :class:`LateBinding` because :class:`LibraryService`
@@ -126,7 +131,10 @@ class SyncOrchestratorConfig:
     (#1383); the terminal memory delta this module reports is drawn from the same
     seam. The ``cover_preparer`` peer holds the apply path's covers, and the
     reporter holds the same ``artwork`` seam for commit-time cover-path
-    finalisation — between them, no ``ArtworkManager`` is owed here.
+    finalisation — between them, no ``ArtworkManager`` is owed here. The
+    ``sync_run_recorder`` peer writes the run's ``SyncRun`` row: this module
+    still decides which terminal status a stopped run earns, and hands that
+    decision over as a method call.
     """
 
     settings: dict[str, Any]
@@ -145,6 +153,7 @@ class SyncOrchestratorConfig:
     session_budget: SessionBudgetMonitor
     chunk_dispatcher: ChunkDispatcher
     cover_preparer: CoverPreparer
+    sync_run_recorder: SyncRunRecorder
 
 
 @dataclass(frozen=True)
@@ -185,6 +194,7 @@ class SyncOrchestrator:
         self._session_budget = config.session_budget
         self._chunk_dispatcher = config.chunk_dispatcher
         self._cover_preparer = config.cover_preparer
+        self._sync_run_recorder = config.sync_run_recorder
 
     # ── Sync control ─────────────────────────────────────────────
 
@@ -591,7 +601,12 @@ class SyncOrchestrator:
 
         Emission only — the IDLE/None reset of the run-lifecycle pair is owned
         by the caller's ``finally: box.finish_run(run_id)`` so every run has a
-        single, run-scoped termination point (#1202).
+        single, run-scoped termination point (#1202). Three neighbouring names
+        end a run and none of them can stand in for another: this one tells the
+        panel, ``LibrarySyncStateBox.finish_run`` releases the slot the next
+        Sync press needs, and
+        :meth:`SyncRunRecorder.do_mark_cancelled` writes the row the next
+        preview reads its baseline out of.
         """
         box = self._sync_state
         box.sync_progress = {
@@ -716,7 +731,9 @@ class SyncOrchestrator:
                 return
 
             # SyncRun.start — short write UoW for the planned counts.
-            await self._loop.run_in_executor(None, self._open_sync_run, run_id, platforms_planned, total_roms_planned)
+            await self._loop.run_in_executor(
+                None, self._sync_run_recorder.do_open_run, run_id, platforms_planned, total_roms_planned
+            )
 
             try:
                 for unit_index, unit in enumerate(work_queue):
@@ -777,17 +794,19 @@ class SyncOrchestrator:
             if cancelled:
                 if box.run_paused:
                     await self._loop.run_in_executor(
-                        None, self._mark_sync_run_paused, run_id, box.interrupt_reason or SYNC_PAUSED_BUDGET
+                        None, self._sync_run_recorder.do_mark_paused, run_id, box.interrupt_reason or SYNC_PAUSED_BUDGET
                     )
                 elif box.run_interrupted:
                     reason = box.interrupt_reason or _SYNC_INTERRUPTED
-                    await self._loop.run_in_executor(None, self._mark_sync_run_interrupted, run_id, reason)
+                    await self._loop.run_in_executor(None, self._sync_run_recorder.do_mark_interrupted, run_id, reason)
                 else:
-                    await self._loop.run_in_executor(None, self._mark_sync_run_cancelled, run_id, _SYNC_CANCELLED)
+                    await self._loop.run_in_executor(
+                        None, self._sync_run_recorder.do_mark_cancelled, run_id, _SYNC_CANCELLED
+                    )
             else:
                 await self._loop.run_in_executor(
                     None,
-                    self._complete_sync_run,
+                    self._sync_run_recorder.do_complete_run,
                     run_id,
                     list(outcome.platform_app_ids.keys()),
                     list(outcome.romm_collection_app_ids.keys()),
@@ -822,68 +841,17 @@ class SyncOrchestrator:
                 "runId": str(box.current_sync_id or ""),
             }
             self._loop.create_task(self._emit("sync_progress", box.sync_progress))
-            # Use the captured ``run_id`` — ``_mark_sync_run_errored`` no-ops
-            # gracefully on a falsy id (pre-``_open_sync_run`` failures, where
-            # the run was never opened).
-            await self._loop.run_in_executor(None, self._mark_sync_run_errored, run_id or box.current_sync_id, _msg)
+            # Use the captured ``run_id`` — ``do_mark_errored`` no-ops gracefully
+            # on a falsy id (pre-``do_open_run`` failures, where the run was
+            # never opened).
+            await self._loop.run_in_executor(
+                None, self._sync_run_recorder.do_mark_errored, run_id or box.current_sync_id, _msg
+            )
         finally:
             # Single run-scoped termination point for every exit path (success,
             # cancel, error, zero-unit) — resets to IDLE only if ``run_id``
             # still owns the slot (#1202).
             box.finish_run(run_id)
-
-    # ── SyncRun lifecycle (short write UoWs) ─────────────────────
-
-    def _open_sync_run(self, run_id: str | None, platforms_planned: int, roms_planned: int) -> None:
-        """Persist a fresh ``running`` SyncRun for the planned counts."""
-        if not run_id:
-            return
-        run = SyncRun.start(
-            id=run_id,
-            at=self._clock.now().isoformat(),
-            platforms_planned=platforms_planned,
-            roms_planned=roms_planned,
-        )
-        with self._uow_factory() as uow:
-            uow.sync_runs.save(run)
-
-    def _complete_sync_run(self, run_id: str | None, platforms: list[str], collections: list[str]) -> None:
-        """Transition the SyncRun to ``completed`` with its synced platform/collection names."""
-        self._terminate_sync_run(
-            run_id, lambda run: run.complete(self._clock.now().isoformat(), platforms, collections)
-        )
-
-    def _mark_sync_run_cancelled(self, run_id: str | None, reason: str) -> None:
-        """Transition the SyncRun to ``cancelled``."""
-        self._terminate_sync_run(run_id, lambda run: run.mark_cancelled(self._clock.now().isoformat(), reason))
-
-    def _mark_sync_run_interrupted(self, run_id: str | None, reason: str) -> None:
-        """Transition the SyncRun to ``interrupted`` (external death, not user cancel)."""
-        self._terminate_sync_run(run_id, lambda run: run.mark_interrupted(self._clock.now().isoformat(), reason))
-
-    def _mark_sync_run_paused(self, run_id: str | None, reason: str) -> None:
-        """Transition the SyncRun to ``paused`` (a deliberate session-budget gate stop)."""
-        self._terminate_sync_run(run_id, lambda run: run.mark_paused(self._clock.now().isoformat(), reason))
-
-    def _mark_sync_run_errored(self, run_id: str | None, error: str) -> None:
-        """Transition the SyncRun to ``errored``."""
-        self._terminate_sync_run(run_id, lambda run: run.mark_errored(self._clock.now().isoformat(), error))
-
-    def _terminate_sync_run(self, run_id: str | None, transition) -> None:
-        """Load the SyncRun, apply *transition*, and save it in one write UoW.
-
-        No-op when the run is absent (never opened) or already terminal —
-        the per-run lifecycle is single-shot, so a double-terminal call
-        (e.g. an exception after a cancel) is silently dropped.
-        """
-        if not run_id:
-            return
-        with self._uow_factory() as uow:
-            run = uow.sync_runs.get(run_id)
-            if run is None or run.status != "running":
-                return
-            transition(run)
-            uow.sync_runs.save(run)
 
     def _stamp_component_group_keys(self, roms: list[dict[str, Any]], resident_keys: dict[int, str]) -> None:
         """Stamp each fresh ROM's component sibling-group key onto its raw dict.

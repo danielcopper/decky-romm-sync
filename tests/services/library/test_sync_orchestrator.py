@@ -2491,9 +2491,13 @@ class TestDoSyncPerUnit:
 class TestSyncRunLifecycle:
     """The SyncRun record persisted by ``_do_sync_per_unit`` across its outcomes.
 
-    The lifecycle methods (start/complete/cancel/error) are short write
-    UoWs keyed off ``box.current_sync_id``; these tests seed that id and
-    assert the persisted ``uow.sync_runs`` row, not just method coverage.
+    What is under test here is the branch, not the write: which of the five
+    outcomes each way a run can end resolves to. Each test drives a real run to
+    its ending, seeds ``box.current_sync_id``, and asserts the persisted
+    ``uow.sync_runs`` row, so a branch that picked the wrong terminal — blaming
+    a frontend crash on the user's Cancel, say — fails here.
+    :class:`SyncRunRecorder` performs the write and is covered on its own in
+    ``tests/services/library/test_sync_run_recorder.py``.
     """
 
     @pytest.mark.asyncio
@@ -2645,7 +2649,7 @@ class TestSyncRunLifecycle:
         Regression: ``finalize_per_unit_run`` nulls ``box.current_sync_id``
         before the terminal write. If the error path read that nulled id it
         would no-op and the run would stay ``running``. The fix captures the
-        run id up front so ``_mark_sync_run_errored`` still targets the run.
+        run id up front so ``do_mark_errored`` still targets the run.
         """
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
@@ -2665,7 +2669,7 @@ class TestSyncRunLifecycle:
         def boom(*_args, **_kwargs):
             raise RuntimeError("terminal write boom")
 
-        plugin._sync_service._orchestrator._complete_sync_run = boom  # type: ignore[method-assign]
+        plugin._sync_service._sync_run_recorder.do_complete_run = boom  # type: ignore[method-assign]
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-terminal-fail"
 
@@ -2681,26 +2685,6 @@ class TestSyncRunLifecycle:
         assert run.status == "errored"
         assert run.finished_at is not None
         assert run.error
-
-    @pytest.mark.asyncio
-    async def test_double_terminal_guard_is_noop(self, plugin, fake_romm_api):
-        """Terminating an already-terminal run is a silent no-op — no raise, no clobber."""
-        from domain.sync_run import SyncRun
-
-        with plugin._uow as uow:
-            run = SyncRun.start(id="run-done", at="2025-01-01T00:00:00", platforms_planned=1, roms_planned=1)
-            run.complete("2025-01-01T01:00:00", ["N64"], [])
-            uow.sync_runs.save(run)
-
-        # A second complete-transition on the already-completed run must not
-        # raise or overwrite the recorded outcome.
-        plugin._sync_service._orchestrator._complete_sync_run("run-done", ["SNES"], ["Faves"])
-
-        with plugin._uow as uow:
-            after = uow.sync_runs.get("run-done")
-        assert after.status == "completed"
-        assert after.platforms_completed == ["N64"]
-        assert after.collections_completed == []
 
 
 class TestReportUnitResults:

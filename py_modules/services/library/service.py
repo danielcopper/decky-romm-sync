@@ -11,7 +11,8 @@ finalisation and the ``roms``-derived callable queries,
 :class:`SessionBudgetMonitor` for Steam's renderer-heap budget,
 :class:`ShortcutLaunchResolver` for each ROM's launch facts,
 :class:`ChunkDispatcher` for one unit's emit → ack → commit round-trips,
-:class:`CoverPreparer` for a unit's covers, :class:`LocalLibraryReader` for what
+:class:`CoverPreparer` for a unit's covers, :class:`SyncRunRecorder` for the
+run's own ``SyncRun`` row, :class:`LocalLibraryReader` for what
 this device already recorded about the library. The façade itself only wires the
 pieces together and delegates — anything that touches RomM or mutates in-flight
 sync state belongs in a sub-service.
@@ -32,6 +33,7 @@ from services.library.reporter import SyncReporter, SyncReporterConfig
 from services.library.session_budget import SessionBudgetMonitor, SessionBudgetMonitorConfig
 from services.library.shortcut_launch_resolver import ShortcutLaunchResolver, ShortcutLaunchResolverConfig
 from services.library.sync_orchestrator import SyncOrchestrator, SyncOrchestratorConfig
+from services.library.sync_run_recorder import SyncRunRecorder, SyncRunRecorderConfig
 
 if TYPE_CHECKING:
     import asyncio
@@ -106,7 +108,9 @@ class LibraryService:
     renderer-heap budget), :class:`ShortcutLaunchResolver` (each ROM's installed
     path + active emulator), :class:`ChunkDispatcher` (one unit's apply, emitted
     and committed a chunk at a time), :class:`CoverPreparer` (a unit's covers,
-    refreshed and downloaded before its shortcuts are emitted), and
+    refreshed and downloaded before its shortcuts are emitted),
+    :class:`SyncRunRecorder` (the run's ``SyncRun`` row, opened at its plan and
+    closed at its outcome), and
     :class:`LocalLibraryReader` (this device's own record of the library, read
     back out of SQLite) over a single shared :class:`LibrarySyncStateBox`. The
     façade itself owns the box and exposes the callable surface; every
@@ -207,6 +211,16 @@ class LibraryService:
             )
         )
 
+        # Sub-service: run recorder — the ``SyncRun`` row for this run.
+        # Constructed before the orchestrator, which decides which terminal
+        # status a stopped run earns and hands that decision here to be written.
+        self._sync_run_recorder = SyncRunRecorder(
+            config=SyncRunRecorderConfig(
+                clock=config.clock,
+                uow_factory=config.uow_factory,
+            )
+        )
+
         self._orchestrator = SyncOrchestrator(
             config=SyncOrchestratorConfig(
                 settings=config.settings,
@@ -225,6 +239,7 @@ class LibraryService:
                 session_budget=self._session_budget,
                 chunk_dispatcher=self._chunk_dispatcher,
                 cover_preparer=self._cover_preparer,
+                sync_run_recorder=self._sync_run_recorder,
             )
         )
 
