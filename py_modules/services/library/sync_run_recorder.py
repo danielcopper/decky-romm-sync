@@ -48,6 +48,8 @@ from typing import TYPE_CHECKING
 from domain.sync_run import SyncRun
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from services.protocols import Clock, UnitOfWorkFactory
 
 
@@ -106,7 +108,7 @@ class SyncRunRecorder:
         """Transition the SyncRun to ``errored``."""
         self._terminate_run(run_id, lambda run: run.mark_errored(self._clock.now().isoformat(), error))
 
-    def _terminate_run(self, run_id: str | None, transition) -> None:
+    def _terminate_run(self, run_id: str | None, transition: Callable[[SyncRun], None]) -> None:
         """Load the SyncRun, apply *transition*, and save it in one write UoW.
 
         No-op when the run is absent (never opened) or already terminal —
