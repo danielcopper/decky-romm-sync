@@ -300,8 +300,8 @@ class SyncReporter:
         the row per ADR-0007 — never delete), (2) refresh the offline
         ``platform_slug → display_name`` cache from the live work-queue,
         and (3) build the cross-unit collection mappings. The last-sync
-        timestamp and the synced platform/collection lists now live on
-        the ``SyncRun`` record the orchestrator writes — they are not
+        timestamp and the synced platform/collection lists live on
+        the ``SyncRun`` record :class:`SyncRunRecorder` writes — they are not
         persisted here.
 
         Everything happens inside one write UoW so the unbind + cache
