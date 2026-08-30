@@ -2673,7 +2673,7 @@ class TestSyncRunLifecycle:
         plugin._sync_service._chunk_dispatcher._wait_for_unit_complete = fake_wait
 
         # The terminal completed-write raises (e.g. a SQLite lock during the
-        # short write UoW) AFTER finalize has already nulled current_sync_id.
+        # short write UoW), which is what routes the run into the error path.
         def boom(*_args, **_kwargs):
             raise RuntimeError("terminal write boom")
 
@@ -2685,7 +2685,8 @@ class TestSyncRunLifecycle:
         for _ in range(3):
             await asyncio.sleep(0)
 
-        # current_sync_id was nulled by finalize, but the run is still recorded errored.
+        # The run id is back to None — ``finish_run``, in the terminating
+        # ``finally`` — and the run is still recorded errored.
         assert plugin._sync_service._current_sync_id is None
         with plugin._uow as uow:
             run = uow.sync_runs.get("run-terminal-fail")

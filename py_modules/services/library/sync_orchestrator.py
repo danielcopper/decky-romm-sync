@@ -841,9 +841,15 @@ class SyncOrchestrator:
                 "runId": str(box.current_sync_id or ""),
             }
             self._loop.create_task(self._emit("sync_progress", box.sync_progress))
-            # Use the captured ``run_id`` — ``do_mark_errored`` no-ops gracefully
-            # on a falsy id (pre-``do_open_run`` failures, where the run was
-            # never opened).
+            # Use the captured ``run_id`` rather than the box's live one: it
+            # keeps this write independent of where the run id is cleared. The
+            # two are the same value today — ``finish_run`` clears it in the
+            # ``finally`` below, after this line — so the fallback is insurance
+            # against a clear moving back ahead of the error path, which is
+            # where reading the live id would silently no-op and leave the run
+            # ``running``. ``do_mark_errored`` no-ops gracefully on a falsy id
+            # either way (pre-``do_open_run`` failures, where the run was never
+            # opened).
             await self._loop.run_in_executor(
                 None, self._sync_run_recorder.do_mark_errored, run_id or box.current_sync_id, _msg
             )
