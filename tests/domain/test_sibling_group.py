@@ -334,6 +334,12 @@ class TestComputeComponentGroupKeys:
         b = _rom(2, ss_id=22, siblings=(1,))
         assert compute_component_group_keys([a, b], {}) == {2: "igdb:100:57"}
 
+    def test_explicit_null_key_is_fresh_not_resident(self):
+        # Carrying the field as NULL (a row awaiting backfill after migration 011)
+        # is not residency — the member is fresh and gets a computed key.
+        a = {"id": 1, "platform_id": 57, "igdb_id": 100, "sibling_group_key": None, "sibling_roms": []}
+        assert compute_component_group_keys([a], {}) == {1: "igdb:100:57"}
+
     def test_db_resident_key_seeds_fresh_member(self):
         # B is fresh and edges to a DB-resident sibling (rom 1, not in the unit)
         # whose persisted key is igdb:100:57 → B adopts it.

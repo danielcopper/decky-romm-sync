@@ -25,11 +25,13 @@ if TYPE_CHECKING:
 class VersionMetadata:
     """The server-derived version facts for one ROM (ADR-0021).
 
-    ``sibling_group_key`` names the sibling group this dump belongs to;
-    ``regions`` / ``languages`` / ``revision`` / ``tags`` describe how it differs
-    from its siblings; ``is_main_sibling`` marks the group's representative dump.
-    The defaults are the "no version metadata known" state — an empty instance is
-    the neutral value the ROM factory falls back to.
+    ``sibling_group_key`` names the sibling group this dump belongs to and has
+    exactly two legal states: a real key (``"{source}:{value}:{platform}"``, or
+    the ``romm:{rom_id}:{platform_id}`` solo fallback) or ``None`` — no group
+    derived yet. ``regions`` / ``languages`` / ``revision`` / ``tags`` describe
+    how the dump differs from its siblings; ``is_main_sibling`` marks the group's
+    representative dump. The defaults are the "no version metadata known" state —
+    an empty instance is the neutral value the ROM factory falls back to.
     """
 
     sibling_group_key: str | None = None
@@ -39,6 +41,17 @@ class VersionMetadata:
     tags: tuple[str, ...] = ()
     is_main_sibling: bool = False
 
+    def __post_init__(self) -> None:
+        """Reject an empty ``sibling_group_key``, the one value that names no state.
+
+        An empty key is meaningless and raises ``ValueError`` — "no group derived
+        yet" stays ``None`` (unknown), never an empty adopted key. This is the
+        single route by which a key reaches the ``Rom`` aggregate, so refusing it
+        here is what lets every residency reader ask ``is not None`` and mean it.
+        """
+        if self.sibling_group_key == "":
+            raise ValueError("sibling_group_key must not be empty")
+
     @classmethod
     def from_mapping(cls, m: Mapping[str, Any], *, sibling_group_key: str | None = None) -> VersionMetadata:
         """Build a ``VersionMetadata`` from a flat RomM-derived mapping.
@@ -46,12 +59,13 @@ class VersionMetadata:
         Applies the same safe defaulting the sync and version-switch persist
         paths use (``.get(...) or default``), so a missing or ``null`` field
         degrades to its neutral value rather than raising. *sibling_group_key*
-        overrides the mapping's key when truthy (the version-switch case, where
-        the target adopts its bound group's key); a falsy override falls back to
-        the mapping's own key.
+        overrides the mapping's key when it is a real key (the version-switch
+        case, where the target adopts its bound group's key); an empty or missing
+        key on either side degrades to ``None`` rather than tripping the
+        empty-key invariant.
         """
         return cls(
-            sibling_group_key=sibling_group_key or m.get("sibling_group_key"),
+            sibling_group_key=sibling_group_key or m.get("sibling_group_key") or None,
             regions=tuple(m.get("regions") or ()),
             languages=tuple(m.get("languages") or ()),
             revision=m.get("revision") or "",

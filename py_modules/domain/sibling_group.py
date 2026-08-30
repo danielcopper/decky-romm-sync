@@ -167,7 +167,7 @@ def _partition_unit(unit_roms: list[dict[str, Any]]) -> tuple[dict[int, dict[str
     for rom in unit_roms:
         rom_id = int(rom["id"])
         key = rom.get("sibling_group_key")
-        if key:
+        if key is not None:
             in_unit_resident[rom_id] = key
         else:
             fresh_by_id[rom_id] = rom
