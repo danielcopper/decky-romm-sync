@@ -311,7 +311,7 @@ class VersionSwitchService:
             if bound is None:
                 return None
             group_key = bound.sibling_group_key
-            rows = list(uow.roms.iter_by_group_key(group_key)) if group_key else [bound]
+            rows = [bound] if group_key is None else list(uow.roms.iter_by_group_key(group_key))
             members = [
                 _MemberView(
                     rom_id=r.rom_id,
