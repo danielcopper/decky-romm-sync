@@ -35,9 +35,10 @@ What the dependency surface does **not** carry is the contract. No event emitter
 this module tells nobody, because the terminal progress frame and
 ``sync_complete`` are emitted by the orchestrator only once this write has landed
 (#39). No state box: the run id arrives as an argument, which keeps the write a
-function of what the caller handed over rather than of what the box happened to
-hold when the executor got round to it — the error path relies on exactly that,
-passing a run id captured before finalize nulled the live one.
+function of what the caller handed over rather than of what the box happens to
+hold by the time the executor gets round to it — the orchestrator captures its
+run id once, at the top of the run, and hands that same value to every write
+here, the terminal one included.
 """
 
 from __future__ import annotations
