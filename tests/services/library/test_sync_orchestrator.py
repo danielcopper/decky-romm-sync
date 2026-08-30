@@ -2646,10 +2646,18 @@ class TestSyncRunLifecycle:
         """A terminal write that raises AFTER finalize must still mark the run
         ``errored`` — not leave it stuck ``running``.
 
-        Regression: ``finalize_per_unit_run`` nulls ``box.current_sync_id``
-        before the terminal write. If the error path read that nulled id it
-        would no-op and the run would stay ``running``. The fix captures the
-        run id up front so ``do_mark_errored`` still targets the run.
+        What this pins is that the error path records the run at all: raise
+        inside the terminal write and the row must still end ``errored``.
+
+        It does NOT exercise the captured run id any more, and the docstring
+        used to claim it did. ``finalize_per_unit_run`` nulled
+        ``box.current_sync_id`` before the terminal write when that claim was
+        written; #1202 moved the nulling into ``finish_run``, which runs in the
+        ``finally`` AFTER this path, so ``run_id`` and ``box.current_sync_id``
+        are the same value here and swapping one for the other changes nothing.
+        The capture stays because it makes the error path independent of where
+        the nulling lives — put a null back before the terminal write and it is
+        what keeps this test true.
         """
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
