@@ -67,10 +67,11 @@ class RetroDeckPathsAdapter:
             self._last_load_health = RetroDeckConfigHealth.OK
             return config
         except FileNotFoundError:
-            # Missing file is the expected fallback path (fresh install,
-            # no RetroDECK yet) — don't spam the log on every read, and
-            # don't cache the time so the next read picks up a created
-            # file immediately.
+            # Missing file is the expected fallback path (fresh install, no
+            # RetroDECK yet) — don't spam the log on every read. A created file
+            # is picked up on the next read because the TTL guard tests the
+            # cached value before the age, and both failure paths null it; the
+            # unset time here is not what buys that.
             self._cached_config = None
             self._last_load_health = RetroDeckConfigHealth.ABSENT
             return None
