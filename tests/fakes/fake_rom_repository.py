@@ -68,9 +68,18 @@ class FakeRomRepository:
         return iter([copy.deepcopy(rom) for rom in self._roms.values() if rom.platform_slug == platform_slug])
 
     def iter_by_group_key(self, group_key: str) -> Iterator[Rom]:
-        # Mirrors the SQLite ``WHERE sibling_group_key = ?``: a NULL key never
-        # matches, so an unbackfilled / solo row is never returned by this path.
-        return iter([copy.deepcopy(rom) for rom in self._roms.values() if rom.sibling_group_key == group_key])
+        # Mirrors the SQLite ``WHERE sibling_group_key = ?``: NULL never compares
+        # equal to anything, itself included, so an unbackfilled / solo row is
+        # never returned by this path. The explicit NULL check is what buys that
+        # — Python's ``None == None`` is True, which would hand back every
+        # keyless row as one group where the real query returns none.
+        return iter(
+            [
+                copy.deepcopy(rom)
+                for rom in self._roms.values()
+                if rom.sibling_group_key is not None and rom.sibling_group_key == group_key
+            ]
+        )
 
     def count(self) -> int:
         return len(self._roms)

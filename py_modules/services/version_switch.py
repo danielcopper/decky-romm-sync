@@ -311,7 +311,7 @@ class VersionSwitchService:
             if bound is None:
                 return None
             group_key = bound.sibling_group_key
-            rows = list(uow.roms.iter_by_group_key(group_key)) if group_key else [bound]
+            rows = [bound] if group_key is None else list(uow.roms.iter_by_group_key(group_key))
             members = [
                 _MemberView(
                     rom_id=r.rom_id,
@@ -772,7 +772,9 @@ class VersionSwitchService:
                 return None
             target_local = uow.roms.get(target_rom_id)
             group_key = bound.sibling_group_key
-            member_ids = {r.rom_id for r in uow.roms.iter_by_group_key(group_key)} if group_key else {bound.rom_id}
+            member_ids = (
+                {bound.rom_id} if group_key is None else {r.rom_id for r in uow.roms.iter_by_group_key(group_key)}
+            )
             member_ids.add(target_rom_id)
             return _SwitchContext(
                 bound_rom_id=bound.rom_id,
