@@ -254,13 +254,14 @@ Format: **invariant** — tier — enforced by.
   directory), all four `CoreInfoProvider` reads — `get_active_core`, `get_default_emulator`, `get_emulator_options`,
   `resolve_sandbox_launcher` (each re-probes the flatpak roots for **its** ES-DE file and re-stats it before it may use
   the parse cache: `es_systems.xml` for the first three, `es_find_rules.xml` for the launcher read, and both for the
-  options read, which globs each option's emulator install through the find rules) — and `SystemResolver` (parses the
+  options read, which globs each option's emulator install through the find rules), `SystemResolver` (parses the
   plugin's **own** bundled `config.json`, not RetroDECK's `retrodeck.json`, and does no network work despite living on
-  the RomM HTTP adapter). Two other families of real I/O seam were weighed and kept out — the reasons are in the
-  script's docstring, and neither is an exemption; nor are those two an inventory of what else touches the disk. **"It's
-  only a read" is the reasoning this rule exists to refuse**: `SqliteUnitOfWork.__enter__` issues `BEGIN IMMEDIATE`, so
-  even a read-only UoW takes the write lock. The database is in WAL, so readers are unaffected — but every other
-  **writer** waits on the lock for up to `busy_timeout=5000` and fails with `SQLITE_BUSY` if it is still held then, and
+  the RomM HTTP adapter), and `SystemSupportedExtensionsFn` / `SystemKnownFn` (two questions to `es_systems.xml` through
+  that same per-call probe). Two other real I/O seams were weighed and kept out — the reasons are in the script's
+  docstring, and neither is an exemption; nor are those two an inventory of what else touches the disk. **"It's only a
+  read" is the reasoning this rule exists to refuse**: `SqliteUnitOfWork.__enter__` issues `BEGIN IMMEDIATE`, so even a
+  read-only UoW takes the write lock. The database is in WAL, so readers are unaffected — but every other **writer**
+  waits on the lock for up to `busy_timeout=5000` and fails with `SQLITE_BUSY` if it is still held then, and
   `FakeUnitOfWork` shares no connection, so no unit test notices. Six call sites had drifted across the rule before
   anything looked (#1779), for the reason the check exists: nothing at a call site reveals that an injected seam touches
   the disk. **The rule and the gate come from reading code — no measurement of how long any of those transactions
@@ -275,9 +276,10 @@ Format: **invariant** — tier — enforced by.
   whose implementation _grows_ a file read later. Matching only attribute calls is deliberate: the pure
   `domain.disc_selection.enumerate_discs` shares a name with the seam and does no I/O — it is safe because its call site
   imports it bare, not because of the name. The call-shaped blind spot is shared with the deadlock rule and only this
-  family closes it: `SystemResolver` has no method name a consumer would write, so the list carries `_resolve_system`,
-  the attribute every consumer in `services/` binds it to — by convention rather than by construction, and the deadlock
-  rule's own call-shaped seams stay open. That seam is also the odd one out for a second reason: the adapter memoises
+  family closes it: its three `__call__`-only seams have no method name a consumer would write, so the list carries the
+  attribute each is bound to (`_resolve_system`, `_system_extensions`, `_system_known`) — by convention rather than by
+  construction, and only while such a name means one thing, which is exactly what keeps `_list_files` out. The deadlock
+  rule's own call-shaped seams stay open. `SystemResolver` is the odd one out for a second reason: the adapter memoises
   its map for the life of the process, so exactly one call ever opens the file, and the entry earns its place because
   that one call can land inside a UoW. One `# pragma: no uow-check` covers both families — it suppresses the line, and
   no seam is in both lists, so where a line does name two seams it silences both

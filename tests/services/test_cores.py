@@ -789,6 +789,11 @@ class TestSetGameCoreTransactionBoundary:
 
         assert result["success"] is False
         assert result["reason"] == "core_unavailable"
+        # Names the platform the row moved to, but claims only what was checked:
+        # whether the label works there was never resolved, and finding out would
+        # cost the ES-DE read this split keeps out of the transaction.
         assert "psx" in result["message"]
+        assert "not verified" in result["message"]
+        assert "not available" not in result["message"]
         with uow as u:
             assert u.roms.get(42).emulator_override is None

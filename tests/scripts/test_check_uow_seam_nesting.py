@@ -293,6 +293,23 @@ class TestIoSeamsViolations:
         assert method in findings[0]
         assert "file-I/O seam" in findings[0]
 
+    @pytest.mark.parametrize("attribute", ["_resolve_system", "_system_extensions", "_system_known"])
+    def test_call_shaped_seams_are_matched_by_their_holding_attribute(self, attribute: str):
+        # These Protocols are __call__-only, so no consumer ever writes a method
+        # name — the attribute each is bound to is the only thing to match, and
+        # it works because each of these names means one thing in the tree.
+        findings = check.scan_source(
+            "class S:\n"
+            "    def go(self, system):\n"
+            "        with self._uow_factory() as uow:\n"
+            f"            answer = self.{attribute}(system)\n"
+            "        return answer\n",
+            "svc.py",
+        )
+        assert len(findings) == 1
+        assert attribute in findings[0]
+        assert "file-I/O seam" in findings[0]
+
     def test_private_resolve_system_attribute_inside_uow_is_flagged(self):
         # SystemResolver is call-shaped, so no consumer ever writes the Protocol's
         # own name — the attribute they all bind it to is what must be matched.

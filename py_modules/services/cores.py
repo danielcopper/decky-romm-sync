@@ -281,10 +281,15 @@ class CoreService:
                 # column). The label was validated against the platform the
                 # snapshot named, so pinning it now would persist a label that
                 # was never checked against the platform it will resolve under.
+                # The message says exactly that rather than calling the label
+                # unavailable: re-resolving to find out would cost the ES-DE
+                # read this split exists to keep out of the transaction, and on
+                # a label valid for both platforms "unavailable" is simply
+                # false — the user retries and it works.
                 return {
                     "success": False,
                     "reason": "core_unavailable",
-                    "message": f"Emulator '{label}' is not available for {rom.platform_slug}",
+                    "message": f"Emulator '{label}' was not verified for {rom.platform_slug}; try again",
                 }
             # Enforce the aggregate invariant (strip / reject blank) via the
             # verb method, then persist the resulting label through the pin-only
