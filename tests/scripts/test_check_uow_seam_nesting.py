@@ -20,10 +20,10 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     from types import ModuleType
-
-    import pytest
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "check_uow_seam_nesting.py"
 
@@ -242,7 +242,7 @@ class TestScanSourceClean:
 
 
 class TestIoSeamsViolations:
-    """The file-I/O family (#1779) — the six sites stage 1 fixed."""
+    """The file-I/O family: every shape the matcher must flag (#1779)."""
 
     def test_resolve_for_install_inside_uow_is_flagged(self):
         # The pre-#1779 shortcut_launch_resolver shape: resolve each install's
@@ -274,17 +274,24 @@ class TestIoSeamsViolations:
         assert len(findings) == 1
         assert "enumerate_discs" in findings[0]
 
-    def test_get_emulator_options_inside_uow_is_flagged(self):
+    @pytest.mark.parametrize(
+        "method",
+        ["get_active_core", "get_default_emulator", "get_emulator_options", "resolve_sandbox_launcher"],
+    )
+    def test_every_core_info_read_inside_uow_is_flagged(self, method: str):
+        # All four CoreInfoProvider reads re-probe the same ES-DE files, so the
+        # family covers the Protocol, not one method of it.
         findings = check.scan_source(
             "class S:\n"
             "    def go(self, system):\n"
             "        with self._uow_factory() as uow:\n"
-            "            options = self._core_info.get_emulator_options(system)\n"
-            "        return options\n",
+            f"            answer = self._core_info.{method}(system)\n"
+            "        return answer\n",
             "svc.py",
         )
         assert len(findings) == 1
-        assert "get_emulator_options" in findings[0]
+        assert method in findings[0]
+        assert "file-I/O seam" in findings[0]
 
     def test_private_resolve_system_attribute_inside_uow_is_flagged(self):
         # SystemResolver is call-shaped, so no consumer ever writes the Protocol's
@@ -416,6 +423,29 @@ class TestIoSeamsClean:
         )
         assert findings == []
 
+    def test_one_pragma_suppresses_two_seams_on_one_line(self):
+        # The pre-#1779 cores.py shape: both seams on a single line. The pragma
+        # suppresses the line, so it silences both — there is no second spelling
+        # to get wrong. The un-pragma'd twin proves the line really carries two.
+        line = "            o = self._core_info.get_emulator_options(self._resolve_system(slug))"
+        source = "class S:\n    def go(self, slug):\n        with self._uow_factory() as uow:\n{}\n        return o\n"
+
+        assert len(check.scan_source(source.format(line), "svc.py")) == 2
+        assert check.scan_source(source.format(line + "  # pragma: no uow-check"), "svc.py") == []
+
+    def test_bound_method_passed_as_an_argument_is_a_known_blind_spot(self):
+        # NOT a desired outcome — a recorded limit. Classification looks at a
+        # call's own func, so a seam handed to run_in_executor is an attribute,
+        # not a call, and passes. Closing it should turn this test red so the
+        # docstrings that name the blind spot get corrected with it. The called
+        # twin proves the seam is one the family otherwise catches here.
+        body = "class S:\n    def go(self, install):\n        with self._uow_factory() as uow:\n            return {}\n"
+
+        assert (
+            check.scan_source(body.format("self._loop.run_in_executor(None, self._d.enumerate_discs, i)"), "s.py") == []
+        )
+        assert len(check.scan_source(body.format("self._d.enumerate_discs(install)"), "s.py")) == 1
+
 
 class TestFamiliesAreDistinguishable:
     """Each family names its own hazard — the messages must not collapse."""
@@ -445,7 +475,7 @@ class TestFamiliesAreDistinguishable:
             "            return self._disc_resolver.enumerate_discs(install)\n"
         )
         assert "file-I/O seam" in finding
-        assert "global write lock" in finding
+        assert "write lock" in finding
         assert "busy_timeout" in finding
         assert "deadlock" not in finding
         assert "UoW-opening seam" not in finding

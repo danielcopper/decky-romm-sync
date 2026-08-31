@@ -15,17 +15,19 @@ is invisible there — it only surfaces on a real device. The hazard has bitten
 four sites across three issues (#1047, #1134 twice, and the migration site
 fixed via #1155). The seams live in :data:`SEAM_METHODS`.
 
-**Rule 2 — a seam that touches the disk holds the write lock for the whole
-walk.** ``BEGIN IMMEDIATE`` takes the database's global write lock at the top
-of the block, so **even a read-only UoW is a writer** as far as every other
-connection is concerned, and they each give up after ``busy_timeout=5000``. A
-directory walk or a config parse held inside a UoW therefore stalls every other
-writer in the plugin for as long as the I/O takes. CONTEXT.md's Unit of Work
-entry and ADR-0006 state the rule — a transaction wraps database reads and
-writes, never file or server I/O — and until #1779 nothing detected a breach:
-six call sites had drifted across it, because nothing at a call site reveals
-that an injected seam touches the disk. The seams live in
-:data:`IO_SEAM_METHODS`.
+**Rule 2 — a seam that touches the disk holds the write lock across the I/O.**
+``BEGIN IMMEDIATE`` takes the write lock at the top of the block, so **even a
+read-only UoW is a writer**. The database runs in WAL, so readers are
+unaffected; any other *writer* that arrives blocks and gives up after
+``busy_timeout=5000``. A directory walk or a config parse held inside a UoW
+therefore stalls those writers for as long as the I/O takes. CONTEXT.md's Unit
+of Work entry and ADR-0006 state the rule — a transaction wraps database reads
+and writes, never file or server I/O — and until #1779 nothing detected a
+breach: six call sites had drifted across it, because nothing at a call site
+reveals that an injected seam touches the disk. The seams live in
+:data:`IO_SEAM_METHODS`. Both the rule and this check come from reading the
+code; nothing here rests on a measurement of how long any of those
+transactions actually held the lock.
 
 The established fix is the same for both: snapshot the rows a seam needs
 *inside* one short UoW, close it, then call the seam *outside* any open UoW
@@ -54,37 +56,68 @@ spots apply to **both** families:
   (``fn = resolver.active_core_for_rom; fn(rom_id)``) or holding the UoW
   factory under an attribute whose name does not end in ``uow_factory`` slips
   past the name match.
+* It classifies a call by its own ``func``, so a seam **passed as a bound
+  method** is invisible — ``run_in_executor(None, resolver.enumerate_discs,
+  install)`` inside a UoW is an attribute, not a call, and is not flagged. That
+  matters more than the shape suggests: ``run_in_executor`` is how
+  ``services/disc.py`` and ``services/cores.py`` reach their ``_io`` bodies in
+  the first place. ``scripts/check_read_only_module.py`` records the same shape
+  for its own gate.
 * Both seam lists are hand-maintained. A seam whose implementation *grows* a
   UoW open or a file read later is not detected until someone adds its name.
 
-One blind spot is not symmetric between the families. **A seam injected as a
-call-shaped Protocol** (``__call__``, no method name of its own) is invisible
-under rule 1: the consumer writes ``self._candidate_probe(...)``, never the
-seam's own name, so the ``current_save_sorting`` / ``has_adoption_candidate``
-entries guard only call sites that name the method — the owning service's own,
-and any peer holding the object rather than the bound method. Closing that
-generally means matching the holding attribute too, which is a second list to
-keep in step and is not built. Rule 2 has one call-shaped seam,
-``SystemResolver``, and closes it the cheap way instead: every consumer in
-``services/`` stores it as ``self._resolve_system``, so **both** the Protocol's
-name and that attribute name are listed. That is a convention, not a
-guarantee — a consumer that binds it under a different attribute slips past.
+One blind spot is rule 1's alone. **A seam injected as a call-shaped Protocol**
+(``__call__``, no method name of its own) is invisible to it: the consumer
+writes ``self._candidate_probe(...)``, never the seam's own name, so the
+``current_save_sorting`` / ``has_adoption_candidate`` entries guard only call
+sites that name the method — the owning service's own, and any peer holding the
+object rather than the bound method. Closing that generally means matching the
+holding attribute too, which is a second list to keep in step and is not built.
+Rule 2 has one call-shaped seam, ``SystemResolver``, and closes it the cheap way
+instead: every consumer in ``services/`` binds it to ``self._resolve_system``,
+so that attribute name is listed beside ``resolve_system``, the implementation's
+own method name (``RommHttpAdapter.resolve_system``, for a peer holding the
+object). That is a convention, not a guarantee — a consumer that binds it under
+a different attribute slips past.
 
 Conversely, matching only *attribute* calls is what keeps the ``enumerate_discs``
-entry safe: the pure ``domain.disc_selection.enumerate_discs`` is called bare
-(``enumerate_discs(files, ...)``) and does no I/O of its own, so it is never
-mistaken for the seam.
+entry safe: the pure ``domain.disc_selection.enumerate_discs`` does no I/O of
+its own, and its one consumer imports it bare. Written dotted it *would* be
+flagged — the safety is in the call site's bare import, not in the name.
+
+Seams deliberately left out
+---------------------------
+Two families of disk-touching seam are outside :data:`IO_SEAM_METHODS`. Neither
+is exempt from the rule — a UoW held across either is a breach — and the reason
+is not that their I/O matters less:
+
+* The **call-shaped file seams** — ``SystemSupportedExtensionsFn`` and
+  ``SystemKnownFn`` (both reach ``es_systems.xml``) and ``DirectoryFileListerFn``
+  (a directory listing). These are matchable *today*: every consumer happens to
+  bind them to ``self._system_extensions`` / ``self._system_known`` /
+  ``self._list_files``, so listing those attribute names would work on exactly
+  the convention that carries ``_resolve_system``. Leaving them out is a scope
+  decision, not a limit of the mechanism. What does differ is the quality of the
+  match: ``enumerate_discs`` or ``get_emulator_options`` name one seam and
+  nothing else, whereas ``_list_files`` is a name any class might bind to
+  something unrelated, so an entry would key the gate on a naming coincidence.
+* ``RetroDeckPaths``'s path getters sit behind a 30-second TTL cache
+  (``adapters/retrodeck_paths.py``), so a call is usually a dict lookup and a
+  ban would fire mostly where nothing is spent — which teaches writers to reach
+  for a pragma instead of looking. The caveat is that the cache is only warm
+  when there is a file to cache: a missing ``retrodeck.json`` deliberately
+  records no cache time, so on a machine without RetroDECK every getter reopens.
 
 The escape hatch is a trailing comment on the seam-call line:
 
     self._active_core.active_core_for_rom(rom_id)  # pragma: no uow-check
 
-**One pragma covers both families.** It suppresses the line, not a named rule:
-a call site names exactly one seam, and no seam is in both lists (a seam that
-both opened a UoW and walked the disk would be its own design fault), so there
-is never an ambiguity for a second pragma spelling to resolve. Requiring the
-writer to pick the right spelling would only ask them to restate what the
-failure message already told them.
+**One pragma covers both families,** because it suppresses the *line*, not a
+named rule. No seam is in both lists, and where one line names two seams —
+``get_emulator_options(self._resolve_system(slug))`` was the pre-#1779
+``services/cores.py`` shape, on one line — the pragma silences both. A second
+spelling would only ask the writer to restate what the failure message already
+told them, and would have to be written twice on that line.
 
 Exit 0 on no findings, exit 1 if any findings (one line per finding).
 """
@@ -122,27 +155,40 @@ SEAM_METHODS: frozenset[str] = frozenset(
 # --- Rule 2: seams that touch the filesystem -----------------------------
 # Method names whose implementation reads the disk. None of them opens a UoW,
 # so nothing deadlocks — the cost is duration: the UoW's BEGIN IMMEDIATE holds
-# the global write lock across the whole walk, and every other connection in
-# the plugin gives up at busy_timeout. Each entry names the Protocol it belongs
-# to and the I/O it performs.
+# the write lock across the whole walk, and any other writer that arrives gives
+# up at busy_timeout. Each entry names the Protocol it belongs to and the I/O it
+# performs. What is deliberately NOT here, and why, is in the module docstring.
 IO_SEAM_METHODS: frozenset[str] = frozenset(
     {
-        # DiscResolver (services/disc_launch_resolver.py) — recursive walk of the
-        # ROM's install directory, plus an ES-DE config read for the system's
+        # DiscResolver (services/protocols/cross_service.py) — recursive walk of
+        # the ROM's install directory, plus an ES-DE config read for the system's
         # supported extensions.
         "enumerate_discs",
-        # CoreInfoProvider (adapters/es_de_config.py) — ES-DE config discovery and
-        # parse, plus a per-option probe for whether that emulator is installed.
-        "get_emulator_options",
-        # DiscResolver (services/disc_launch_resolver.py) — the same recursive
-        # walk of the install directory, resolving the persisted disc pin over it.
+        # DiscResolver — the same recursive walk, resolving the persisted disc
+        # pin over it.
         "resolve_for_install",
-        # SystemResolver (services/protocols/paths.py) — opens and parses
-        # RetroDECK's ``config.json``. It is implemented on the RomM HTTP adapter,
-        # which the name makes easy to misread: it does no network work at all,
-        # only the file read. The Protocol is call-shaped, so ``_resolve_system``
-        # is listed with it — that is the attribute every consumer in services/
-        # binds it to, and the only spelling the matcher can see (module docstring).
+        # CoreInfoProvider (services/protocols/paths.py) — all four reads of
+        # RetroDECK's ES-DE configuration. Each re-probes the flatpak install
+        # roots for es_systems.xml and re-stats it before it may answer from the
+        # parse cache; get_emulator_options additionally globs every option's
+        # emulator install, and resolve_sandbox_launcher reads es_find_rules.xml.
+        # Listing one of the four would be arbitrary — services/firmware.py calls
+        # two of them inside one loop, and services/active_core_resolver.py the
+        # other two.
+        "get_active_core",
+        "get_default_emulator",
+        "get_emulator_options",
+        "resolve_sandbox_launcher",
+        # SystemResolver (services/protocols/paths.py) — parses the plugin's OWN
+        # bundled config.json (plugin root, else defaults/config.json) for its
+        # platform_map. Implemented on the RomM HTTP adapter, which the name makes
+        # easy to misread twice over: it does no network work, and the file is not
+        # RetroDECK's retrodeck.json. It is also the odd one out — the adapter
+        # memoises the map for the life of the process, so exactly one call ever
+        # opens the file. The entry earns its place because that one call can land
+        # inside a UoW. The Protocol is call-shaped, so `_resolve_system` — the
+        # attribute every consumer in services/ binds it to — is listed beside
+        # `resolve_system`, the implementation's own method name.
         "resolve_system",
         "_resolve_system",
     }
@@ -165,7 +211,7 @@ _DEADLOCK_REMEDY = (
 )
 _WRITE_LOCK_REMEDY = (
     "snapshot inside the UoW, close it, "
-    "then do the I/O outside (BEGIN IMMEDIATE holds the global write lock even for a "
+    "then do the I/O outside (BEGIN IMMEDIATE holds the write lock even for a "
     "read-only UoW, so every other writer in the plugin blocks for as long as the I/O "
     "takes, then fails at busy_timeout)"
 )
@@ -196,9 +242,11 @@ def _is_uow_opener(node: ast.expr) -> bool:
 def _classify(node: ast.Call) -> tuple[str, str] | None:
     """Return ``(detail, remedy)`` for a hazardous call, or None.
 
-    Only attribute calls are considered for the two seam families, so a
-    same-named module-level function (``domain.disc_selection.enumerate_discs``)
-    is never mistaken for the seam it shares a name with.
+    Only attribute calls are considered for the two seam families. A
+    module-level function sharing a seam's name
+    (``domain.disc_selection.enumerate_discs``) is therefore missed while its
+    call site imports it bare, which is how the one in the tree is written; a
+    dotted call to the same function would be flagged.
     """
     func = node.func
     if isinstance(func, ast.Attribute):

@@ -26,10 +26,11 @@ if TYPE_CHECKING:
 def record_uow_open(uow: FakeUnitOfWork, seam: object, method: str) -> list[bool]:
     """Wrap ``seam.method`` so every call appends ``uow.is_open`` to the returned list.
 
-    *seam* is a fake the service under test was injected with; the wrapper
-    delegates to the original, so the fake's own behavior and recording are
-    unchanged. The returned list grows as the service runs — read it after the
-    call under test.
+    *seam* is the object holding the seam — usually a fake the service under
+    test was injected with, but a service patching its own bound seam attribute
+    works the same way. The wrapper delegates to the original, so the holder's
+    own behavior and recording are unchanged. The returned list grows as the
+    service runs — read it after the call under test.
     """
     original: Callable[..., Any] = getattr(seam, method)
     observed: list[bool] = []

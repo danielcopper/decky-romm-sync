@@ -27,13 +27,13 @@ The ``disc_resolver`` seam is held to the same boundary from the other side:
 both install-path readers snapshot their ``(install, selected_disc)`` pairs
 inside the read UoW and close it before resolving a single one, because
 ``resolve_for_install`` lists the install directory. CONTEXT.md's Unit of Work
-entry keeps a transaction to database reads and writes — a directory walk per
-installed ROM held inside one blocks every other writer in the plugin for as
-long as the walk takes, because ``BEGIN IMMEDIATE`` takes the global write lock
-even for a read. That boundary IS gated, unlike the one above: the same
-check's second seam family fires on ``resolve_for_install`` named inside the
-``with`` block. It is the same matcher, so it carries the same peer-call blind
-spot — the gate would not have stopped the fold either.
+entry keeps a transaction to database reads and writes — ``BEGIN IMMEDIATE``
+takes the write lock even for a read, so a directory walk per installed ROM
+held inside one stalls every other writer for as long as the walk takes. The
+same check carries this as its second rule, on the same matcher and with the
+same reach: it fires on ``resolve_for_install`` named inside the ``with``
+block and is silent on the peer-call form. Both boundaries are gated inline;
+neither is gated against the fold.
 """
 
 from __future__ import annotations

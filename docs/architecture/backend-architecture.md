@@ -1461,8 +1461,8 @@ It snapshots the install/ROM rows in one short read UoW, then re-bakes each comm
 same `active_core` / `disc_resolver` seams every other bake site uses. Each seam is outside for its own reason:
 resolving `active_core` inside the iteration UoW would deadlock, since `ActiveCoreResolver.active_core_for_rom` opens
 its own UoW (the per-connection write lock is not re-entrant), while `disc_resolver` opens none and instead walks the
-install directory — and `BEGIN IMMEDIATE` holds the global write lock even for a read, so a walk inside the UoW stalls
-every other writer for its duration (#1779). Uninstalled and unbound ROMs are skipped by construction. The callable is
+install directory — and `BEGIN IMMEDIATE` takes the write lock even for a read, so a walk inside the UoW stalls every
+other writer for its duration (#1779). Uninstalled and unbound ROMs are skipped by construction. The callable is
 read-only and **not** migration-gated.
 
 The frontend pulls this on mount, once the backend is proven reachable (it reuses the app-id/metadata init's
