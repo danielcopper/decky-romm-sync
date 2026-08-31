@@ -21,7 +21,7 @@ of the block, so **even a read-only UoW is a writer** as far as every other
 connection is concerned, and they each give up after ``busy_timeout=5000``. A
 directory walk or a config parse held inside a UoW therefore stalls every other
 writer in the plugin for as long as the I/O takes. CONTEXT.md's Unit of Work
-entry and [ADR-0006] state the rule — a transaction wraps database reads and
+entry and ADR-0006 state the rule — a transaction wraps database reads and
 writes, never file or server I/O — and until #1779 nothing detected a breach:
 six call sites had drifted across it, because nothing at a call site reveals
 that an injected seam touches the disk. The seams live in
