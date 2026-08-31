@@ -259,6 +259,24 @@ def _retire_between_transactions(uow: FakeUnitOfWork, disc_resolver: FakeDiscRes
     disc_resolver.enumerate_discs = retiring
 
 
+def _relocate_between_transactions(uow: FakeUnitOfWork, disc_resolver: FakeDiscResolver, rom_id: int, *, rom_dir: str):
+    """Move the install to a different directory while the picker enumerates.
+
+    The same window as :func:`_retire_between_transactions`, with the install
+    replaced rather than deleted — a RetroDECK-home migration relocating the
+    ROM. The enumerated disc list still describes the old directory.
+    """
+    enumerate_discs = disc_resolver.enumerate_discs
+
+    def relocating(install):
+        discs = enumerate_discs(install)
+        with uow:
+            _seed_install(uow, rom_id=rom_id, rom_dir=rom_dir)
+        return discs
+
+    disc_resolver.enumerate_discs = relocating
+
+
 class TestTransactionBoundary:
     """Enumeration and the bake run between transactions, never inside one.
 
@@ -302,6 +320,20 @@ class TestTransactionBoundary:
         assert result["success"] is False
         assert result["reason"] == "not_installed"
         assert "message" in result
+
+    def test_bake_resolves_over_the_install_the_discs_were_enumerated_from(
+        self, event_loop, service, uow, disc_resolver
+    ):
+        _seed_rom(uow, rom_id=1, selected_disc=None)
+        _seed_install(uow, rom_id=1, rom_dir=_ROM_DIR)
+        _relocate_between_transactions(uow, disc_resolver, 1, rom_dir="/roms/psx/moved")
+
+        result = event_loop.run_until_complete(service.select_disc(1, _DISC2))
+
+        assert result["success"] is True
+        # The bake resolves the pin over the enumerated list, so it must see the
+        # install that list came from — the relocated one was never enumerated.
+        assert disc_resolver.calls[-1] == (_ROM_DIR, _DISC2)
 
     def test_install_retired_between_transactions_fails_not_installed(self, event_loop, service, uow, disc_resolver):
         _seed_rom(uow, rom_id=1, selected_disc=None)

@@ -159,10 +159,13 @@ class DiscService:
             # The row is re-read because the pick is now decided against a
             # snapshot: a background sync, a finishing download or the
             # removed-game cleanup can retire the ROM between the two
-            # transactions, each on its own connection.
+            # transactions, each on its own connection. The install is only
+            # proven to still exist, never re-bound: the bake resolves over
+            # ``discs``, which were enumerated from the snapshot above, and a
+            # relocated install paired with that older listing would resolve a
+            # disc to a directory it was never listed in.
             rom = uow.roms.get(rom_id)
-            install = uow.rom_installs.get(rom_id)
-            if rom is None or install is None:
+            if rom is None or uow.rom_installs.get(rom_id) is None:
                 return {
                     "success": False,
                     "reason": "not_installed",
