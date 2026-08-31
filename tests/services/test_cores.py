@@ -12,6 +12,7 @@ from fakes.fake_core_info_provider import FakeCoreInfoProvider, libretro_option,
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
+from fakes.uow_open_probe import record_uow_open
 
 from domain.disc_selection import Disc
 from domain.emulator_commands import options_to_payload
@@ -699,3 +700,58 @@ class TestCoreChangePreservesPinnedDisc:
             '"%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/bsnes_libretro.so %ROM%" '
             '"/roms/snes/mario.sfc"'
         )
+
+
+# ── transaction boundary ───────────────────────────────────────────────
+
+
+def _retire_rom_between_transactions(uow: FakeUnitOfWork, core_info: FakeCoreInfoProvider, rom_id: int) -> None:
+    """Delete the ROM row while the emulator options are being read.
+
+    That read is the window between ``set_game_core``'s read transaction and
+    its write transaction — the moment a background sync, a finishing download
+    or the removed-game cleanup can retire the ROM from its own connection.
+    """
+    get_emulator_options = core_info.get_emulator_options
+
+    def retiring(system_name):
+        with uow:
+            uow.roms.delete(rom_id)
+        return get_emulator_options(system_name)
+
+    core_info.get_emulator_options = retiring
+
+
+class TestSetGameCoreTransactionBoundary:
+    """The label resolution runs between transactions, never inside one.
+
+    The slug→system resolver parses ``config.json`` and the emulator-options
+    read probes ES-DE's config plus each option's install. A UoW takes SQLite's
+    ``BEGIN IMMEDIATE`` write lock, so either read held inside one stalls every
+    other writer in the plugin (CONTEXT.md → Unit of Work, #1779).
+    ``FakeUnitOfWork`` shares no connection, so what a test can see is the
+    ordering.
+    """
+
+    def test_label_is_resolved_outside_the_uow(self, event_loop, service, uow, core_info):
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99)
+        _seed_install(uow, rom_id=42, file_path="/roms/snes/mario.sfc")
+        open_at_system = record_uow_open(uow, service, "_resolve_system")
+        open_at_options = record_uow_open(uow, core_info, "get_emulator_options")
+
+        result = event_loop.run_until_complete(service.set_game_core(42, "bsnes"))
+
+        assert result["success"] is True
+        assert open_at_system == [False]
+        assert open_at_options == [False]
+
+    def test_rom_retired_between_transactions_fails_not_found(self, event_loop, service, uow, core_info):
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99)
+        _seed_install(uow, rom_id=42, file_path="/roms/snes/mario.sfc")
+        _retire_rom_between_transactions(uow, core_info, 42)
+
+        result = event_loop.run_until_complete(service.set_game_core(42, "bsnes"))
+
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert "42" in result["message"]

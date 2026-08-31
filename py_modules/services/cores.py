@@ -248,15 +248,33 @@ class CoreService:
                     "reason": "not_found",
                     "message": f"ROM {rom_id} is not tracked",
                 }
-            system = self._resolve_system(rom.platform_slug)
-            invocation = label_to_invocation(self._core_info.get_emulator_options(system)["options"], label)
-            if invocation is None:
-                # Hard-fail BEFORE any write — never persist a label that does not
-                # resolve to a bakeable emulator (unknown / needs_setup / un-bakeable).
+            platform_slug = rom.platform_slug
+        # Resolve the label between the two transactions: the slug→system
+        # resolver parses config.json and the emulator options probe ES-DE's
+        # config plus each option's install, and a UoW holds SQLite's BEGIN
+        # IMMEDIATE write lock — file I/O inside one stalls every other writer
+        # in the plugin.
+        system = self._resolve_system(platform_slug)
+        invocation = label_to_invocation(self._core_info.get_emulator_options(system)["options"], label)
+        if invocation is None:
+            # Hard-fail BEFORE any write — never persist a label that does not
+            # resolve to a bakeable emulator (unknown / needs_setup / un-bakeable).
+            return {
+                "success": False,
+                "reason": "core_unavailable",
+                "message": f"Emulator '{label}' is not available for {platform_slug}",
+            }
+        with self._uow_factory() as uow:
+            # The row is re-read because the label was resolved against a
+            # snapshot: a background sync, a finishing download or the
+            # removed-game cleanup can retire the ROM between the two
+            # transactions, each on its own connection.
+            rom = uow.roms.get(rom_id)
+            if rom is None:
                 return {
                     "success": False,
-                    "reason": "core_unavailable",
-                    "message": f"Emulator '{label}' is not available for {rom.platform_slug}",
+                    "reason": "not_found",
+                    "message": f"ROM {rom_id} is not tracked",
                 }
             # Enforce the aggregate invariant (strip / reject blank) via the
             # verb method, then persist the resulting label through the pin-only
