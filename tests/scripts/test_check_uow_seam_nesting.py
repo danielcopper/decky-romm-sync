@@ -5,6 +5,12 @@ The check is loaded via ``importlib`` because ``scripts/`` is not on
 ``scan_source`` core function with small source snippets; the tmp-path
 fixture exercises the directory walk + the ``main`` entry point,
 monkeypatching the script's ``REPO_ROOT`` / ``SERVICES_DIR`` constants.
+
+The check carries two rules over one matcher — a seam that opens its own UoW
+(deadlock) and a seam that touches the disk (write lock held across the I/O).
+The first two classes cover the UoW-opening family, ``TestIoSeams*`` the
+file-I/O family, and :class:`TestFamiliesAreDistinguishable` pins that a reader
+of either failure can tell which rule they broke.
 """
 
 from __future__ import annotations
@@ -235,6 +241,246 @@ class TestScanSourceClean:
         assert check.scan_source("def (:\n", "broken.py") == []
 
 
+class TestIoSeamsViolations:
+    """The file-I/O family (#1779) — the six sites stage 1 fixed."""
+
+    def test_resolve_for_install_inside_uow_is_flagged(self):
+        # The pre-#1779 shortcut_launch_resolver shape: resolve each install's
+        # disc path (a directory walk) inside the open read UoW.
+        findings = check.scan_source(
+            "class S:\n"
+            "    def scan(self):\n"
+            "        paths = {}\n"
+            "        with self._uow_factory() as uow:\n"
+            "            for install in uow.rom_installs.iter_all():\n"
+            "                paths[install.rom_id] = self._disc_resolver.resolve_for_install(install, None)\n"
+            "        return paths\n",
+            "svc.py",
+        )
+        assert len(findings) == 1
+        assert "svc.py:6" in findings[0]
+        assert "resolve_for_install" in findings[0]
+
+    def test_enumerate_discs_inside_uow_is_flagged(self):
+        findings = check.scan_source(
+            "class S:\n"
+            "    def go(self, rom_id):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            install = uow.rom_installs.get(rom_id)\n"
+            "            discs = self._disc_resolver.enumerate_discs(install)\n"
+            "        return discs\n",
+            "svc.py",
+        )
+        assert len(findings) == 1
+        assert "enumerate_discs" in findings[0]
+
+    def test_get_emulator_options_inside_uow_is_flagged(self):
+        findings = check.scan_source(
+            "class S:\n"
+            "    def go(self, system):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            options = self._core_info.get_emulator_options(system)\n"
+            "        return options\n",
+            "svc.py",
+        )
+        assert len(findings) == 1
+        assert "get_emulator_options" in findings[0]
+
+    def test_private_resolve_system_attribute_inside_uow_is_flagged(self):
+        # SystemResolver is call-shaped, so no consumer ever writes the Protocol's
+        # own name — the attribute they all bind it to is what must be matched.
+        findings = check.scan_source(
+            "class S:\n"
+            "    def go(self, rom_id):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            rom = uow.roms.get(rom_id)\n"
+            "            system = self._resolve_system(rom.platform_slug)\n"
+            "        return system\n",
+            "svc.py",
+        )
+        assert len(findings) == 1
+        assert "_resolve_system" in findings[0]
+
+    def test_public_resolve_system_attribute_inside_uow_is_flagged(self):
+        # A peer holding the resolver object rather than the bound method.
+        findings = check.scan_source(
+            "class S:\n"
+            "    def go(self, slug):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            system = self._paths.resolve_system(slug)\n"
+            "        return system\n",
+            "svc.py",
+        )
+        assert len(findings) == 1
+        assert "resolve_system" in findings[0]
+
+    def test_io_seam_inside_try_within_uow_is_flagged(self):
+        findings = check.scan_source(
+            "class S:\n"
+            "    def go(self, install):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            try:\n"
+            "                discs = self._disc_resolver.enumerate_discs(install)\n"
+            "            except OSError:\n"
+            "                discs = []\n"
+            "        return discs\n",
+            "svc.py",
+        )
+        assert len(findings) == 1
+        assert "enumerate_discs" in findings[0]
+
+    def test_io_seam_inside_config_held_factory_is_flagged(self):
+        findings = check.scan_source(
+            "class S:\n"
+            "    def go(self, install):\n"
+            "        with config.uow_factory() as uow:\n"
+            "            return self._disc_resolver.enumerate_discs(install)\n",
+            "svc.py",
+        )
+        assert len(findings) == 1
+        assert "enumerate_discs" in findings[0]
+
+
+class TestIoSeamsClean:
+    def test_io_seam_after_uow_closes_is_clean(self):
+        # The canonical #1779 fix: snapshot inside the UoW, walk the disk after.
+        findings = check.scan_source(
+            "class S:\n"
+            "    def scan(self):\n"
+            "        pending = []\n"
+            "        with self._uow_factory() as uow:\n"
+            "            for install in uow.rom_installs.iter_all():\n"
+            "                pending.append(install)\n"
+            "        return [self._disc_resolver.resolve_for_install(i, None) for i in pending]\n",
+            "svc.py",
+        )
+        assert findings == []
+
+    def test_io_seam_never_inside_any_uow_is_clean(self):
+        findings = check.scan_source(
+            "class S:\n    def go(self, install):\n        return self._disc_resolver.enumerate_discs(install)\n",
+            "svc.py",
+        )
+        assert findings == []
+
+    def test_bare_module_function_of_the_same_name_is_clean(self):
+        # ``domain.disc_selection.enumerate_discs`` is a pure list transform that
+        # touches nothing, and it is called by name. Only attribute calls are
+        # seams, so the shared name costs nothing.
+        findings = check.scan_source(
+            "from domain.disc_selection import enumerate_discs\n"
+            "class S:\n"
+            "    def go(self, rom_id):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            files = uow.rom_installs.get(rom_id).files\n"
+            "            discs = enumerate_discs(files, None)\n"
+            "        return discs\n",
+            "svc.py",
+        )
+        assert findings == []
+
+    def test_io_seam_in_helper_defined_inside_uow_is_clean(self):
+        # Same scope reset as the UoW-opening family: a nested def is a new scope.
+        findings = check.scan_source(
+            "class S:\n"
+            "    def go(self, install):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            def helper():\n"
+            "                return self._disc_resolver.enumerate_discs(install)\n"
+            "            uow.roms.touch(1)\n"
+            "        return helper\n",
+            "svc.py",
+        )
+        assert findings == []
+
+    def test_io_seam_in_lambda_inside_uow_is_clean(self):
+        findings = check.scan_source(
+            "class S:\n"
+            "    def go(self, install):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            fn = lambda: self._disc_resolver.enumerate_discs(install)\n"
+            "        return fn\n",
+            "svc.py",
+        )
+        assert findings == []
+
+    def test_escape_hatch_suppresses_an_io_finding(self):
+        # One pragma spelling covers both families.
+        findings = check.scan_source(
+            "class S:\n"
+            "    def go(self, install):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            d = self._disc_resolver.enumerate_discs(install)  # pragma: no uow-check\n"
+            "        return d\n",
+            "svc.py",
+        )
+        assert findings == []
+
+
+class TestFamiliesAreDistinguishable:
+    """Each family names its own hazard — the messages must not collapse."""
+
+    def _one(self, source: str) -> str:
+        findings = check.scan_source(source, "svc.py")
+        assert len(findings) == 1
+        return findings[0]
+
+    def test_uow_opening_seam_reports_the_deadlock(self):
+        finding = self._one(
+            "class S:\n"
+            "    def go(self, rom_id):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            return self._active_core.active_core_for_rom(rom_id)\n"
+        )
+        assert "UoW-opening seam" in finding
+        assert "deadlock" in finding
+        assert "database is locked" in finding
+        assert "file-I/O seam" not in finding
+
+    def test_io_seam_reports_the_held_write_lock(self):
+        finding = self._one(
+            "class S:\n"
+            "    def go(self, install):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            return self._disc_resolver.enumerate_discs(install)\n"
+        )
+        assert "file-I/O seam" in finding
+        assert "global write lock" in finding
+        assert "busy_timeout" in finding
+        assert "deadlock" not in finding
+        assert "UoW-opening seam" not in finding
+
+    def test_nested_open_is_reported_as_the_deadlock_rule(self):
+        finding = self._one(
+            "class S:\n"
+            "    def run(self):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            with self._uow_factory() as uow2:\n"
+            "                uow2.roms.touch(1)\n"
+        )
+        assert "nested UoW open" in finding
+        assert "database is locked" in finding
+
+    def test_both_families_in_one_block_are_reported_separately(self):
+        findings = check.scan_source(
+            "class S:\n"
+            "    def go(self, rom_id, install):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            core = self._active_core.active_core_for_rom(rom_id)\n"
+            "            discs = self._disc_resolver.enumerate_discs(install)\n"
+            "        return core, discs\n",
+            "svc.py",
+        )
+        assert len(findings) == 2
+        assert sum("UoW-opening seam" in f for f in findings) == 1
+        assert sum("file-I/O seam" in f for f in findings) == 1
+
+    def test_no_seam_is_in_both_families(self):
+        # The one-pragma-covers-both argument in the module docstring rests on a
+        # call site naming exactly one rule.
+        assert not check.SEAM_METHODS & check.IO_SEAM_METHODS
+
+
 class TestFindViolationsWalk:
     def test_walk_finds_and_relativises(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         services_dir = tmp_path / "py_modules" / "services"
@@ -275,7 +521,8 @@ class TestMainEntryPoint:
         assert check.main(["-h"]) == 0
 
     def test_real_repo_run_is_clean(self, capsys):
-        # The four motivating sites are fixed; the real services/ tree must pass.
+        # Both families' motivating sites are fixed — the four deadlock ones and
+        # the six file-I/O ones (#1779); the real services/ tree must pass.
         rc = check.main([])
         assert rc == 0
         assert "OK:" in capsys.readouterr().out
@@ -298,3 +545,48 @@ class TestMainEntryPoint:
         out = capsys.readouterr().out
         assert "active_core_for_rom" in out
         assert "ERROR:" in out
+        # Only the rule that fired is summarised.
+        assert "file-I/O seam" not in out
+
+    def test_main_summarises_only_the_io_rule_for_io_findings(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+    ):
+        services_dir = tmp_path / "py_modules" / "services"
+        services_dir.mkdir(parents=True)
+        (services_dir / "bad.py").write_text(
+            "class S:\n"
+            "    def go(self, install):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            return self._disc_resolver.resolve_for_install(install, None)\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(check, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(check, "SERVICES_DIR", services_dir)
+
+        rc = check.main([])
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "resolve_for_install" in out
+        assert "never file or server I/O" in out
+        assert "UoW-opening seam" not in out
+
+    def test_main_summarises_both_rules_when_both_fire(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys):
+        services_dir = tmp_path / "py_modules" / "services"
+        services_dir.mkdir(parents=True)
+        (services_dir / "bad.py").write_text(
+            "class S:\n"
+            "    def go(self, rom_id, install):\n"
+            "        with self._uow_factory() as uow:\n"
+            "            core = self._active_core.active_core_for_rom(rom_id)\n"
+            "            return core, self._disc_resolver.enumerate_discs(install)\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(check, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(check, "SERVICES_DIR", services_dir)
+
+        rc = check.main([])
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert out.count("ERROR:") == 2
+        assert "must not be called while a UoW is open on the same path" in out
+        assert "never file or server I/O" in out

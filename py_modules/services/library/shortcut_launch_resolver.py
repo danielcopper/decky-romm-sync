@@ -29,7 +29,11 @@ inside the read UoW and close it before resolving a single one, because
 ``resolve_for_install`` lists the install directory. CONTEXT.md's Unit of Work
 entry keeps a transaction to database reads and writes — a directory walk per
 installed ROM held inside one blocks every other writer in the plugin for as
-long as the walk takes.
+long as the walk takes, because ``BEGIN IMMEDIATE`` takes the global write lock
+even for a read. That boundary IS gated, unlike the one above: the same
+check's second seam family fires on ``resolve_for_install`` named inside the
+``with`` block. It is the same matcher, so it carries the same peer-call blind
+spot — the gate would not have stopped the fold either.
 """
 
 from __future__ import annotations

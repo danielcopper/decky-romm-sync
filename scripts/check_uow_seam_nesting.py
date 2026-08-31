@@ -1,43 +1,90 @@
 #!/usr/bin/env python3
-"""UoW-seam nesting ban — deadlock-prevention enforcement.
+"""UoW-seam nesting ban — what may not be called while a Unit of Work is open.
 
-A Unit of Work opens a SQLite transaction with ``BEGIN IMMEDIATE`` on its
-own connection, and that write lock is **not re-entrant**. Calling a seam
-that opens its OWN UoW while a UoW is already open on the same path blocks
-on the nested ``BEGIN IMMEDIATE`` until ``busy_timeout`` (~5s) elapses, then
-raises ``database is locked``. ``FakeUnitOfWork`` in the unit tests shares no
-real connection, so the deadlock is invisible there — it only surfaces on a
-real device. The hazard has bitten four sites across three issues (#1047,
-#1134 twice, and the migration site fixed via #1155).
+A Unit of Work opens a SQLite transaction with ``BEGIN IMMEDIATE`` on its own
+connection. That single fact carries two separate rules, and this check
+enforces both from one AST walk because the matcher is identical — only the
+seam list and the failure message differ.
 
-The established fix is to snapshot the rows a seam needs *inside* one short
-read UoW, close it, then resolve the seam *outside* any open UoW
+**Rule 1 — a seam that opens its own UoW deadlocks.** The write lock is not
+re-entrant. Calling a seam that opens its OWN UoW while a UoW is already open
+on the same path blocks on the nested ``BEGIN IMMEDIATE`` until
+``busy_timeout`` (~5s) elapses, then raises ``database is locked``.
+``FakeUnitOfWork`` in the unit tests shares no real connection, so the deadlock
+is invisible there — it only surfaces on a real device. The hazard has bitten
+four sites across three issues (#1047, #1134 twice, and the migration site
+fixed via #1155). The seams live in :data:`SEAM_METHODS`.
+
+**Rule 2 — a seam that touches the disk holds the write lock for the whole
+walk.** ``BEGIN IMMEDIATE`` takes the database's global write lock at the top
+of the block, so **even a read-only UoW is a writer** as far as every other
+connection is concerned, and they each give up after ``busy_timeout=5000``. A
+directory walk or a config parse held inside a UoW therefore stalls every other
+writer in the plugin for as long as the I/O takes. CONTEXT.md's Unit of Work
+entry and [ADR-0006] state the rule — a transaction wraps database reads and
+writes, never file or server I/O — and until #1779 nothing detected a breach:
+six call sites had drifted across it, because nothing at a call site reveals
+that an injected seam touches the disk. The seams live in
+:data:`IO_SEAM_METHODS`.
+
+The established fix is the same for both: snapshot the rows a seam needs
+*inside* one short UoW, close it, then call the seam *outside* any open UoW
 (``services/relaunch_options_resolver.py``, ``services/cores.py``,
-``services/disc.py``, ``services/downloads.py`` are the reference shape).
+``services/disc.py``, ``services/downloads.py``,
+``services/library/shortcut_launch_resolver.py`` are the reference shape).
+Re-read anything the write then depends on: the second transaction runs on its
+own connection, so the snapshot may have gone stale.
 
-This check walks ``py_modules/services/`` and fails when a known
-UoW-opening seam is called lexically inside an open
-``with <...>uow_factory() as uow:`` block. The two seam families and the
-bare-factory open live in :data:`SEAM_METHODS` / :data:`UOW_FACTORY_SUFFIX`
-at the top of the file, so registering a future seam is a one-line addition.
+This check walks ``py_modules/services/`` and fails when either family's method
+is called lexically inside an open ``with <...>uow_factory() as uow:`` block.
+The two seam lists and the bare-factory open (:data:`UOW_FACTORY_SUFFIX`, which
+catches a nested open under rule 1) live at the top of the file, so registering
+a future seam is a one-line addition.
 
-The matcher is lexical and conservative (a guardrail, not a prover). It only
-sees calls nested inside a ``with`` block in the same function scope — a seam
-reached through a helper called from inside the UoW is not caught, and a
-nested ``def``/``lambda`` resets the scope (a helper *defined* inside a UoW
-but *called* elsewhere is not flagged). It also matches on the surface syntax:
-aliasing a seam to a local (``fn = resolver.active_core_for_rom; fn(rom_id)``)
-or holding the UoW factory under an attribute whose name does not end in
-``uow_factory`` slips past the name match. **A seam injected as a call-shaped
-Protocol is that same blind spot**: the consumer writes
-``self._candidate_probe(...)``, never the seam's own name, so the entry in
-:data:`SEAM_METHODS` guards only the call sites that name the method — the
-service's own, and any peer holding the object rather than the bound method.
-Closing it means matching the holding attribute too, which is a second list to
-keep in step and is not built. The escape hatch is a trailing comment on the
-seam-call line:
+What the matcher cannot see
+---------------------------
+It is lexical and conservative (a guardrail, not a prover), and these blind
+spots apply to **both** families:
+
+* It only sees calls nested inside a ``with`` block in the same function scope
+  — a seam reached through a helper called from inside the UoW is not caught,
+  and a nested ``def``/``lambda`` resets the scope (a helper *defined* inside a
+  UoW but *called* elsewhere is not flagged).
+* It matches on surface syntax: aliasing a seam to a local
+  (``fn = resolver.active_core_for_rom; fn(rom_id)``) or holding the UoW
+  factory under an attribute whose name does not end in ``uow_factory`` slips
+  past the name match.
+* Both seam lists are hand-maintained. A seam whose implementation *grows* a
+  UoW open or a file read later is not detected until someone adds its name.
+
+One blind spot is not symmetric between the families. **A seam injected as a
+call-shaped Protocol** (``__call__``, no method name of its own) is invisible
+under rule 1: the consumer writes ``self._candidate_probe(...)``, never the
+seam's own name, so the ``current_save_sorting`` / ``has_adoption_candidate``
+entries guard only call sites that name the method — the owning service's own,
+and any peer holding the object rather than the bound method. Closing that
+generally means matching the holding attribute too, which is a second list to
+keep in step and is not built. Rule 2 has one call-shaped seam,
+``SystemResolver``, and closes it the cheap way instead: every consumer in
+``services/`` stores it as ``self._resolve_system``, so **both** the Protocol's
+name and that attribute name are listed. That is a convention, not a
+guarantee — a consumer that binds it under a different attribute slips past.
+
+Conversely, matching only *attribute* calls is what keeps the ``enumerate_discs``
+entry safe: the pure ``domain.disc_selection.enumerate_discs`` is called bare
+(``enumerate_discs(files, ...)``) and does no I/O of its own, so it is never
+mistaken for the seam.
+
+The escape hatch is a trailing comment on the seam-call line:
 
     self._active_core.active_core_for_rom(rom_id)  # pragma: no uow-check
+
+**One pragma covers both families.** It suppresses the line, not a named rule:
+a call site names exactly one seam, and no seam is in both lists (a seam that
+both opened a UoW and walked the disk would be its own design fault), so there
+is never an ambiguity for a second pragma spelling to resolve. Requiring the
+writer to pick the right spelling would only ask them to restate what the
+failure message already told them.
 
 Exit 0 on no findings, exit 1 if any findings (one line per finding).
 """
@@ -51,7 +98,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SERVICES_DIR = REPO_ROOT / "py_modules" / "services"
 
-# --- The seam list -------------------------------------------------------
+# --- Rule 1: seams that open their own Unit of Work ----------------------
 # Method names whose implementation opens its OWN Unit of Work. Calling any
 # of these while a UoW is already open on the same SQLite connection
 # re-enters the non-reentrant ``BEGIN IMMEDIATE`` and deadlocks. Matched by
@@ -72,6 +119,35 @@ SEAM_METHODS: frozenset[str] = frozenset(
     }
 )
 
+# --- Rule 2: seams that touch the filesystem -----------------------------
+# Method names whose implementation reads the disk. None of them opens a UoW,
+# so nothing deadlocks — the cost is duration: the UoW's BEGIN IMMEDIATE holds
+# the global write lock across the whole walk, and every other connection in
+# the plugin gives up at busy_timeout. Each entry names the Protocol it belongs
+# to and the I/O it performs.
+IO_SEAM_METHODS: frozenset[str] = frozenset(
+    {
+        # DiscResolver (services/disc_launch_resolver.py) — recursive walk of the
+        # ROM's install directory, plus an ES-DE config read for the system's
+        # supported extensions.
+        "enumerate_discs",
+        # CoreInfoProvider (adapters/es_de_config.py) — ES-DE config discovery and
+        # parse, plus a per-option probe for whether that emulator is installed.
+        "get_emulator_options",
+        # DiscResolver (services/disc_launch_resolver.py) — the same recursive
+        # walk of the install directory, resolving the persisted disc pin over it.
+        "resolve_for_install",
+        # SystemResolver (services/protocols/paths.py) — opens and parses
+        # RetroDECK's ``config.json``. It is implemented on the RomM HTTP adapter,
+        # which the name makes easy to misread: it does no network work at all,
+        # only the file read. The Protocol is call-shaped, so ``_resolve_system``
+        # is listed with it — that is the attribute every consumer in services/
+        # binds it to, and the only spelling the matcher can see (module docstring).
+        "resolve_system",
+        "_resolve_system",
+    }
+)
+
 # A Unit of Work is opened by *calling* a factory whose final name segment
 # ends with this suffix — ``self._uow_factory()``, ``config.uow_factory()``,
 # a bare ``uow_factory()``. Used both to recognise the enclosing ``with``
@@ -79,6 +155,20 @@ SEAM_METHODS: frozenset[str] = frozenset(
 UOW_FACTORY_SUFFIX = "uow_factory"
 
 ESCAPE_HATCH = "pragma: no uow-check"
+
+# The two remedies are one sentence apart, but the hazard behind them is not:
+# rule 1 hangs this operation, rule 2 hangs every other one. A reader who hits
+# either message has to be able to tell which rule they broke.
+_DEADLOCK_REMEDY = (
+    "snapshot inside the UoW, close it, "
+    "then resolve outside (the nested BEGIN IMMEDIATE deadlocks → 'database is locked')"
+)
+_WRITE_LOCK_REMEDY = (
+    "snapshot inside the UoW, close it, "
+    "then do the I/O outside (BEGIN IMMEDIATE holds the global write lock even for a "
+    "read-only UoW, so every other writer in the plugin blocks for as long as the I/O "
+    "takes, then fails at busy_timeout)"
+)
 
 
 def _final_name(func: ast.expr) -> str | None:
@@ -103,33 +193,36 @@ def _is_uow_opener(node: ast.expr) -> bool:
     return name is not None and name.endswith(UOW_FACTORY_SUFFIX)
 
 
-def _seam_method(node: ast.Call) -> str | None:
-    """Return the seam method name a call invokes, or None."""
+def _classify(node: ast.Call) -> tuple[str, str] | None:
+    """Return ``(detail, remedy)`` for a hazardous call, or None.
+
+    Only attribute calls are considered for the two seam families, so a
+    same-named module-level function (``domain.disc_selection.enumerate_discs``)
+    is never mistaken for the seam it shares a name with.
+    """
     func = node.func
-    if isinstance(func, ast.Attribute) and func.attr in SEAM_METHODS:
-        return func.attr
+    if isinstance(func, ast.Attribute):
+        if func.attr in SEAM_METHODS:
+            return f"UoW-opening seam '.{func.attr}(...)'", _DEADLOCK_REMEDY
+        if func.attr in IO_SEAM_METHODS:
+            return f"file-I/O seam '.{func.attr}(...)'", _WRITE_LOCK_REMEDY
+    if _is_uow_opener(node):
+        return f"nested UoW open '{_final_name(func)}(...)'", _DEADLOCK_REMEDY
     return None
 
 
 def _finding_for_call(node: ast.Call, source_lines: list[str], rel: str) -> str | None:
     """Classify one call reached while a UoW is open. None = not a hazard."""
-    seam = _seam_method(node)
-    if seam is not None:
-        detail = f"UoW-opening seam '.{seam}(...)'"
-    elif _is_uow_opener(node):
-        detail = f"nested UoW open '{_final_name(node.func)}(...)'"
-    else:
+    classified = _classify(node)
+    if classified is None:
         return None
+    detail, remedy = classified
 
     line_idx = node.lineno - 1
     if 0 <= line_idx < len(source_lines) and ESCAPE_HATCH in source_lines[line_idx]:
         return None
 
-    return (
-        f"{rel}:{node.lineno}:{node.col_offset} "
-        f"{detail} called while a UoW is open — snapshot inside the UoW, close it, "
-        f"then resolve outside (the nested BEGIN IMMEDIATE deadlocks → 'database is locked')"
-    )
+    return f"{rel}:{node.lineno}:{node.col_offset} {detail} called while a UoW is open — {remedy}"
 
 
 def _scan(node: ast.AST, in_uow: bool, source_lines: list[str], rel: str, findings: list[str]) -> None:
@@ -174,7 +267,7 @@ def _scan(node: ast.AST, in_uow: bool, source_lines: list[str], rel: str, findin
 
 
 def scan_source(source: str, filename: str = "<source>") -> list[str]:
-    """Return every nested-UoW-seam finding in one module's *source* text."""
+    """Return every in-UoW seam finding in one module's *source* text."""
     try:
         tree = ast.parse(source, filename=filename)
     except SyntaxError:
@@ -187,7 +280,7 @@ def scan_source(source: str, filename: str = "<source>") -> list[str]:
 
 
 def find_violations(services_dir: Path = SERVICES_DIR) -> list[str]:
-    """Walk *services_dir* and return every nested-UoW-seam finding."""
+    """Walk *services_dir* and return every in-UoW seam finding."""
     findings: list[str] = []
     if not services_dir.is_dir():
         return findings
@@ -209,13 +302,25 @@ def main(argv: list[str]) -> int:
     if findings:
         for line in findings:
             print(line)
-        print()
-        print(
-            "ERROR: a UoW-opening seam (ActiveCoreResolver / RelaunchOptionsResolver / "
-            "uow_factory) must not be called while a UoW is open on the same path "
-            "(CLAUDE.md → Invariant register). Snapshot inside the UoW, close it, then "
-            "resolve outside."
-        )
+        # Only summarise the rules that actually fired, so the closing advice
+        # matches the findings above it.
+        if any(_DEADLOCK_REMEDY in line for line in findings):
+            print()
+            print(
+                "ERROR: a UoW-opening seam (ActiveCoreResolver / RelaunchOptionsResolver / "
+                "uow_factory) must not be called while a UoW is open on the same path "
+                "(CLAUDE.md → Invariant register). Snapshot inside the UoW, close it, then "
+                "resolve outside."
+            )
+        if any(_WRITE_LOCK_REMEDY in line for line in findings):
+            print()
+            print(
+                "ERROR: a file-I/O seam (DiscResolver / CoreInfoProvider / SystemResolver) "
+                "must not be called while a UoW is open — a Unit of Work wraps database "
+                "reads and writes only, never file or server I/O (CLAUDE.md → Invariant "
+                "register, CONTEXT.md → Unit of Work, ADR-0006). Snapshot inside the UoW, "
+                "close it, then do the I/O outside."
+            )
         return 1
     print(f"OK: no nested UoW-seam calls in {SERVICES_DIR.relative_to(REPO_ROOT)}.")
     return 0
