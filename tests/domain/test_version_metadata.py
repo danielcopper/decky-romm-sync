@@ -38,6 +38,12 @@ class TestConstruction:
         with pytest.raises((AttributeError, TypeError)):
             meta.revision = "2"  # type: ignore[misc]
 
+    def test_empty_group_key_is_rejected(self):
+        # "No group derived yet" is None; an empty key is neither a group nor a
+        # state, and would leave the residency readers disagreeing.
+        with pytest.raises(ValueError, match="sibling_group_key"):
+            VersionMetadata(sibling_group_key="")
+
 
 class TestFromMapping:
     def test_all_keys_present_are_carried(self):
@@ -87,6 +93,14 @@ class TestFromMapping:
         meta = VersionMetadata.from_mapping({"sibling_group_key": "mapping-key"}, sibling_group_key="bound-key")
         assert meta.sibling_group_key == "bound-key"
 
-    def test_falsy_override_falls_back_to_mapping_key(self):
-        meta = VersionMetadata.from_mapping({"sibling_group_key": "mapping-key"}, sibling_group_key=None)
+    @pytest.mark.parametrize("override", [None, ""])
+    def test_falsy_override_falls_back_to_mapping_key(self, override: str | None):
+        meta = VersionMetadata.from_mapping({"sibling_group_key": "mapping-key"}, sibling_group_key=override)
         assert meta.sibling_group_key == "mapping-key"
+
+    def test_empty_key_with_no_other_source_degrades_to_none(self):
+        # from_mapping degrades rather than raises: with no real key on the other
+        # side to fall back to, an empty one coalesces to None instead of
+        # tripping the constructor's invariant.
+        assert VersionMetadata.from_mapping({"sibling_group_key": ""}).sibling_group_key is None
+        assert VersionMetadata.from_mapping({}, sibling_group_key="").sibling_group_key is None
