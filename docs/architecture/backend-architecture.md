@@ -1458,10 +1458,12 @@ backstop short of a Force Full Sync or uninstall/reinstall.
 `get_installed_relaunch_options()` is the read half of the fix: a 0-arg read that returns `[{app_id, launch_options}]`
 for every ROM that is both **installed** (has a `rom_installs` row) and **bound** (its `roms.shortcut_app_id` is set).
 It snapshots the install/ROM rows in one short read UoW, then re-bakes each command **outside** that UoW through the
-same `active_core` / `disc_resolver` seams every other bake site uses — resolving inside the iteration UoW would
-deadlock, since `ActiveCoreResolver.active_core_for_rom` opens its own UoW (the per-connection write lock is not
-re-entrant). Uninstalled and unbound ROMs are skipped by construction. The callable is read-only and **not**
-migration-gated.
+same `active_core` / `disc_resolver` seams every other bake site uses. Each seam is outside for its own reason:
+resolving `active_core` inside the iteration UoW would deadlock, since `ActiveCoreResolver.active_core_for_rom` opens
+its own UoW (the per-connection write lock is not re-entrant), while `disc_resolver` opens none and instead walks the
+install directory — and `BEGIN IMMEDIATE` takes the write lock even for a read, so a walk inside the UoW stalls every
+other writer for its duration (#1779). Uninstalled and unbound ROMs are skipped by construction. The callable is
+read-only and **not** migration-gated.
 
 The frontend pulls this on mount, once the backend is proven reachable (it reuses the app-id/metadata init's
 retry/backoff, not a second loop), and confirm-sets each entry via the existing `setLaunchOptionsConfirmed`

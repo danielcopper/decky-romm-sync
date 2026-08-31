@@ -7,8 +7,12 @@ seam the sync's bake sites draw from — rather than a mock of it.
 The disc-resolved install paths (``do_scan_installed_paths`` /
 ``do_read_installed_paths``) are pinned in ``tests/services/test_disc_bake_sites.py``
 alongside the other launch-bake sites, so a change to the disc pin's handling
-fails every site at once.
+fails every site at once. What is pinned HERE about those two is the boundary
+that belongs to this module rather than to the disc pin: neither of them may
+hold a Unit of Work open across the resolver's directory listing.
 """
+
+from fakes.uow_open_probe import record_uow_open
 
 from domain.shortcut_data import EmulatorInvocation
 
@@ -66,3 +70,37 @@ class TestBuildCoreOverrides:
             [{"id": 10, "platform_slug": "n64"}]
         )
         assert result == {}
+
+
+class TestInstallPathReadsCloseTheUnitOfWorkFirst:
+    """Neither install-path read holds a UoW open across the disc resolver.
+
+    ``resolve_for_install`` lists the install directory, once per installed ROM.
+    A UoW takes SQLite's ``BEGIN IMMEDIATE`` write lock, so a listing held
+    inside one blocks every other writer in the plugin for the whole scan
+    (CONTEXT.md → Unit of Work, #1779). ``FakeUnitOfWork`` shares no connection,
+    so what a test can see is the ordering: the rows are snapshotted inside the
+    transaction and every resolve runs after it closes.
+    """
+
+    def test_scan_resolves_after_the_unit_of_work_closes(self, plugin):
+        _seed_install(plugin, 10, file_path="/roms/psx/a.chd", platform_slug="psx")
+        _seed_install(plugin, 11, file_path="/roms/psx/b.chd", platform_slug="psx")
+        resolver = plugin._sync_service._shortcut_launch_resolver
+        open_at_resolve = record_uow_open(plugin._uow, resolver._disc_resolver, "resolve_for_install")
+
+        paths = resolver.do_scan_installed_paths()
+
+        assert set(paths) == {10, 11}
+        assert open_at_resolve == [False, False]
+
+    def test_read_resolves_after_the_unit_of_work_closes(self, plugin):
+        _seed_install(plugin, 10, file_path="/roms/psx/a.chd", platform_slug="psx")
+        _seed_install(plugin, 11, file_path="/roms/psx/b.chd", platform_slug="psx")
+        resolver = plugin._sync_service._shortcut_launch_resolver
+        open_at_resolve = record_uow_open(plugin._uow, resolver._disc_resolver, "resolve_for_install")
+
+        paths = resolver.do_read_installed_paths({10, 11})
+
+        assert set(paths) == {10, 11}
+        assert open_at_resolve == [False, False]

@@ -23,12 +23,17 @@ silent on the peer-call form (``self.do_build_core_overrides(...)`` inside it),
 a blind spot its own docstring records. So the reason not to write the fold is
 the deadlock, not a check that would stop you — nothing will.
 
-One rule this module does not keep, inherited with the code rather than
-introduced by it: both install-path readers hold their UoW open across the disc
-resolver's directory listing, once per installed ROM. CONTEXT.md's Unit of Work
-entry keeps a transaction narrow — database reads and writes, never file I/O —
-so this file is where that fix lands when it comes, and a reader should not
-take the boundary above as evidence the rest is clean.
+The ``disc_resolver`` seam is held to the same boundary from the other side:
+both install-path readers snapshot their ``(install, selected_disc)`` pairs
+inside the read UoW and close it before resolving a single one, because
+``resolve_for_install`` lists the install directory. CONTEXT.md's Unit of Work
+entry keeps a transaction to database reads and writes — ``BEGIN IMMEDIATE``
+takes the write lock even for a read, so a directory walk per installed ROM
+held inside one stalls every other writer for as long as the walk takes. The
+same check carries this as its second rule, on the same matcher and with the
+same reach: it fires on ``resolve_for_install`` named inside the ``with``
+block and is silent on the peer-call form. Both boundaries are gated inline;
+neither is gated against the fold.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from domain.rom_install import RomInstall
     from domain.shortcut_data import EmulatorInvocation
     from services.protocols import ActiveCoreReader, DiscResolver, UnitOfWorkFactory
 
@@ -98,13 +104,15 @@ class ShortcutLaunchResolver:
         record appear in the map; a ROM not downloaded is absent, and both cases
         reach :func:`build_shortcuts_data` as the same empty launch command.
         """
+        pending: list[tuple[RomInstall, str | None]] = []
         with self._uow_factory() as uow:
-            paths: dict[int, str] = {}
             for install in uow.rom_installs.iter_all():
                 rom = uow.roms.get(install.rom_id)
-                selected_disc = rom.selected_disc if rom is not None else None
-                paths[install.rom_id] = self._disc_resolver.resolve_for_install(install, selected_disc)
-            return paths
+                pending.append((install, rom.selected_disc if rom is not None else None))
+        return {
+            install.rom_id: self._disc_resolver.resolve_for_install(install, selected_disc)
+            for install, selected_disc in pending
+        }
 
     def do_read_installed_paths(self, rom_ids: set[int]) -> dict[int, str]:
         """Read ``{rom_id: bake_path}`` for *rom_ids* via targeted point-lookups.
@@ -118,12 +126,15 @@ class ShortcutLaunchResolver:
         target. A ROM with no install record is absent; both cases reach
         :func:`build_shortcuts_data` as the same empty launch command.
         """
+        pending: list[tuple[RomInstall, str | None]] = []
         with self._uow_factory() as uow:
-            paths: dict[int, str] = {}
             for rom_id in rom_ids:
                 install = uow.rom_installs.get(rom_id)
-                if install is not None:
-                    rom = uow.roms.get(rom_id)
-                    selected_disc = rom.selected_disc if rom is not None else None
-                    paths[rom_id] = self._disc_resolver.resolve_for_install(install, selected_disc)
-            return paths
+                if install is None:
+                    continue
+                rom = uow.roms.get(rom_id)
+                pending.append((install, rom.selected_disc if rom is not None else None))
+        return {
+            install.rom_id: self._disc_resolver.resolve_for_install(install, selected_disc)
+            for install, selected_disc in pending
+        }

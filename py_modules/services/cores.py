@@ -248,15 +248,48 @@ class CoreService:
                     "reason": "not_found",
                     "message": f"ROM {rom_id} is not tracked",
                 }
-            system = self._resolve_system(rom.platform_slug)
-            invocation = label_to_invocation(self._core_info.get_emulator_options(system)["options"], label)
-            if invocation is None:
-                # Hard-fail BEFORE any write — never persist a label that does not
-                # resolve to a bakeable emulator (unknown / needs_setup / un-bakeable).
+            platform_slug = rom.platform_slug
+        # Resolve the label between the two transactions: the emulator-options
+        # read re-probes ES-DE's config and each option's install on every call
+        # (the slug→system resolver only on the process's first), and a UoW
+        # holds SQLite's BEGIN IMMEDIATE write lock — file I/O inside one stalls
+        # every other writer for its duration.
+        system = self._resolve_system(platform_slug)
+        invocation = label_to_invocation(self._core_info.get_emulator_options(system)["options"], label)
+        if invocation is None:
+            # Hard-fail BEFORE any write — never persist a label that does not
+            # resolve to a bakeable emulator (unknown / needs_setup / un-bakeable).
+            return {
+                "success": False,
+                "reason": "core_unavailable",
+                "message": f"Emulator '{label}' is not available for {platform_slug}",
+            }
+        with self._uow_factory() as uow:
+            # The row is re-read because the label was resolved against a
+            # snapshot: a background sync, a finishing download or the
+            # removed-game cleanup can retire the ROM between the two
+            # transactions, each on its own connection.
+            rom = uow.roms.get(rom_id)
+            if rom is None:
+                return {
+                    "success": False,
+                    "reason": "not_found",
+                    "message": f"ROM {rom_id} is not tracked",
+                }
+            if rom.platform_slug != platform_slug:
+                # A re-sync rewrites platform_slug (it is a synced-identity
+                # column). The label was validated against the platform the
+                # snapshot named, so pinning it now would persist a label that
+                # was never checked against the platform it will resolve under.
+                # The message says exactly that rather than calling the label
+                # unavailable: re-resolving to find out would cost the ES-DE
+                # read this split exists to keep out of the transaction, and on
+                # a label valid for both platforms "unavailable" is simply
+                # false — the user retries and it works.
                 return {
                     "success": False,
                     "reason": "core_unavailable",
-                    "message": f"Emulator '{label}' is not available for {rom.platform_slug}",
+                    "message": f"Emulator '{label}' was not verified for {rom.platform_slug}; try again",
                 }
             # Enforce the aggregate invariant (strip / reject blank) via the
             # verb method, then persist the resulting label through the pin-only

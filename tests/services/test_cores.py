@@ -12,6 +12,7 @@ from fakes.fake_core_info_provider import FakeCoreInfoProvider, libretro_option,
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
+from fakes.uow_open_probe import record_uow_open
 
 from domain.disc_selection import Disc
 from domain.emulator_commands import options_to_payload
@@ -699,3 +700,100 @@ class TestCoreChangePreservesPinnedDisc:
             '"%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/bsnes_libretro.so %ROM%" '
             '"/roms/snes/mario.sfc"'
         )
+
+
+# ── transaction boundary ───────────────────────────────────────────────
+
+
+def _retire_rom_between_transactions(uow: FakeUnitOfWork, core_info: FakeCoreInfoProvider, rom_id: int) -> None:
+    """Delete the ROM row while the emulator options are being read.
+
+    That read is the window between ``set_game_core``'s read transaction and
+    its write transaction — the moment a background sync, a finishing download
+    or the removed-game cleanup can retire the ROM from its own connection.
+    """
+    get_emulator_options = core_info.get_emulator_options
+
+    def retiring(system_name):
+        with uow:
+            uow.roms.delete(rom_id)
+        return get_emulator_options(system_name)
+
+    core_info.get_emulator_options = retiring
+
+
+def _move_platform_between_transactions(
+    uow: FakeUnitOfWork, core_info: FakeCoreInfoProvider, rom_id: int, *, platform_slug: str
+) -> None:
+    """Re-sync the ROM onto a different platform while the options are read.
+
+    ``platform_slug`` is a synced-identity column, so a sync UPSERT landing in
+    the window between the two transactions rewrites it — and the label was
+    resolved against the platform the first transaction read.
+    """
+    get_emulator_options = core_info.get_emulator_options
+
+    def resyncing(system_name):
+        with uow:
+            _seed_rom(uow, rom_id=rom_id, platform_slug=platform_slug, shortcut_app_id=99)
+        return get_emulator_options(system_name)
+
+    core_info.get_emulator_options = resyncing
+
+
+class TestSetGameCoreTransactionBoundary:
+    """The label resolution runs between transactions, never inside one.
+
+    The emulator-options read re-probes ES-DE's config and each option's
+    install on every call; the slug→system resolver parses the plugin's own
+    ``config.json`` once and memoises it for the life of the process, so it is
+    the first call that can land on the file. A UoW takes SQLite's ``BEGIN
+    IMMEDIATE`` write lock, so either read held inside one stalls every other
+    writer for its duration (CONTEXT.md → Unit of Work, #1779).
+    ``FakeUnitOfWork`` shares no connection, so what a test can see is the
+    ordering.
+    """
+
+    def test_label_is_resolved_outside_the_uow(self, event_loop, service, uow, core_info):
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99)
+        _seed_install(uow, rom_id=42, file_path="/roms/snes/mario.sfc")
+        open_at_system = record_uow_open(uow, service, "_resolve_system")
+        open_at_options = record_uow_open(uow, core_info, "get_emulator_options")
+
+        result = event_loop.run_until_complete(service.set_game_core(42, "bsnes"))
+
+        assert result["success"] is True
+        assert open_at_system == [False]
+        assert open_at_options == [False]
+
+    def test_rom_retired_between_transactions_fails_not_found(self, event_loop, service, uow, core_info):
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99)
+        _seed_install(uow, rom_id=42, file_path="/roms/snes/mario.sfc")
+        _retire_rom_between_transactions(uow, core_info, 42)
+
+        result = event_loop.run_until_complete(service.set_game_core(42, "bsnes"))
+
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert "42" in result["message"]
+
+    def test_platform_moved_between_transactions_refuses_the_pin(self, event_loop, service, uow, core_info):
+        # The label resolved against "snes"; the row is "psx" by the time it
+        # would be written, so it was never checked against the platform it will
+        # resolve under. The single-transaction version could not see this.
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99)
+        _seed_install(uow, rom_id=42, file_path="/roms/snes/mario.sfc")
+        _move_platform_between_transactions(uow, core_info, 42, platform_slug="psx")
+
+        result = event_loop.run_until_complete(service.set_game_core(42, "bsnes"))
+
+        assert result["success"] is False
+        assert result["reason"] == "core_unavailable"
+        # Names the platform the row moved to, but claims only what was checked:
+        # whether the label works there was never resolved, and finding out would
+        # cost the ES-DE read this split keeps out of the transaction.
+        assert "psx" in result["message"]
+        assert "not verified" in result["message"]
+        assert "not available" not in result["message"]
+        with uow as u:
+            assert u.roms.get(42).emulator_override is None

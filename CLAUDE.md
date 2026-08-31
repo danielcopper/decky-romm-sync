@@ -244,7 +244,45 @@ Format: **invariant** — tier — enforced by.
 - **Aggregate state mutated only via verb-named methods (no field assignment)** — check —
   `scripts/check_aggregate_field_assignment.py`
 - **No UoW-opening seam (ActiveCoreResolver, RelaunchOptionsResolver, uow_factory) is called while a UoW is open on the
-  same path** — check — `scripts/check_uow_seam_nesting.py`
+  same path** — check — `scripts/check_uow_seam_nesting.py` (the first of the **two** rules that script carries, over
+  one shared matcher; the file-I/O rule below is a different hazard with its own seam list and its own failure message,
+  and neither entry is evidence about the other)
+- **No file-I/O seam is called while a UoW is open — a Unit of Work wraps database reads and writes, never file or
+  server I/O (CONTEXT.md → Unit of Work, ADR-0006)** — check — `scripts/check_uow_seam_nesting.py`, second seam family
+  (`IO_SEAM_METHODS`). The list is **the seams this checker can see and has been told about, never an inventory of the
+  I/O seams that exist**: `DiscResolver.enumerate_discs` / `.resolve_for_install` (a recursive walk of the ROM's install
+  directory), all four `CoreInfoProvider` reads — `get_active_core`, `get_default_emulator`, `get_emulator_options`,
+  `resolve_sandbox_launcher` (each re-probes the flatpak roots for **its** ES-DE file and re-stats it before it may use
+  the parse cache: `es_systems.xml` for the first three, `es_find_rules.xml` for the launcher read, and both for the
+  options read, which globs each option's emulator install through the find rules), `SystemResolver` (parses the
+  plugin's **own** bundled `config.json`, not RetroDECK's `retrodeck.json`, and does no network work despite living on
+  the RomM HTTP adapter), and `SystemSupportedExtensionsFn` / `SystemKnownFn` (two questions to `es_systems.xml` through
+  that same per-call probe). Two other real I/O seams were weighed and kept out — the reasons are in the script's
+  docstring, and neither is an exemption; nor are those two an inventory of what else touches the disk. **"It's only a
+  read" is the reasoning this rule exists to refuse**: `SqliteUnitOfWork.__enter__` issues `BEGIN IMMEDIATE`, so even a
+  read-only UoW takes the write lock. The database is in WAL, so readers are unaffected — but every other **writer**
+  waits on the lock for up to `busy_timeout=5000` and fails with `SQLITE_BUSY` if it is still held then, and
+  `FakeUnitOfWork` shares no connection, so no unit test notices. Six call sites had drifted across the rule before
+  anything looked (#1779), for the reason the check exists: nothing at a call site reveals that an injected seam touches
+  the disk. **The rule and the gate come from reading code — no measurement of how long any of those transactions
+  actually held the lock exists, and nothing here should be read as one.** What the check sees is the deadlock rule's
+  matcher unchanged — an **attribute** call naming a listed seam, lexically inside a `with <...>uow_factory()` block in
+  the same function scope — so it inherits every blind spot of that half: a seam behind a helper one level down, an
+  alias to a local, a factory attribute whose name does not end in `uow_factory`, a nested `def`/`lambda` (which resets
+  the scope by design), a seam **passed as a bound method**
+  (`run_in_executor(None, self._disc_resolver.enumerate_discs, install)` — an attribute, not a call, and
+  `run_in_executor` is exactly how `disc.py` and `cores.py` reach their `_io` bodies; the same shape
+  `check_read_only_module.py` records for its own gate), and the hand-maintained list itself, which cannot notice a seam
+  whose implementation _grows_ a file read later. Matching only attribute calls is deliberate: the pure
+  `domain.disc_selection.enumerate_discs` shares a name with the seam and does no I/O — it is safe because its call site
+  imports it bare, not because of the name. The call-shaped blind spot is shared with the deadlock rule and only this
+  family closes it: its three `__call__`-only seams have no method name a consumer would write, so the list carries the
+  attribute each is bound to (`_resolve_system`, `_system_extensions`, `_system_known`) — by convention rather than by
+  construction, and only while such a name means one thing, which is exactly what keeps `_list_files` out. The deadlock
+  rule's own call-shaped seams stay open. `SystemResolver` is the odd one out for a second reason: the adapter memoises
+  its map for the life of the process, so exactly one call ever opens the file, and the entry earns its place because
+  that one call can land inside a UoW. One `# pragma: no uow-check` covers both families — it suppresses the line, and
+  no seam is in both lists, so where a line does name two seams it silences both
 - **Services never call clocks / sleep / uuid / random directly (inject the Protocol)** — check —
   `scripts/check_cosmic_call_bans.sh`
 - **No module in `services/`, `bootstrap/`, `adapters/`, `domain/`, `lib/` or `models/` crosses the ~1000-LOC

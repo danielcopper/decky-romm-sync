@@ -89,9 +89,12 @@ class DiscService:
             install = uow.rom_installs.get(rom_id)
             if rom is None or install is None or install.rom_dir is None:
                 return {"multi_disc": False}
-            discs = self._disc_resolver.enumerate_discs(install)
             selected = rom.selected_disc
             file_path = install.file_path
+        # Enumeration lists the install directory, so it runs on the snapshot
+        # after the read UoW closes: a UoW takes SQLite's BEGIN IMMEDIATE write
+        # lock, and holding one across file I/O stalls every other writer.
+        discs = self._disc_resolver.enumerate_discs(install)
         if len(discs) < 2:
             return {"multi_disc": False}
         # Down-validate the pin: a stale pin (the file is no longer enumerated)
@@ -125,10 +128,6 @@ class DiscService:
         return await self._loop.run_in_executor(None, self._select_disc_io, rom_id, filename)
 
     def _select_disc_io(self, rom_id: int, filename: str | None) -> dict[str, Any]:
-        # The validate + write run inside one UoW; the bake — which calls
-        # ``active_core_for_rom`` (it opens its OWN UoW) — runs AFTER this UoW
-        # closes, so the two never nest on the same SQLite connection (BEGIN
-        # IMMEDIATE would otherwise self-deadlock).
         with self._uow_factory() as uow:
             rom = uow.roms.get(rom_id)
             install = uow.rom_installs.get(rom_id)
@@ -138,20 +137,48 @@ class DiscService:
                     "reason": "not_installed",
                     "message": f"ROM {rom_id} is not installed as a multi-disc ROM",
                 }
-            discs = self._disc_resolver.enumerate_discs(install)
-            if len(discs) < 2:
+        # Enumerate and validate between the two transactions: enumeration lists
+        # the install directory, and a UoW holds SQLite's BEGIN IMMEDIATE write
+        # lock, so file I/O inside one stalls every other writer in the plugin.
+        discs = self._disc_resolver.enumerate_discs(install)
+        if len(discs) < 2:
+            return {
+                "success": False,
+                "reason": ErrorCode.UNSUPPORTED.value,
+                "message": f"ROM {rom_id} is not a multi-disc ROM",
+            }
+        if filename is not None and filename not in {disc.filename for disc in discs}:
+            # B4: hard-fail BEFORE any write — never pin a disc no enumeration
+            # can resolve to a launchable path.
+            return {
+                "success": False,
+                "reason": ErrorCode.NOT_FOUND.value,
+                "message": f"'{filename}' is not a disc of ROM {rom_id}",
+            }
+        with self._uow_factory() as uow:
+            # The row is re-read because the pick is now decided against a
+            # snapshot: a background sync, a finishing download or the
+            # removed-game cleanup can retire the ROM between the two
+            # transactions, each on its own connection. The install is re-read
+            # for the same admission the first transaction applied — it exists
+            # and is folder-backed — but the row is never re-bound: the bake
+            # resolves over ``discs``, which were enumerated from the snapshot
+            # above, and a relocated install paired with that older listing
+            # would resolve a disc to a directory it was never listed in.
+            # That is the accepted cost of the split: a re-install that moves the
+            # ROM in this window still gets its pin, and the returned
+            # ``launch_options`` — which the frontend confirm-sets on the live
+            # shortcut — then names the directory the ROM has left. It is
+            # self-correcting rather than sticky: the startup launch-options
+            # reconcile (#1043) re-bakes every installed+bound ROM from the
+            # current rows on the next plugin load.
+            rom = uow.roms.get(rom_id)
+            current_install = uow.rom_installs.get(rom_id)
+            if rom is None or current_install is None or current_install.rom_dir is None:
                 return {
                     "success": False,
-                    "reason": ErrorCode.UNSUPPORTED.value,
-                    "message": f"ROM {rom_id} is not a multi-disc ROM",
-                }
-            if filename is not None and filename not in {disc.filename for disc in discs}:
-                # B4: hard-fail BEFORE any write — never pin a disc no
-                # enumeration can resolve to a launchable path.
-                return {
-                    "success": False,
-                    "reason": ErrorCode.NOT_FOUND.value,
-                    "message": f"'{filename}' is not a disc of ROM {rom_id}",
+                    "reason": "not_installed",
+                    "message": f"ROM {rom_id} is not installed as a multi-disc ROM",
                 }
             if filename is None:
                 rom.clear_selected_disc()
@@ -171,8 +198,8 @@ class DiscService:
         (the pin just written, or the default when cleared), then folds it over
         the ROM's FULL active core so a per-game/per-platform core still bakes its
         ``-e`` override form rather than a plain launch. Runs after the write UoW
-        has closed: ``active_core_for_rom`` opens its own UoW, so resolving here
-        keeps it from nesting on the same SQLite connection.
+        has closed: ``active_emulator_for_rom`` opens its own UoW, so resolving
+        here keeps it from nesting on the same SQLite connection.
         """
         bake_path = self._disc_resolver.resolve_bake_path(install, discs, selected_disc)
         emulator = self._active_core.active_emulator_for_rom(rom_id)
