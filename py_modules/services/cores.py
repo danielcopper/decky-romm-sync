@@ -249,11 +249,11 @@ class CoreService:
                     "message": f"ROM {rom_id} is not tracked",
                 }
             platform_slug = rom.platform_slug
-        # Resolve the label between the two transactions: the slug→system
-        # resolver parses config.json and the emulator options probe ES-DE's
-        # config plus each option's install, and a UoW holds SQLite's BEGIN
-        # IMMEDIATE write lock — file I/O inside one stalls every other writer
-        # in the plugin.
+        # Resolve the label between the two transactions: the emulator-options
+        # read re-probes ES-DE's config and each option's install on every call
+        # (the slug→system resolver only on the process's first), and a UoW
+        # holds SQLite's BEGIN IMMEDIATE write lock — file I/O inside one stalls
+        # every other writer for its duration.
         system = self._resolve_system(platform_slug)
         invocation = label_to_invocation(self._core_info.get_emulator_options(system)["options"], label)
         if invocation is None:
@@ -275,6 +275,16 @@ class CoreService:
                     "success": False,
                     "reason": "not_found",
                     "message": f"ROM {rom_id} is not tracked",
+                }
+            if rom.platform_slug != platform_slug:
+                # A re-sync rewrites platform_slug (it is a synced-identity
+                # column). The label was validated against the platform the
+                # snapshot named, so pinning it now would persist a label that
+                # was never checked against the platform it will resolve under.
+                return {
+                    "success": False,
+                    "reason": "core_unavailable",
+                    "message": f"Emulator '{label}' is not available for {rom.platform_slug}",
                 }
             # Enforce the aggregate invariant (strip / reject blank) via the
             # verb method, then persist the resulting label through the pin-only

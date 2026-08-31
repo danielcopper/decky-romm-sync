@@ -722,13 +722,34 @@ def _retire_rom_between_transactions(uow: FakeUnitOfWork, core_info: FakeCoreInf
     core_info.get_emulator_options = retiring
 
 
+def _move_platform_between_transactions(
+    uow: FakeUnitOfWork, core_info: FakeCoreInfoProvider, rom_id: int, *, platform_slug: str
+) -> None:
+    """Re-sync the ROM onto a different platform while the options are read.
+
+    ``platform_slug`` is a synced-identity column, so a sync UPSERT landing in
+    the window between the two transactions rewrites it — and the label was
+    resolved against the platform the first transaction read.
+    """
+    get_emulator_options = core_info.get_emulator_options
+
+    def resyncing(system_name):
+        with uow:
+            _seed_rom(uow, rom_id=rom_id, platform_slug=platform_slug, shortcut_app_id=99)
+        return get_emulator_options(system_name)
+
+    core_info.get_emulator_options = resyncing
+
+
 class TestSetGameCoreTransactionBoundary:
     """The label resolution runs between transactions, never inside one.
 
-    The slug→system resolver parses ``config.json`` and the emulator-options
-    read probes ES-DE's config plus each option's install. A UoW takes SQLite's
-    ``BEGIN IMMEDIATE`` write lock, so either read held inside one stalls every
-    other writer in the plugin (CONTEXT.md → Unit of Work, #1779).
+    The emulator-options read re-probes ES-DE's config and each option's
+    install on every call; the slug→system resolver parses the plugin's own
+    ``config.json`` once and memoises it for the life of the process, so it is
+    the first call that can land on the file. A UoW takes SQLite's ``BEGIN
+    IMMEDIATE`` write lock, so either read held inside one stalls every other
+    writer for its duration (CONTEXT.md → Unit of Work, #1779).
     ``FakeUnitOfWork`` shares no connection, so what a test can see is the
     ordering.
     """
@@ -755,3 +776,19 @@ class TestSetGameCoreTransactionBoundary:
         assert result["success"] is False
         assert result["reason"] == "not_found"
         assert "42" in result["message"]
+
+    def test_platform_moved_between_transactions_refuses_the_pin(self, event_loop, service, uow, core_info):
+        # The label resolved against "snes"; the row is "psx" by the time it
+        # would be written, so it was never checked against the platform it will
+        # resolve under. The single-transaction version could not see this.
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99)
+        _seed_install(uow, rom_id=42, file_path="/roms/snes/mario.sfc")
+        _move_platform_between_transactions(uow, core_info, 42, platform_slug="psx")
+
+        result = event_loop.run_until_complete(service.set_game_core(42, "bsnes"))
+
+        assert result["success"] is False
+        assert result["reason"] == "core_unavailable"
+        assert "psx" in result["message"]
+        with uow as u:
+            assert u.roms.get(42).emulator_override is None

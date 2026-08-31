@@ -277,6 +277,24 @@ def _relocate_between_transactions(uow: FakeUnitOfWork, disc_resolver: FakeDiscR
     disc_resolver.enumerate_discs = relocating
 
 
+def _unfold_install_between_transactions(uow: FakeUnitOfWork, disc_resolver: FakeDiscResolver, rom_id: int) -> None:
+    """Replace the folder-backed install with a single-file one while enumerating.
+
+    The same window as :func:`_retire_between_transactions`, with the install
+    re-installed as a single file (``rom_dir`` NULL) — the shape the first
+    transaction refuses outright, arriving after it has already admitted the ROM.
+    """
+    enumerate_discs = disc_resolver.enumerate_discs
+
+    def unfolding(install):
+        discs = enumerate_discs(install)
+        with uow:
+            _seed_install(uow, rom_id=rom_id, rom_dir=None)
+        return discs
+
+    disc_resolver.enumerate_discs = unfolding
+
+
 class TestTransactionBoundary:
     """Enumeration and the bake run between transactions, never inside one.
 
@@ -345,5 +363,21 @@ class TestTransactionBoundary:
         assert result["success"] is False
         assert result["reason"] == "not_installed"
         # Nothing was pinned on the surviving row.
+        with uow_unwrap(uow) as u:
+            assert u.roms.get(1).selected_disc is None
+
+    def test_install_unfolded_between_transactions_fails_not_installed(self, event_loop, service, uow, disc_resolver):
+        # A folder-backed install re-installed as a single file in the window is
+        # the shape the read transaction refuses up front; the write transaction
+        # applies the same admission rather than pinning a disc onto a ROM that
+        # no longer has a disc folder.
+        _seed_rom(uow, rom_id=1, selected_disc=None)
+        _seed_install(uow, rom_id=1, rom_dir=_ROM_DIR)
+        _unfold_install_between_transactions(uow, disc_resolver, 1)
+
+        result = event_loop.run_until_complete(service.select_disc(1, _DISC2))
+
+        assert result["success"] is False
+        assert result["reason"] == "not_installed"
         with uow_unwrap(uow) as u:
             assert u.roms.get(1).selected_disc is None

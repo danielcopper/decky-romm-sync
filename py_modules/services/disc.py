@@ -159,13 +159,22 @@ class DiscService:
             # The row is re-read because the pick is now decided against a
             # snapshot: a background sync, a finishing download or the
             # removed-game cleanup can retire the ROM between the two
-            # transactions, each on its own connection. The install is only
-            # proven to still exist, never re-bound: the bake resolves over
-            # ``discs``, which were enumerated from the snapshot above, and a
-            # relocated install paired with that older listing would resolve a
-            # disc to a directory it was never listed in.
+            # transactions, each on its own connection. The install is re-read
+            # for the same admission the first transaction applied — it exists
+            # and is folder-backed — but the row is never re-bound: the bake
+            # resolves over ``discs``, which were enumerated from the snapshot
+            # above, and a relocated install paired with that older listing
+            # would resolve a disc to a directory it was never listed in.
+            # That is the accepted cost of the split: a re-install that moves the
+            # ROM in this window still gets its pin, and the returned
+            # ``launch_options`` — which the frontend confirm-sets on the live
+            # shortcut — then names the directory the ROM has left. It is
+            # self-correcting rather than sticky: the startup launch-options
+            # reconcile (#1043) re-bakes every installed+bound ROM from the
+            # current rows on the next plugin load.
             rom = uow.roms.get(rom_id)
-            if rom is None or uow.rom_installs.get(rom_id) is None:
+            current_install = uow.rom_installs.get(rom_id)
+            if rom is None or current_install is None or current_install.rom_dir is None:
                 return {
                     "success": False,
                     "reason": "not_installed",
@@ -177,9 +186,6 @@ class DiscService:
                 rom.pin_selected_disc(filename)
             uow.roms.set_selected_disc(rom_id, rom.selected_disc)
             selected = rom.selected_disc
-        # The bake resolves the ROM's active core through a seam that opens its
-        # OWN UoW, so it runs after the write UoW closes — the non-reentrant
-        # BEGIN IMMEDIATE would otherwise self-deadlock.
         launch_options = self._bake_launch_options(rom_id, install, discs, selected)
         return {"success": True, "launch_options": launch_options, "selected": selected}
 
@@ -192,8 +198,8 @@ class DiscService:
         (the pin just written, or the default when cleared), then folds it over
         the ROM's FULL active core so a per-game/per-platform core still bakes its
         ``-e`` override form rather than a plain launch. Runs after the write UoW
-        has closed: ``active_core_for_rom`` opens its own UoW, so resolving here
-        keeps it from nesting on the same SQLite connection.
+        has closed: ``active_emulator_for_rom`` opens its own UoW, so resolving
+        here keeps it from nesting on the same SQLite connection.
         """
         bake_path = self._disc_resolver.resolve_bake_path(install, discs, selected_disc)
         emulator = self._active_core.active_emulator_for_rom(rom_id)
