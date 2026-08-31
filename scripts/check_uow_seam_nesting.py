@@ -18,13 +18,14 @@ fixed via #1155). The seams live in :data:`SEAM_METHODS`.
 **Rule 2 — a seam that touches the disk holds the write lock across the I/O.**
 ``BEGIN IMMEDIATE`` takes the write lock at the top of the block, so **even a
 read-only UoW is a writer**. The database runs in WAL, so readers are
-unaffected; any other *writer* that arrives blocks and gives up after
-``busy_timeout=5000``. A directory walk or a config parse held inside a UoW
-therefore stalls those writers for as long as the I/O takes. CONTEXT.md's Unit
-of Work entry and ADR-0006 state the rule — a transaction wraps database reads
-and writes, never file or server I/O — and until #1779 nothing detected a
-breach: six call sites had drifted across it, because nothing at a call site
-reveals that an injected seam touches the disk. The seams live in
+unaffected; any other *writer* that arrives waits on the lock for up to
+``busy_timeout=5000`` and fails with ``SQLITE_BUSY`` only if it is still held
+then. A directory walk or a config parse held inside a UoW therefore stalls
+those writers for as long as the I/O takes. CONTEXT.md's Unit of Work entry and
+ADR-0006 state the rule — a transaction wraps database reads and writes, never
+file or server I/O — and until #1779 nothing detected a breach: six call sites
+had drifted across it, because nothing at a call site reveals that an injected
+seam touches the disk. The seams live in
 :data:`IO_SEAM_METHODS`. Both the rule and this check come from reading the
 code; nothing here rests on a measurement of how long any of those
 transactions actually held the lock.
@@ -66,30 +67,32 @@ spots apply to **both** families:
 * Both seam lists are hand-maintained. A seam whose implementation *grows* a
   UoW open or a file read later is not detected until someone adds its name.
 
-One blind spot is rule 1's alone. **A seam injected as a call-shaped Protocol**
-(``__call__``, no method name of its own) is invisible to it: the consumer
-writes ``self._candidate_probe(...)``, never the seam's own name, so the
-``current_save_sorting`` / ``has_adoption_candidate`` entries guard only call
-sites that name the method — the owning service's own, and any peer holding the
-object rather than the bound method. Closing that generally means matching the
-holding attribute too, which is a second list to keep in step and is not built.
-Rule 2 has one call-shaped seam, ``SystemResolver``, and closes it the cheap way
-instead: every consumer in ``services/`` binds it to ``self._resolve_system``,
-so that attribute name is listed beside ``resolve_system``, the implementation's
-own method name (``RommHttpAdapter.resolve_system``, for a peer holding the
-object). That is a convention, not a guarantee — a consumer that binds it under
-a different attribute slips past.
+One blind spot is **shared by both families, and only one of them closes it**.
+A seam injected as a call-shaped Protocol (``__call__``, no method name of its
+own) has no method name to match: the consumer writes
+``self._candidate_probe(...)``, never the seam's own name. Rule 1 leaves it
+open — the ``current_save_sorting`` / ``has_adoption_candidate`` entries guard
+only call sites that name the method, which is the owning service's own and any
+peer holding the object rather than the bound method. Rule 2's one call-shaped
+seam, ``SystemResolver``, is closed the cheap way instead: every consumer in
+``services/`` binds it to ``self._resolve_system``, so that attribute name is
+listed beside ``resolve_system``, the implementation's own method name
+(``RommHttpAdapter.resolve_system``, for a peer holding the object). That is a
+convention, not a guarantee — a consumer binding it under a different attribute
+slips past. Doing the same for rule 1 means a second list of holding attributes
+to keep in step, and is not built.
 
 Conversely, matching only *attribute* calls is what keeps the ``enumerate_discs``
 entry safe: the pure ``domain.disc_selection.enumerate_discs`` does no I/O of
 its own, and its one consumer imports it bare. Written dotted it *would* be
 flagged — the safety is in the call site's bare import, not in the name.
 
-Seams deliberately left out
----------------------------
-Two families of disk-touching seam are outside :data:`IO_SEAM_METHODS`. Neither
-is exempt from the rule — a UoW held across either is a breach — and the reason
-is not that their I/O matters less:
+Seams considered and left out
+-----------------------------
+These were weighed for :data:`IO_SEAM_METHODS` and kept out. It is a record of
+two decisions, not a survey of what touches the disk. Neither is exempt from the
+rule — a UoW held across either is a breach — and the reason is not that their
+I/O matters less:
 
 * The **call-shaped file seams** — ``SystemSupportedExtensionsFn`` and
   ``SystemKnownFn`` (both reach ``es_systems.xml``) and ``DirectoryFileListerFn``
@@ -98,26 +101,25 @@ is not that their I/O matters less:
   ``self._list_files``, so listing those attribute names would work on exactly
   the convention that carries ``_resolve_system``. Leaving them out is a scope
   decision, not a limit of the mechanism. What does differ is the quality of the
-  match: ``enumerate_discs`` or ``get_emulator_options`` name one seam and
-  nothing else, whereas ``_list_files`` is a name any class might bind to
-  something unrelated, so an entry would key the gate on a naming coincidence.
+  match: ``get_emulator_options`` names one seam and nothing else, whereas
+  ``_list_files`` is a name any class might bind to something unrelated, so an
+  entry would key the gate on a naming coincidence.
 * ``RetroDeckPaths``'s path getters sit behind a 30-second TTL cache
   (``adapters/retrodeck_paths.py``), so a call is usually a dict lookup and a
   ban would fire mostly where nothing is spent — which teaches writers to reach
-  for a pragma instead of looking. The caveat is that the cache is only warm
-  when there is a file to cache: a missing ``retrodeck.json`` deliberately
-  records no cache time, so on a machine without RetroDECK every getter reopens.
+  for a pragma instead of looking. The caveat is that only a successfully-read
+  config is ever cached, and the TTL guard tests the cached value first, so on a
+  machine without RetroDECK every getter reopens.
 
 The escape hatch is a trailing comment on the seam-call line:
 
     self._active_core.active_core_for_rom(rom_id)  # pragma: no uow-check
 
 **One pragma covers both families,** because it suppresses the *line*, not a
-named rule. No seam is in both lists, and where one line names two seams —
-``get_emulator_options(self._resolve_system(slug))`` was the pre-#1779
-``services/cores.py`` shape, on one line — the pragma silences both. A second
-spelling would only ask the writer to restate what the failure message already
-told them, and would have to be written twice on that line.
+named rule — so a line naming more than one seam, such as
+``get_emulator_options(self._resolve_system(slug))``, is silenced by the single
+comment on it. A rule-named spelling would only ask the writer to restate what
+the failure message already told them.
 
 Exit 0 on no findings, exit 1 if any findings (one line per finding).
 """
@@ -169,12 +171,12 @@ IO_SEAM_METHODS: frozenset[str] = frozenset(
         "resolve_for_install",
         # CoreInfoProvider (services/protocols/paths.py) — all four reads of
         # RetroDECK's ES-DE configuration. Each re-probes the flatpak install
-        # roots for es_systems.xml and re-stats it before it may answer from the
-        # parse cache; get_emulator_options additionally globs every option's
-        # emulator install, and resolve_sandbox_launcher reads es_find_rules.xml.
-        # Listing one of the four would be arbitrary — services/firmware.py calls
-        # two of them inside one loop, and services/active_core_resolver.py the
-        # other two.
+        # roots for ITS file and re-stats it before it may answer from the parse
+        # cache: es_systems.xml for the first three, es_find_rules.xml for
+        # resolve_sandbox_launcher. get_emulator_options touches both — it globs
+        # every option's emulator install through the find rules. Listing one of
+        # the four would be arbitrary: services/firmware.py calls two of them
+        # inside one loop, and services/active_core_resolver.py the other two.
         "get_active_core",
         "get_default_emulator",
         "get_emulator_options",
@@ -203,8 +205,8 @@ UOW_FACTORY_SUFFIX = "uow_factory"
 ESCAPE_HATCH = "pragma: no uow-check"
 
 # The two remedies are one sentence apart, but the hazard behind them is not:
-# rule 1 hangs this operation, rule 2 hangs every other one. A reader who hits
-# either message has to be able to tell which rule they broke.
+# rule 1 hangs this operation, rule 2 holds every other writer up. A reader who
+# hits either message has to be able to tell which rule they broke.
 _DEADLOCK_REMEDY = (
     "snapshot inside the UoW, close it, "
     "then resolve outside (the nested BEGIN IMMEDIATE deadlocks → 'database is locked')"
@@ -212,8 +214,8 @@ _DEADLOCK_REMEDY = (
 _WRITE_LOCK_REMEDY = (
     "snapshot inside the UoW, close it, "
     "then do the I/O outside (BEGIN IMMEDIATE holds the write lock even for a "
-    "read-only UoW, so every other writer in the plugin blocks for as long as the I/O "
-    "takes, then fails at busy_timeout)"
+    "read-only UoW, so every other writer in the plugin waits for as long as the I/O "
+    "takes, up to busy_timeout)"
 )
 
 

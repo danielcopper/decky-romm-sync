@@ -252,32 +252,35 @@ Format: **invariant** — tier — enforced by.
   (`IO_SEAM_METHODS`). The list is **the seams this checker can see and has been told about, never an inventory of the
   I/O seams that exist**: `DiscResolver.enumerate_discs` / `.resolve_for_install` (a recursive walk of the ROM's install
   directory), all four `CoreInfoProvider` reads — `get_active_core`, `get_default_emulator`, `get_emulator_options`,
-  `resolve_sandbox_launcher` (each re-probes the flatpak roots for `es_systems.xml` and re-stats it before it may use
-  the parse cache; the options read also globs each option's emulator install, and the launcher read parses
-  `es_find_rules.xml`) — and `SystemResolver` (parses the plugin's **own** bundled `config.json`, not RetroDECK's
-  `retrodeck.json`, and does no network work despite living on the RomM HTTP adapter). Two more families of real I/O
-  seam are left out and the reasons are in the script's docstring; neither is an exemption. **"It's only a read" is the
-  reasoning this rule exists to refuse**: `SqliteUnitOfWork.__enter__` issues `BEGIN IMMEDIATE`, so even a read-only UoW
-  takes the write lock. The database is in WAL, so readers are unaffected — but every other **writer** blocks and gives
-  up after `busy_timeout=5000`, and `FakeUnitOfWork` shares no connection, so no unit test notices. Six call sites had
-  drifted across the rule before anything looked (#1779), for the reason the check exists: nothing at a call site
-  reveals that an injected seam touches the disk. **The rule and the gate come from reading code — no measurement of how
-  long any of those transactions actually held the lock exists, and nothing here should be read as one.** What the check
-  sees is the deadlock rule's matcher unchanged — an **attribute** call naming a listed seam, lexically inside a
-  `with <...>uow_factory()` block in the same function scope — so it inherits every blind spot of that half: a seam
-  behind a helper one level down, an alias to a local, a factory attribute whose name does not end in `uow_factory`, a
-  nested `def`/`lambda` (which resets the scope by design), a seam **passed as a bound method**
+  `resolve_sandbox_launcher` (each re-probes the flatpak roots for **its** ES-DE file and re-stats it before it may use
+  the parse cache: `es_systems.xml` for the first three, `es_find_rules.xml` for the launcher read, and both for the
+  options read, which globs each option's emulator install through the find rules) — and `SystemResolver` (parses the
+  plugin's **own** bundled `config.json`, not RetroDECK's `retrodeck.json`, and does no network work despite living on
+  the RomM HTTP adapter). Two other families of real I/O seam were weighed and kept out — the reasons are in the
+  script's docstring, and neither is an exemption; nor are those two an inventory of what else touches the disk. **"It's
+  only a read" is the reasoning this rule exists to refuse**: `SqliteUnitOfWork.__enter__` issues `BEGIN IMMEDIATE`, so
+  even a read-only UoW takes the write lock. The database is in WAL, so readers are unaffected — but every other
+  **writer** waits on the lock for up to `busy_timeout=5000` and fails with `SQLITE_BUSY` if it is still held then, and
+  `FakeUnitOfWork` shares no connection, so no unit test notices. Six call sites had drifted across the rule before
+  anything looked (#1779), for the reason the check exists: nothing at a call site reveals that an injected seam touches
+  the disk. **The rule and the gate come from reading code — no measurement of how long any of those transactions
+  actually held the lock exists, and nothing here should be read as one.** What the check sees is the deadlock rule's
+  matcher unchanged — an **attribute** call naming a listed seam, lexically inside a `with <...>uow_factory()` block in
+  the same function scope — so it inherits every blind spot of that half: a seam behind a helper one level down, an
+  alias to a local, a factory attribute whose name does not end in `uow_factory`, a nested `def`/`lambda` (which resets
+  the scope by design), a seam **passed as a bound method**
   (`run_in_executor(None, self._disc_resolver.enumerate_discs, install)` — an attribute, not a call, and
   `run_in_executor` is exactly how `disc.py` and `cores.py` reach their `_io` bodies; the same shape
   `check_read_only_module.py` records for its own gate), and the hand-maintained list itself, which cannot notice a seam
   whose implementation _grows_ a file read later. Matching only attribute calls is deliberate: the pure
   `domain.disc_selection.enumerate_discs` shares a name with the seam and does no I/O — it is safe because its call site
-  imports it bare, not because of the name. One blind spot is this family's own: `SystemResolver` is call-shaped, so no
-  consumer writes a method name at all — the list carries `_resolve_system`, the attribute every consumer in `services/`
-  binds it to, which closes the gap by convention rather than by construction. That seam is also the odd one out for a
-  second reason: the adapter memoises its map for the life of the process, so exactly one call ever opens the file, and
-  the entry earns its place because that one call can land inside a UoW. One `# pragma: no uow-check` covers both
-  families — it suppresses the line, and no seam is in both lists, so where a line does name two seams it silences both
+  imports it bare, not because of the name. The call-shaped blind spot is shared with the deadlock rule and only this
+  family closes it: `SystemResolver` has no method name a consumer would write, so the list carries `_resolve_system`,
+  the attribute every consumer in `services/` binds it to — by convention rather than by construction, and the deadlock
+  rule's own call-shaped seams stay open. That seam is also the odd one out for a second reason: the adapter memoises
+  its map for the life of the process, so exactly one call ever opens the file, and the entry earns its place because
+  that one call can land inside a UoW. One `# pragma: no uow-check` covers both families — it suppresses the line, and
+  no seam is in both lists, so where a line does name two seams it silences both
 - **Services never call clocks / sleep / uuid / random directly (inject the Protocol)** — check —
   `scripts/check_cosmic_call_bans.sh`
 - **No module in `services/`, `bootstrap/`, `adapters/`, `domain/`, `lib/` or `models/` crosses the ~1000-LOC

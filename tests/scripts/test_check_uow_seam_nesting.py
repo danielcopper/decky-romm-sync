@@ -424,9 +424,10 @@ class TestIoSeamsClean:
         assert findings == []
 
     def test_one_pragma_suppresses_two_seams_on_one_line(self):
-        # The pre-#1779 cores.py shape: both seams on a single line. The pragma
-        # suppresses the line, so it silences both — there is no second spelling
-        # to get wrong. The un-pragma'd twin proves the line really carries two.
+        # Nothing forces a seam onto its own line: one expression can name two.
+        # The pragma suppresses the line, so it silences both — there is no
+        # second spelling to get wrong. The un-pragma'd twin proves the line
+        # really carries two.
         line = "            o = self._core_info.get_emulator_options(self._resolve_system(slug))"
         source = "class S:\n    def go(self, slug):\n        with self._uow_factory() as uow:\n{}\n        return o\n"
 
