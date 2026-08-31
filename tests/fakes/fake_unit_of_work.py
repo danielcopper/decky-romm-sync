@@ -99,7 +99,19 @@ class FakeUnitOfWork:
         self.committed = False
         self.rolled_back = False
         self.enter_count = 0
+        self.exit_count = 0
         self._snapshot: _Snapshot | None = None
+
+    @property
+    def is_open(self) -> bool:
+        """Whether a ``with`` block is open on this unit right now.
+
+        The real ``SqliteUnitOfWork`` holds ``BEGIN IMMEDIATE`` — SQLite's
+        global write lock — for exactly this window, and the fake shares no
+        connection, so a test cannot observe the lock and has to observe the
+        window instead. Reads True inside any depth of nesting.
+        """
+        return self.enter_count > self.exit_count
 
     def __enter__(self) -> FakeUnitOfWork:
         self.enter_count += 1
@@ -126,6 +138,7 @@ class FakeUnitOfWork:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
+        self.exit_count += 1
         snapshot = self._snapshot
         self._snapshot = None
         if exc_type is None:
