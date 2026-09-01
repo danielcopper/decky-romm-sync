@@ -2,15 +2,15 @@
 #    uv pip compile requirements-dev.txt --output-file=requirements-dev.lock
 basedpyright==1.39.10
     # via -r requirements-dev.txt
-click==8.4.2
+click==8.5.0
     # via import-linter
-coverage==7.15.4
+coverage==7.16.0
     # via pytest-cov
-grimp==3.15
+grimp==3.16
     # via import-linter
-hypothesis==6.165.10
+hypothesis==6.167.1
     # via -r requirements-dev.txt
-import-linter==2.13
+import-linter==2.14
     # via -r requirements-dev.txt
 iniconfig==2.3.0
     # via pytest
@@ -18,7 +18,7 @@ markdown-it-py==4.2.0
     # via rich
 mdurl==0.1.2
     # via markdown-it-py
-nodejs-wheel-binaries==24.16.0
+nodejs-wheel-binaries==24.19.0
     # via basedpyright
 packaging==26.3
     # via pytest
@@ -26,7 +26,7 @@ pluggy==1.6.0
     # via
     #   pytest
     #   pytest-cov
-pygments==2.20.0
+pygments==2.21.0
     # via
     #   pytest
     #   rich
