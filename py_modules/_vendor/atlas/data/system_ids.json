@@ -1,0 +1,706 @@
+{
+  "schema": 2,
+  "spec": "DESIGN.md — Vocabulary. atlas's own system vocabulary: the ids every question about a system takes, which are ES-DE's system names because that is what a frontend catalogue on the machine declares. World knowledge under CLAUDE.md's boundary rule — nothing here is read off a machine, so it is versioned and source-cited, and the loader refuses a malformed list rather than answering out of one.",
+  "description": "systems: the canonical ids, in ES-DE's vocabulary, sorted. The set is a snapshot of one stated build's es_systems.xml, which is what makes membership checkable rather than an opinion: a name that file does not declare is not an id, however plausible it looks. A test parses the deployed file and asserts set-identity, so the snapshot cannot drift from the build in silence. platforms: each system's <platform> tags from the same build, read the way ES-DE reads them (lowercased, readList-split, 'ignore' clears the list) — the snapshot column the resolvers fall back to when a system's tags cannot be read live (a sealed catalogue, a system this installation does not declare).",
+  "sources": {
+    "systems": "es_systems.xml as shipped by RetroDECK 0.10.9b (components/es-de/share/es-de/resources/systems/linux/es_systems.xml), read 2026-08-07: the 172 <system><name> values it declares. Commented-out blocks are not declarations and are not included."
+  },
+  "systems": [
+    "3do",
+    "adam",
+    "amiga",
+    "amiga1200",
+    "amiga600",
+    "amigacd32",
+    "amstradcpc",
+    "apple2",
+    "apple2gs",
+    "arcade",
+    "arcadia",
+    "archimedes",
+    "arduboy",
+    "astrocde",
+    "atari2600",
+    "atari5200",
+    "atari7800",
+    "atari800",
+    "atarijaguar",
+    "atarilynx",
+    "atarist",
+    "atarixe",
+    "atomiswave",
+    "bbcmicro",
+    "c64",
+    "cdimono1",
+    "cdtv",
+    "chailove",
+    "channelf",
+    "coco",
+    "colecovision",
+    "consolearcade",
+    "cps",
+    "cps1",
+    "cps2",
+    "cps3",
+    "crvision",
+    "daphne",
+    "desktop",
+    "doom",
+    "dos",
+    "dragon32",
+    "dreamcast",
+    "easyrpg",
+    "electron",
+    "famicom",
+    "fba",
+    "fbneo",
+    "fds",
+    "flash",
+    "fm7",
+    "fmtowns",
+    "gamate",
+    "gameandwatch",
+    "gamecom",
+    "gamegear",
+    "gb",
+    "gba",
+    "gbc",
+    "gc",
+    "genesis",
+    "gmaster",
+    "gx4000",
+    "intellivision",
+    "j2me",
+    "laserdisc",
+    "lcdgames",
+    "lowresnx",
+    "lutro",
+    "macintosh",
+    "mame",
+    "mark3",
+    "mastersystem",
+    "megacd",
+    "megacdjp",
+    "megadrive",
+    "megadrivejp",
+    "megaduck",
+    "mess",
+    "model2",
+    "moto",
+    "msx",
+    "msx1",
+    "msx2",
+    "msxturbor",
+    "mugen",
+    "multivision",
+    "n3ds",
+    "n64",
+    "n64dd",
+    "naomi",
+    "naomi2",
+    "naomigd",
+    "nds",
+    "neogeo",
+    "neogeocd",
+    "neogeocdjp",
+    "nes",
+    "ngp",
+    "ngpc",
+    "odyssey2",
+    "openbor",
+    "oric",
+    "palm",
+    "pc",
+    "pc88",
+    "pc98",
+    "pcengine",
+    "pcenginecd",
+    "pcfx",
+    "pico8",
+    "plus4",
+    "pokemini",
+    "portmaster",
+    "ports",
+    "primehack",
+    "ps2",
+    "ps3",
+    "psp",
+    "psvita",
+    "psx",
+    "pv1000",
+    "quake",
+    "satellaview",
+    "saturn",
+    "saturnjp",
+    "scummvm",
+    "scv",
+    "sega32x",
+    "sega32xjp",
+    "sega32xna",
+    "segacd",
+    "sfc",
+    "sg-1000",
+    "sgb",
+    "snes",
+    "snesna",
+    "solarus",
+    "spectravideo",
+    "stv",
+    "sufami",
+    "supergrafx",
+    "supervision",
+    "supracan",
+    "switch",
+    "tanodragon",
+    "tg-cd",
+    "tg16",
+    "ti99",
+    "tic80",
+    "to8",
+    "triforce",
+    "uzebox",
+    "vectrex",
+    "vic20",
+    "videopac",
+    "vircon32",
+    "virtualboy",
+    "vsmile",
+    "wasm4",
+    "wii",
+    "wiiu",
+    "windows3x",
+    "windows9x",
+    "wonderswan",
+    "wonderswancolor",
+    "x1",
+    "x68000",
+    "xbox",
+    "zmachine",
+    "zx81",
+    "zxspectrum"
+  ],
+  "platforms": {
+    "3do": [
+      "3do"
+    ],
+    "adam": [
+      "adam"
+    ],
+    "amiga": [
+      "amiga"
+    ],
+    "amiga1200": [
+      "amiga"
+    ],
+    "amiga600": [
+      "amiga"
+    ],
+    "amigacd32": [
+      "amigacd32"
+    ],
+    "amstradcpc": [
+      "amstradcpc"
+    ],
+    "apple2": [
+      "apple2"
+    ],
+    "apple2gs": [
+      "apple2gs"
+    ],
+    "arcade": [
+      "arcade"
+    ],
+    "arcadia": [
+      "arcadia"
+    ],
+    "archimedes": [
+      "archimedes"
+    ],
+    "arduboy": [
+      "arduboy"
+    ],
+    "astrocde": [
+      "astrocde"
+    ],
+    "atari2600": [
+      "atari2600"
+    ],
+    "atari5200": [
+      "atari5200"
+    ],
+    "atari7800": [
+      "atari7800"
+    ],
+    "atari800": [
+      "atari800"
+    ],
+    "atarijaguar": [
+      "atarijaguar"
+    ],
+    "atarilynx": [
+      "atarilynx"
+    ],
+    "atarist": [
+      "atarist"
+    ],
+    "atarixe": [
+      "atarixe"
+    ],
+    "atomiswave": [
+      "arcade"
+    ],
+    "bbcmicro": [
+      "bbcmicro"
+    ],
+    "c64": [
+      "c64"
+    ],
+    "cdimono1": [
+      "cdimono1"
+    ],
+    "cdtv": [
+      "cdtv"
+    ],
+    "chailove": [
+      "love"
+    ],
+    "channelf": [
+      "channelf"
+    ],
+    "coco": [
+      "coco"
+    ],
+    "colecovision": [
+      "colecovision"
+    ],
+    "consolearcade": [
+      "arcade"
+    ],
+    "cps": [
+      "arcade"
+    ],
+    "cps1": [
+      "arcade"
+    ],
+    "cps2": [
+      "arcade"
+    ],
+    "cps3": [
+      "arcade"
+    ],
+    "crvision": [
+      "crvision"
+    ],
+    "daphne": [
+      "daphne",
+      "arcade"
+    ],
+    "desktop": [
+      "pcwindows"
+    ],
+    "doom": [
+      "pc",
+      "pcwindows"
+    ],
+    "dos": [
+      "dos"
+    ],
+    "dragon32": [
+      "dragon32"
+    ],
+    "dreamcast": [
+      "dreamcast"
+    ],
+    "easyrpg": [
+      "easyrpg"
+    ],
+    "electron": [
+      "electron"
+    ],
+    "famicom": [
+      "famicom"
+    ],
+    "fba": [
+      "arcade"
+    ],
+    "fbneo": [
+      "arcade"
+    ],
+    "fds": [
+      "fds"
+    ],
+    "flash": [
+      "flash"
+    ],
+    "fm7": [
+      "fm7"
+    ],
+    "fmtowns": [
+      "fmtowns"
+    ],
+    "gamate": [
+      "gamate"
+    ],
+    "gameandwatch": [
+      "gameandwatch"
+    ],
+    "gamecom": [
+      "gamecom"
+    ],
+    "gamegear": [
+      "gamegear"
+    ],
+    "gb": [
+      "gb"
+    ],
+    "gba": [
+      "gba"
+    ],
+    "gbc": [
+      "gbc"
+    ],
+    "gc": [
+      "gc"
+    ],
+    "genesis": [
+      "genesis"
+    ],
+    "gmaster": [
+      "gmaster"
+    ],
+    "gx4000": [
+      "gx4000"
+    ],
+    "intellivision": [
+      "intellivision"
+    ],
+    "j2me": [
+      "j2me"
+    ],
+    "laserdisc": [
+      "daphne",
+      "arcade"
+    ],
+    "lcdgames": [
+      "lcdgames",
+      "gameandwatch"
+    ],
+    "lowresnx": [
+      "lowresnx"
+    ],
+    "lutro": [
+      "lutro"
+    ],
+    "macintosh": [
+      "macintosh"
+    ],
+    "mame": [
+      "arcade"
+    ],
+    "mark3": [
+      "mastersystem"
+    ],
+    "mastersystem": [
+      "mastersystem"
+    ],
+    "megacd": [
+      "segacd"
+    ],
+    "megacdjp": [
+      "segacd"
+    ],
+    "megadrive": [
+      "megadrive"
+    ],
+    "megadrivejp": [
+      "megadrive"
+    ],
+    "megaduck": [
+      "megaduck"
+    ],
+    "mess": [
+      "mess"
+    ],
+    "model2": [
+      "arcade"
+    ],
+    "moto": [
+      "moto"
+    ],
+    "msx": [
+      "msx"
+    ],
+    "msx1": [
+      "msx"
+    ],
+    "msx2": [
+      "msx2"
+    ],
+    "msxturbor": [
+      "msxturbor"
+    ],
+    "mugen": [
+      "mugen"
+    ],
+    "multivision": [
+      "sg-1000"
+    ],
+    "n3ds": [
+      "n3ds"
+    ],
+    "n64": [
+      "n64"
+    ],
+    "n64dd": [
+      "n64"
+    ],
+    "naomi": [
+      "arcade"
+    ],
+    "naomi2": [
+      "arcade"
+    ],
+    "naomigd": [
+      "arcade"
+    ],
+    "nds": [
+      "nds"
+    ],
+    "neogeo": [
+      "neogeo"
+    ],
+    "neogeocd": [
+      "neogeocd"
+    ],
+    "neogeocdjp": [
+      "neogeocd"
+    ],
+    "nes": [
+      "nes"
+    ],
+    "ngp": [
+      "ngp"
+    ],
+    "ngpc": [
+      "ngpc"
+    ],
+    "odyssey2": [
+      "odyssey2"
+    ],
+    "openbor": [
+      "openbor"
+    ],
+    "oric": [
+      "oric"
+    ],
+    "palm": [
+      "palm"
+    ],
+    "pc": [
+      "pc"
+    ],
+    "pc88": [
+      "pc88"
+    ],
+    "pc98": [
+      "pc98"
+    ],
+    "pcengine": [
+      "pcengine"
+    ],
+    "pcenginecd": [
+      "pcenginecd"
+    ],
+    "pcfx": [
+      "pcfx"
+    ],
+    "pico8": [
+      "pico8"
+    ],
+    "plus4": [
+      "plus4"
+    ],
+    "pokemini": [
+      "pokemini"
+    ],
+    "portmaster": [
+      "portmaster"
+    ],
+    "ports": [
+      "pc",
+      "pcwindows"
+    ],
+    "primehack": [
+      "wii"
+    ],
+    "ps2": [
+      "ps2"
+    ],
+    "ps3": [
+      "ps3"
+    ],
+    "psp": [
+      "psp"
+    ],
+    "psvita": [
+      "psvita"
+    ],
+    "psx": [
+      "psx"
+    ],
+    "pv1000": [
+      "pv1000"
+    ],
+    "quake": [
+      "pc",
+      "pcwindows"
+    ],
+    "satellaview": [
+      "satellaview"
+    ],
+    "saturn": [
+      "saturn"
+    ],
+    "saturnjp": [
+      "saturn"
+    ],
+    "scummvm": [
+      "scummvm"
+    ],
+    "scv": [
+      "scv"
+    ],
+    "sega32x": [
+      "sega32x"
+    ],
+    "sega32xjp": [
+      "sega32x"
+    ],
+    "sega32xna": [
+      "sega32x"
+    ],
+    "segacd": [
+      "segacd"
+    ],
+    "sfc": [
+      "snes"
+    ],
+    "sg-1000": [
+      "sg-1000"
+    ],
+    "sgb": [
+      "sgb"
+    ],
+    "snes": [
+      "snes"
+    ],
+    "snesna": [
+      "snes"
+    ],
+    "solarus": [
+      "solarus"
+    ],
+    "spectravideo": [
+      "spectravideo"
+    ],
+    "stv": [
+      "arcade"
+    ],
+    "sufami": [
+      "sufami"
+    ],
+    "supergrafx": [
+      "supergrafx"
+    ],
+    "supervision": [
+      "supervision"
+    ],
+    "supracan": [
+      "supracan"
+    ],
+    "switch": [
+      "switch"
+    ],
+    "tanodragon": [
+      "dragon32"
+    ],
+    "tg-cd": [
+      "pcenginecd"
+    ],
+    "tg16": [
+      "pcengine"
+    ],
+    "ti99": [
+      "ti99"
+    ],
+    "tic80": [
+      "tic80"
+    ],
+    "to8": [
+      "moto"
+    ],
+    "triforce": [
+      "arcade"
+    ],
+    "uzebox": [
+      "uzebox"
+    ],
+    "vectrex": [
+      "vectrex"
+    ],
+    "vic20": [
+      "vic20"
+    ],
+    "videopac": [
+      "odyssey2"
+    ],
+    "vircon32": [
+      "vircon32"
+    ],
+    "virtualboy": [
+      "virtualboy"
+    ],
+    "vsmile": [
+      "vsmile"
+    ],
+    "wasm4": [
+      "wasm4"
+    ],
+    "wii": [
+      "wii"
+    ],
+    "wiiu": [
+      "wiiu"
+    ],
+    "windows3x": [
+      "windows3x"
+    ],
+    "windows9x": [
+      "pcwindows"
+    ],
+    "wonderswan": [
+      "wonderswan"
+    ],
+    "wonderswancolor": [
+      "wonderswancolor"
+    ],
+    "x1": [
+      "x1"
+    ],
+    "x68000": [
+      "x68000"
+    ],
+    "xbox": [
+      "xbox"
+    ],
+    "zmachine": [
+      "zmachine"
+    ],
+    "zx81": [
+      "zx81"
+    ],
+    "zxspectrum": [
+      "zxspectrum"
+    ]
+  }
+}

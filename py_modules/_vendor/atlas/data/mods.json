@@ -1,0 +1,433 @@
+{
+  "schema": 1,
+  "spec": "Where each emulator reads mods, and what the frontend patches content with — for the part of those answers no read of a machine recovers. Three blocks. 'cores' and 'emulators' are the mod cards, split exactly as texture_packs.json splits its own and for the same reason: a libretro core is handed its root by RetroArch, while a standalone emulator opens its own default directory below an XDG base, so the first names a root KIND the resolver resolves live and the second names the base and the subpath. Neither ever states a directory, and neither states the governing option's VALUE — that is read from the options file RetroArch would read first or from the default the installed core registers. What is here is the fragment below the root, the keying of the tree, and the identity of the switch. Two things are this family's own. A card states one OR SEVERAL trees: an emulator may read mods from directories that are different mechanisms rather than alternatives (FBNeo takes a replacement romset, an IPS patch set and a romdata file from three trees under one switch), and each such tree names the role that tells it apart. And an option may record its DEFAULT, for a core that registers its options too late for any probe to read: the value is then written down with the build it was read at, the live core still wins wherever it speaks, and a machine running another build gets the value with unverified-version beside it. 'soft_patching' is the other question's world knowledge: which patch formats the RetroArch an arrangement ships was built to attempt, keyed by installation kind. It is here rather than read live because it is not readable at all — patching as a whole is HAVE_PATCH and the .xdelta applier HAVE_XDELTA (Makefile.common:260-267 at RetroArch a79435a), both decided at compile time, and no setting, log or file on a running machine states either. Everything else about that question is derived from the content path by arithmetic atlas ports, so this file carries no patch paths, no attempt order and no continuation rule: those follow from upstream source and belong in the resolver, not in a table. A record states the formats its build was PROVEN to attempt — a format outside the list is one that build does not try — and pins the arrangement version it was proven against. An arrangement absent from that block is one whose RetroArch nobody has examined, and its answer leaves every format unestablished (patch-formats-unestablished) rather than assuming the upstream build defaults. An emulator absent from this file is not one without mods: it is one whose wiring atlas has not established, and the resolver says exactly that. One absence is deliberate. MAME standalone: its plugin directories are not emulator defaults at all — RetroDECK writes them into mame.ini (pluginspath and homepath, components/mame/component_prepare.sh:97-98,:120-121) — so reading them means modelling that configuration, and quoting the path the installer intended would state an arrangement's directory as an emulator's read location, which is the mistake these cards exist to avoid.",
+  "soft_patching": {
+    "retrodeck": {
+      "formats": [
+        "ips",
+        "bps",
+        "ups",
+        "xdelta"
+      ],
+      "verified_arrangement": "0.10.9b",
+      "citation": "[V-binary] The shipped retroarch (RetroDECK 0.10.9b components/retroarch/bin/retroarch) carries '.xdelta', '.ips', '.bps' and '.ups' as four adjacent whole NUL-delimited runs at 0x78a06a-0x78a07f, and both compile-time flags are evidenced by help lines that exist only inside their own guard: '--no-patch  Disables all forms of content patching.' is compiled under #ifdef HAVE_PATCH (retroarch.c:7169-7172) and '--xdelta=FILE  Specifies path for Xdelta patch that will be applied to content.' under #ifdef HAVE_XDELTA (retroarch.c:7164-7168), which Makefile.common:260-267 admits only when HAVE_PATCH is set as well. So this build attempts all four formats, and the claim is scoped to the RetroDECK version that ships that binary."
+    }
+  },
+  "emulators": {
+    "DOLPHIN": {
+      "mods": {
+        "base": "data",
+        "trees": [
+          {
+            "subdir": "Load/GraphicMods",
+            "keying": null
+          }
+        ],
+        "settings": "GFX.ini"
+      },
+      "provenance": {
+        "source": "[V-binary/V-script] The shipped dolphin-emu (RetroDECK 0.10.9b components/dolphin/bin/dolphin-emu) carries \"Load/GraphicMods/\" as a whole NUL-delimited run (0x13e79ce) and the switch key \"EnableMods\" as another (0x1827578); RetroDECK names the same path in components/dolphin/component_functions.sh:19 ($XDG_DATA_HOME/dolphin-emu/Load/GraphicMods) and links it into its shared tree (component_prepare.sh:25,:44). EnableMods lives in GFX.ini, which ships beside the Dolphin.ini component_functions.sh:3 pins to $XDG_CONFIG_HOME/dolphin-emu — atlas does not read it, and live it carries no EnableMods line at all, so the compiled default governs today. [O] no keying is recorded: the binary states a mod tree's vocabulary (\"mods\", \"groups\", \"features\", \"assets\", \"{}/{}.json\") but no keyed path template, and a derived answer is not one atlas gives. One trap this row survived: the emulator's own setting description reads \"Loads graphics mods from User/GraphicsMods/…\" — with an 's' the path literal does not have. The recorded path is the literal's spelling, which is the one the loader opens."
+      },
+      "anchors": {
+        "binary": "dolphin/bin/dolphin-emu",
+        "names": {
+          "GFX.ini": {
+            "literal": "GFX.ini"
+          },
+          "GraphicMods": {
+            "literal": "GraphicMods"
+          },
+          "Load": {
+            "literal": "Load"
+          }
+        }
+      }
+    },
+    "PRIMEHACK": {
+      "mods": {
+        "base": "data",
+        "trees": [
+          {
+            "subdir": "Load/GraphicMods",
+            "keying": null
+          }
+        ],
+        "settings": "GFX.ini"
+      },
+      "provenance": {
+        "source": "[V-binary/V-script] The Dolphin fork carries the same two whole runs in its own build — \"Load/GraphicMods/\" (0x12d051e) and \"EnableMods\" (0x1721f58) — and RetroDECK links $XDG_DATA_HOME/primehack/Load/GraphicMods (components/primehack/component_prepare.sh:21,:39). The fork's GFX.ini sits under $XDG_CONFIG_HOME/primehack beside the Dolphin.ini component_functions.sh:3 pins, and is not read here. The shared tree's side of this link is flat (mods/Primehack) where Dolphin's is mods/Dolphin/GraphicMods — a difference in the distribution's hub that does not touch the emulator-side path this card states. [O] no keying, for the same reason as Dolphin's row."
+      },
+      "anchors": {
+        "binary": "primehack/bin/primehack",
+        "names": {
+          "GFX.ini": {
+            "literal": "GFX.ini"
+          },
+          "GraphicMods": {
+            "literal": "GraphicMods"
+          },
+          "Load": {
+            "literal": "Load"
+          }
+        }
+      }
+    },
+    "AZAHAR": {
+      "mods": {
+        "base": "data",
+        "trees": [
+          {
+            "subdir": "load/mods",
+            "keying": {
+              "value": "title-id",
+              "citation": "[V-binary] the shipped azahar (RetroDECK 0.10.9b components/azahar/bin/azahar) carries the mod loader's path template \"{}mods/{:016X}/\" as a whole NUL-delimited run (0x1ae76e3) — a 16-hex-digit component is a 3DS title id, the same evidence the texture row's keying rests on."
+            }
+          }
+        ],
+        "settings": null
+      },
+      "provenance": {
+        "source": "[V-binary/V-script] The binary carries \"/azahar-emu/\" (0x1ae6807) and \"load/\" (0x1ae6865) as whole runs in the user-path table around SetUserPath, and the loader's template above; RetroDECK names the joined path in components/azahar/component_functions.sh:5 ($XDG_DATA_HOME/azahar-emu/load/mods) and links it (component_prepare.sh:27,:45). A 3DS mod below that level is a LayeredFS overlay and/or a code patch: \"romfs/\", \"exefs/code.ips\" and the Luma3DS-compatible \"{}luma/titles/{:016X}/code.ips\" are whole runs around LoadOverrides. [O] NO SWITCH IS ESTABLISHED, which is why this card names no configuration file: the libretro sibling registers 30 core options and none of them names mods, and the standalone's only mods-ish CLI flag, --enable-citra-mods/-e, sits inside the dedicated-room-server option block (beside room-name, max_members, ban-list-file and preferred-game) and is about multiplayer, not loading. Whether anything gates LayeredFS at all needs upstream source nobody has read for it, so the answer states nothing rather than pointing at a file that may govern nothing."
+      },
+      "anchors": {
+        "binary": "azahar/bin/azahar",
+        "names": {
+          "load": {
+            "literal": "load"
+          },
+          "mods": {
+            "literal": "mods"
+          }
+        }
+      }
+    },
+    "PPSSPP": {
+      "mods": {
+        "base": "config",
+        "trees": [
+          {
+            "subdir": "PSP/PLUGINS",
+            "keying": {
+              "value": "pack",
+              "citation": "[V-binary/V-source] The shipped PPSSPPSDL carries \"PLUGINS\" as a whole NUL-delimited run (0x1537b9d) and the loader's error literal \"Failed to load plugin ini: %s/plugin.ini\"; upstream ppsspp@c19acc0 Core/HLE/Plugins.cpp:92-104 walks the plugins directory for SUBDIRECTORIES and takes each one that holds a plugin.ini, composing the plugin's own file as ms0:/PSP/PLUGINS/<subdir>/<file> (:60). The level below the root is therefore a pack directory, not a per-game one."
+            }
+          }
+        ],
+        "settings": "ppsspp.ini"
+      },
+      "provenance": {
+        "source": "[V-binary/V-script] \"PSP/\" is NOT a whole run in the standalone PPSSPPSDL (0 exact runs of 9 occurrences) — the same asymmetry the texture card records for this emulator — so that component of the path rests on the arrangement script rather than on the binary: components/ppsspp/component_functions.sh:12 names $XDG_CONFIG_HOME/ppsspp/PSP/PLUGINS and component_prepare.sh:20,:51 links it. The switch lives in ppsspp.ini, pinned by component_functions.sh:3 and not read here; the build carries two candidate keys as whole runs, \"EnablePlugins\" (0x153f984) and \"LoadPlugins\" (0x153fe2b), and the message \"Plugins are disabled, ignoring enabled plugin '%s'\" proves a master gate exists. [O] which of the two is that gate is not established — and it does not have to be, because neither is read."
+      },
+      "anchors": {
+        "binary": "ppsspp/bin/PPSSPPSDL",
+        "names": {
+          "PLUGINS": {
+            "literal": "PLUGINS"
+          },
+          "PSP": {
+            "literal": "PSP"
+          },
+          "ppsspp.ini": {
+            "literal": "ppsspp.ini"
+          }
+        }
+      }
+    },
+    "PCSX2": {
+      "mods": {
+        "trees": [
+          {
+            "directory": {
+              "section": "Folders",
+              "key": "Patches",
+              "default": "patches",
+              "citation": "Pcsx2Config.cpp:2288 at v2.6.3 reads it through LoadPathFromSettings (:2272-2278), which falls back to the compiled default and resolves a relative value against the DataRoot; :2262 writes that default into a fresh ini"
+            },
+            "keying": {
+              "value": "serial",
+              "citation": "[V-binary] The shipped pcsx2-qt carries the patch file's name template \"{}_{:08X}{}.pnach\" (0x14beb2) and the serial glob \"{}_*.pnach\" (0x121783) as whole NUL-delimited runs: the game's serial and the CRC name the FILE. This is the one row in the family where the keyed level is a file rather than a directory — the patches directory is flat — and the keying is stated anyway, with the file-level fact here, the way the LRPS2 texture card states its fixed 'replacements' sub-level rather than inventing a field for it."
+            }
+          }
+        ],
+        "settings": "PCSX2.ini"
+      },
+      "provenance": {
+        "source": "[V-binary/V-source/V-script] \"patches\" is a whole NUL-delimited run in the shipped pcsx2-qt (0xf2c44) and so is the EmuFolders key \"Patches\" (0xef323) and the section \"Folders\" (0x142033). The tree is stated as a configuration key rather than an XDG subpath because it IS one: EmuFolders::LoadConfig reads [Folders] Patches through LoadPathFromSettings, the same helper the memory-card, texture, savestates and gamesettings directories of this emulator go through (Pcsx2Config.cpp:2288 with :2272-2278), so an unset key means the compiled 'patches' below the DataRoot, a relative value hangs off it, and an absolute one wins outright (:2275). RetroDECK does NOT write the key — it names the default location in components/pcsx2/component_functions.sh:11 ($XDG_CONFIG_HOME/PCSX2/patches) and links it (component_prepare.sh:54,:92) — so on that arrangement the compiled default is what answers; the difference is that the answer now reads the key instead of assuming nobody set it, which is what issue #314 was about. Two things a caller should know and no field carries: the distribution extracts a shipped patch pack into that tree on every reset and at the 0.10.0b upgrade, backing up what was there first (component_prepare.sh:65-71), so the directory is not user-owned; and the switch EnablePatches lives in PCSX2.ini (pinned by component_functions.sh:3, and inis/ is where that emulator keeps it), which this answer reads for the directory and not for the switch, because the card states none."
+      },
+      "anchors": {
+        "binary": "pcsx2/bin/pcsx2-qt",
+        "names": {
+          "PCSX2.ini": {
+            "literal": "PCSX2.ini"
+          },
+          "Folders": {
+            "literal": "Folders"
+          },
+          "Patches": {
+            "literal": "Patches"
+          },
+          "patches": {
+            "literal": "patches"
+          }
+        }
+      }
+    },
+    "CEMU": {
+      "mods": {
+        "base": "data",
+        "trees": [
+          {
+            "subdir": "graphicPacks",
+            "keying": {
+              "value": "pack",
+              "citation": "[V-binary] the shipped Cemu_relwithdebinfo carries \"graphicPacks\", \"graphicPacks/downloadedGraphicPacks/{}\" and \"rules.txt\" as NUL-delimited literals: the level below the root is a pack directory holding a rules.txt, which is the same evidence — and the same answer — the texture card records for this emulator."
+            }
+          }
+        ],
+        "settings": "settings.xml"
+      },
+      "provenance": {
+        "source": "[V-binary/V-script] On Cemu a mod and a texture pack are ONE mechanism and one directory, and both questions answer with it: a graphic pack directory carries rules.txt for texture replacement and may carry patches.txt beside it, an assembler patch against the running title's modules (the shipped binary carries \"patches.txt\" at 0x87a73b amid moduleMatches, \"Expected '=' after address\" and \"Error in assembler: {}\"). RetroDECK wires exactly one row for it, on the texture side (texture_packs/Cemu/graphicPacks -> $XDG_DATA_HOME/Cemu/graphicPacks, components/cemu/component_prepare.sh:20,:32, component_functions.sh:8), and none under its mods hub. The row is stated in both families rather than in one, because a caller asking where a Wii U mod goes must get an answer and \"ask the other question\" is not one — and the honest thing to record beside it is that on this emulator they are the same directory. settings.xml is pinned by component_functions.sh:3 and is not read here."
+      },
+      "anchors": {
+        "binary": "cemu/bin/Cemu_relwithdebinfo",
+        "names": {
+          "graphicPacks": {
+            "literal": "graphicPacks"
+          },
+          "settings.xml": {
+            "literal": "settings.xml"
+          }
+        }
+      }
+    },
+    "DUCKSTATION": {
+      "mods": {
+        "trees": [
+          {
+            "directory": {
+              "section": "Folders",
+              "key": "Cheats",
+              "default": "cheats",
+              "citation": "[V-source] EmuFolders::LoadConfig reads [Folders] Cheats through LoadPathFromSettings with the compiled default 'cheats' below the DataRoot (settings.cpp:1968, :1953-1962); the shipped binary carries \"Cheats\" and \"cheats\" as whole NUL-delimited runs."
+            },
+            "keying": {
+              "value": "title",
+              "citation": "[V-binary/V-source] The shipped duckstation-qt carries \"{}.cht\" as a whole NUL-delimited run, and GetCheatFileName composes the file as <cheats dir>/<title>.cht from System::GetGameTitle() (system.cpp:5511-5517 at stenzek/duckstation@64655818e). Like PCSX2's patches, the keyed level is the FILE rather than a directory — the cheats directory is flat. The title is not the content file's name: it is a custom title the user set in the emulator's own game list, else the disc's title from DuckStation's database, else a multi-disc image's own metadata title, and only failing all of those the file's stem (system.cpp:4008-4051). It is also taken unsanitised, unlike the media-capture path beside it (:5113), so the title's own characters are the file's."
+            }
+          }
+        ],
+        "settings": "settings.ini"
+      },
+      "provenance": {
+        "source": "[V-binary/V-source] The DuckStation build RetroDECK ships as 'DuckStation (Legacy)', the fork release frozen 2024-09-19 (build stamp in components/duckstation/bin/duckstation-qt); citations pin stenzek/duckstation@64655818e. Cheat files are this emulator's patch mechanism, the counterpart of PCSX2's .pnach patches: one file per game, read from EmuFolders::Cheats. That directory is [Folders] Cheats, read through LoadPathFromSettings like every folder of this emulator (settings.cpp:1968 with :1953-1962), so an unset or empty key means 'cheats' below the DataRoot and a relative value hangs off it. RetroDECK does NOT write that key (components/duckstation/component_prepare.sh sets BIOS, memory cards and the game list only), which is exactly why this row answers: the directory is the emulator's own default rather than a path an installer put in its configuration. The tree is stated as a configuration key rather than an XDG subpath because the root it hangs off is not a fixed XDG join at all — DuckStation's DataRoot is $XDG_CONFIG_HOME/duckstation where that variable is set and absolute, else ~/.local/share/duckstation (qthost.cpp:562-582), so naming either base outright would answer correctly on one arrangement and wrongly on the other. The switch, [Console] EnableCheats with a compiled default of off (settings.cpp:163), is deliberately not stated here: this family's cards name no switch for a standalone emulator, and enabled stays unanswered with the configuration file named."
+      },
+      "anchors": {
+        "binary": "duckstation/bin/duckstation-qt",
+        "names": {
+          "Cheats": {
+            "literal": "Cheats"
+          },
+          "Folders": {
+            "literal": "Folders"
+          },
+          "cheats": {
+            "literal": "cheats"
+          },
+          "settings.ini": {
+            "literal": "settings.ini"
+          }
+        }
+      }
+    }
+  },
+  "cores": {
+    "azahar": {
+      "identifiers": {
+        "library_name": [
+          "Azahar"
+        ]
+      },
+      "mods": {
+        "root": "savefile_directory",
+        "trees": [
+          {
+            "subdir": "azahar-emu/load/mods",
+            "keying": {
+              "value": "title-id",
+              "citation": "[V-binary] azahar_libretro.so (9701a3d) carries the mod loader's path template \"{}mods/{:016X}/\" as a whole NUL-delimited run (0x22ea97e) — a 16-hex-digit component is a 3DS title id."
+            }
+          }
+        ],
+        "option": null,
+        "config": null
+      },
+      "provenance": {
+        "source": "[V-binary/O-root] The core carries all three components as whole NUL-delimited runs: \"/azahar-emu/\" (0x22d90e2), \"load/\" (0x22d9140) in the user-path table beside \"config/\", \"cache/\", \"sdmc/\" and \"nand/\", and the loader template above. [O] which root that user directory hangs off is the open question the audit already carries for this core's saves (core_audit.json: azahar, verdict 'suspect'): RetroDECK 0.10.9b prepares its link under the RetroArch config tree's own saves directory rather than the configured one (components/retroarch/component_prepare.sh:163, and it names Citra rather than azahar-emu), and nothing has been observed reading either. So the location recorded here is the one the libretro save-directory contract derives, and every answer built on it states emulator-read-unestablished until issue #98 closes the verdict. [O] no switch: the core registers 30 options and not one of them names mods, so this card records no option and names no configuration — the same open state its standalone sibling is in, and not to be confused with a feature whose switch is known and unread."
+      },
+      "anchors": {
+        "names": {
+          "azahar-emu": {
+            "literal": "azahar-emu"
+          },
+          "load": {
+            "literal": "load"
+          },
+          "mods": {
+            "literal": "mods"
+          }
+        }
+      }
+    },
+    "dolphin": {
+      "identifiers": {
+        "library_name": [
+          "dolphin-emu"
+        ]
+      },
+      "mods": {
+        "root": "savefile_directory",
+        "trees": [
+          {
+            "subdir": "dolphin-emu/User/Load/GraphicMods",
+            "keying": null
+          }
+        ],
+        "option": null,
+        "config": {
+          "path": "dolphin-emu/User/Config/GFX.ini"
+        }
+      },
+      "provenance": {
+        "source": "[V-binary/O-root] dolphin_libretro.so (fd1aca3a) carries \"/dolphin-emu/User\" (0xfc9d8b), \"Load/\" (0x10dda26), \"GFX.ini\" (0x10ddb3f) and the switch key \"EnableMods\" (0xfccdd3) as whole NUL-delimited runs; the \"GraphicMods\" component has no run of its own — it survives only inside the tail-merged \"Load/GraphicModsCustom Uber Pixel Shader\" (0x103f110), the third trap in docs/research/core-audit.md — and the path is the standalone Dolphin line's own layout, which RetroDECK links for this core at components/retroarch/component_prepare.sh:164,:202. THE SWITCH IS NOT A CORE OPTION: a sweep of all 67 dolphin_* option keys in the shipped build finds dolphin_load_custom_textures, dolphin_cache_custom_textures and dolphin_cheats_enabled and nothing for mods, so EnableMods is read from the GFX.ini inside the user tree this core builds — an ordinary ini that would answer, which atlas does not read. That is why this row carries emulator-config-unread, a caveat that until now only ever rode a standalone emulator's answer. [O] the root is the same open question as azahar's (core_audit.json: dolphin, verdict 'suspect')."
+      },
+      "anchors": {
+        "names": {
+          "GFX.ini": {
+            "literal": "GFX.ini"
+          },
+          "GraphicMods": {
+            "literal": "GraphicMods"
+          },
+          "Load": {
+            "literal": "Load"
+          },
+          "User": {
+            "literal": "User"
+          },
+          "dolphin-emu": {
+            "literal": "dolphin-emu"
+          }
+        }
+      }
+    },
+    "fbneo": {
+      "identifiers": {
+        "library_name": [
+          "FinalBurn Neo"
+        ]
+      },
+      "mods": {
+        "root": "system_directory",
+        "trees": [
+          {
+            "role": "patched",
+            "subdir": "fbneo/patched",
+            "keying": {
+              "value": "rom-name",
+              "citation": "[V-source/V-binary] fbneo@01e29d5 src/burner/libretro/libretro.cpp:930-933 composes \"%s%cfbneo%cpatched%c%s\" from the system directory and the ROMSET name and opens it as an archive, so the level below the root is the romset. The format string is a whole NUL-delimited run in the shipped build (0x2ed1762)."
+            }
+          },
+          {
+            "role": "ips",
+            "subdir": "fbneo/ips",
+            "keying": {
+              "value": "rom-name",
+              "citation": "[V-source/V-binary] fbneo@01e29d5 src/burner/libretro/libretro.cpp:1986 builds the IPS root as \"%s%cfbneo%cips%c\" (whole run at 0x2ed19be), and src/burner/libretro/ips_manager.cpp:252-260 scans it one level down, at <ips>/<drvname>/, for the .dat files that describe each patch set — so this tree is keyed by the romset too. (The dossier that opened this row had the level as derived; the directory scan is what makes it read.)"
+            }
+          },
+          {
+            "role": "romdata",
+            "subdir": "fbneo/romdata",
+            "keying": {
+              "value": "rom-name",
+              "citation": "[V-source/V-binary] fbneo@01e29d5 src/burner/libretro/libretro.cpp:1989 builds \"%s%cfbneo%cromdata%c\" and :2319 opens \"%s%cfbneo%cromdata%c%s.dat\" for a named romset — both whole NUL-delimited runs in the shipped build (0x2ed19cf, 0x2ed15c9) — so a romdata file is named after the romset."
+            }
+          }
+        ],
+        "option": {
+          "setting": "fbneo-allow-patched-romsets",
+          "values": {
+            "enabled": true,
+            "disabled": false
+          },
+          "default": {
+            "value": "enabled",
+            "verified_core": "v1.0.0.03  01e29d5",
+            "citation": "[V-source] fbneo@01e29d5 src/burner/libretro/retro_common.cpp:236-249 defines the option with the values disabled|enabled and the default_value \"enabled\", and :53 initialises the variable it feeds (bPatchedRomsetsEnabled) to true, so the feature is ON until something turns it off. The value is written down because nothing on a machine states it: this core registers its options after retro_set_environment, so no probe captures a default (atlas's own read of the shipped build returns none), and neither the shipped nor a live retroarch-core-options.cfg mentions the key."
+          }
+        },
+        "config": null
+      },
+      "provenance": {
+        "source": "[V-source/V-binary] The root is the system directory as the core receives it — the log literal \"Setting system dir to %s\" sits immediately before the path cluster, and every path above is composed from g_system_dir. One option governs all three trees, established from the code that reads it: fbneo@01e29d5 refuses the patched romset at libretro.cpp:930, the IPS application at ips_manager.cpp:365 and the romdata application at romdata.cpp:604, each on the same !bPatchedRomsetsEnabled. Per-patch selection below that is per-romset dynamic core options (fbneo-ips-<romset>-<n>, fbneo-romdata-<romset>-<n>) which nothing can enumerate in advance, so the answer states the trees and the one switch above them and stops there. [V-live] RetroDECK 0.10.9b copies its own fbneo tree into $bios_path (components/retroarch/component_prepare.sh:109) and links all three directories into its mods hub (:113-115, re-linked at :203-205)."
+      },
+      "anchors": {
+        "names": {
+          "fbneo": {
+            "literal": "fbneo"
+          },
+          "fbneo-allow-patched-romsets": {
+            "literal": "fbneo-allow-patched-romsets"
+          },
+          "ips": {
+            "literal": "ips"
+          },
+          "patched": {
+            "literal": "patched"
+          },
+          "romdata": {
+            "literal": "romdata"
+          }
+        }
+      }
+    },
+    "citra": {
+      "identifiers": {
+        "library_name": [
+          "Citra"
+        ]
+      },
+      "mods": {
+        "root": "savefile_directory",
+        "trees": [
+          {
+            "subdir": "citra-emu/load/mods",
+            "keying": {
+              "value": "title-id",
+              "citation": "[V-binary] citra_libretro.so (5263fae) carries the mod loader's path template \"{}mods/{:016X}/\" as a whole NUL-delimited run (0x17a1cf9) — a 16-hex-digit component is a 3DS title id."
+            }
+          }
+        ],
+        "option": null,
+        "config": null
+      },
+      "provenance": {
+        "source": "[V-binary/O-root] The core carries all three components as whole NUL-delimited runs: \"/citra-emu/\" (0x1724a4b), \"load/\" (0x1724a8e) in the user-path table beside \"config/\", \"cache/\", \"sdmc/\" and \"nand/\", and the loader template above. [O] which root that user directory hangs off is the open question the audit carries for this core's saves (core_audit.json: citra, verdict 'suspect'): RetroDECK 0.10.9b prepares its link under the RetroArch config tree's own saves directory rather than the configured one, and names Citra rather than citra-emu (components/retroarch/component_prepare.sh:157 for textures, :163 for mods), and nothing has been observed reading either. So the location recorded here is the one the libretro save-directory contract derives, and every answer built on it states emulator-read-unestablished until issue #98 closes the verdict. [O] no switch: the core registers 26 options and not one of them names mods, so this card records no option and names no configuration — the same open state its successor azahar is in, and not to be confused with a feature whose switch is known and unread."
+      },
+      "anchors": {
+        "names": {
+          "citra-emu": {
+            "literal": "citra-emu"
+          },
+          "load": {
+            "literal": "load"
+          },
+          "mods": {
+            "literal": "mods"
+          }
+        }
+      }
+    }
+  }
+}

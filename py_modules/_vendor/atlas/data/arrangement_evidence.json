@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "spec": "DESIGN.md — the answer guarantee and its evidence levels; docs/how-to-use.md — what arrangement-unverified tells a client. The per-core marks in docs/research/coverage-matrix.md are a different record: which cores were checked where, not whether the arrangement itself was ever observed.",
+  "description": "Which emulator arrangements atlas has observed on a live installation, keyed by installation kind. An arrangement's config reading is source-verified against pinned upstream either way — this file records only whether a real machine running that arrangement has confirmed the wiring end to end. An arrangement with no entry counts as unverified: nothing here is evidence by omission.",
+  "arrangements": {
+    "retrodeck": {
+      "label": "RetroDECK",
+      "verified": {
+        "version": "0.10.9b",
+        "date": "2026-08-05",
+        "reference": "the RetroDECK 0.10.9b installation atlas's live verification round ran against (docs/research/retrodeck-save-placement.md; per-core records in core_audit.json)"
+      },
+      "note": "[V] Save roots, the override chain, the ES-DE catalogue and the firmware tree were read off a running installation and compared against the resolver's answers."
+    },
+    "emudeck": {
+      "label": "an EmuDeck arrangement",
+      "verified": {
+        "version": "863ab69d81f66a4c9c0cf65bf642fb96ccc4ca2c",
+        "date": "2026-08-10",
+        "reference": "the EmuDeck installation atlas's live verification round ran against. The version is the backend checkout's git HEAD, read as the two plain files under ~/.config/EmuDeck/backend/.git (the HEAD symref, then the loose ref) — the same read the runtime drift comparison performs. The deployed ES-DE was 3.4.1, established out-of-band: the AppImage's md5 matched the stable LinuxSteamDeckAppImage package in ES-DE's published latest_release.json (the check is scripts/verify_esde_evidence.py — run it on the reference machine to re-establish or refute this identification; re-run CONFIRMED it on 2026-08-19); ~/ES-DE/logs/es_log.txt states the version in its first line only after a first launch, and the verification machine had none"
+      },
+      "note": "[V] Detection, the marker parse, the ES-DE catalogue (the 8-system overlay, gamelist selections, the sealed state), ROM placement, the RetroArch save/state wiring ($savesPath/retroarch/{saves,states} symlinked into the Flatpak tree, cfg naming the symlink) and the firmware root were read off a running installation and compared against the resolver's answers. ES-DE presence is decided from the disk; a machine driven by Pegasus or Steam ROM Manager instead keeps the emulator-catalogue-unestablished refusal."
+    },
+    "bare_retroarch_flatpak": {
+      "label": "the bare RetroArch Flatpak",
+      "verified": null,
+      "note": "[D] The cfg location and RetroArch's own upstream defaults are source-verified; no unclaimed org.libretro.RetroArch installation has been observed."
+    },
+    "bare_retroarch_native": {
+      "label": "a native RetroArch install",
+      "verified": null,
+      "note": "[D] The cfg location and RetroArch's own upstream defaults are source-verified; no native installation has been observed."
+    }
+  }
+}

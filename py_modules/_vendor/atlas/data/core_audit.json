@@ -1,0 +1,702 @@
+{
+  "schema": 3,
+  "spec": "The verification matrix behind docs/research/core-audit.md. per_game_capable is a proven static capability: true = at least one per-game save mode is established by source, shipped binary, or observation; false = absence is established; null = unknown. It does not state the active mode of a running installation — SavefilePlacement.granularity does that where supported. note is the concise evidence and limitation summary. save_options names the core options the audit found governing the file set and granularity; it is required for a multi-option verdict and rejected on every other one, because that verdict is exactly the claim that those options decide the answer — the resolver hands them to the caller in the 'core-multi-option' caveat so an unstated granularity says which options it depends on instead of reading as nothing-to-report. verified records, per arrangement (retrodeck / emudeck / bare), which versions the knowledge was verified against; null = never verified there. MAINTENANCE IS ENFORCED, not documented-and-hoped: strict loading requires the capability and note, a test asserts every rule card in core_oddities.json has an entry here, and the resolver attaches an 'unverified-version' caveat when a card is applied on an arrangement that is null here or whose live-read version differs from the verified one. core_library_version is the value the core's own retro_get_system_info reports (query_core), so staleness is checked against live reads on both sides.",
+  "cores": {
+    "azahar": {
+      "verdict": "suspect",
+      "per_game_capable": null,
+      "note": "[O] RetroDECK's prepared Citra save subtree suggests a deviation; no core-written save has been observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "boom3": {
+      "verdict": "card",
+      "per_game_capable": false,
+      "note": "[V-source/binary] Answers no libretro memory id. Writes into the content's own tree — user-named savegames under savegames/ beside a written-back libretro.cfg — because PATH_SAVE answers the ROM tree; the subdirectory it creates under the frontend's save root is never written. Confirmed at the shipped era (28a19ef~1). Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "boom3_xp": {
+      "verdict": "card",
+      "per_game_capable": false,
+      "note": "[V-source/binary] The Resurrection of Evil build of the same tree; answers no libretro memory id. Writes into the content's own tree — user-named savegames under savegames/ beside a written-back libretro.cfg — because PATH_SAVE answers the ROM tree; the subdirectory it creates under the frontend's save root is never written. Confirmed at the shipped era (28a19ef~1). Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "bsnes": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] The shipped 115 generation answers no libretro memory id by design — the source says so — and writes <rom_stem>.srm itself. The .rtc the card once declared is not written for Super Famicom content: the 'time.rtc' branch lives only in the Game Boy handler, reached solely through the Super Game Boy subsystem, and the history shows it never lived anywhere else — a cartridge clock resets every launch. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "bsnes-jg": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] The shipped 2.0.2 generation fills RETRO_MEMORY_SAVE_RAM, so the frontend writes <rom_stem>.srm, and writes <rom_stem>.rtc itself into the save directory — one save, two writers. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "bsnes_hd_beta": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] The shipped 10.6 generation answers no libretro memory id and writes <rom_stem>.srm itself — read in its own tree at beta_10_6 rather than carried over from bsnes. Like bsnes, its 'time.rtc' branch lives only in the Game Boy handler behind the Super Game Boy subsystem; a Super Famicom cartridge clock is never persisted, and the .rtc the card once declared is retired with the same correction. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "cannonball": {
+      "verdict": "card",
+      "per_game_capable": false,
+      "note": "[V-source/binary] Answers no libretro memory id and writes three score tables of its own into the frontend's save directory — hiscores.sav, hiscores_timetrial.sav and hiscores_continuous.sav — under fixed names that follow nothing about the content. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "cap32": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers system RAM alone. Keeps a track-level differencing file per drive-A floppy as <save dir>/<image name>.sav — the image's full name, extension kept — written only when the disk was altered, at eject, swap and teardown; drive B has none, and tapes, snapshots and cartridges write nothing. Supersedes the 07-24 queue triage. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "desmume": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers only system RAM. Writes <save dir>/<rom_stem>.dsv itself through its backup device — the battery path defaults to the save directory this build fills, with system-directory and content-directory fallbacks; a legacy .sav is imported once, never written. No .dsv.bak in this build: the copy is gated on a Windows-frontend-only setting whose default is off — the difference to the desmume2015 card's pair. Supersedes the 07-24 queue triage. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "desmume2015": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers only SYSTEM_RAM, so RetroArch writes nothing; writes <rom_stem>.dsv itself with a .dsv.bak beside it — relative to the launching process's working directory, because the path member its build never fills stays empty. The one carded core whose directory is a property of the launch. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "dolphin": {
+      "verdict": "suspect",
+      "per_game_capable": null,
+      "note": "[O] RetroDECK's prepared dolphin-emu save subtree suggests a different root; no core-written save has been observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "dosbox_pure": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no memory id. The emulated C: drive is a union of the read-only content and one writable overlay, and the overlay is the save: <save dir>/<rom_stem>.pure.zip, created on first modification, rewritten on a five-second schedule. A .SAVENAME file redirects the name for shared saves, a legacy <rom_stem>.sav keeps being used unless strict mode forbids it, Boot OS setups keep -CDRIVE.sav and hash-keyed disks beside it and install OS images into the system directory. Supersedes the 07-24 queue triage. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "easyrpg": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no memory id, and the libretro port names no save path: the save filesystem is the game's own directory, so RPG Maker's fifteen Save##.lsd slots land beside the game files — or, for archived content, in a sibling '<archive name>.save/' directory the player creates. The frontend's save directory never enters the answer. Supersedes the 07-24 queue triage. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "fbalpha2012": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no libretro memory id and writes past the frontend: the NVRAM half of the machine state as <save_dir>/<driver>.fs, plus a <driver>.hi where its hiscore option is on. Named after the driver, which its exact lookup makes equal to the content's stem. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "fbalpha2012_cps1": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no libretro memory id. The family's fifth carded build, with a shape of its own: no BurnStateSave and no '.fs' — the non-volatile half is the boards' EEPROM, written as <driver>.nv at teardown for the sets that have one (Q-Sound/CPS1.5, Pang hardware, EEPROM bootlegs), beside the family's option-gated <driver>.hi. The record that said 'frontend writes nothing' was true and is retired by the card. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "fbalpha2012_cps2": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no libretro memory id and writes past the frontend: the NVRAM half of the machine state as <save_dir>/<driver>.fs, plus a <driver>.hi where its hiscore option is on. Named after the driver, which its exact lookup makes equal to the content's stem. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "fbalpha2012_cps3": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no libretro memory id and writes past the frontend: the NVRAM half of the machine state as <save_dir>/<driver>.fs, plus a <driver>.hi where its hiscore option is on. Named after the driver, which its exact lookup makes equal to the content's stem. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "fbalpha2012_neogeo": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no libretro memory id and writes past the frontend: the NVRAM half of the machine state as <save_dir>/<driver>.fs, and nothing else — this build has neither high scores nor memory cards. Named after the driver, which its exact lookup makes equal to the content's stem. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "fbneo": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] The shipped 01e29d5 generation writes its saves into a subtree of its own under the save directory: <rom_stem>.fs always, and a .memcard for Neo Geo cartridge content whose grouping fbneo-memcard-mode selects — one shared card, one per game, or none. The default sits in the card, which is where it can be read back (this core registers no options a probe can capture). No mode is live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "flycast": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary/live] flycast@1dac369 libretro.cpp:790-807 maps the option; oslib.cpp:38-67 builds the VMU path. Both placements observed live: shared vmu_save_*.bin under <system_directory>/dc, and 'All VMUs' writing <save_id>.<port>.bin into the redirected save directory (libretro.cpp:2142-2148), save_id being the disc's product number (emulator.cpp:838-841). [V-source] content without such an id — arcade, or a disc header stating none — is named after the ROM by the same function (oslib.cpp:62); the card carries both spellings and the answer states the condition. 'VMU A1' is [D] from the same path and covers port A1 alone, so its save spans two roots and states no file set. [O] which ports a per-content mode covers depends on the content platform (Naomi connects B1/C1, maple_cfg.cpp:246-253) — a dimension the card schema does not have.",
+      "verified": {
+        "retrodeck": {
+          "version": "0.10.9b",
+          "core_library_version": "1dac369",
+          "date": "2026-08-05"
+        },
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "genesis_plus_gx": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Frontend SRAM is real for the cartridge systems, and unreachable for the CD ones: SYSTEM_MCD runs scd_init() instead of md_cart_init() (core/genesis.c:162-175), so sram.on never sets and the memory interface answers 0 — the record's CD rows were corrected to say so. The CD save is the core's own BRAM tree under three interacting options (genesis_plus_gx_system_bram, _cart_bram, _cart_size; libretro.c:1383-1500), written by bram_load/bram_save (libretro.c:3675, :3730) — the multi-option shape the single-option card schema cannot express. Never live-observed. Card shipped: the rule dispatches on the content's class and reads the three BRAM options for CD content.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "geolith": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Writes four files of its own per game into the frontend's save directory — <rom_stem>.nv, .srm, .mcr and .brm — and for CD content also fills RETRO_MEMORY_SAVE_RAM, so RetroArch writes a <rom_stem>.srm onto the same path the core writes. Not live-observed; whether the two agree about the bytes is open (#139).",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "hatari": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no memory id. The save story is write-back into the content itself, option-routed: with 'hatari_writeprotect_floppy' off — the registered default — a modified floppy is written back into its own image at eject and shutdown, .st/.msa/.dim/.ipf/.stx and even inside a .zip (src/floppy.c:599-634 at 7008194, the revision the record pinned); 'on' discards the changes, 'auto' follows the file's own protection. Hard-disk content (a GEMDOS directory, ACSI/IDE images) takes writes in place under 'hatari_writeprotect_hd' the same way. Falcon/TT machines keep hatari.nvram under $HOME/.hatari (src/falcon/nvram.c:186-196) — a root outside every kind the card format states. Card shipped: the writeback modes state the save lives inside the content (save-inside-content), 'on' states the discarded emptiness (save-writes-discarded), and which option governs is the content's class, read by the card's rule. The queue's 'auto.sav'/'hatari.sav' strings are memory-snapshot (savestate) defaults, reachable only through the core's own GUI — not this family. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "kronos": {
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro",
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no libretro memory id. Writes its own tree under the save root: kronos/saturn/<stem>.ram plus optional -ext*.ram addon cartridges, kronos/stv/<stem>.ram plus the board eeprom <romset>.nv — or Beetle Saturn's flat <stem>.bkr/.bcr when kronos_use_beetle_saves is on. Both subtrees are created blind at retro_init. Supersedes the 07-24 queue triage. Not live-observed."
+    },
+    "mame": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source] The shipped a90e86e1 generation answers no libretro memory id and keeps its saves in three trees of its own below the save directory: nvram (the machine's battery memory), cfg (its dip switches, beside an emulator-wide default.cfg) and diff (write differences against CHD hard disks). The diff names come from the machine's ROM table in the binary and are stated as unnameable rather than guessed. Two switches govern the card's rule: mame_mame_paths_enable hands path control back to MAME, whose save trees then anchor at the frontend process's working directory (no ini is read while mame_read_config is off — the default), and with both switches on the rule reads mame.ini and the driver's <stem>.ini along $HOME/.mame;<system>/mame/ini the way the emulator does. Nothing is live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "mame2000": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] The shipped 0.37b5 generation answers no libretro memory id and keeps three trees of its own below <save_dir>/mame2000 — nvram, hi and cfg — naming each file after the driver. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "mame2003": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] The shipped generation answers no libretro memory id and keeps its own trees below the save directory, under 'mame2003' by default and directly under it where the core's subfolder option is turned off: nvram, hi and cfg by driver name, plus a shared memcard tree and a diff tree whose names atlas cannot derive. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "mame2003_plus": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] The shipped generation answers no libretro memory id and keeps its own trees below the save directory, under 'mame2003-plus' by default and directly under it where the core's subfolder option is turned off: nvram, hi and cfg by driver name, plus a shared memcard tree and a diff tree whose names atlas cannot derive. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "mame2010": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] The shipped 0.139 generation answers no libretro memory id and keeps its own trees below <save_dir>/mame2010: nvram, hi and cfg by driver name, plus a shared memcard tree and a diff tree whose names atlas cannot derive. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "mednafen_ngp": {
+      "verdict": "standard-dir",
+      "per_game_capable": true,
+      "note": "[V-live] RetroDECK 0.10.9b contains content-keyed SNK Gals' Fighters (USA, Europe).flash in the standard save directory.",
+      "verified": {
+        "retrodeck": {
+          "version": "0.10.9b",
+          "core_library_version": null,
+          "date": "2026-07-23"
+        },
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "mednafen_psx": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] beetle-psx-libretro@d6383bf writes every memory card into retro_save_directory (libretro.cpp:5234-5249): slot 0 either reaches RetroArch through the libretro SRAM interface as an .srm (libretro.cpp:5129-5145) or is written by the core as <stem>.<idx>.mcr (:2145-2163), slot 1 adds a second .mcr once a game dirties it (:2459-2485), and sharing swaps the content stem for mednafen_psx_libretro_shared (:5247). Which of those applies is what the three options decide; the shipped core registers their defaults. Issue #80 settled from the same source: the card-image index options supply the digit in <stem>.<idx>.mcr (libretro.cpp:2159-2164), so the card's names hold for the registered defaults and its rule steps aside for any other selection. Card shipped.",
+      "verified": {
+        "retrodeck": {
+          "version": "0.10.9b",
+          "core_library_version": null,
+          "date": "2026-07-23"
+        },
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "mednafen_psx_hw": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Same implementation as Beetle PSX at the same revision (d6383bf), reached through the beetle_psx_hw_ option prefix. Card shipped alongside mednafen_psx's, through the hw option prefix.",
+      "verified": {
+        "retrodeck": {
+          "version": "0.10.9b",
+          "core_library_version": null,
+          "date": "2026-07-23"
+        },
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "mednafen_saturn": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-live + V-source/binary] Answers system RAM alone; writes its three files itself, flat in the save directory — <stem>.bkr (internal backup RAM, mednafen/ss/ss.cpp:1037-1044 at ccba526), <stem>.bcr (backup cartridge, cart/backup.cpp:62) and <stem>.smpc (RTC and language, ss.cpp:1142) — live-observed content-keyed on a RetroDECK arrangement (2026-07-23). Each stem swaps to 'mednafen_saturn_libretro_shared' under its own option: 'beetle_saturn_shared_int' for the internal pair, 'beetle_saturn_shared_ext' for the cartridge (libretro.cpp:1045-1073, options read at :257-276) — two independent options over one file set, the Beetle PSX shape the single-option card cannot express. The 08-17 queue's 'BSC.MCR' hit is the SH-2 bus controller's register name in the debugger's vocabulary, not a file. Mednafen's rotating sav backups are stubbed out in this port (ss.cpp:1032-1035). Card shipped: the mode is selected by a rule reading both options — the granularity block names each switch with its live value and where to change it.",
+      "verified": {
+        "retrodeck": {
+          "version": "0.10.9b",
+          "core_library_version": null,
+          "date": "2026-07-23"
+        },
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "melonds": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no libretro memory id and writes <save_dir>/<rom_stem>.sav itself, the DS card's SRAM. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "melondsds": {
+      "verdict": "standard",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Fills save_ram, so RetroArch writes <rom_stem>.srm — and no host file appears beside it on the catalogue route: the binary's DSi '.sav' paths are NAND-internal spellings inside the image kept in the system directory, firmware and Wi-Fi settings flush to the system directory (core/tasks.cpp:263-292 at v1.2.0), and the GBA slot writes back to the save file the subsystem was handed at its own path (tasks.cpp:239-260) — a route no catalogue entry launches. The 07-24 side question is closed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "mgba": {
+      "verdict": "standard",
+      "per_game_capable": true,
+      "note": "[V-live] Multiple content-keyed .srm files were observed under RetroDECK 0.10.9b's effective save directories.",
+      "verified": {
+        "retrodeck": {
+          "version": "0.10.9b",
+          "core_library_version": null,
+          "date": "2026-07-23"
+        },
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "mupen64plus_next": {
+      "verdict": "standard",
+      "per_game_capable": true,
+      "note": "[V-live] RetroDECK 0.10.9b produced separate content-keyed 296960-byte .srm files for two games using different save chips.",
+      "verified": {
+        "retrodeck": {
+          "version": "0.10.9b",
+          "core_library_version": null,
+          "date": "2026-07-23"
+        },
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "neocd": {
+      "verdict": "multi-option",
+      "per_game_capable": true,
+      "note": "[V-source/binary] neocd@5eca2c8: src/path.cpp:137-168 proves a per-content mode and src/libretro.cpp:214-215 exposes frontend save RAM. neocd_per_content_saves is registered as Off|On (src/libretro_variables.cpp:45), so it defaults to the shared <system_dir>/neocd/neocd.srm — written down because the core registers its variables at load, where no probe reads them, and it has no card to hold the value structurally. Load precedence and live behavior remain [O].",
+      "save_options": [
+        "neocd_per_content_saves"
+      ],
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "noods": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no libretro memory id and keeps its own <save_dir>/<rom_stem>.sav, opened as a descriptor the emulator writes into directly. Created and seeded on first launch whether the game saves or not. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "nxengine": {
+      "verdict": "card",
+      "per_game_capable": false,
+      "note": "[V-source/binary] Answers no libretro memory id and exports the frontend's save directory to the game's own code, which keeps five Cave Story profiles there — profile.dat and profile2.dat through profile5.dat, under names that follow nothing about the content. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "openlara": {
+      "verdict": "card",
+      "per_game_capable": false,
+      "note": "[V-source/binary] Answers no libretro memory id. At retro_init it creates 'openlara/' under the frontend's save directory and the engine keeps exactly one file there, 'savegame.dat' — every game and every slot inside one file. Settings and the level cache go under 'openlara/cache/' in the system directory instead. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "opera": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] opera-libretro@67a29e6 — the revision the shipped binary reports — writes its NVRAM per game or shared under <save_dir>/opera (opera_lr_nvram.c:130-152, :154-175) and exposes no RETRO_MEMORY_SAVE_RAM (libretro.c:430-444), so the nvram files are the whole save. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "pcsx2": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] The shipped 14d19f8 generation offers content-keyed <rom_stem>.ps2 cards when pcsx2_shared_memory_cards is disabled, and shared cards under the system directory when it is enabled; that per-content mode is not live-observed. The default sits in the card, which is where it can be read back (this core registers no options a probe can capture).",
+      "verified": {
+        "retrodeck": {
+          "version": "0.10.9b",
+          "core_library_version": "14d19f8",
+          "date": "2026-07-23"
+        },
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "pcsx_rearmed": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] pcsx_rearmed@228c14e hands slot 1 to the libretro SRAM interface (frontend/libretro.c:2050-2068, :3483-3496), so RetroArch writes the standard .srm; pcsx_rearmed_memcard2 (frontend/libretro_core_options.h:152-165) is the core's only save option and switching it on adds pcsx-card2.mcd in the save directory, one card shared by every game (frontend/libretro.c:3500-3525). Card shipped: a plain single-option card, both modes from the one switch.",
+      "verified": {
+        "retrodeck": {
+          "version": "0.10.9b",
+          "core_library_version": null,
+          "date": "2026-07-23"
+        },
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "pokemini": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary, placement V-live] Answers no save id beyond system RAM. Writes <save dir>/<rom_stem>.eep itself: read back at load, written at unload only when the cartridge EEPROM was touched; EEPROM sharing is compiled off. A content-keyed .eep was live-observed in the standard save directory (2026-07-23). Supersedes the standard-dir triage — the file set is now stated by the card.",
+      "verified": {
+        "retrodeck": {
+          "version": "0.10.9b",
+          "core_library_version": null,
+          "date": "2026-07-23"
+        },
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "ppsspp": {
+      "verdict": "suspect",
+      "per_game_capable": null,
+      "note": "[O] The shipped sort override is known, but PPSSPP's libretro save subtree and granularity have not been established.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "prboom": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no libretro memory id. Creates <save dir>/<rom_stem>/ at load and keeps eight menu-slot savegames (prbmsav0.dsg-prbmsav7.dsg) plus a written-back prboom.cfg there; a DeHackEd patch may rename the savegame base, and the card scopes for it. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "quasi88": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no save memory id. Floppy writes are option-routed: 'q88_save_to_disk_image' disabled (default) keeps a differencing file per opened disk image as <save dir>/<image stem>.srm — created empty at launch, the frontend's spelling without the frontend — and enabled writes the sectors into the loaded image itself, no separate file anywhere. Supersedes the 07-24 queue triage. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "race": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no libretro memory id and writes <save_dir>/<rom_stem>.ngf itself, the Neo Geo Pocket's flash memory. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "scummvm": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] Answers no memory id. Saves are ScummVM's own slot files, named per engine from the ScummVM *target* — launcher configuration, not the content path — written by its DefaultSaveFileManager into ScummVM's 'savepath' setting, whose registered default is the frontend's save directory, flat (libretro-os-base.cpp:47, libretro-os-utils.cpp:212-221 at 686cdd1, the revision the shipped binary names); an unset or invalid setting falls back the same way. The setting is the user's, changeable in the core's own GUI and persisted in <system dir>/scummvm.ini (libretro-os-utils.cpp:64-69), so the card's rule reads that ini the way the emulator does, and its one mode states the directory while refusing the names (the all-unnamed group form; a savepath routed elsewhere steps aside with save-root-redirected). Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "swanstation": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] The shipped 4d309c0 registers both card-type options; the libretro .srm, shared, game-code and game-title modes are established from source (src/libretro/libretro_host_interface.cpp:396-415, src/core/system.cpp:1457-1486). Not live-observed. Card shipped: the mode is the pair of slot types, selected by the card's rule.",
+      "verified": {
+        "retrodeck": {
+          "version": "0.10.9b",
+          "core_library_version": null,
+          "date": "2026-07-23"
+        },
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "tyrquake": {
+      "verdict": "card",
+      "per_game_capable": false,
+      "note": "[V-source/binary] Answers no libretro memory id. Creates <save dir>/<content dir name>/ at load and keeps Quake's twelve menu-slot savegames (s0.sav-s11.sav) plus a written-back config.cfg there; the console's save command may add free-named .sav files beside them. Supersedes the 07-24 queue triage. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "virtualjaguar": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] The shipped 48096c1 generation fills RETRO_MEMORY_SAVE_RAM with the Jaguar's 128-byte EEPROM and *also* writes both that file and a .cdrom.srm twin itself, from paths it builds out of the save directory and the content's basename. The frontend and the core therefore write one of the two files in different byte orders. No option governs any of it. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "vitaquake2": {
+      "verdict": "card",
+      "per_game_capable": false,
+      "note": "[V-source/binary] Answers no libretro memory id. Creates <save dir>/<content dir name>/ at load and writes config.cfg plus Quake 2's save/ slot tree there; the per-map level states are names atlas cannot derive, so that group is stated as a directory. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "vitaquake2-rogue": {
+      "verdict": "card",
+      "per_game_capable": false,
+      "note": "[V-source/binary] The Ground Zero build of the same source; answers no libretro memory id. Creates <save dir>/<content dir name>/ at load and writes config.cfg plus Quake 2's save/ slot tree there; the per-map level states are names atlas cannot derive, so that group is stated as a directory. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "vitaquake2-xatrix": {
+      "verdict": "card",
+      "per_game_capable": false,
+      "note": "[V-source/binary] The Reckoning build of the same source; answers no libretro memory id. Creates <save dir>/<content dir name>/ at load and writes config.cfg plus Quake 2's save/ slot tree there; the per-map level states are names atlas cannot derive, so that group is stated as a directory. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "vitaquake2-zaero": {
+      "verdict": "card",
+      "per_game_capable": false,
+      "note": "[V-source/binary] The Zaero build of the same source; answers no libretro memory id. Creates <save dir>/<content dir name>/ at load and writes config.cfg plus Quake 2's save/ slot tree there; the per-map level states are names atlas cannot derive, so that group is stated as a directory. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "vitaquake3": {
+      "verdict": "card",
+      "per_game_capable": false,
+      "note": "[V-source/binary] Answers no libretro memory id. Writes q3config.cfg into the content's own tree — fs_homepath falls back to the ROM tree because the homePath static is never filled — and the arena progress rides inside it as archived cvars; the subdirectory it creates under the frontend's save root is never written. Not live-observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "citra": {
+      "verdict": "suspect",
+      "per_game_capable": null,
+      "note": "[O] The unfiltered options scan of the shipped citra_libretro.so shows two save-relevant switches nobody has verified — citra_use_libretro_save_path and citra_use_virtual_sd — beside LibRetro::GetSaveDir and the emulated SD's FileSys archives. Which directories those switches actually route, and what the core writes where, has not been read from source; no core-written save has been observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    }
+  }
+}

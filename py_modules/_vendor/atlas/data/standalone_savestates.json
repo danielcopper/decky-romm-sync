@@ -1,0 +1,524 @@
+{
+  "schema": 1,
+  "spec": "Standalone savestate cards: which emulators the savestate question can answer for a non-libretro catalogue entry, keyed by the %EMULATOR_…% token the launch command names. World knowledge under DESIGN.md's boundary rule — each card states where the emulator's states tree hangs (a compiled join below one of its XDG trees, or the configuration key whose value moves it), how the emulator names a state file, the catalogue systems the card answers for, and the citations behind all of it at the revision the arrangement ships; the reading itself is code beside the card (atlas/installations.py), which reads that configuration the way the emulator does and states every degradation as a structured caveat. The 'names' pattern is the field the save cards never needed: every one of these emulators names its states itself, from an identity of the running game (a disc serial, a game id, a title id) that no content path derives — melonDS alone derives its from the loaded file's name — so the pattern is stated, cited, and handed to the caller in the caveat that says why the files below cannot be listed by name. A card can also state, as a cited fact, that the emulator has no savestates at all ('absent', #284) — an answer, not a refusal, serialized as no_savestates with its citation; such a card states no names, no settings and no anchors, because there is no tree to describe and no word to pin. An emulator absent from this file is still not one without savestates: it is one whose savestate wiring atlas has not established, and the resolver refuses exactly as it did before this file existed.",
+  "emulators": {
+    "DOLPHIN": {
+      "savestates": {
+        "settings": null,
+        "systems": [
+          "gc",
+          "wii"
+        ],
+        "base": "data",
+        "subdir": "StateSaves",
+        "names": {
+          "pattern": "<game_id>.s<slot>",
+          "citation": "State.cpp:304-308"
+        },
+        "citations": {
+          "build": "dolphin 2603a",
+          "tree": "FileUtil.cpp:852",
+          "names": "State.cpp:304-308"
+        }
+      },
+      "anchors": {
+        "binary": "dolphin/bin/dolphin-emu",
+        "names": {
+          "StateSaves": {
+            "literal": "StateSaves"
+          }
+        }
+      },
+      "provenance": {
+        "source": "Dolphin 2603a, the release the save card pins for the same shipped binary (dolphin 2603a). The states tree is a compiled join no configuration moves: s_user_paths[D_STATESAVES_IDX] = s_user_paths[D_USER_IDX] + STATESAVES_DIR (FileUtil.cpp:852; STATESAVES_DIR \"StateSaves\", CommonPaths.h:59) — the one assignment the file makes, with no settings key rewiring it, so this card names no governing config. A state is <game_id>.s<slot>, the id the running disc's own (MakeStateFilename, State.cpp:304-308), slots 1-10 (State.h:23), with lastState.sav beside them (State.cpp:424, :990) — none of it derivable from the content path, so the names stay a cited pattern rather than a list. The user directory is the emulator's XDG data tree, which RetroDECK reroutes with a symlink the answer walks (dir_prep \"$states_path/dolphin\" \"$XDG_DATA_HOME/dolphin-emu/StateSaves\", components/dolphin/component_prepare.sh:23, :42). On EmuDeck the emulator is the org.DolphinEmu.dolphin-emu flatpak, its StateSaves linked below the app's own data home (emuDeckDolphin.sh:92), so the launch's flatpak variant reads the app's own XDG homes below ~/.var/app."
+      }
+    },
+    "PRIMEHACK": {
+      "savestates": {
+        "settings": null,
+        "systems": [
+          "gc",
+          "wii"
+        ],
+        "base": "data",
+        "subdir": "StateSaves",
+        "names": {
+          "pattern": "<game_id>.s<slot>",
+          "citation": "State.cpp:943-947"
+        },
+        "citations": {
+          "build": "shiiion/dolphin 81bfb96",
+          "tree": "FileUtil.cpp:847",
+          "names": "State.cpp:943-947",
+          "installations": {
+            "io.github.shiiion.primehack": {
+              "build": "shiiion/dolphin 53f53e0",
+              "tree": "FileUtil.cpp:852",
+              "names": "State.cpp:324-328"
+            }
+          }
+        }
+      },
+      "anchors": {
+        "binary": "primehack/bin/primehack",
+        "names": {
+          "StateSaves": {
+            "literal": "StateSaves"
+          }
+        }
+      },
+      "provenance": {
+        "source": "PrimeHack, the Metroid Prime fork of Dolphin, read at shiiion/dolphin 81bfb96 — the revision RetroDECK's component is built from — with the Flathub build EmuDeck installs (53f53e0) cited beside it per installation. The states shape is Dolphin's, inherited whole: the tree is the compiled StateSaves join below the fork's own user directory (FileUtil.cpp:847 at 81bfb96; FileUtil.cpp:852 at 53f53e0; STATESAVES_DIR \"StateSaves\", CommonPaths.h:66 and :59 respectively), no configuration moves it, and a state is <game_id>.s<slot> (MakeStateFilename, State.cpp:943-947 at 81bfb96; State.cpp:324-328 at 53f53e0), slots 1-10 (State.h:19 / :23), lastState.sav beside them (State.cpp:410 / :444). Which name the user directory itself carries belongs to the build (primehack vs dolphin-emu, emulator_settings.json, #246). RetroDECK reroutes the tree with a symlink the answer walks (dir_prep \"$states_path/primehack\" \"$XDG_DATA_HOME/primehack/StateSaves\", components/primehack/component_prepare.sh:19, :37); EmuDeck links the Flathub flatpak's own tree below ~/.var/app/io.github.shiiion.primehack/data/dolphin-emu/StateSaves (emuDeckPrimehack.sh:59)."
+      }
+    },
+    "PPSSPP": {
+      "savestates": {
+        "settings": null,
+        "systems": [
+          "psp"
+        ],
+        "base": "config",
+        "subdir": "PSP/PPSSPP_STATE",
+        "names": {
+          "pattern": "<disc_id>_<disc_version>_<slot>.ppst",
+          "citation": "SaveState.cpp:324-346"
+        },
+        "citations": {
+          "build": "ppsspp v1.20.4",
+          "tree": "PathUtil.cpp:74-75",
+          "names": "SaveState.cpp:324-346"
+        }
+      },
+      "anchors": {
+        "binary": "ppsspp/bin/PPSSPPSDL",
+        "names": {
+          "PSP": {
+            "literal": "PSP"
+          },
+          "PPSSPP_STATE": {
+            "literal": "PPSSPP_STATE"
+          }
+        }
+      },
+      "provenance": {
+        "source": "PPSSPP v1.20.4, the release the save card pins for the same shipped binary (ppsspp v1.20.4). States live at <memstick>/PSP/PPSSPP_STATE (DIRECTORY_SAVESTATE, PathUtil.cpp:74-75), and the memstick is the compiled $XDG_CONFIG_HOME/ppsspp join the save card cites (NativeApp.cpp:473-482) — no setting names either, so this card names no governing config. A state is <disc_id>_<disc_version>_<slot>.ppst — the id and version the game's own SFO values (GenerateFullDiscId + GenerateSaveSlotFilename, SaveState.cpp:324-346) — with .undo.ppst, load_undo.ppst (SaveState.cpp:66-70) and per-slot .jpg screenshots beside them; none of it derivable from the content path. RetroDECK reroutes the tree with a symlink the answer walks (dir_prep \"$states_path/PSP/PPSSPP-SA\" \"$XDG_CONFIG_HOME/ppsspp/PSP/PPSSPP_STATE\", components/ppsspp/component_prepare.sh:17, :47). On EmuDeck the emulator is the org.ppsspp.PPSSPP flatpak, its PPSSPP_STATE linked below the app's own config home (emuDeckPPSSPP.sh:58)."
+      }
+    },
+    "RPCS3": {
+      "savestates": {
+        "settings": null,
+        "systems": [
+          "ps3"
+        ],
+        "base": "config",
+        "subdir": "savestates",
+        "names": {
+          "pattern": "<title>/<title>_<prefix>_<id>.SAVESTAT",
+          "citation": "savestate_utils.cpp:430-435"
+        },
+        "citations": {
+          "build": "rpcs3 7c6b3dcd",
+          "tree": "savestate_utils.cpp:293",
+          "names": "savestate_utils.cpp:430-435"
+        }
+      },
+      "anchors": {
+        "binary": "rpcs3/bin/rpcs3",
+        "names": {
+          "savestates": {
+            "literal": "savestates"
+          }
+        }
+      },
+      "provenance": {
+        "source": "RPCS3 build 7c6b3dcd, the revision the save card pins for the same shipped binary (rpcs3 7c6b3dcd). Unlike the save tree, states never touch the emulated drive: the directory is a compiled join below the emulator's own config directory — fs::get_config_dir() + \"savestates/\" + title + \"/\" (savestate_utils.cpp:293, :298), one directory per title, the title the running game's id or, lacking one, the boot path's basename (:285) — and no configuration key moves it, so this card names no governing config. get_config_dir on Linux is $XDG_CONFIG_HOME else ~/.config, plus /rpcs3/ (File.cpp:2218-2292, the join itself at :2292; a portable/ directory beside the executable would win, :2228-2233, and neither arrangement has one). A state is <title>/<title>_<prefix>_<id>.SAVESTAT (savestate_utils.cpp:430-435), read back also in .zst/.gz compressed spellings (:320); the title id is the game's own, not derivable from the content path. RetroDECK reroutes the tree with a symlink the answer walks (dir_prep \"$states_path/ps3/rpcs3\" \"$XDG_CONFIG_HOME/rpcs3/savestates\", components/rpcs3/component_prepare.sh:18, :39). EmuDeck wires nothing here — its AppImage launch reads the host's own ~/.config/rpcs3/savestates."
+      }
+    },
+    "AZAHAR": {
+      "savestates": {
+        "settings": null,
+        "systems": [
+          "n3ds"
+        ],
+        "base": "data",
+        "subdir": "states",
+        "names": {
+          "pattern": "<program_id>.<slot>.cst",
+          "citation": "savestate.cpp:41-48"
+        },
+        "citations": {
+          "build": "azahar 2125.1.1",
+          "tree": "file_util.cpp:1029",
+          "names": "savestate.cpp:41-48"
+        }
+      },
+      "anchors": {
+        "binary": "azahar/bin/azahar",
+        "names": {
+          "states": {
+            "literal": "states"
+          }
+        }
+      },
+      "provenance": {
+        "source": "Azahar 2125.1.1, the release the save card pins for the same shipped binary (azahar 2125.1.1). States live at <user dir>/states — a compiled entry in the emulator's own path table (StatesDir, file_util.cpp:1029; STATES_DIR \"states\", common_paths.h:69) that no configuration key moves (the [Data Storage] keys the save answer reads route only the emulated SD and NAND), so this card names no governing config. The user directory on Linux is the XDG data tree ($XDG_DATA_HOME/azahar-emu, EMU_DATA_DIR, common_paths.h:41), the same directory the settings table states. A state is <program_id>.<slot>.cst — the id the running title's own, 16 hex digits — with a movie variant <program_id>.movie<movie_id>.<slot>.cst (GetSaveStatePath, savestate.cpp:41-48); neither derivable from the content path. Neither arrangement reroutes or configures this tree: RetroDECK's component_prepare.sh wires saves only, so the compiled location simply stands, on EmuDeck under the AppImage's host XDG tree."
+      }
+    },
+    "PCSX2": {
+      "savestates": {
+        "settings": "PCSX2.ini",
+        "systems": [
+          "ps2"
+        ],
+        "directory": {
+          "section": "Folders",
+          "key": "Savestates",
+          "default": "sstates",
+          "citation": "Pcsx2Config.cpp:2258, :2284 at v2.6.3"
+        },
+        "names": {
+          "pattern": "<serial> (<crc>).<slot>.p2s",
+          "citation": "VMManager.cpp:1790-1806 at v2.6.3"
+        }
+      },
+      "anchors": {
+        "binary": "pcsx2/bin/pcsx2-qt",
+        "names": {
+          "PCSX2.ini": {
+            "literal": "PCSX2.ini"
+          },
+          "Folders": {
+            "literal": "Folders"
+          },
+          "Savestates": {
+            "literal": "Savestates"
+          },
+          "sstates": {
+            "literal": "sstates"
+          }
+        }
+      },
+      "provenance": {
+        "source": "PCSX2 v2.6.3, the release the save card pins for the same shipped binary. The states directory is [Folders] Savestates, default 'sstates', a relative value joining the DataRoot (Pcsx2Config.cpp:2258, :2284; LoadPathFromSettings :2272-2278) — the same $XDG_CONFIG_HOME/PCSX2 DataRoot and inis/PCSX2.ini the save card states (:2197-2217). The key is matched ASCII case-insensitively, which is the fact issue #225 turned on: RetroDECK writes the line spelled 'SaveStates' (set_setting_value … \"SaveStates\" … \"Folders\", components/pcsx2/component_prepare.sh:25, :83) while the source reads \"Savestates\", and the two are one key because the reader is CSimpleIniA (INISettingsInterface.h:66) — CSimpleIniTempl over SI_NoCase (SimpleIni.h:3642-3643), which on non-Windows is the ASCII case-insensitive SI_GenericNoCase (:2882-2887 define SI_NO_CONVERSION, :3629-3634 pick the comparator, :2916-2931 lower-case only A-Z). Section names collapse the same way, and duplicate spellings in one file collapse to one entry with the last occurrence winning (AddEntry, SimpleIni.h:2042-2150). So RetroDECK's written line governs, not the compiled 'sstates' — and the resolver reads the key the way the emulator does. A state is <serial> (<crc>).<slot>.p2s — the serial and CRC the disc's own — with .resume.p2s for the resume slot and .p2s.backup beside overwritten slots (GetSaveStateFileName, VMManager.cpp:1790-1806); none derivable from the content path. EmuDeck writes the upstream spelling into the same key (iniFieldUpdate … \"Folders\" \"Savestates\", emuDeckPCSX2QT.sh:77) and reaches this card through its launcher script."
+      }
+    },
+    "MELONDS": {
+      "savestates": {
+        "settings": "melonDS.toml",
+        "systems": [
+          "nds"
+        ],
+        "directory": {
+          "section": "Instance0",
+          "key": "SavestatePath",
+          "default": "",
+          "citation": "Config.cpp:302, EmuInstance.cpp:696-701 at 1.1"
+        },
+        "names": {
+          "pattern": "<rom_stem>.ml<slot>",
+          "citation": "EmuInstance.cpp:696-701 at 1.1"
+        }
+      },
+      "anchors": {
+        "binary": "melonds/bin/melonDS",
+        "names": {
+          "melonDS.toml": {
+            "literal": "melonDS.toml"
+          },
+          "Instance0": {
+            "literal": "Instance"
+          },
+          "SavestatePath": {
+            "literal": "SavestatePath"
+          }
+        }
+      },
+      "provenance": {
+        "source": "melonDS 1.1, the release the save card pins for the same shipped binary and the release Flathub currently installs for EmuDeck. A state is <rom stem>.ml<slot> — the loaded file's name without its last extension, the extension .ml plus the slot digit — composed by the same getAssetPath the save answer walks (getSavestateName, EmuInstance.cpp:696-701; getAssetPath :445-484), slots 1-8 (Window.cpp:356-361; slot 0 is the free-file picker, :364-367). The directory is [Instance0] SavestatePath, the save path's sibling row in the legacy table (Config.cpp:302), read the way Config::Load reads it: melonDS.toml where it exists, the pre-1.0 melonDS.ini line by line where none does, factory defaults where the TOML does not parse (Config.cpp:785-803). An empty or absent value puts the state beside the ROM itself and a relative one resolves against the launching process's working directory, exactly as for the save (getAssetPath, EmuInstance.cpp:445-484). For content inside an archive the stem is the archived file's name, which the archive's own path does not derive (EmuInstance.cpp:1846-1848; the archive suffixes, Window.cpp:124-148). RetroDECK writes the key into its states tree (set_setting_value … \"SavestatePath\" … \"Instance0\", components/melonds/component_prepare.sh:18, :34). On EmuDeck the emulator is the net.kuribo64.melonDS flatpak (melonds.sh:4) and the legacy INI EmuDeck writes there (SavestatePath=…, emuDeckMelonDS.sh:83-86) is 1.1's migration source while no TOML exists."
+      }
+    },
+    "DUCKSTATION": {
+      "savestates": {
+        "settings": "settings.ini",
+        "systems": [
+          "psx"
+        ],
+        "directory": {
+          "section": "Folders",
+          "key": "SaveStates",
+          "default": "savestates",
+          "citation": "settings.cpp:1944, :1975 at stenzek/duckstation@64655818e"
+        },
+        "names": {
+          "pattern": "<serial>_<slot>.sav",
+          "citation": "system.cpp:5288-5302 at stenzek/duckstation@64655818e"
+        }
+      },
+      "anchors": {
+        "binary": "duckstation/bin/duckstation-qt",
+        "names": {
+          "settings.ini": {
+            "literal": "settings.ini"
+          },
+          "Folders": {
+            "literal": "Folders"
+          },
+          "SaveStates": {
+            "literal": "SaveStates"
+          },
+          "savestates": {
+            "literal": "savestates"
+          }
+        }
+      },
+      "provenance": {
+        "source": "The DuckStation build RetroDECK ships as 'DuckStation (Legacy)' — the save card's pin, stenzek/duckstation@64655818e. The states directory is [Folders] SaveStates, default 'savestates' below the DataRoot (settings.cpp:1944, :1975; an empty value falls to the default, a relative one joins the DataRoot, then Path::RealPath resolves it, :1955-1962). RetroDECK's script calls the location hard-coded (components/duckstation/component_prepare.sh:20) — the key disproves that comment, but the script only links the default location (dir_prep \"$states_path/psx/duckstation\" \"$XDG_CONFIG_HOME/duckstation/savestates\", :20, :38), a symlink the answer walks, while EmuDeck writes the key itself (SaveStates = …, emuDeckDuckStation.sh:67-75). A per-game state is <serial>_<slot>.sav with <serial>_resume.sav beside it, and the global slots are savestate_<slot>.sav and resume.sav in the same directory (System::GetGameSaveStateFileName / GetGlobalSaveStateFileName, system.cpp:5288-5302), slots 1-10 each (system.h:83-84); the serial is the disc's own, not derivable from the content path. settings.ini lives in the DataRoot the launch environment picks — the same two-base probe the save card states (qthost.cpp:562-582)."
+      }
+    },
+    "CEMU": {
+      "savestates": {
+        "systems": [
+          "wiiu"
+        ],
+        "absent": {
+          "citation": "Cemu 2.6: unfiltered strings scan of the shipped components/cemu/bin/Cemu_relwithdebinfo carries no savestate or snapshot vocabulary, and the v2.6 tree's only 'savestate' spellings are the graphic-packs window persisting its own UI state (src/gui/GraphicPacksWindow2.cpp:326) and the issue template listing 'Add savestates' among features yet to be implemented (.github/ISSUE_TEMPLATE/feature_report.yaml:18)"
+        }
+      },
+      "provenance": {
+        "source": "Cemu 2.6, the release the shipped binary carries as a whole version string (components/cemu/bin/Cemu_relwithdebinfo) and the generation the save card pins. The feature does not exist at this generation: the unfiltered strings scan of the shipped binary carries no savestate or snapshot vocabulary, a full-tree read of cemu-project/Cemu at v2.6 finds no guest-state serializer anywhere, the only 'savestate' spellings being GraphicPacksWindow2::SaveStateToConfig — the graphic-packs WINDOW persisting its own UI state to config (src/gui/GraphicPacksWindow2.cpp:326, .h:70) — and the project's own issue template names 'Add savestates' among large-scale features yet to be implemented (.github/ISSUE_TEMPLATE/feature_report.yaml:18). Neither arrangement wires any state path for it (components/cemu/component_prepare.sh, emuDeckCemu.sh). The stated no answers before the EmuDeck variant gate: it is a statement about the emulator generation, not about which binary the launch would pick."
+      }
+    },
+    "VITA3K": {
+      "savestates": {
+        "systems": [
+          "psvita"
+        ],
+        "absent": {
+          "citation": "Vita3K build 3996 (commit cb1f592c): repo-wide, no savestate vocabulary — the only 'snapshot' is a comment on NID-export iteration (vita3k/modules/taiHEN/taiHEN.cpp:1331-1335) — and the shipped binary's only '_Save_state' strings are MSVC-STL thread-support symbols, not a feature"
+        }
+      },
+      "provenance": {
+        "source": "Vita3K build 3996, whose corresponding commit is cb1f592c — the same pin the save card carries for the same shipped binary (components/vita3k/bin/Vita3K). The feature does not exist at this build: the unfiltered strings scan of the shipped binary carries no savestate vocabulary (its only '_Save_state'/'_Restore_state' strings are MSVC-STL thread-support symbols beside _Cnd_/_Mtx_/_Thrd_), and a full-tree read at cb1f592c finds no state serializer — the one 'snapshot' in the tree is a comment about NID-export iteration (vita3k/modules/taiHEN/taiHEN.cpp:1331-1335). Neither arrangement wires any state path for it (components/vita3k/component_prepare.sh wires pref-path, saves, textures and shaders only; emuDeckVita3K.sh likewise)."
+      }
+    },
+    "RYUBING": {
+      "savestates": {
+        "systems": [
+          "switch"
+        ],
+        "absent": {
+          "citation": "projects/Ryubing (git.ryujinx.app) release 1.3.3: repo-wide across its 3938 C# sources, zero savestate vocabulary — the Ryujinx lineage has never had a guest-state serializer; docs.ryujinx.app documents save-file management only",
+          "build_unestablished": "nothing ships Ryubing — RetroDECK's find rule probes the user's own install (Ryujinx.sh, a ryubing binary, or the io.github.ryubing.Ryujinx flatpak; es_find_rules.xml) — so which build a launch runs is not established; the record reads release 1.3.3, the newest at examination"
+        }
+      },
+      "provenance": {
+        "source": "Ryubing (the Ryujinx continuation at git.ryujinx.app/projects/Ryubing), read at release 1.3.3, the newest at examination (2026-08-25). The feature does not exist in the lineage: a full-tarball read of the 1.3.3 source — 3938 C# files — finds zero occurrences of savestate vocabulary, the Forgejo's own repo-wide code search answers 'No results' for both spellings, and the project documentation (docs.ryujinx.app) covers save-file management only. RetroDECK ships no Ryubing build — its es_find_rules.xml probes the user's own Ryujinx.sh, ryubing binary or io.github.ryubing.Ryujinx flatpak, and the staticpath entries name an external-components launcher this build does not carry — which is why the card marks the running build unestablished rather than citing one."
+      }
+    },
+    "RUFFLE": {
+      "savestates": {
+        "systems": [
+          "flash"
+        ],
+        "absent": {
+          "citation": "ruffle-rs/ruffle@b001ac43, the commit the shipped binary names in its version string: repo-wide, no savestate vocabulary — the player's persistence is the SharedObjects tree behind --save-directory, the save question's business (#247) — and the unfiltered scan of components/ruffle/bin/ruffle agrees"
+        }
+      },
+      "provenance": {
+        "source": "Ruffle at ruffle-rs/ruffle@b001ac439e9cf1a860116f3cfe1b85d2881228c3, the commit the shipped binary carries in its own version string (components/ruffle/bin/ruffle). The feature does not exist: the unfiltered strings scan of the shipped binary carries no savestate machinery — its 'snapshot' spellings are Rust tokio internals and the Flash flash.text.TextSnapshot API, and its save vocabulary is the desktop player's --save-directory argument, the SharedObjects tree — and the repository carries no savestate vocabulary either. RetroDECK wires only that saves tree (dir_prep \"$saves_path/flash/ruffle\" \"$ruffle_saves_path\", components/ruffle/component_prepare.sh:14, the variable $XDG_DATA_HOME/ruffle/SharedObjects at component_functions.sh:5), which is the save question's own open row (#247); no state path exists to wire."
+      }
+    },
+    "GZDOOM": {
+      "savestates": {
+        "systems": [
+          "doom"
+        ],
+        "absent": {
+          "citation": "GZDoom g4.14.2: the engine's whole serialization surface is its savegame system — UNSAFE_CCMD(save) goes through G_BuildSaveName into G_SaveGame (src/console/c_cmds.cpp:702-731), quicksave rotation writes quick%02d (src/g_game.cpp:2293-2310) and autosaves auto%02d (:2271), all landing in G_GetSavegamesFolder (src/common/menu/savegamemanager.cpp:559-604) — the save question's business; no snapshot feature outside the game's own saves exists"
+        }
+      },
+      "provenance": {
+        "source": "GZDoom g4.14.2, the version the shipped components/gzdoom/bin/gzdoom carries as a whole string. A source port's saving IS the game's own save system, and at this generation that is the only serialization there is: the save console command (UNSAFE_CCMD(save), src/console/c_cmds.cpp:702-731), the quicksave rotation (quick%02d, src/g_game.cpp:2293-2310), and the autosaves (auto%02d, :2271) all compose their file through G_BuildSaveName (src/common/menu/savegamemanager.cpp:597-604) into G_GetSavegamesFolder (:559-592: the -savedir flag, else the save_dir cvar, else the platform savegames path). RetroDECK wires exactly that cvar — save_dir=RETRODECKHOMEDIR/saves/doom/gzdoom (shipped rd_config/gzdoom.ini:372, substituted by components/gzdoom/component_prepare.sh:26-30) — under saves/, the SAVE question's tree, not states/. The unfiltered scan of the shipped binary carries no savestate vocabulary; quicksave is a savegame slot, not a machine snapshot, and this card does not blur the two questions."
+      }
+    },
+    "IRONWAIL": {
+      "savestates": {
+        "systems": [
+          "quake"
+        ],
+        "absent": {
+          "citation": "ironwail v0.8.2: the save command is Quake's own savegame system — Host_Savegame_f writes <gamedir>/<name>.sav (Quake/host_cmd.c:2373-2434, the extension at :2433, registered at :3784), autosaves under <gamedir>/autosave (:1420) — and the repository carries no savestate vocabulary at all",
+          "build_unestablished": "neither arrangement ships ironwail — RetroDECK's find rule probes the user's own 'ironwail' binary (es_find_rules.xml), and its staticpath entry names a component this build does not carry — so which build a launch runs is not established; the record reads release v0.8.2, the newest at examination"
+        }
+      },
+      "provenance": {
+        "source": "ironwail (the QuakeSpasm-derived Quake port), read at release v0.8.2, the newest at examination (2026-08-25). A source port's saving is the game's own save system, and ironwail has nothing beside it: the save command writes Quake savegames — Host_Savegame_f composes <com_gamedir>/<name>.sav (Quake/host_cmd.c:2373-2434) and the autosave tree sits at <com_gamedir>/autosave (:1420) — which is the save question's business, and the repository carries no savestate vocabulary anywhere. RetroDECK ships no ironwail build (no component; the es_find_rules.xml IRONWAIL rule probes the user's own binary), which is why the card marks the running build unestablished rather than citing one."
+      }
+    },
+    "OPENBOR": {
+      "savestates": {
+        "systems": [
+          "openbor"
+        ],
+        "absent": {
+          "citation": "OpenBOR v4.0 build 7533 (DCurrent/openbor v7533, the shipped AppImage): saveGameFile() writes module progress into <base>/Saves (engine/openbor.c:2764-2771; declared engine/openbor.h:4208) — the save question's business — and neither the repository nor the unfiltered scan of components/openbor/bin/OpenBOR carries any savestate vocabulary"
+        }
+      },
+      "provenance": {
+        "source": "OpenBOR v4.0 build 7533 — components/openbor/component_version names the v7533 release tag, and the component recipe pulls that release's Linux AppImage from DCurrent/openbor. The engine persists module progress through its own save files: saveGameFile() lands them in <base>/Saves (engine/openbor.c:2764-2771, the function declared at engine/openbor.h:4208), the save question's business. No savestate feature exists: the unfiltered strings scan of the shipped binary carries no savestate or snapshot vocabulary (its persistence vocabulary is '.sav' and 'saves/'), and the repository carries none either. RetroDECK's component wires nothing at all (components/openbor/component_prepare.sh is an empty reset block)."
+      }
+    },
+    "PICO-8": {
+      "savestates": {
+        "systems": [
+          "pico8"
+        ],
+        "absent": {
+          "citation": "PICO-8 manual v0.2.7 (lexaloffle.com/dl/docs/pico-8_manual.html, the vendor's complete documented surface, read 2026-08-25): no savestate feature exists or ever has — cartridge persistence is CARTDATA, written under cdata/, the save question's business",
+          "build_unestablished": "PICO-8 is closed source and the binary is the user's own copy, stored beside its config (dir_prep \"$bios_path/pico-8\" \"$HOME/.lexaloffle/pico-8\", components/pico-8/component_prepare.sh:15) — no shipped build pins the claim; the record reads the v0.2.7 manual"
+        }
+      },
+      "provenance": {
+        "source": "PICO-8, a closed-source fantasy console whose binary RetroDECK does not ship — the component stores the user's own copy and its config together (components/pico-8/component_prepare.sh:15) and routes the cartridge save data out (dir_prep \"$saves_path/pico-8\" \"$bios_path/pico-8/cdata\", :16). The vendor's complete documented surface is the manual, and at v0.2.7 it documents no savestate feature and never has: cartridge persistence is the CARTDATA API writing 256 bytes per cart under cdata/ — the save question's business — beside GIF capture and screenshots. A closed binary cannot be scanned into a stronger statement than its documentation makes, which is why the evidence level is the manual's and the running build is marked unestablished."
+      }
+    },
+    "SOLARUS": {
+      "savestates": {
+        "systems": [
+          "solarus"
+        ],
+        "absent": {
+          "citation": "Solarus 2.0.4 (libsolarus.so.2.0.4, the soname the shipped launcher links): the engine's persistence is the quest-scripted savegame — Savegame::save() writes the file the quest names below the quest write directory (src/core/Savegame.cpp:353-373, the write-dir requirement at :114) — the save question's business; repo-wide the only 'saveState' is the launcher's Qt splitter call (launcher/sources/widgets/MainWindow.cpp:163) and the unfiltered engine scan carries no savestate vocabulary"
+        }
+      },
+      "provenance": {
+        "source": "Solarus 2.0.4 — components/solarus/bin/solarus-launcher links libsolarus.so.2.0.4 out of components/shared-libs, and the soname is the pin. Solarus is a quest engine: a game saves through the Lua savegame API, and Savegame::save() writes the file the quest itself names below the quest write directory (src/core/Savegame.cpp:353-373; a quest that sets none cannot save at all, :114) — per-quest game saves, the save question's business. No state serializer exists: the unfiltered strings scans of both the launcher and the engine library carry no savestate vocabulary (the launcher's 'saveState' is Qt's QSplitter window layout, launcher/sources/widgets/MainWindow.cpp:163), and the full v2.0.4 tree agrees. RetroDECK wires no state path (components/solarus/component_prepare.sh creates the config directory and nothing else)."
+      }
+    },
+    "XEMU": {
+      "savestates": {
+        "settings": "xemu.toml",
+        "systems": [
+          "xbox"
+        ],
+        "inside_image": {
+          "key": "hdd_path",
+          "citation": "ui/xemu-snapshots.c:156-158 (the snapshot browser opens the file g_config.sys.files.hdd_path names), :193-198 (bdrv_all_find_vmstate_bs + bdrv_snapshot_list); migration/savevm.c:3285-3301 (save_snapshot writes the VM state into the vmstate device and the record across every snapshot-capable one); block/snapshot.c:736-777 (the vmstate device is the first snapshot-capable one — the qcow2 hard disk) at v0.8.135"
+        },
+        "names": {
+          "pattern": "<snapshot name, else vm-YYYYMMDDhhmmss>",
+          "citation": "migration/savevm.c:3277-3282 at v0.8.135"
+        }
+      },
+      "anchors": {
+        "binary": "xemu/bin/xemu",
+        "names": {
+          "hdd_path": {
+            "literal": "hdd_path"
+          },
+          "xemu.toml": {
+            "literal": "xemu.toml"
+          }
+        }
+      },
+      "provenance": {
+        "source": "xemu v0.8.135, the release the shipped binary carries as a whole version string (components/xemu/bin/xemu) and the save card's pin. A snapshot is not a file: xemu's savestates are QEMU internal snapshots, written INTO the qcow2 hard-disk image xemu.toml names in [sys.files] hdd_path — save_snapshot writes the VM state into the vmstate block device (qemu_fopen_bdrv + qemu_savevm_state, migration/savevm.c:3285-3290) and creates the snapshot record across every snapshot-capable device (bdrv_all_create_snapshot, :3301; the iteration block/snapshot.c:695-733), and the vmstate device is the first snapshot-capable one (bdrv_all_find_vmstate_bs with no vmstate argument, block/snapshot.c:736-777) — in xemu's machine the qcow2 hard disk, the DVD being read-only and the EEPROM raw. The emulator's own snapshot browser states the same fact in code: it opens exactly the file hdd_path names to list the snapshots and their embedded metadata (ui/xemu-snapshots.c:156-158, the list via bdrv_snapshot_list :193-198). Entries are named by the user (the snapshot UI's create field, the F5-F8 shortcut bindings, xemu-snapshots.c:46-51) or default to vm-YYYYMMDDhhmmss (savevm.c:3277-3282). A machine with no disk configured cannot snapshot at all ('no block device can store vmstate for snapshot', block/snapshot.c:781-782), which is the resolver's refusal branch. xemu.toml lives under the DATA home the way the save card establishes (SDL_GetPrefPath; RetroDECK links its config-tree copy there, components/xemu/component_prepare.sh:16-17), and on EmuDeck the emulator is the app.xemu.xemu flatpak the save card records, its trees below ~/.var/app. The card answers the xbox rows it shares with the save card; the consolearcade xemu entry stays outside both for the same reason — that launch's content story is unexamined. Neither arrangement wires any state path for xemu — nothing outside the image exists to wire."
+      }
+    },
+    "MAME": {
+      "savestates": {
+        "systems": [
+          "adam",
+          "amstradcpc",
+          "apple2",
+          "apple2gs",
+          "arcade",
+          "arcadia",
+          "archimedes",
+          "astrocde",
+          "atari7800",
+          "atarijaguar",
+          "bbcmicro",
+          "cdimono1",
+          "channelf",
+          "coco",
+          "consolearcade",
+          "cps",
+          "cps1",
+          "cps2",
+          "cps3",
+          "crvision",
+          "daphne",
+          "dragon32",
+          "electron",
+          "fm7",
+          "fmtowns",
+          "gamate",
+          "gameandwatch",
+          "gamecom",
+          "gmaster",
+          "gx4000",
+          "intellivision",
+          "laserdisc",
+          "lcdgames",
+          "macintosh",
+          "mame",
+          "megaduck",
+          "model2",
+          "neogeo",
+          "neogeocd",
+          "neogeocdjp",
+          "odyssey2",
+          "oric",
+          "pv1000",
+          "scv",
+          "stv",
+          "supervision",
+          "supracan",
+          "tanodragon",
+          "ti99",
+          "vectrex",
+          "videopac",
+          "vsmile",
+          "x1",
+          "x68000"
+        ],
+        "launch_ini": {
+          "file": "mame.ini",
+          "keys": {
+            "state_directory": {
+              "default": "sta",
+              "citation": "emuopts.cpp:62 at mame0287"
+            },
+            "statename": {
+              "default": "%g",
+              "citation": "emuopts.cpp:85 at mame0287"
+            }
+          },
+          "citation": "parse_one_ini opens <basename>.ini over the ini_path search path (mameopts.cpp:116-131); mame.ini is parsed twice so the first pass can move that path (:39-42); a CLI -inipath cannot be overridden from an ini because an equal-or-lower priority set does not override (options.cpp:270); the SHIPPED builds' compiled default path is $HOME/.mame;/app/share/mame/ini — a Flathub build define, not upstream's #ifndef fallback: the shipped binary carries the literal as bytes ('OME/.APP_NAME;/app/share/APP_NAME/ini' at offset 366643824, the '$H' head an instruction immediate), the Flathub manifest sets SDL_INI_PATH exactly so and installs a real mame.ini at /app/share/mame/ini (org.mamedev.MAME.yaml:33, :68 at master, which builds mame0289 — the byte-identical define in the shipped 0.287 binary is the primary evidence), and the mechanism is sdl3/sdlopts.cpp:27-35 (#ifndef INI_PATH, so a define replaces it) with APP_NAME becoming 'mame' at startup (:112-115) — source lines at mame0287"
+        },
+        "names": {
+          "pattern": "<machine>/<slot>.sta, slot one of auto, quick, 0-9, a-z",
+          "citation": "machine.cpp:576 (the <statename>/<name>.sta join); ui/state.cpp:34-42 (the a-z/0-9 menu slots); ui/ui.cpp:1702-1705 (quick); machine.cpp:429-432 (auto, under the off-by-default autosave option, emuopts.cpp:71) at mame0287"
+        }
+      },
+      "anchors": {
+        "binary": "mame/bin/mame",
+        "names": {
+          "state_directory": {
+            "literal": "state_directory"
+          },
+          "statename": {
+            "literal": "statename"
+          },
+          "mame.ini": {
+            "unprotected": "the emulator never stores the whole name: parse_one_ini composes it at run time from emulator_info::get_configname() + \".ini\" (mameopts.cpp:125 at mame0287), so 'mame.ini' is nowhere in the shipped binary as bytes (verified raw, 0 matches) and its fragments 'mame' and '.ini' are far too generic to pin"
+          }
+        }
+      },
+      "provenance": {
+        "source": "MAME 0.287, the version the shipped components/mame/bin/mame carries as a whole string ('0.287 (unknown)'). The states root is the state_directory option, compiled default 'sta' (emuopts.cpp:62), read out of mame.ini with MAME's own grammar — name to the first whitespace, value trimmed of spaces and one pair of quotes, '#' comments, a duplicate key's last occurrence winning (core_options::parse_ini_file, options.cpp:980-1046, trim_spaces_and_quotes :60-73, the equal-priority override :270) — and PATH-typed values get environment substitution: a leading ~ becomes $HOME and $VAR/${VAR} expand from the process environment (type_specific_substitutions, options.cpp:622-627; osd_subst_env, posixdir.cpp:236-300). Which mame.ini governs is the launch's own fact: parse_one_ini opens it over the ini_path search path (mameopts.cpp:116-131, the double parse :39-42), the command's -inipath outranks any ini (options.cpp:270), and the compiled default of the SHIPPED builds is $HOME/.mame;/app/share/mame/ini — the Flathub build define, byte-proven in the shipped binary ('OME/.APP_NAME;/app/share/APP_NAME/ini' at offset 366643824, the '$H' head an instruction immediate; SDL_INI_PATH in org.mamedev.MAME.yaml:33, the manifest that also installs a real mame.ini at /app/share/mame/ini, :68), APP_NAME becoming 'mame' at startup (sdl3/sdlopts.cpp:112-115); upstream's #ifndef fallback $HOME/.mame;.;ini (sdl3/sdlopts.cpp:27-35) is UNREACHABLE in these builds — which is why this card takes the launch_ini shape instead of naming a settings-table address. A relative root resolves against the working directory (emu_file over the searchpath, handle_saveload machine.cpp:899-903), the %STARTDIR% some catalogue commands state. Below the root sits one subdirectory per machine: statename, default %g = the running system's short name (get_statename, machine.cpp:474-547, the substitution at :544; the <statename>/<name>.sta join at compose_saveload_filename :555-579), which the command's positional system word fills — the ROM's own stem where the machine IS %BASENAME%. A state file is <slot>.sta: the save-state menu's single-key slots a-z/0-9 (keyboard_input_item_name, ui/state.cpp:34-42; the menu directory :527-532), quick (ui/ui.cpp:1702-1705) and auto (machine.cpp:429-432, written only under the off-by-default autosave option, emuopts.cpp:71, and only for flagged drivers). Whether a system supports states officially is the driver's compiled MACHINE_SUPPORTS_SAVE flag (gamedrv.h:76); an unflagged one still writes the file and warns (machine.cpp:927-928), which every answer states as savestate-support-machine-dependent. After mame.ini MAME layers debug/orientation/screen/source/parent/driver inis from the same path (parse_standard_inis, mameopts.cpp:37-96); the answer lists the search path and says so only where such files actually sit. RetroDECK writes state_directory = $states_path/mame-sa into $XDG_CONFIG_HOME/mame/ini/mame.ini (set_setting_value, components/mame/component_prepare.sh:91, :114; the address component_functions.sh:3) and most of its catalogue commands pass -inipath /var/config/mame/ini, the sandbox spelling of that directory; the commands that pass none set %STARTDIR%=~/.mame instead, where no mame.ini exists on a stock machine — and the compiled path's second element finds nothing either, because RetroDECK's deploy carries no /app/share/mame at all (the component relocates the Flathub tree to /app/retrodeck/components/mame/share/mame, where the compiled address never looks; that relocated copy's own lines are inipath $HOME/.mame;/app/share/mame/ini and state_directory $HOME/.mame/sta, share/mame/ini/mame.ini:10, :24) — so the compiled 'sta' resolves below ~/.mame. EmuDeck runs the org.mamedev.MAME flatpak against $HOME/.mame/mame.ini (emuDeckMAME.sh:7) and writes state_directory = $savesPath/mame/states there (:102-104) — the first element of the compiled search path finds that file, and the /app/share/mame/ini/mame.ini the flatpak really ships stands behind it as the second. The app id that launch runs under is org.mamedev.MAME (emuDeckMAME.sh:4-5), stated in emulator_settings.json since #288 — before that it could only have been recorded on a save card, and MAME has none, so the EmuDeck route refused with the variant named however much of the reading was established."
+      }
+    }
+  }
+}

@@ -33,6 +33,18 @@ reportPrivateUsage = "none"
 target-version = "py311"
 line-length = 120
 extend-exclude = ["py_modules/_vendor", "./scripts"]
+# Ruff applies extend-exclude to a directory walk but ignores it for a path passed
+# explicitly, unless this is set. .githooks/pre-commit passes staged paths explicitly,
+# so without it the hook reformats the vendored verbatim copies it is excluding —
+# 26 of atlas's 35 modules — and breaks the byte-identity that
+# scripts/check_vendored_atlas.py exists to prove. Upstream runs no Python formatter
+# at all, so no line-length here rescues it: 88 rewrites 33 files, 100 rewrites 20,
+# 120 rewrites 26.
+# This covers the whole extend-exclude list, so it also stops the hook formatting and
+# linting ./scripts. That is what the exclude already asked for and CI already did —
+# ruff's walk never reached scripts/ — but the hook was the only thing still checking
+# those files, so they now have no ruff coverage from anywhere.
+force-exclude = true
 
 [tool.ruff.lint]
 select = [
