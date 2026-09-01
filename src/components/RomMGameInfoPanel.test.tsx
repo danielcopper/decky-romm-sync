@@ -10,36 +10,36 @@
 // pickBiosColor, ...) are pure. We pick a unique appId per test to keep
 // any module-scope mock state isolated.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, act } from "@testing-library/react";
-import { createElement, useSyncExternalStore, type ComponentProps } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render } from "@testing-library/react";
+import { type ComponentProps, createElement, useSyncExternalStore } from "react";
 import { RomMGameInfoPanel } from "./RomMGameInfoPanel";
 import * as backend from "../api/backend";
 import type { CachedGameDetail } from "../api/backend";
 import * as cachedStore from "../utils/cachedGameDetailStore";
-import { getBiosStatusShared, _resetSharedReadsForTests } from "../api/sharedReads";
+import { _resetSharedReadsForTests, getBiosStatusShared } from "../api/sharedReads";
 import * as slotState from "../utils/slotState";
 import {
+  domListenerCount,
   installDomEventListenerSpy,
   uninstallDomEventListenerSpy,
-  domListenerCount,
 } from "../test-utils/dom-event-listener-spy";
-import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
+import { deckyEventListenerCount, emitDeckyEvent } from "../test-utils/decky-api-mock";
 import { useVersionError } from "./VersionErrorCard";
 import {
-  setRommConnectionState,
-  reportServerReachable,
   getRommConnectionState,
-  setServerRetryProgress,
   getServerRetryProgress,
+  reportServerReachable,
+  setRommConnectionState,
+  setServerRetryProgress,
 } from "../utils/connectionState";
 import type {
-  MigrationStatus,
-  SaveSortMigrationStatus,
-  RomMetadata,
-  DownloadCompleteEvent,
   CoreInfo,
+  DownloadCompleteEvent,
   InstalledRom,
+  MigrationStatus,
+  RomMetadata,
+  SaveSortMigrationStatus,
   SaveStatus,
 } from "../types";
 
@@ -1446,7 +1446,8 @@ describe("RomMGameInfoPanel", () => {
           {
             file_name: "PSX_BLEED_MARKER.bin",
             description: "PSX BIOS",
-            classification: "required",
+            wanted: "needed",
+            required_by_active: true,
             downloaded: true,
           },
         ],
@@ -2802,7 +2803,8 @@ describe("RomMGameInfoPanel", () => {
               file_name: "bios.smc",
               description: "BIOS file",
               downloaded: false,
-              classification: "required",
+              wanted: "needed",
+              required_by_active: true,
               cores: { snes9x_libretro: { required: true } },
               used_by_active: true,
             },
@@ -2810,7 +2812,8 @@ describe("RomMGameInfoPanel", () => {
               file_name: "unknown.bin",
               description: "",
               downloaded: false,
-              classification: "unknown",
+              wanted: "unknown",
+              required_by_active: false,
             },
           ],
         } as never,
@@ -2843,9 +2846,10 @@ describe("RomMGameInfoPanel", () => {
       });
       expect(container.textContent).toContain("Emulator");
       expect(container.textContent).toContain("Snes9x");
-      // unknown file is filtered out of the visible list; the "+1 other"
-      // note appears instead.
-      expect(container.textContent).toContain("other file");
+      // A file no emulator asks for keeps its own note rather than a row: the
+      // rows are the files with an owning emulator, and the note says which of
+      // the two remaining answers this one is.
+      expect(container.textContent).toContain("1 file on server nothing installed could answer for");
     });
 
     it("highlights the active core's per-BIOS line and leaves non-active cores grey (#955)", async () => {
@@ -2866,7 +2870,8 @@ describe("RomMGameInfoPanel", () => {
               file_name: "scph5501.bin",
               description: "PSX BIOS",
               downloaded: false,
-              classification: "required",
+              wanted: "needed",
+              required_by_active: true,
               cores: {
                 beetle_psx_hw_libretro: { required: true },
                 swanstation_libretro: { required: false },
@@ -2938,7 +2943,8 @@ describe("RomMGameInfoPanel", () => {
               file_name: "scph5501.bin",
               description: "PSX BIOS",
               downloaded: false,
-              classification: "required",
+              wanted: "needed",
+              required_by_active: true,
               cores: {
                 beetle_psx_hw_libretro: { required: true },
                 swanstation_libretro: { required: false },
@@ -3008,7 +3014,8 @@ describe("RomMGameInfoPanel", () => {
               file_name: "scph5501.bin",
               description: "PSX BIOS",
               downloaded: false,
-              classification: "required",
+              wanted: "needed",
+              required_by_active: true,
               cores: {
                 some_obscure_libretro: { required: true },
               },
@@ -3178,11 +3185,12 @@ describe("RomMGameInfoPanel", () => {
       }
     });
 
-    it("unmanaged: grey header dot + honest text, and the 'files on server' note survives all-unknown (#1520)", async () => {
-      // Every server file is unknown (no registry coverage) → backend ships
-      // bios_level "unmanaged". The panel must render the neutral grey dot + honest
-      // header text (never a false "All ready"), and the "files on server" note —
-      // previously swallowed when knownFiles is empty — must still render.
+    it("unknown: grey header dot + honest text, and the 'files on server' note survives (#1520)", async () => {
+      // No installed emulator's answer could be established for any server file
+      // → backend ships bios_level "unknown". The panel must render the neutral
+      // grey dot + honest header text (never a false "All ready"), and the
+      // "files on server" note — previously swallowed when the row list is
+      // empty — must still render.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
@@ -3201,9 +3209,9 @@ describe("RomMGameInfoPanel", () => {
               file_name: "a.bin",
               downloaded: false,
               local_path: "",
-              required: false,
               description: "",
-              classification: "unknown",
+              wanted: "unknown",
+              required_by_active: false,
               cores: {},
               used_by_active: true,
             },
@@ -3211,15 +3219,15 @@ describe("RomMGameInfoPanel", () => {
               file_name: "b.bin",
               downloaded: false,
               local_path: "",
-              required: false,
               description: "",
-              classification: "unknown",
+              wanted: "unknown",
+              required_by_active: false,
               cores: {},
               used_by_active: true,
             },
           ],
         } as never,
-        bios_level: "unmanaged",
+        bios_level: "unknown",
         metadata: makeMetadata(),
         stale_fields: [],
       });
@@ -3233,10 +3241,10 @@ describe("RomMGameInfoPanel", () => {
       expect(container.innerHTML).toContain("#8f98a0");
       expect(container.innerHTML).not.toContain("#5ba32b");
       // Honest header text, not "All ready".
-      expect(container.textContent).toContain("Not managed by the plugin");
+      expect(container.textContent).toContain("BIOS requirement unknown");
+      expect(container.textContent).toContain("2 files on server nothing installed could answer for");
       expect(container.textContent).not.toContain("All ready");
-      // Swallowed-note fix: the note renders even though every file is unknown.
-      expect(container.textContent).toContain("2 files on server the plugin doesn't recognise");
+      // Swallowed-note fix: the note renders even though no file has a row.
     });
   });
 

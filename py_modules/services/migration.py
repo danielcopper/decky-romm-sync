@@ -28,7 +28,7 @@ from domain.save_path import resolve_save_dir
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Callable, Sequence
+    from collections.abc import Sequence
 
     from models.state import SaveSortSettings
 
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
         ActiveCoreReader,
         CoreNameProviderFn,
         EventEmitter,
+        FirmwareResolver,
         MigrationFileStore,
         RelaunchOptionsReader,
         RetroArchSaveLayoutProvider,
@@ -71,7 +72,9 @@ class MigrationServiceConfig:
     ROM launches with when re-deriving the save-sort subdirectory name. The
     ``relaunch_options`` seam re-bakes every relocated ROM's full Steam
     ``launch_options`` (active core + selected disc) from its moved path so the
-    pick survives the home migration. Relational migration state (ROM installs,
+    pick survives the home migration. ``firmware_resolver`` names which files in
+    a pending home are firmware at all, so the untracked-BIOS sweep moves those
+    and leaves everything else alone. Relational migration state (ROM installs,
     BIOS records, change markers) is read through the injected ``uow_factory``.
     """
 
@@ -81,7 +84,7 @@ class MigrationServiceConfig:
     logger: logging.Logger
     settings_persister: SettingsPersister
     emit: EventEmitter
-    get_bios_files_index: Callable[[], dict[str, dict[str, Any]]]
+    firmware_resolver: FirmwareResolver
     retrodeck_paths: RetroDeckPaths
     get_save_layout: RetroArchSaveLayoutProvider
     active_core: ActiveCoreReader
@@ -100,7 +103,7 @@ class MigrationService:
         self._logger = config.logger
         self._settings_persister = config.settings_persister
         self._emit = config.emit
-        self._get_bios_files_index = config.get_bios_files_index
+        self._firmware_resolver = config.firmware_resolver
         self._retrodeck_paths = config.retrodeck_paths
         self._get_save_layout = config.get_save_layout
         self._active_core = config.active_core
@@ -381,17 +384,23 @@ class MigrationService:
 
         ``tracked_file_names`` is the set of BIOS file names already covered by
         the ``BiosFile`` snapshot, so those tracked records aren't moved twice.
-        Each registry entry is probed under every pending home's ``bios/`` dir
-        newest-first (#1042); the first on-disk hit wins. Untracked BIOS files
-        have no aggregate record, so their move carries a no-op updater (nothing
-        to persist).
+        What makes a file in a pending home firmware rather than something the
+        user left there is that an installed emulator asks for it: the resolver's
+        catalogue is the candidate list, and each candidate is probed under every
+        pending home's ``bios/`` dir newest-first (#1042); the first on-disk hit
+        wins. Untracked BIOS files have no aggregate record, so their move
+        carries a no-op updater (nothing to persist).
+
+        A resolver that could not answer yields no candidates, so the sweep moves
+        nothing rather than sweeping the directory wholesale — a missed file
+        stays readable in the old home, where a wrongly-moved one would not.
         """
         items = []
         new_bios = self._retrodeck_paths.bios_path()
-        for file_name, reg_entry in self._get_bios_files_index().items():
-            if file_name in tracked_file_names:
+        for placement in self._firmware_resolver().placements:
+            if placement.file_name in tracked_file_names:
                 continue
-            firmware_path = reg_entry.get("firmware_path", file_name)
+            firmware_path = placement.destination
             for home in reversed(pending_homes):
                 old_bios = os.path.join(home, "bios")
                 if not self._migration_file_store.is_dir(old_bios):
@@ -400,7 +409,7 @@ class MigrationService:
                 if not self._migration_file_store.exists(old_file):
                     continue
                 new_file = os.path.join(new_bios, firmware_path)
-                items.append((file_name, old_file, new_file, lambda: None, "bios"))
+                items.append((placement.file_name, old_file, new_file, lambda: None, "bios"))
                 break
         return items
 

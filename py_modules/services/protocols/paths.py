@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from domain.firmware_wants import FirmwareCatalogue
     from domain.save_layout import SaveLayout
     from domain.shortcut_data import EmulatorInvocation
     from lib.retrodeck_health import RetroDeckConfigHealth
@@ -23,6 +24,22 @@ class SystemResolver(Protocol):
     """Resolve a RomM platform slug to a RetroDECK system path."""
 
     def __call__(self, platform_slug: str, platform_fs_slug: str | None = None) -> str: ...
+
+
+class FirmwareResolver(Protocol):
+    """Read what the installed emulators want, live off the machine.
+
+    One whole-machine question per call, deliberately: the answer's scope is
+    every installed emulator, so a file classifies identically on the System
+    page and on a game detail page. Asking per platform instead is what let the
+    same file read "known" on one surface and "unknown" on another.
+
+    Implementations never raise and never guess: a reading that fails comes back
+    as a catalogue with no placements and ``complete`` clear, which classifies
+    every server file as ``unknown`` rather than as "nothing needed".
+    """
+
+    def __call__(self) -> FirmwareCatalogue: ...
 
 
 class RetroDeckPaths(Protocol):

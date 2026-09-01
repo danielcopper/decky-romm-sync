@@ -10,20 +10,20 @@
 // within this file. To avoid that state bleeding between tests we use a unique
 // `testAppId` per test (incremented in `beforeEach`) — Option A in the playbook.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, act, waitFor } from "@testing-library/react";
-import { createElement, type ComponentProps, type ReactElement } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render, waitFor } from "@testing-library/react";
+import { type ComponentProps, createElement, type ReactElement } from "react";
 import { RomMPlaySection } from "./RomMPlaySection";
 import * as backend from "../api/backend";
 import { _resetSharedReadsForTests } from "../api/sharedReads";
 import { showContextMenu, showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
 import {
+  domListenerCount,
   installDomEventListenerSpy,
   uninstallDomEventListenerSpy,
-  domListenerCount,
 } from "../test-utils/dom-event-listener-spy";
-import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
+import { deckyEventListenerCount, emitDeckyEvent } from "../test-utils/decky-api-mock";
 import type { DownloadCompleteEvent, SaveStatus } from "../types";
 import { stubAppStore } from "../test-utils/steamStubs";
 import * as cachedStore from "../utils/cachedGameDetailStore";
@@ -2120,9 +2120,9 @@ describe("RomMPlaySection", () => {
       expect(container.textContent).toContain("0/3");
     });
 
-    it("core_changed: an unmanaged platform does NOT surface a play-section BIOS row (#1520)", async () => {
+    it("core_changed: an unanswerable platform does NOT surface a play-section BIOS row (#1520)", async () => {
       // A platform with server firmware but no registry coverage reports
-      // bios_level "unmanaged". That state is non-actionable on the play section
+      // bios_level "unknown". That state is non-actionable on the play section
       // (it lives in the BIOS tab), so the row must stay suppressed even though
       // biosNeeded is true — mirroring how "ok" is suppressed here.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
@@ -2141,16 +2141,16 @@ describe("RomMPlaySection", () => {
           local_count: 0,
           all_downloaded: false,
         },
-        bios_level: "unmanaged",
-        bios_label: "Not managed",
+        bios_level: "unknown",
+        bios_label: "Unknown",
       });
       // biosNeeded is true (server firmware exists) — the suppression is driven
-      // purely by the "unmanaged" level, not by biosNeeded being false. If the
-      // gate regressed, "Not managed" would render.
+      // purely by the "unknown" level, not by biosNeeded being false. If the
+      // gate regressed, "Unknown" would render.
       vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
         biosNeeded: true,
-        biosStatus: "unmanaged",
-        biosLabel: "Not managed",
+        biosStatus: "unknown",
+        biosLabel: "Unknown",
       });
 
       await act(async () => {

@@ -1,18 +1,18 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Dispatch, SetStateAction } from "react";
 import {
+  refreshAchievementsInBackground,
   refreshBiosInBackground,
   refreshCoreInfoInBackground,
-  refreshAchievementsInBackground,
 } from "./sectionRefresh";
 import * as backend from "../api/backend";
 import { _resetSharedReadsForTests } from "../api/sharedReads";
 import { libretroEmu } from "../test-utils/coreFixtures";
-import type { EmulatorOption } from "../types";
+import type { BiosLevel, EmulatorOption } from "../types";
 
 interface BiosState {
   biosNeeded: boolean;
-  biosStatus: "ok" | "partial" | "missing" | "unmanaged" | null;
+  biosStatus: BiosLevel | null;
   biosLabel: string;
   unrelated: string;
 }

@@ -19,6 +19,7 @@ from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 from fakes.fake_download_file_store import FakeDownloadFileStore
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
+from fakes.fake_firmware_resolver import FakeFirmwareResolver
 from fakes.fake_game_process_control import FakeGameProcessControlAdapter
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
@@ -246,6 +247,7 @@ class TestWireServices:
             "download_file_store": FakeDownloadFileStore(),
             "adoption_move": MagicMock(),
             "firmware_file_store": FakeFirmwareFileStore(),
+            "firmware_resolver": FakeFirmwareResolver(),
             "migration_file_store": FakeMigrationFileStore(),
             "rom_file_store": FakeRomFileStore(),
             "save_file_store": FakeSaveFileStore(),
@@ -305,6 +307,7 @@ class TestWireServices:
                 download_file_store=deps["download_file_store"],
                 adoption_move=deps["adoption_move"],
                 firmware_file_store=deps["firmware_file_store"],
+                firmware_resolver=deps["firmware_resolver"],
                 migration_file_store=deps["migration_file_store"],
                 rom_file_store=deps["rom_file_store"],
                 save_file_store=deps["save_file_store"],
@@ -444,27 +447,18 @@ class TestWireServices:
         assert sgdb_service._get_pending_sync() == {42: {"name": "Game", "platform_name": "N64"}}
         deps["loop"].close()
 
-    def test_bios_files_index_binding_observes_firmware_rebinds(self, tmp_path):
-        """MigrationService sees post-load reassignments of bios_files_index.
+    def test_migration_service_receives_the_firmware_resolver(self, tmp_path):
+        """The untracked-BIOS sweep asks the same seam every firmware surface asks.
 
-        Regression for #349: ``firmware_service.load_bios_registry()`` rebinds
-        ``_bios_files_index`` to a fresh dict each call; the binding must
-        re-resolve the property on every read.
+        It replaced a late-bound reader of the registry index (#349): with the
+        answer read live there is nothing to rebind, and the sweep's candidate
+        list is whatever the resolver declares at the moment it runs.
         """
         deps = self._make_deps(tmp_path)
         result = wire_services(self._make_config(deps))
-        firmware_service = result["firmware_service"]
         migration_service = result["migration_service"]
 
-        # Re-loading reassigns _bios_files_index; mutate the new dict and
-        # confirm migration's deferred-read picks up the change.
-        firmware_service.load_bios_registry()
-        firmware_service._bios_files_index["scph5501.bin"] = {
-            "platform": "psx",
-            "description": "PS1 BIOS",
-        }
-
-        assert "scph5501.bin" in migration_service._get_bios_files_index()
+        assert migration_service._firmware_resolver is deps["firmware_resolver"]
         deps["loop"].close()
 
     def test_migration_service_receives_get_core_name(self, tmp_path):

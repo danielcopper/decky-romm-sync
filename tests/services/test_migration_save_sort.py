@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
+from fakes.fake_firmware_resolver import FakeFirmwareResolver
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_relaunch_options_resolver import FakeRelaunchOptionsResolver
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
@@ -118,7 +119,7 @@ def _make_service(
             logger=logging.getLogger("test"),
             settings_persister=MagicMock(),
             emit=MagicMock(),
-            get_bios_files_index=dict,
+            firmware_resolver=FakeFirmwareResolver(),
             retrodeck_paths=FakeRetroDeckPaths(
                 saves=saves_path,
                 roms=roms_path,

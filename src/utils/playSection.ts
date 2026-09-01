@@ -8,7 +8,7 @@
  */
 
 import type { BiosAnswer } from "../api/backend";
-import type { CoreInfo, EmulatorOption, SaveStatus, SaveSyncDisplay } from "../types";
+import type { BiosLevel, CoreInfo, EmulatorOption, SaveStatus, SaveSyncDisplay } from "../types";
 import { hasAnySaveConflict } from "./saveStatus";
 import { formatTimeAgo } from "./formatters";
 
@@ -17,7 +17,7 @@ import { formatTimeAgo } from "./formatters";
  *  `get_platform_core_info` path — it no longer rides the BIOS payload (#923). */
 export interface BiosInfoFields {
   biosNeeded: boolean;
-  biosStatus: "ok" | "partial" | "missing" | "unmanaged" | null;
+  biosStatus: BiosLevel | null;
   biosLabel: string;
 }
 

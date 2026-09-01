@@ -369,15 +369,22 @@ fix the save-sort migration bug. But `.info` files contain much more, and the pa
 The following unlocks are natural follow-ups; each should land in its own issue and its own PR so we can pace them
 against real need rather than speculatively building ahead.
 
-| Capability                     | `.info` field(s)                                                            | Replaces today's                          | Value                                                                                     |
-| ------------------------------ | --------------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Per-core supported extensions  | `supported_extensions`                                                      | Hardcoded lists in `defaults/config.json` | Self-updating via Flatpak releases; fewer drift bugs when cores add formats.              |
-| Per-core firmware requirements | `firmware_count`, `firmware<N>_desc`, `firmware<N>_path`, `firmware<N>_opt` | Manual BIOS registry in `FirmwareService` | Authoritative list per active core; highlights what's truly needed vs optional.           |
-| Core switching validation      | `supported_extensions`                                                      | (no check today)                          | Prevent assigning a core to a system whose ROM extensions it can't load.                  |
-| DAT/database identification    | `database`                                                                  | (no use today)                            | Match ROM headers against the right datfile for integrity checks.                         |
-| Core display names             | `display_name`                                                              | ES-DE label only                          | Secondary source when an ES-DE label is unavailable (rare); never used to override ES-DE. |
+| Capability                    | `.info` field(s)       | Replaces today's                          | Value                                                                                     |
+| ----------------------------- | ---------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Per-core supported extensions | `supported_extensions` | Hardcoded lists in `defaults/config.json` | Self-updating via Flatpak releases; fewer drift bugs when cores add formats.              |
+| Core switching validation     | `supported_extensions` | (no check today)                          | Prevent assigning a core to a system whose ROM extensions it can't load.                  |
+| DAT/database identification   | `database`             | (no use today)                            | Match ROM headers against the right datfile for integrity checks.                         |
+| Core display names            | `display_name`         | ES-DE label only                          | Secondary source when an ES-DE label is unavailable (rare); never used to override ES-DE. |
 
-None of these are in scope for #208. They are listed here so that, when the time comes, contributors know:
+Per-core **firmware requirements** used to head that list — the same `.info` fields (`firmware_count`,
+`firmware<N>_desc`, `firmware<N>_path`, `firmware<N>_opt`) against the manual BIOS registry in `FirmwareService`. It is
+done, and it did not land as another accessor on this parser: reading those fields is only half the job, and the other
+half (resolving each declared path against the live firmware root, following symlinks, keeping "this core declares
+nothing" apart from "this core's declaration could not be read") is what the vendored resolver already does. It reaches
+`FirmwareService` through the `FirmwareResolver` seam — see
+[Backend Architecture](backend-architecture.md#firmwareservice-notes-the-live-firmware-resolver).
+
+None of the rest are in scope for #208. They are listed here so that, when the time comes, contributors know:
 
 - The parser already exists — no new adapter needed.
 - The right way to extend it is a new callback protocol in `services/protocols/` (the `paths.py` module) plus a new

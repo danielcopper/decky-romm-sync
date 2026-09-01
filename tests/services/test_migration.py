@@ -12,6 +12,7 @@ from _factories import _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_disc_resolver import FakeDiscResolver
+from fakes.fake_firmware_resolver import FakeFirmwareResolver
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_relaunch_options_resolver import FakeRelaunchOptionsResolver
@@ -90,9 +91,9 @@ def plugin(tmp_path, fake_romm_api):
             romm_api=fake_romm_api,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
-            plugin_dir=decky.DECKY_PLUGIN_DIR,
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             firmware_file_store=FirmwareFileAdapter(),
+            firmware_resolver=FakeFirmwareResolver(),
             retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),
             resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
@@ -100,7 +101,6 @@ def plugin(tmp_path, fake_romm_api):
             uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
-    p._firmware_service.load_bios_registry()
 
     p._sync_service = LibraryService(
         config=LibraryServiceConfig(
@@ -142,6 +142,7 @@ def plugin(tmp_path, fake_romm_api):
         ),
     )
 
+    firmware_resolver = FakeFirmwareResolver()
     p._migration_service = MigrationService(
         config=MigrationServiceConfig(
             migration_file_store=MigrationFileAdapter(),
@@ -150,7 +151,7 @@ def plugin(tmp_path, fake_romm_api):
             logger=decky.logger,
             settings_persister=p._settings_persister,
             emit=RecordingEmitter(),
-            get_bios_files_index=lambda: p._firmware_service.bios_files_index,
+            firmware_resolver=firmware_resolver,
             retrodeck_paths=FakeRetroDeckPaths(),
             get_save_layout=_default_save_layout,
             active_core=p._active_core,
@@ -1533,7 +1534,7 @@ class TestMigrationFailureInjection:
             "logger": decky.logger,
             "settings_persister": FakeSettingsPersister(),
             "emit": RecordingEmitter(),
-            "get_bios_files_index": dict,
+            "firmware_resolver": FakeFirmwareResolver(),
             "retrodeck_paths": FakeRetroDeckPaths(),
             "get_save_layout": lambda: InSaveDir(sort_by_content=False, sort_by_core=False),
             "active_core": FakeActiveCoreResolver(default=(None, None)),
@@ -2173,8 +2174,10 @@ class TestChainedMigration:
         with open(bios_b, "w") as f:
             f.write("bios")
 
-        # Controlled registry so the probe has exactly one entry to find.
-        plugin._migration_service._get_bios_files_index = lambda: {"scph5501.bin": {"firmware_path": "scph5501.bin"}}
+        # A single declared file, so the sweep has exactly one candidate to find.
+        resolver = FakeFirmwareResolver()
+        resolver.declare("scph5501.bin", required_by=["mednafen_psx_libretro"])
+        plugin._migration_service._firmware_resolver = resolver
         plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(bios=os.path.join(c, "bios"))
 
         with plugin._uow as uow:

@@ -1064,7 +1064,6 @@ class TestMainStartupOrdering:
         download_service.cleanup_leftover_tmp_files = MagicMock()
 
         firmware_service = MagicMock()
-        firmware_service.load_bios_registry = MagicMock()
 
         startup_healing_service = MagicMock()
         startup_healing_service.prune_stale_installed_roms.side_effect = lambda: call_order.append(
@@ -1116,6 +1115,7 @@ class TestMainStartupOrdering:
                 download_file_store=MagicMock(),
                 adoption_move=MagicMock(),
                 firmware_file_store=MagicMock(),
+                firmware_resolver=MagicMock(),
                 migration_file_store=MagicMock(),
                 rom_file_store=MagicMock(),
                 save_file_store=MagicMock(),

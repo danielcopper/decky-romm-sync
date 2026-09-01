@@ -257,6 +257,19 @@ Three distinct notions in core selection, kept separate because they have differ
   resolver answers it for both the launch and every read consumer (BIOS requirement, save path, game-detail badge), so
   the launched core never diverges from what those reads assume.
 
+### Wanted (firmware): needed / optional / not needed / unknown
+
+What the machine says about one firmware file the RomM server holds. The first two are the resolver's per-file answer —
+an installed emulator will not run without it (**needed**), or can use it and will run without it (**optional**). The
+last two are not properties of the file at all but of the **reading**: every emulator the platform offers stated what it
+wants and none named this file (**not needed**), versus one of them could not be asked (**unknown**).
+
+Keeping the last two apart is the whole point of the vocabulary — "nothing wants this" is a finished answer and "nothing
+could be established" is the absence of one, and a single boolean called both _not required_. **Wanted** is a property
+of the machine and does not move with the core the user picked; the launch-scoped question is **required by active
+core**, which is what the missing-BIOS badge counts. The foil to **BIOS level** (the platform-wide readiness verdict:
+unknown / ok / partial / missing).
+
 ### Safely-bakeable
 
 An ES-DE `<command>` the plugin can bake into a Steam shortcut's `-e` override: a real emulator invocation that **ends

@@ -9,24 +9,25 @@
 
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import {
+  debugLog,
+  getArtworkBase64,
   getCachedGameDetail,
   getInstalledRom,
-  getArtworkBase64,
   getSaveSlots,
   isSaveTrackingConfigured,
-  debugLog,
 } from "../api/backend";
 import type { BiosAnswer } from "../api/backend";
 import { getBiosStatusShared, getPlatformCoreInfoShared, getRomMetadataShared } from "../api/sharedReads";
 import type {
-  RomMetadata,
-  InstalledRom,
+  BiosLevel,
   BiosStatus,
   CoreInfo,
+  InstalledRom,
+  LastKnownSlots,
+  RomMetadata,
+  SaveSlotSummary,
   SaveStatus,
   SyncConflict,
-  SaveSlotSummary,
-  LastKnownSlots,
 } from "../types";
 import { applyRefreshSlotResult } from "../utils/slotState";
 import { detach } from "../utils/detach";
@@ -41,13 +42,14 @@ export interface PanelState {
   metadata: RomMetadata | null;
   coverBase64: string | null;
   biosStatus: BiosStatus | null;
-  // unmanaged/ok/partial/missing classification — single source of truth is the
+  // unknown/ok/partial/missing decision — single source of truth is the
   // backend (`compute_bios_level`); both the cache path and the bios-change refresh
   // path thread `bios_level` straight off their respective payloads, never
   // re-deriving it. Drives the BIOS status-dot color, in `BiosTab`.
-  // "unmanaged" (server files present, none registry-known) renders neutral grey.
+  // "unknown" (server files present, no emulator's answer established for any of
+  // them) renders neutral grey.
   // null when no BIOS need.
-  biosLevel: "ok" | "partial" | "missing" | "unmanaged" | null;
+  biosLevel: BiosLevel | null;
   // Core info comes from the dedicated get_platform_core_info path (#923), not
   // from biosStatus — the two concerns are decoupled. It stays here rather than
   // in the BIOS tab because it has to reach the render in the SAME update as

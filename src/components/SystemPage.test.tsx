@@ -13,14 +13,14 @@
 //   - handleDeleteBios catch → setBiosStatus(`Failed to delete BIOS files: ${e}`)
 //   - setSystemCore onChange catch → debugLog(`setSystemCore: error: ${e}`)
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render } from "@testing-library/react";
 import { showModal } from "@decky/ui";
 import type { ReactElement } from "react";
 import { SystemPage } from "./SystemPage";
 import * as backend from "../api/backend";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
-import type { FirmwarePlatformExt } from "../types";
+import type { BiosLevel, FirmwarePlatformExt } from "../types";
 
 // scrollToTop is a no-op in happy-dom; mock for cleanliness.
 vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
@@ -143,10 +143,10 @@ function makeBiosPlatform(overrides: Partial<FirmwarePlatformExt> = {}): Firmwar
   // them from the files unless a test overrides them explicitly.
   const serverCount = files.length;
   const localCount = files.filter((f) => f.downloaded).length;
-  const requiredFiles = files.filter((f) => f.classification === "required");
+  const requiredFiles = files.filter((f) => f.required_by_active);
   const requiredCount = requiredFiles.length;
   const requiredDownloaded = requiredFiles.filter((f) => f.downloaded).length;
-  const biosLevel: "ok" | "partial" | "missing" =
+  const biosLevel: BiosLevel =
     requiredDownloaded >= requiredCount ? "ok" : requiredDownloaded > 0 ? "partial" : "missing";
   return {
     platform_slug: "snes",
@@ -217,13 +217,13 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "snes.rom",
+                local_path: "snes.rom",
                 size: 100,
                 md5: "x",
                 downloaded: true,
-                required: true,
                 description: "BIOS",
-                hash_valid: true,
-                classification: "required",
+                wanted: "needed",
+                required_by_active: true,
               },
             ],
           }),
@@ -328,13 +328,13 @@ describe("SystemPage", () => {
           {
             id: 1,
             file_name: "boot.rom",
+            local_path: "boot.rom",
             size: 100,
             md5: "x",
             downloaded: false,
-            required: false,
             description: "Optional",
-            hash_valid: null,
-            classification: "optional",
+            wanted: "optional",
+            required_by_active: false,
           },
         ],
       });
@@ -526,13 +526,13 @@ describe("SystemPage", () => {
           {
             id: 1,
             file_name: "bios.rom",
+            local_path: "bios.rom",
             size: 100,
             md5: "x",
             downloaded: false,
-            required: true,
             description: "Required BIOS",
-            hash_valid: null,
-            classification: "required",
+            wanted: "needed",
+            required_by_active: true,
           },
         ],
       });
@@ -704,13 +704,13 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "ok.bin",
+                local_path: "ok.bin",
                 size: 100,
                 md5: "x",
                 downloaded: true,
-                required: false,
                 description: "OK File",
-                hash_valid: true,
-                classification: "optional",
+                wanted: "optional",
+                required_by_active: false,
               },
             ],
           }),
@@ -733,99 +733,6 @@ describe("SystemPage", () => {
       expect(container.textContent).not.toContain("OK File");
     });
 
-    it("renders hashIndicator ' ✓' for downloaded files with hash_valid=true", async () => {
-      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
-        success: true,
-        platforms: [
-          makeBiosPlatform({
-            platform_slug: "snes",
-            files: [
-              {
-                id: 1,
-                file_name: "good.rom",
-                size: 100,
-                md5: "x",
-                downloaded: true,
-                required: false,
-                description: "Good",
-                hash_valid: true,
-                classification: "optional",
-              },
-            ],
-          }),
-        ],
-      });
-      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
-      await flushAsync();
-      await act(async () => {
-        fireEvent.click(getByText("Show Files (1)"));
-        await Promise.resolve();
-      });
-      expect(container.textContent).toContain("good.rom ✓");
-    });
-
-    it("renders hashIndicator ' ⚠' for downloaded files with hash_valid=false", async () => {
-      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
-        success: true,
-        platforms: [
-          makeBiosPlatform({
-            platform_slug: "snes",
-            files: [
-              {
-                id: 1,
-                file_name: "bad.rom",
-                size: 100,
-                md5: "x",
-                downloaded: true,
-                required: false,
-                description: "Bad",
-                hash_valid: false,
-                classification: "optional",
-              },
-            ],
-          }),
-        ],
-      });
-      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
-      await flushAsync();
-      await act(async () => {
-        fireEvent.click(getByText("Show Files (1)"));
-        await Promise.resolve();
-      });
-      expect(container.textContent).toContain("bad.rom ⚠");
-    });
-
-    it("renders hashIndicator ' —' for downloaded files with hash_valid=null", async () => {
-      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
-        success: true,
-        platforms: [
-          makeBiosPlatform({
-            platform_slug: "snes",
-            files: [
-              {
-                id: 1,
-                file_name: "unk.rom",
-                size: 100,
-                md5: "x",
-                downloaded: true,
-                required: false,
-                description: "Unk",
-                hash_valid: null,
-                classification: "optional",
-              },
-            ],
-          }),
-        ],
-      });
-      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
-      await flushAsync();
-      await act(async () => {
-        fireEvent.click(getByText("Show Files (1)"));
-        await Promise.resolve();
-      });
-      expect(container.textContent).toContain("unk.rom —");
-    });
-
     it("renders a missing required file (red dot branch) when expanded", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
@@ -836,13 +743,13 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "missing-req.rom",
+                local_path: "missing-req.rom",
                 size: 100,
                 md5: "x",
                 downloaded: false,
-                required: true,
                 description: "ReqMissing",
-                hash_valid: null,
-                classification: "required",
+                wanted: "needed",
+                required_by_active: true,
               },
             ],
           }),
@@ -868,13 +775,13 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "missing-opt.rom",
+                local_path: "missing-opt.rom",
                 size: 100,
                 md5: "x",
                 downloaded: false,
-                required: false,
                 description: "OptMissing",
-                hash_valid: null,
-                classification: "optional",
+                wanted: "optional",
+                required_by_active: false,
               },
             ],
           }),
@@ -890,7 +797,7 @@ describe("SystemPage", () => {
       expect(container.textContent).toContain("missing-opt.rom — Missing");
     });
 
-    it("renders the unrecognized-file footer when unknown files are present", async () => {
+    it("renders the unanswered-file footer when unknown files are present", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
@@ -900,13 +807,13 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "mystery.rom",
+                local_path: "mystery.rom",
                 size: 100,
                 md5: "x",
                 downloaded: true,
-                required: false,
                 description: "?",
-                hash_valid: null,
-                classification: "unknown",
+                wanted: "unknown",
+                required_by_active: false,
               },
             ],
           }),
@@ -918,7 +825,7 @@ describe("SystemPage", () => {
         fireEvent.click(getByText("Show Files (1)"));
         await Promise.resolve();
       });
-      expect(container.textContent).toContain("1 file(s) not recognized");
+      expect(container.textContent).toContain("1 file(s) nothing installed could answer for");
     });
   });
 
@@ -936,13 +843,13 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "req.rom",
+                local_path: "req.rom",
                 size: 100,
                 md5: "x",
                 downloaded: true,
-                required: true,
                 description: "Req",
-                hash_valid: true,
-                classification: "required",
+                wanted: "needed",
+                required_by_active: true,
               },
             ],
           }),
@@ -964,24 +871,24 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "req.rom",
+                local_path: "req.rom",
                 size: 100,
                 md5: "x",
                 downloaded: true,
-                required: true,
                 description: "Req",
-                hash_valid: true,
-                classification: "required",
+                wanted: "needed",
+                required_by_active: true,
               },
               {
                 id: 2,
                 file_name: "opt.rom",
+                local_path: "opt.rom",
                 size: 100,
                 md5: "x",
                 downloaded: false,
-                required: false,
                 description: "Opt",
-                hash_valid: null,
-                classification: "optional",
+                wanted: "optional",
+                required_by_active: false,
               },
             ],
           }),
@@ -1002,13 +909,13 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "req.rom",
+                local_path: "req.rom",
                 size: 100,
                 md5: "x",
                 downloaded: false,
-                required: true,
                 description: "Req",
-                hash_valid: null,
-                classification: "required",
+                wanted: "needed",
+                required_by_active: true,
               },
             ],
           }),
@@ -1029,13 +936,13 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "opt.rom",
+                local_path: "opt.rom",
                 size: 100,
                 md5: "x",
                 downloaded: true,
-                required: false,
                 description: "Opt",
-                hash_valid: true,
-                classification: "optional",
+                wanted: "optional",
+                required_by_active: false,
               },
             ],
           }),
@@ -1057,13 +964,13 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "opt.rom",
+                local_path: "opt.rom",
                 size: 100,
                 md5: "x",
                 downloaded: false,
-                required: false,
                 description: "Opt",
-                hash_valid: null,
-                classification: "optional",
+                wanted: "optional",
+                required_by_active: false,
               },
             ],
           }),
@@ -1075,27 +982,28 @@ describe("SystemPage", () => {
       expect(container.textContent).toContain("1 missing");
     });
 
-    it("renders 'Not managed by the plugin' + a neutral grey dot for an unmanaged platform (#1520)", async () => {
-      // Server files present but none registry-known → backend ships bios_level
-      // "unmanaged". The System page must render honest neutral text (not a false
-      // all-clear) with the shared grey status dot, and never flag it "BIOS needed".
+    it("renders 'BIOS requirement unknown' + a neutral grey dot for an unanswered platform (#1520)", async () => {
+      // Server files present and no installed emulator's answer established for
+      // any of them → backend ships bios_level "unknown". The System page must
+      // render honest neutral text (not a false all-clear) with the shared grey
+      // status dot, and never flag it "BIOS needed".
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
           makeBiosPlatform({
             platform_slug: "psvita",
-            bios_level: "unmanaged",
+            bios_level: "unknown",
             files: [
               {
                 id: 1,
                 file_name: "unknown.bin",
+                local_path: "unknown.bin",
                 size: 100,
                 md5: "x",
                 downloaded: false,
-                required: false,
                 description: "?",
-                hash_valid: null,
-                classification: "unknown",
+                wanted: "unknown",
+                required_by_active: false,
               },
             ],
           }),
@@ -1103,8 +1011,8 @@ describe("SystemPage", () => {
       });
       const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      expect(container.textContent).toContain("Not managed by the plugin");
-      expect(container.textContent).toContain("1 file(s) on server the plugin doesn't recognise");
+      expect(container.textContent).toContain("BIOS requirement unknown");
+      expect(container.textContent).toContain("1 file(s) on server nothing installed could answer for");
       // Neutral grey dot via the shared helper — never green.
       expect(container.innerHTML).toContain("#8f98a0");
       expect(container.innerHTML).not.toContain("#5ba32b");
@@ -1640,13 +1548,13 @@ describe("SystemPage", () => {
           {
             id: 1,
             file_name: "scph5501.bin",
+            local_path: "scph5501.bin",
             size: 100,
             md5: "x",
             downloaded: true,
-            required: true,
             description: "PS1 BIOS",
-            hash_valid: true,
-            classification: "required",
+            wanted: "needed",
+            required_by_active: true,
           },
         ],
       });
@@ -1659,13 +1567,13 @@ describe("SystemPage", () => {
           {
             id: 1,
             file_name: "scph5501.bin",
+            local_path: "scph5501.bin",
             size: 100,
             md5: "x",
             downloaded: false,
-            required: true,
             description: "PS1 BIOS",
-            hash_valid: null,
-            classification: "required",
+            wanted: "needed",
+            required_by_active: true,
           },
         ],
       });

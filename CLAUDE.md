@@ -64,8 +64,9 @@ new code in it.
   `romm_origin=False` if it does not talk to RomM (not checked).
 - `bootstrap-wiring.md` — the `main.py` / `bootstrap/` split, and which half of `bootstrap/` new wiring belongs in.
 - `callables.md` — the `{success, reason, message}` failure shape and its two carve-outs. Checked.
-- `vendored-assets.md` — `_vendor/`, `native/`, `defaults/` are checksum-pinned verbatim copies. The checksums are
-  checked; the reflex to fix the upstream artifact instead of the copy is not.
+- `vendored-assets.md` — `_vendor/` and `native/` are checksum-pinned verbatim copies. The checksums are checked; the
+  reflex to fix the upstream artifact instead of the copy is not. `defaults/` holds no vendored artifact since the BIOS
+  registry left.
 - `testing-backend.md` — test tiers, gate tests, vendored conformance vectors.
 - `testing-frontend.md` — the `@decky/api` event harness, non-vacuous catch assertions.
 - `comments.md` — an inline comment is the exception: only an outside-world fact, a road not taken, or a constraint the
@@ -243,6 +244,20 @@ Format: **invariant** — tier — enforced by.
   stage, so a stopping frame with a non-terminal stage would collapse the in-progress rows while ending nothing. The
   panel cannot defend against it: a bare `running: false` is exactly what its own retraction of an optimistic start
   looks like
+- **A firmware answer nothing could establish is `unknown`, never `not_needed` — and the distinction survives every
+  layer it crosses** — test + prompt-only — `tests/adapters/test_atlas_firmware.py` pins the adapter's degradation (a
+  raising resolver, a missing installation, an answer with no root all come back with `resolved` clear, never as an
+  empty catalogue reading "nothing needed"), `tests/domain/test_firmware_wants.py` pins the classification, and
+  `tests/services/test_firmware.py::TestCheckPlatformBiosUnknown` pins the same listing answering `not_needed` under a
+  whole reading and `unknown` under a partial one. The rule spans four modules and no diff-scoped review sees it whole:
+  the adapter decides whether the reading happened, `domain/firmware_wants.py` holds the two values apart,
+  `services/firmware.py` scopes the doubt to the emulators ES-DE offers for the platform, and both frontend surfaces
+  render them as different sentences. **Nothing mechanical stands behind the scoping half.** A future caller that folds
+  the two values back together — a truthiness test on a placement, a `wanted != "needed"` bucket, a default of
+  `not_needed` where the catalogue is silent — goes green: the collapse is the upstream defect this swap removed, and it
+  is one careless `or` away from returning. The scope itself is the second unguarded half: `_core_scope` returning
+  `None` (ES-DE unreadable) is the only thing between an unestablished scope and a confident "nothing needs these", and
+  a caller that passes an empty list instead of `None` has silently claimed a complete reading
 - **Aggregate state mutated only via verb-named methods (no field assignment)** — check —
   `scripts/check_aggregate_field_assignment.py`
 - **No UoW-opening seam (ActiveCoreResolver, RelaunchOptionsResolver, uow_factory) is called while a UoW is open on the

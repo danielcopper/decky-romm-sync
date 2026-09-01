@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from models.metadata import AchievementSummary
 
-from domain.bios import compute_bios_label, compute_bios_level, format_bios_status
+from domain.bios_status import compute_bios_label, compute_bios_level, format_bios_status
 from domain.platform_names import decode_platform_names
 from domain.save_status import compute_save_sync_display
 from lib.path_safety import PathTraversalError, safe_join

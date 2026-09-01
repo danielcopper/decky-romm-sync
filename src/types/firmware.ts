@@ -3,16 +3,29 @@
  * file status, and the available-cores selection presented in the UI.
  */
 
+/**
+ * What the machine answers about one firmware file, in the four values the
+ * resolver's per-file answer and the reading's completeness together produce.
+ * `not_needed` is a finished answer — every emulator the platform offers was
+ * read and none asks for the file — while `unknown` is the absence of one. They
+ * are never folded together: the collapse is what made a file the plugin could
+ * not ask about look like a file nothing wanted.
+ */
+export type FirmwareWanted = "needed" | "optional" | "not_needed" | "unknown";
+
 interface FirmwareFile {
   id: number;
   file_name: string;
   size: number;
   md5: string;
+  local_path: string;
   downloaded: boolean;
-  required: boolean;
   description: string;
-  hash_valid: boolean | null;
-  classification: "required" | "optional" | "unknown";
+  wanted: FirmwareWanted;
+  /** Whether the platform's launching core is the one that requires it — the
+   *  axis the "BIOS needed" badge and the required counts key off, distinct
+   *  from `wanted`, which is about every installed emulator. */
+  required_by_active: boolean;
 }
 
 interface FirmwarePlatform {
@@ -70,15 +83,17 @@ export interface FirmwarePlatformExt extends FirmwarePlatform {
   emulators?: EmulatorOption[];
   emulator_data_available?: boolean;
   // Per-platform BIOS aggregates computed by the backend from the same
-  // core-aware enriched files (`compute_bios_level`), so the System page reads
-  // the ok/partial/missing decision and display counts off the payload instead
-  // of re-deriving the threshold logic. The optional-missing breakdown stays a
-  // local file-level computation (a richer axis the 3-state level doesn't model).
-  bios_level?: "ok" | "partial" | "missing" | "unmanaged" | null;
+  // core-aware classified files (`compute_bios_level`), so the System page reads
+  // the unknown/ok/partial/missing decision and display counts off the payload
+  // instead of re-deriving the threshold logic. The optional-missing breakdown
+  // stays a local file-level computation (a richer axis the level doesn't model).
+  bios_level?: BiosLevel | null;
   required_count?: number;
   required_downloaded?: number;
   server_count?: number;
   local_count?: number;
+  known_count?: number;
+  unknown_count?: number;
 }
 
 export interface FirmwareStatus {
@@ -92,12 +107,21 @@ export interface BiosFileStatus {
   file_name: string;
   downloaded: boolean;
   local_path: string;
-  required: boolean;
   description: string;
-  classification: "required" | "optional" | "unknown";
+  wanted: FirmwareWanted;
+  /** Whether the core THIS game launches with requires the file. `wanted` is the
+   *  machine's answer about the file; this one is the launch's. */
+  required_by_active: boolean;
   cores?: Record<string, { required: boolean }>;
   used_by_active?: boolean;
 }
+
+/**
+ * The backend's readiness decision for a platform's BIOS. `"unknown"` means the
+ * server holds firmware and no installed emulator's answer could be established
+ * for any of it — a neutral state, never a green all-clear.
+ */
+export type BiosLevel = "ok" | "partial" | "missing" | "unknown";
 
 export interface BiosStatus {
   needs_bios: boolean;
@@ -106,16 +130,19 @@ export interface BiosStatus {
   all_downloaded?: boolean;
   required_count?: number;
   required_downloaded?: number;
+  // Server files an installed emulator asks for, and files nothing could answer
+  // about. A `not_needed` file is in neither — it is answered for, and wanted by
+  // nothing — which is what keeps "nothing here is needed" apart from "nothing
+  // could be established".
+  known_count?: number;
   unknown_count?: number;
   files?: BiosFileStatus[];
-  // unmanaged/ok/partial/missing state computed by the backend (compute_bios_level)
-  // so the frontend reads the classification off the payload instead of
-  // re-deriving the threshold logic. "unmanaged" means the platform has server
-  // files but none map to a registry entry (no coverage). Present only when
-  // needs_bios is true.
-  bios_level?: "ok" | "partial" | "missing" | "unmanaged" | null;
+  // unknown/ok/partial/missing state computed by the backend (compute_bios_level)
+  // so the frontend reads the decision off the payload instead of re-deriving the
+  // threshold logic. Present only when needs_bios is true.
+  bios_level?: BiosLevel | null;
   // Set when the check could not determine the requirement: the firmware fetch
-  // failed and the platform has no registry coverage to fall back on. The
+  // failed and nothing was cached, so which files even exist is unknown. The
   // `needs_bios: false` it rides on is ignorance, not an answer, so no consumer
   // may clear a shown requirement on it (#1693).
   bios_status_unknown?: boolean;

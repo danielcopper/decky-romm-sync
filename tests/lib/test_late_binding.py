@@ -11,9 +11,9 @@ from lib.late_binding import LateBinding
 
 def test_get_before_set_raises():
     """Accessing an unset binding must raise RuntimeError tagged with the name."""
-    binding: LateBinding[dict[str, Any]] = LateBinding("bios_files_index")
+    binding: LateBinding[dict[str, Any]] = LateBinding("pending_sync")
 
-    with pytest.raises(RuntimeError, match="bios_files_index"):
+    with pytest.raises(RuntimeError, match="pending_sync"):
         binding.get()
 
 
@@ -71,12 +71,12 @@ def test_get_reflects_mutation_of_shared_reference():
 
 def test_error_message_includes_name_and_hint():
     """The RuntimeError text names the binding and points at the cause."""
-    binding: LateBinding[dict[str, Any]] = LateBinding("bios_files_index")
+    binding: LateBinding[dict[str, Any]] = LateBinding("pending_sync")
 
     with pytest.raises(RuntimeError) as excinfo:
         binding.get()
 
     msg = str(excinfo.value)
-    assert "bios_files_index" in msg
+    assert "pending_sync" in msg
     assert "set" in msg
     assert "startup ordering bug" in msg

@@ -26,8 +26,9 @@ verbatim as `atlas.SHA256SUMS`. That keeps `atlas/` exactly equal to the manifes
 exceptions. The equality half is not optional: `sha256sum -c --ignore-missing` exits 0 after a vendored file is deleted,
 so a plain checksum sweep would pass a half-copied tree.
 
-`_vendor.atlas` has no consumer yet; `tests/test_vendored_atlas.py` imports it and asserts the pinned version, so the
-copy is proven to resolve and not merely to hash correctly.
+`_vendor.atlas` is consumed by `adapters/atlas_firmware.py` alone — the firmware seam behind
+`services.protocols.FirmwareResolver`. `tests/test_vendored_atlas.py` additionally imports it and asserts the pinned
+version, so the copy is proven to resolve and not merely to hash correctly even if that adapter ever stops importing it.
 
 ### How to update
 

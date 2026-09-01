@@ -11,12 +11,19 @@
  * `coreInfo.emulators` is the platform's core list, which a core switch does not
  * change.
  *
+ * Two axes are rendered side by side and must not be conflated. A file's
+ * `wanted` is what the whole machine says about it; `required_by_active` is what
+ * the core this game launches with says. The readiness line is about the second
+ * — a file another core demands is not a missing prerequisite for this launch —
+ * while the rows below it show the first, so nothing is silently dropped from
+ * the list for belonging to a core the user is not using.
+ *
  * CSS classes prefixed with `romm-panel-` are injected separately by
  * styleInjector.
  */
 
 import { FC, type ReactElement } from "react";
-import type { BiosStatus, CoreInfo } from "../types";
+import type { BiosFileStatus, BiosLevel, BiosStatus, CoreInfo, FirmwareWanted } from "../types";
 import { biosColorForLevel } from "../utils/biosColor";
 import { infoRow, section } from "./panelSection";
 
@@ -24,9 +31,9 @@ interface BiosTabProps {
   /** The platform's BIOS requirement, or null when its core needs none — in
    *  which case there is no tab to render. */
   biosStatus: BiosStatus | null;
-  /** Backend-computed readiness classification driving the status-dot color;
+  /** Backend-computed readiness verdict driving the status-dot color;
    *  null whenever there is no requirement. */
-  biosLevel: "ok" | "partial" | "missing" | "unmanaged" | null;
+  biosLevel: BiosLevel | null;
   /** Active core + available cores, from the dedicated `get_platform_core_info`
    *  path (#923) — never derived from `biosStatus`. */
   coreInfo: CoreInfo | null;
@@ -61,26 +68,34 @@ function buildBiosCoreLines(
   });
 }
 
-/** The header line: status dot plus the readiness phrasing this surface uses. */
+/**
+ * The header line: status dot plus the readiness phrasing this surface uses.
+ *
+ * The sentence and the ratio beside it are the SAME axis (#1762). Where there
+ * are required files the ratio counts those; where there are none it counts
+ * every file, because that is then the only axis there is. Printing a
+ * required-file sentence next to an all-files ratio described two different sets
+ * as one line.
+ */
 function buildBiosHeader(bios: BiosStatus, biosLevel: BiosTabProps["biosLevel"]): ReactElement[] {
   const localCount = bios.local_count ?? 0;
   const serverCount = bios.server_count ?? 0;
-  const reqCount = bios.required_count;
-  const reqDone = bios.required_downloaded;
+  const reqCount = bios.required_count ?? 0;
+  const reqDone = bios.required_downloaded ?? 0;
 
-  // Color is sourced from the backend ok/partial/missing classification via the
+  // Color is sourced from the backend unknown/ok/partial/missing verdict via the
   // shared helper — never re-derived here. The verbose phrasing below stays this
   // surface's own concern (per-surface wording).
   const biosColor = biosColorForLevel(biosLevel);
   let biosLabel: string;
-  if (biosLevel === "unmanaged") {
-    // No registry coverage — the plugin makes no readiness claim. Honest text
+  if (biosLevel === "unknown") {
+    // Nothing installed could say whether these files are wanted. Honest text
     // over the neutral grey dot, never a false "All ready".
-    biosLabel = "Not managed by the plugin";
-  } else if (reqCount != null && reqDone != null) {
+    biosLabel = "BIOS requirement unknown";
+  } else if (reqCount > 0) {
     biosLabel =
       reqDone >= reqCount
-        ? `All required ready (${localCount}/${serverCount})`
+        ? `All required ready (${reqDone}/${reqCount})`
         : `${reqDone}/${reqCount} required files ready`;
   } else {
     biosLabel = bios.all_downloaded
@@ -99,7 +114,25 @@ function buildBiosHeader(bios: BiosStatus, biosLevel: BiosTabProps["biosLevel"])
   ];
 }
 
-/** One row per known firmware file, plus the "files on server" note. */
+/** The dot beside one file row: what it means for THIS launch, then for others. */
+function fileDotColor(file: BiosFileStatus): string {
+  if (file.downloaded) return "#5ba32b";
+  if (file.required_by_active) return "#d94126";
+  // Missing and not required here, but demanded by some other installed core:
+  // amber, because switching cores would make it a blocker.
+  const requiredElsewhere = Object.values(file.cores ?? {}).some((c) => c.required);
+  return requiredElsewhere ? "#d4a72c" : "#8f98a0";
+}
+
+/**
+ * One row per firmware file an installed emulator asks for, plus a note for the rest.
+ *
+ * The rows are the files with an owning emulator — the ones whose per-core lines
+ * say something. The note below them keeps the two remaining answers apart
+ * (#1762): files nothing asks for are a finished answer, files nothing could be
+ * asked about are not, and the old single line called both "not required by any
+ * known core" while counting neither.
+ */
 function buildBiosFileList(bios: BiosStatus, coreInfo: CoreInfo | null): ReactElement[] {
   // Build core_so -> label lookup from the dedicated core-info path (#923).
   // Only libretro emulators carry a core_so (a standalone emulator has none),
@@ -109,34 +142,16 @@ function buildBiosFileList(bios: BiosStatus, coreInfo: CoreInfo | null): ReactEl
     if (e.core_so) coreLabelMap[e.core_so] = e.label;
   }
 
-  // Filter out unknown files (not in registry) — they're noise from the server
-  const knownFiles = (bios.files ?? []).filter((f) => f.classification !== "unknown");
-  const unknownCount = (bios.files ?? []).length - knownFiles.length;
+  const files = bios.files ?? [];
+  const wantedFiles = files.filter((f) => f.wanted === "needed" || f.wanted === "optional");
+  const countOf = (wanted: FirmwareWanted) => files.filter((f) => f.wanted === wanted).length;
 
-  const fileElements = knownFiles.map((f) => {
-    // Dot color logic:
-    // Green: downloaded
-    // Red: missing + required by current core
-    // Orange: missing + required by another core (not current)
-    // Grey: optional for current core or not used by any known core
-    let dotColor: string;
-    if (f.downloaded) {
-      dotColor = "#5ba32b";
-    } else if (f.used_by_active !== false && f.classification === "required") {
-      dotColor = "#d94126";
-    } else if (!f.used_by_active && f.cores) {
-      const requiredByOther = Object.values(f.cores).some((c) => c.required);
-      dotColor = requiredByOther ? "#d4a72c" : "#8f98a0";
-    } else {
-      dotColor = "#8f98a0";
-    }
-
-    // Build per-core lines
+  const fileElements = wantedFiles.map((f) => {
     const coreLines = f.cores ? buildBiosCoreLines(f.cores, coreLabelMap, coreInfo?.active_core) : [];
 
     return (
       <div key={f.file_name} className="romm-panel-file-row">
-        <span key="dot" className="romm-status-dot" style={{ backgroundColor: dotColor }} />
+        <span key="dot" className="romm-status-dot" style={{ backgroundColor: fileDotColor(f) }} />
         <span key="name" className="romm-panel-file-name">
           {f.description || f.file_name}
         </span>
@@ -158,23 +173,19 @@ function buildBiosFileList(bios: BiosStatus, coreInfo: CoreInfo | null): ReactEl
     );
   });
 
-  // The "files on server" note is independent of knownFiles.length so it
-  // survives the unmanaged case (every file unknown → no known files); there it
-  // is the honest signal about what the server holds. When there are known
-  // files it reads as a "+ N other files" footnote.
-  if (unknownCount > 0) {
-    const plural = unknownCount === 1 ? "" : "s";
-    const unknownNote =
-      knownFiles.length > 0
-        ? `+ ${unknownCount} other file${plural} on server (not required by any known core)`
-        : `${unknownCount} file${plural} on server the plugin doesn't recognise`;
+  for (const [wanted, phrase] of [
+    ["not_needed", "no installed emulator asks for"],
+    ["unknown", "nothing installed could answer for"],
+  ] as const) {
+    const count = countOf(wanted);
+    if (count === 0) continue;
     fileElements.push(
       <div
-        key="unknown-note"
+        key={`${wanted}-note`}
         className="romm-panel-file-row"
         style={{ color: "rgba(255, 255, 255, 0.4)", fontSize: "12px", marginTop: "8px" }}
       >
-        {unknownNote}
+        {`${count} file${count === 1 ? "" : "s"} on server ${phrase}`}
       </div>,
     );
   }

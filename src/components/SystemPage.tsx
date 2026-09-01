@@ -1,23 +1,23 @@
-import { useState, useEffect, FC } from "react";
+import { FC, useEffect, useState } from "react";
 import {
-  PanelSection,
-  PanelSectionRow,
   ButtonItem,
+  ConfirmModal,
   Field,
   Focusable,
-  ConfirmModal,
+  PanelSection,
+  PanelSectionRow,
   showContextMenu,
   showModal,
 } from "@decky/ui";
 import {
-  getFirmwareStatus,
+  debugLog,
+  deletePlatformBios,
   downloadAllFirmware,
   downloadRequiredFirmware,
-  deletePlatformBios,
+  getFirmwareStatus,
   setSystemCore,
-  debugLog,
 } from "../api/backend";
-import type { FirmwarePlatformExt } from "../types";
+import type { FirmwarePlatformExt, FirmwareWanted } from "../types";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { biosColorForLevel } from "../utils/biosColor";
 import { detach } from "../utils/detach";
@@ -30,6 +30,19 @@ import {
   withPruneLease,
 } from "../utils/pruneLease";
 import { batchConfirmLaunchOptions } from "../utils/launchOptionsReconcile";
+
+/**
+ * How each of the four `wanted` values reads on a file row. `not_needed` is
+ * spelled out rather than shortened: "not needed" is a statement about every
+ * installed emulator, and the row beside it saying "unknown" is the absence of
+ * one, so the two must not look like near-synonyms.
+ */
+const WANTED_LABELS: Record<FirmwareWanted, string> = {
+  needed: "needed",
+  optional: "optional",
+  not_needed: "not needed",
+  unknown: "unknown",
+};
 
 /**
  * Build the per-platform summary label/description from the backend BIOS
@@ -82,12 +95,6 @@ function announceBiosChange(platformSlug: string) {
   globalThis.dispatchEvent(
     new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: platformSlug } }),
   );
-}
-
-function hashIndicator(hv: boolean | null): string {
-  if (hv === true) return " ✓";
-  if (hv === false) return " ⚠";
-  return " —";
 }
 
 /**
@@ -284,7 +291,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
 
   const renderBiosPlatform = (platform: FirmwarePlatformExt, index: number) => {
     const isLastPlatform = index === syncedPlatforms.length - 1;
-    const unknownFiles = platform.files.filter((f) => f.classification === "unknown");
+    const unansweredFiles = platform.files.filter((f) => f.wanted === "unknown");
     // Display counts come from the backend aggregates (computed from the same
     // core-aware files); fall back to local derivation only if a payload omits
     // them. The optional-missing breakdown stays a local file-level axis — the
@@ -295,27 +302,35 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     const isDownloading = downloading === platform.platform_slug;
     const isExpanded = expanded[platform.platform_slug] ?? false;
 
-    const requiredFiles = platform.files.filter((f) => f.classification === "required");
+    const requiredFiles = platform.files.filter((f) => f.required_by_active);
     const requiredCount = platform.required_count ?? requiredFiles.length;
     const requiredDone = platform.required_downloaded ?? requiredFiles.filter((f) => f.downloaded).length;
-    const optionalMissing = platform.files.filter((f) => f.classification === "optional" && !f.downloaded).length;
+    const optionalMissing = platform.files.filter(
+      (f) => f.wanted === "optional" && !f.required_by_active && !f.downloaded,
+    ).length;
 
     // The ok/partial/missing DECISION is the backend's bios_level — "ready"
     // means all required files present (bios_level === "ok"). Fall back to the
     // local count comparison only when the level is absent from the payload.
     const requiredReady = platform.bios_level == null ? requiredDone === requiredCount : platform.bios_level === "ok";
 
-    // "unmanaged": the platform has server files but none map to a registry
-    // entry, so the plugin makes no readiness claim. Render neutral grey + honest
-    // text instead of a false all-clear. requiredCount is always 0 here (no
-    // registry-known files), so it is never counted as a "BIOS needed" platform.
-    const isUnmanaged = platform.bios_level === "unmanaged";
+    // "unknown": the platform has server files and no installed emulator's
+    // answer could be established for any of them, so the plugin makes no
+    // readiness claim. Render neutral grey + honest text instead of a false
+    // all-clear. requiredCount is always 0 here, so it is never counted as a
+    // "BIOS needed" platform.
+    const isUnknown = platform.bios_level === "unknown";
 
     const needsAttention = platform.has_games && requiredCount > 0 && !requiredReady;
-    const { summaryLabel, summaryDescription } = isUnmanaged
+    const { summaryLabel, summaryDescription } = isUnknown
       ? {
-          summaryLabel: "Not managed by the plugin",
-          summaryDescription: `${total} file(s) on server the plugin doesn't recognise`,
+          summaryLabel: "BIOS requirement unknown",
+          // With no file list there is nothing to count — offline, WHICH files
+          // exist is the unknown, not what wants them.
+          summaryDescription:
+            total > 0
+              ? `${total} file(s) on server nothing installed could answer for`
+              : "The list of BIOS files could not be read",
         }
       : getBiosSummary(requiredCount, requiredDone, requiredReady, optionalMissing, done, total, allDone);
     const hasRequiredMissing = requiredCount > 0 && !requiredReady;
@@ -348,7 +363,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
         <PanelSectionRow>
           <Field
             label={
-              isUnmanaged ? (
+              isUnknown ? (
                 <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                   <span
                     style={{
@@ -388,11 +403,11 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
           <Focusable>
             {platform.files.map((file) => {
               let dotColor: string;
-              if (file.classification === "unknown") {
+              if (file.wanted === "unknown") {
                 dotColor = "#d4a72c";
               } else if (file.downloaded) {
                 dotColor = "#5ba32b";
-              } else if (file.classification === "required") {
+              } else if (file.required_by_active) {
                 dotColor = "#d94126";
               } else {
                 dotColor = "#8f98a0";
@@ -412,23 +427,19 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
                             flexShrink: 0,
                           }}
                         />
-                        {`${file.description || file.file_name} (${file.classification})`}
+                        {`${file.description || file.file_name} (${WANTED_LABELS[file.wanted]})`}
                       </span>
                     }
-                    description={
-                      file.downloaded
-                        ? `${file.file_name}${hashIndicator(file.hash_valid)}`
-                        : `${file.file_name} — Missing`
-                    }
+                    description={file.downloaded ? file.file_name : `${file.file_name} — Missing`}
                     bottomSeparator="none"
                   />
                 </PanelSectionRow>
               );
             })}
-            {unknownFiles.length > 0 && (
+            {unansweredFiles.length > 0 && (
               <PanelSectionRow>
                 <Field
-                  label={`${unknownFiles.length} file(s) not recognized`}
+                  label={`${unansweredFiles.length} file(s) nothing installed could answer for`}
                   description="Report at github.com/danielcopper/romm-tender/issues if needed."
                   bottomSeparator="none"
                 />

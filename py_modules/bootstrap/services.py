@@ -105,7 +105,6 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
     # binding is populated via ``.set(...)`` once the producer exists.
     # Accessing ``.get()`` before ``.set()`` raises RuntimeError instead of
     # the NameError a bare forward-ref lambda would produce.
-    bios_files_index_binding: LateBinding[dict[str, dict[str, Any]]] = LateBinding("bios_files_index")
     pending_sync_binding: LateBinding[dict[int, dict[str, Any]]] = LateBinding("pending_sync")
     # DownloadService needs RomRemovalService.remove_rom for the #1298 sibling
     # supersede, but RomRemovalService needs DownloadService's queue-cleanup seam —
@@ -169,7 +168,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             logger=cfg.runtime.logger,
             settings_persister=cfg.callbacks.settings_persister,
             emit=cfg.runtime.emit,
-            get_bios_files_index=bios_files_index_binding.get,
+            firmware_resolver=cfg.adapters.firmware_resolver,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             get_save_layout=cfg.callbacks.get_save_layout,
             active_core=active_core_resolver,
@@ -357,9 +356,9 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             romm_api=cfg.adapters.romm_api,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
-            plugin_dir=cfg.runtime.plugin_dir,
             clock=cfg.runtime.clock,
             firmware_file_store=cfg.adapters.firmware_file_store,
+            firmware_resolver=cfg.adapters.firmware_resolver,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             core_info=cfg.adapters.core_info_provider,
             resolve_system=cfg.adapters.http_adapter.resolve_system,
@@ -367,10 +366,6 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             uow_factory=cfg.callbacks.uow_factory,
         ),
     )
-    # Load the BIOS registry from disk now so the property does not raise
-    # the pre-load RuntimeError when the binding's reader is later invoked.
-    firmware_service.load_bios_registry()
-    bios_files_index_binding.set(lambda: firmware_service.bios_files_index)
 
     sgdb_service = SteamGridService(
         config=SteamGridServiceConfig(
