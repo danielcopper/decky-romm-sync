@@ -122,15 +122,20 @@ silent.
 
 ### Where the plugin gets its answers
 
-The plugin asks your **installed emulators** what they want. Every RetroArch core ships a small description file next to
-it declaring the firmware it needs and where each file goes, and the plugin reads those live — so the answers follow
-your RetroDECK install, including cores that were added after the plugin was released.
+The plugin asks your **installed RetroArch cores** what they want. Every core ships a small description file next to it
+declaring the firmware it needs and where each file goes, and the plugin reads those live — so the answers follow your
+RetroDECK install, including cores that were added after the plugin was released.
+
+**Standalone emulators are not asked.** RetroDECK also offers emulators that are not RetroArch cores — RPCS3, Vita3K,
+Cemu, xemu and others — and they state their firmware in their own formats rather than in that one description file.
+Reading them accurately is a separate piece of work, so rather than guess, the plugin says it does not know: a system
+whose only emulators are standalone reads **unknown** (below), never "not needed".
 
 Each file on your server therefore gets one of four answers:
 
-- **Needed** — an installed emulator will not run without it
-- **Optional** — an installed emulator can use it but does not require it
-- **Not needed** — every emulator for this system was asked, and none of them wants this file
+- **Needed** — an installed core will not run without it
+- **Optional** — an installed core can use it but does not require it
+- **Not needed** — every RetroArch core this system offers was asked, and none of them wants this file
 - **Unknown** — the plugin could not work out an answer (see below)
 
 ### When the requirement is unknown
@@ -138,26 +143,50 @@ Each file on your server therefore gets one of four answers:
 "Not needed" and "unknown" are deliberately kept apart. The first is an answer; the second is the absence of one, and
 the plugin will not present it as an all-clear.
 
-A system reads **unknown** when one of the emulators it offers ships without its description file, or when RetroDECK's
-configuration cannot be read at all. That platform shows a neutral grey status and the text **"BIOS requirement
-unknown"** instead of a green all-clear. On a stock RetroDECK this is rare — a handful of bundled cores ship without a
-description file, and only one of them is offered for any system.
+A **file** reads unknown when the plugin could not ask every core the system offers — one of them ships without its
+description file, or RetroDECK's configuration could not be read at all.
+
+A whole **system** reads unknown, showing a neutral grey status and the text **"BIOS requirement unknown"** instead of a
+green all-clear, only when all three of these hold: your server holds firmware for that system, not one of those files
+could be answered for, and at least one of them reads unknown. In other words every row on the platform is unknown,
+which is what leaves nothing to base a readiness claim on. A single answered row is enough to keep the normal
+green/amber/red status: if the system offers two cores and only one is unreadable, the other core's answers still stand
+and only the unanswered rows read unknown. A system whose every file was answered with _not needed_ is not this case at
+all — that is a finished answer, and it reads green.
+
+Two situations reach it. The common one is a system whose emulators are all standalone — PS3 through RPCS3, for instance
+— where there is no core to ask in the first place. The other is a system all of whose cores are unreadable; on a stock
+RetroDECK that is rare, since only a handful of bundled cores ship without a description file and just one of them is
+offered for any system.
 
 This is informational, not an error: your files may be perfectly fine, the plugin simply can't confirm what is needed.
 You can still download them manually through RomM if your emulator needs them. Genuinely BIOS-free systems (such as the
-NES) are unaffected — every emulator answers, none of them wants anything, and the system reads as ready.
+NES) are unaffected — every core answers, none of them wants anything, and the system reads as ready.
 
 !!! note "Systems that used to read \"Not managed by the plugin\" will have moved"
 
-    That state meant only \"no entry in the built-in table\", and the table is gone. Those systems now get a real
-    answer, which can go either way: **green**, because no installed emulator wants any of those files, or **red or
-    amber**, because one does and the table simply never knew. Both are new, and both are correct.
+    That state meant only \"no entry in the built-in table\", and the table is gone. Those systems now get whatever the
+    installed cores say, which can go three ways: **green**, because no installed core wants any of those files, **red
+    or amber**, because one does and the table simply never knew, or **grey**, because the system offers no RetroArch
+    core to ask. All three are new, and all three are honest.
 
-## Per-Platform BIOS Filtering
+## Which Files a Platform Lists
 
-The plugin only shows BIOS files that belong to the platform you're looking at — a GBA game page lists what your server
-holds under GBA, not what it holds under Game Boy. Which of those files matter is then decided by the emulators, so a
-file another system's core wants is shown for what it is rather than hidden.
+A platform's list has two halves. The first is what your **server** files under that platform — a GBA page lists the
+firmware your server holds under GBA, not what it holds under Game Boy. The second is every file an **emulator RetroDECK
+offers for that platform** asks for, wherever your server keeps that file and even when your server does not hold it at
+all; rows in that half are marked as not being in your RomM library.
+
+The second half follows what you can **launch** the platform with, not how a file is usually catalogued, and the two do
+not always line up. RetroDECK offers NooDS under Game Boy Advance, and NooDS does run GBA games. Its description file
+names five firmware files — `bios7.bin`, `bios9.bin`, `firmware.bin`, `nds_sd_card.bin` and `gba_bios.bin` — and a core
+states its firmware once, for the whole core, with no way to say which of those a GBA game in particular needs. So a GBA
+page lists all five: they are exactly the files an emulator you can start a GBA game with declares. Filtering rows out
+by the system a file is usually filed under would, wherever such a file is genuinely required, leave you with a game
+that refuses to launch and nothing on the page explaining why.
+
+Being listed is not the same as being needed. All five of NooDS's files are optional, so none of them turns a GBA page
+red by itself — and what each row means for the core you actually launch with is the next section's question.
 
 ## Active Core Detection
 

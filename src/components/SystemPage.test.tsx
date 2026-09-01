@@ -13,8 +13,8 @@
 //   - handleDeleteBios catch → setBiosStatus(`Failed to delete BIOS files: ${e}`)
 //   - setSystemCore onChange catch → debugLog(`setSystemCore: error: ${e}`)
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render } from "@testing-library/react";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, fireEvent, act } from "@testing-library/react";
 import { showModal } from "@decky/ui";
 import type { ReactElement } from "react";
 import { SystemPage } from "./SystemPage";

@@ -1,9 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Dispatch, SetStateAction } from "react";
 import {
-  refreshAchievementsInBackground,
   refreshBiosInBackground,
   refreshCoreInfoInBackground,
+  refreshAchievementsInBackground,
 } from "./sectionRefresh";
 import * as backend from "../api/backend";
 import { _resetSharedReadsForTests } from "../api/sharedReads";

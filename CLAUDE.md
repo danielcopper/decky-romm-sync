@@ -255,9 +255,12 @@ Format: **invariant** — tier — enforced by.
   render them as different sentences. **Nothing mechanical stands behind the scoping half.** A future caller that folds
   the two values back together — a truthiness test on a placement, a `wanted != "needed"` bucket, a default of
   `not_needed` where the catalogue is silent — goes green: the collapse is the upstream defect this swap removed, and it
-  is one careless `or` away from returning. The scope itself is the second unguarded half: `_core_scope` returning
-  `None` (ES-DE unreadable) is the only thing between an unestablished scope and a confident "nothing needs these", and
-  a caller that passes an empty list instead of `None` has silently claimed a complete reading
+  is one careless `or` away from returning. The scope is the second half, and there the two ends now agree rather than
+  one trusting the other: `_core_scope` answers `None` both when `es_systems.xml` is unreadable **and** when it offers
+  the platform no libretro core (35 of ES-DE's 172 systems, `ps3` among them — a mapped RomM platform whose only entry
+  is RPCS3), and `reading_complete_for` refuses an empty scope as well as a `None` one. An empty scope read as complete
+  is a finished reading of nobody: every server file classifies `not_needed`, `required_count` is 0, and the platform
+  reports a green "All ready" over firmware the standalone emulator will not boot without
 - **A firmware row the RomM library does not hold (`on_server: False`) counts towards readiness, and never towards a
   download affordance or a progress ratio** — test + prompt-only — `tests/services/test_firmware.py` pins the row's
   shape (`id` absent, `on_server` clear), that it raises `required_count`, and that it stays out of `server_count`;
@@ -267,8 +270,9 @@ Format: **invariant** — tier — enforced by.
   buttons' condition is a filter inside `SystemPage.tsx` and exists nowhere else. Each fold has its own quiet failure:
   drop the row from readiness and a platform reads ready while a required file is absent; add it to the ratio and a SNES
   page reports `0 / 26 files, 26 missing` for twenty-six optional files no core wants; add it to the buttons and the
-  page offers a download that cannot succeed. The `id: None` is load-bearing — it is what the page reads to withhold the
-  affordance, so it is not a placeholder to be filled in
+  page offers a download that cannot succeed. `on_server` is the one field all three read; the row's `id: None` is an
+  honest absence with no consumer at all, so nothing breaks if it is filled in and nothing is guarded by leaving it
+  empty
 - **No BIOS answer outlives the page that asked for it** — test + prompt-only —
   `tests/services/test_game_detail.py::TestGetCachedGameDetailCarriesNoBiosAnswer` and the two contract cases in
   `tests/contract/test_game_detail_read.py`. `get_cached_game_detail` carries none and says so (`bios_status_unknown`,

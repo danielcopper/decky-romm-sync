@@ -120,26 +120,42 @@ class FirmwareService:
 
     @staticmethod
     def _core_scope(options: dict[str, Any]) -> list[str] | None:
-        """The libretro cores an ES-DE emulator list offers, or ``None`` when unread.
+        """The libretro cores an ES-DE emulator list offers, or ``None`` when it names none.
 
-        The scope an absence is judged against. ``None`` — ``es_systems.xml``
-        could not be read — means the scope itself is unestablished, so nothing
-        may be ruled out for this platform.
+        The scope an absence is judged against. ``None`` means the scope itself
+        is unestablished, so nothing may be ruled out for this platform — and it
+        has two causes that are the same thing to the caller: ``es_systems.xml``
+        could not be read, or it was read and offers this system no libretro
+        core at all.
 
-        Standalone entries are deliberately not in the scope, and the reason is
-        a recorded deferral rather than a gap: ADR-0020 defers standalone BIOS
-        accuracy (inheriting ADR-0012's), and ``get_active_core`` is libretro-only
-        for that same reason. The resolver answers for standalone emulators
-        perfectly well through its per-system route — it is only the
-        whole-machine inventory this service asks that enumerates libretro cores
-        — so when the deferral is lifted the capability is already there.
+        The second is not a corner case. 35 of ES-DE's 172 systems have no
+        libretro command, ``ps3`` among them — a mapped RomM platform whose only
+        entry is RPCS3. An empty list would be a *complete* reading of nothing:
+        every server file classifies ``not_needed``, ``required_count`` is 0, and
+        the platform reads a green "All ready" over firmware RPCS3 will not boot
+        without. The same applies to any RomM slug ``resolve_system`` maps to a
+        name ``es_systems.xml`` does not carry. Grey ``unknown`` is the honest
+        answer for a platform whose emulators this service does not enumerate,
+        and it is what ADR-0020's standalone deferral actually licenses.
+
+        Standalone entries are out of the scope by that deferral rather than by
+        oversight: ADR-0020 defers standalone BIOS accuracy (inheriting
+        ADR-0012's), and ``get_active_core`` is libretro-only for the same
+        reason. Widening the scope is not the whole of lifting it — the resolver
+        does answer per-system for standalone emulators, but
+        ``_vendor/atlas/data/standalone_firmware.json`` holds cards for five of
+        them (CEMU, DUCKSTATION, MELONDS, PCSX2, XEMU) against the 23 distinct
+        standalone tokens RetroDECK offers, and the other 18 answer
+        ``declaration="unsupported"``, which upstream documents as meaning
+        unknown. So the deferral outlives this scope: upstream coverage has to
+        arrive first.
 
         Takes the already-read options rather than the system name so a caller
         that needs the emulator list anyway reads it once.
         """
         if not options["available"]:
             return None
-        return [option.core_so for option in options["options"] if option.core_so]
+        return [option.core_so for option in options["options"] if option.core_so] or None
 
     def _reading_complete(self, catalogue: FirmwareCatalogue, system: str) -> bool:
         """May an absence from *catalogue* be read as "nothing wants it" for *system*?"""
@@ -384,7 +400,9 @@ class FirmwareService:
         read as work outstanding on a system that needs nothing — a SNES page
         would say ``0 / 26 files, 26 missing`` for twenty-six optional files no
         core requires. ``known_count`` / ``unknown_count`` are the machine's
-        answer about the files themselves and count every row.
+        answer about the files themselves, and are the library's set too — they
+        are weighed against ``server_count``, so a row it does not hold would
+        raise the numerator of a ratio it is not in.
         """
         on_server = [f for f in files if f.on_server]
         server_count = len(on_server)
@@ -887,8 +905,12 @@ class FirmwareService:
 def _overview_row(item: dict[str, Any]) -> dict[str, Any]:
     """The System-page row for a file the library does not hold.
 
-    ``id`` is ``None`` because there is nothing to download — that absence is
-    what the page reads to withhold the affordance, so it is not a placeholder.
+    ``on_server: False`` is the load-bearing field: both download buttons filter
+    on it (``SystemPage.tsx``), and so do the page's own progress totals. ``id``
+    is ``None`` as an honest absence — there is no server record to name — and
+    no consumer reads it, so filling it in with a placeholder would withhold
+    nothing but would make a row that cannot be fetched look fetchable to the
+    next reader.
     """
     return {
         "id": None,

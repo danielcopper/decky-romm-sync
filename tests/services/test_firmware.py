@@ -10,7 +10,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from _factories import _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
-from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_core_info_provider import FakeCoreInfoProvider, libretro_option
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
 from fakes.fake_firmware_resolver import FakeFirmwareResolver
@@ -150,6 +150,21 @@ def _stub_listing(fw: FirmwareService, firmware_list: list[dict[str, Any]]) -> N
     api.list_firmware.return_value = firmware_list
 
 
+_TEST_CORE = "testcore_libretro"
+
+
+def _test_core_info() -> FakeCoreInfoProvider:
+    """ES-DE offering exactly the one libretro core ``_declare`` attributes its wants to.
+
+    The scope must be non-empty and must contain that core. A platform ES-DE
+    offers no libretro core for reads ``unknown`` by design (35 of its 172
+    systems are in that position), so a fixture left on the bare
+    ``FakeCoreInfoProvider()`` would exercise the no-scope path while its tests
+    read as if they were about a complete reading.
+    """
+    return FakeCoreInfoProvider(options=[libretro_option(_TEST_CORE, "Test Core")])
+
+
 @pytest.fixture
 def plugin():
     p = _make_testable_plugin()
@@ -170,6 +185,7 @@ def plugin():
         romm_api=p._romm_api,
         uow_factory=FakeUnitOfWorkFactory(p._uow),
         clock=_make_clock(),
+        core_info=_test_core_info(),
     )
 
     p._sync_service = LibraryService(
@@ -209,9 +225,6 @@ async def _set_event_loop(plugin, fw):
 @pytest.fixture
 def fw(plugin):
     return plugin._firmware_service
-
-
-_TEST_CORE = "testcore_libretro"
 
 
 def _declare(fw: FirmwareService, *specs: tuple[str, str, bool]) -> None:
@@ -476,7 +489,7 @@ class TestGetFirmwareStatus:
 
     @pytest.mark.asyncio
     async def test_detects_downloaded_files(self, fw, tmp_path):
-        # File goes flat in bios root (not in registry, no firmware_path)
+        # File goes flat in bios root — nothing declares a placement for it
         bios_dir = tmp_path / "retrodeck" / "bios"
         bios_dir.mkdir(parents=True)
         (bios_dir / "bios_dc.bin").write_bytes(b"\x00" * 100)
@@ -613,7 +626,8 @@ class TestGetFirmwareStatusBiosAggregates:
 
         The listing carries only the optional file; the two the dc core will not
         run without are wanted all the same, so they are shown — marked
-        ``on_server`` false and with no id to download by.
+        ``on_server`` false, which is the field the page's buttons and totals
+        filter on, and carrying no server id because there is no server record.
         """
         plat = await self._run(tmp_path, self._firmware("opt1.bin"), downloaded={"opt1.bin"})
 
@@ -1034,6 +1048,42 @@ class TestCheckPlatformBiosUnknown:
         assert result["bios_level"] == "unknown"
 
     @pytest.mark.asyncio
+    async def test_a_row_the_library_does_not_hold_cannot_cancel_the_unknown_verdict(self, tmp_path):
+        """``known_count`` is about server files, so a union row must not raise it.
+
+        A beyond-server row exists only because an emulator declared the file,
+        so it is always ``needed``/``optional`` — always "known". Counted, one of
+        them cancels ``unknown`` for a platform whose every server file went
+        unanswered: the headline goes green while the row underneath still says
+        nothing could answer for it.
+        """
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {"id": 1, "file_name": "stray.bin", "file_path": "bios/snes/stray.bin", "file_size_bytes": 100},
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=FakeFirmwareResolver(unread_cores=frozenset({"snes9x_libretro"})),
+            core_info=FakeCoreInfoProvider(
+                options=[libretro_option("snes9x_libretro", "Snes9x"), libretro_option("bsnes_libretro", "bsnes")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        # Declared by the core that WAS read, and absent from the library — the
+        # union row. The server's own file stays unanswerable either way.
+        _resolver(fw).declare("extra.bin", required_by=["bsnes_libretro"])
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("snes")
+
+        wanted = {f["file_name"]: f["wanted"] for f in result["files"]}
+        assert wanted == {"stray.bin": "unknown", "extra.bin": "needed"}
+        assert result["server_count"] == 1
+        assert result["known_count"] == 0
+        assert result["unknown_count"] == 1
+        assert result["bios_level"] == "unknown"
+
+    @pytest.mark.asyncio
     async def test_an_unreadable_emulator_list_leaves_the_scope_unestablished(self, tmp_path):
         """No ``es_systems.xml`` → the scope itself is unknown, so nothing is ruled out."""
         romm_api = MagicMock()
@@ -1099,8 +1149,11 @@ class TestCheckPlatformBiosUnknown:
 
         result = await fw.check_platform_bios("dc")
 
-        # Three declared files: two the listing carries, one it does not.
-        assert result["known_count"] == 3
+        # Three declared files, but only the two the listing carries count:
+        # ``known_count`` is weighed against ``server_count``, so the row the
+        # library does not hold is not in its set.
+        assert result["known_count"] == 2
+        assert result["server_count"] == 2
         assert result["bios_level"] != "unknown"
 
 
@@ -1217,7 +1270,7 @@ class TestDownloadAllFirmware:
     @pytest.mark.asyncio
     async def test_downloads_missing_only(self, plugin, fw, tmp_path):
 
-        # Pre-create one file so it's skipped (flat in bios root, not in registry)
+        # Pre-create one file so it's skipped (flat in bios root — no declared placement)
         bios_dir = tmp_path / "retrodeck" / "bios"
         bios_dir.mkdir(parents=True)
         (bios_dir / "existing.bin").write_bytes(b"\x00" * 50)
@@ -1490,13 +1543,13 @@ class TestCheckPlatformBiosRequired:
         assert result["required_downloaded"] == 0
         assert result["server_count"] == 3
         # No required file downloaded → bios_level 'missing' (single source of
-        # truth: domain.bios.compute_bios_level, threaded off this payload, #461).
+        # truth: domain.bios_status.compute_bios_level, threaded off this payload, #461).
         assert result["bios_level"] == "missing"
 
     @pytest.mark.asyncio
     async def test_all_required_downloaded(self, fw, tmp_path):
         """When all required files are downloaded, counts reflect this."""
-        # Create downloaded required files (flat in bios root, no firmware_path in registry)
+        # Create downloaded required files (flat in bios root — nothing declares a placement)
         bios_dir = tmp_path / "retrodeck" / "bios"
         bios_dir.mkdir(parents=True)
         (bios_dir / "required1.bin").write_bytes(b"\x00" * 100)
@@ -1589,7 +1642,7 @@ class TestCheckPlatformBiosRequired:
 
     @pytest.mark.asyncio
     async def test_per_file_required_and_description(self, fw, tmp_path):
-        """Individual files include required and description from registry."""
+        """Individual files carry the declaring core's required flag and description."""
         firmware_list = [
             {"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin", "file_size_bytes": 100, "md5_hash": ""},
         ]
@@ -1605,7 +1658,15 @@ class TestCheckPlatformBiosRequired:
 
     @pytest.mark.asyncio
     async def test_files_no_emulator_asks_for_are_answered_not_unknown(self, fw, tmp_path):
-        """Every emulator read and two files unclaimed → they are answered for."""
+        """Every emulator read and two files unclaimed → they are answered for.
+
+        The ``fw`` fixture's ES-DE offers exactly the libretro core ``_declare``
+        attributes its wants to, so the scope is real and complete — which is
+        what makes ``not_needed`` the honest answer here. On an empty scope the
+        same listing must read ``unknown``
+        (:meth:`test_a_platform_with_no_libretro_core_answers_for_nothing`), and
+        this assertion would hold vacuously.
+        """
         firmware_list = [
             {
                 "id": 1,
@@ -1682,6 +1743,37 @@ class TestCheckPlatformBiosRequired:
         assert wanted["mystery.bin"] == "unknown"
         assert result["unknown_count"] == 1
 
+    @pytest.mark.asyncio
+    async def test_a_platform_with_no_libretro_core_answers_for_nothing(self, tmp_path):
+        """A standalone-only system reads grey, never a green "nothing needs these".
+
+        ES-DE is readable and offers this system one emulator — a standalone
+        one, so the libretro scope is empty. 35 of ES-DE's 172 systems are in
+        that position, ``ps3`` (RPCS3) among them, and it is a mapped RomM
+        platform: answering the empty scope as a complete reading classified
+        every server file ``not_needed``, put ``required_count`` at 0 and
+        reported "All ready" over firmware RPCS3 will not boot without.
+        """
+        from tests.fakes.fake_core_info_provider import standalone_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {"id": 1, "file_name": "PS3UPDAT.PUP", "file_path": "bios/ps3/PS3UPDAT.PUP", "file_size_bytes": 1},
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            core_info=FakeCoreInfoProvider(options=[standalone_option("%EMULATOR_RPCS3% %ROM%", "RPCS3")]),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("ps3")
+
+        assert [f["wanted"] for f in result["files"]] == ["unknown"]
+        assert result["known_count"] == 0
+        assert result["unknown_count"] == 1
+        assert result["bios_level"] == "unknown"
+
 
 class TestCheckPlatformBiosSlugNormalization:
     """check_platform_bios resolves slug→system for the active-core INPUT, keeps raw slug for BIOS.
@@ -1727,7 +1819,7 @@ class TestCheckPlatformBiosSlugNormalization:
 
         result = await fw.check_platform_bios(slug)
 
-        # RAW slug matched the firmware file_path + registry, so a file is found.
+        # RAW slug matched the firmware file_path, so a file is found.
         assert result["needs_bios"] is True
         assert result["server_count"] == 1
         # Both core read seams received the NORMALIZED system.
@@ -1751,8 +1843,8 @@ class TestCheckPlatformBiosNoCoreFields:
         core_info = FakeCoreInfoProvider(
             active_core=("genesisplusgx_libretro", "Genesis Plus GX"),
             available_cores=[
-                {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro"},
-                {"label": "PicoDrive", "so": "picodrive_libretro"},
+                {"label": "Genesis Plus GX", "core_so": "genesisplusgx_libretro"},
+                {"label": "PicoDrive", "core_so": "picodrive_libretro"},
             ],
         )
         fw = _make_firmware_service(core_info=core_info)
@@ -1776,8 +1868,8 @@ class TestCheckPlatformBiosNoCoreFields:
         core_info = FakeCoreInfoProvider(
             active_core=("genesisplusgx_libretro", "Genesis Plus GX"),
             available_cores=[
-                {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro"},
-                {"label": "PicoDrive", "so": "picodrive_libretro"},
+                {"label": "Genesis Plus GX", "core_so": "genesisplusgx_libretro"},
+                {"label": "PicoDrive", "core_so": "picodrive_libretro"},
             ],
         )
         fw = _make_firmware_service(romm_api=plugin._romm_api, core_info=core_info)
@@ -2265,7 +2357,7 @@ class TestCheckPlatformBiosPreResolvedCore:
     async def test_none_falls_back_to_system_default(self, fw, tmp_path):
         """``active_core_so=None`` resolves the system default via ``get_active_core``.
 
-        Same registry, no per-game core: the platform-level path reads the system
+        Same declarations, no per-game core: the platform-level path reads the system
         default (mGBA → optional) so ``required_count`` is 0 — the opposite of the
         override case, locking in the result-flip.
         """

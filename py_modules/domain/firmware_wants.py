@@ -129,13 +129,24 @@ class FirmwareCatalogue:
         return {placement.file_name: placement for placement in self.placements}
 
     def reading_complete_for(self, core_sos: Collection[str] | None) -> bool:
-        """Was every emulator in *core_sos* asked what it wants?
+        """May an absence be read as "nothing wants it" for the scope *core_sos*?
 
         ``core_sos`` is the scope the caller is answering for — the libretro
-        cores its platform offers. ``None`` means the caller could not establish
-        its own scope, which is itself a reason to rule nothing out.
+        cores its platform offers — and the question is whether every one of
+        them was asked. ``None`` means the caller could not establish its own
+        scope, which is itself a reason to rule nothing out.
+
+        **An empty scope is refused too**, though every emulator in it was
+        vacuously asked. Read as complete it would license the strongest claim
+        this vocabulary can make — "no emulator here wants any of these files" —
+        off asking nobody, which is the very collapse the four values exist to
+        prevent. A caller reaching this with no core to name has not established
+        a reading, whether it says so with ``None`` or with an empty list, so
+        both answer the same. That makes the refusal belt-and-braces rather than
+        the only guard: ``FirmwareService._core_scope`` already returns ``None``
+        for a platform ES-DE offers no libretro core for.
         """
-        if not self.resolved or core_sos is None:
+        if not self.resolved or not core_sos:
             return False
         return not self.unread_cores.intersection(core_sos)
 

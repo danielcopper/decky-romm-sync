@@ -10,7 +10,7 @@
  * Save Sync and BIOS items only appear when relevant.
  */
 
-import { FC, Fragment, type ReactElement, useEffect, useState } from "react";
+import { useState, useEffect, FC, Fragment, type ReactElement } from "react";
 import { showToast } from "../utils/toast";
 import {
   ConfirmModal,
@@ -23,7 +23,7 @@ import {
   showModal,
 } from "@decky/ui";
 import { basicAppDetailsSectionStylerClasses } from "../utils/deckyUiInternals";
-import { FaCog, FaExclamationTriangle, FaGamepad, FaMicrochip } from "react-icons/fa";
+import { FaGamepad, FaCog, FaMicrochip, FaExclamationTriangle } from "react-icons/fa";
 import { CustomPlayButton } from "./CustomPlayButton";
 import { DiscSelector } from "./DiscSelector";
 import { VersionPicker } from "./VersionPicker";
@@ -35,29 +35,29 @@ import { saveSyncToastBody } from "../utils/saveSyncToast";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getEventTarget } from "../utils/events";
 import {
-  clearGameCore,
-  debugLog,
-  deleteLocalSaves,
-  downloadAllFirmware,
-  getRomMetadata,
-  getSgdbResolution,
+  testConnection,
   probeReachability,
-  reconcilePlaytime,
+  getSgdbResolution,
+  getRomMetadata,
   refreshCoverArtwork,
   removeRom,
-  setGameCore,
+  downloadAllFirmware,
   syncRomSaves,
-  testConnection,
+  deleteLocalSaves,
+  setGameCore,
+  clearGameCore,
+  reconcilePlaytime,
+  debugLog,
 } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import {
   capturePruneLeaseAdmission,
-  isPruneLeaseCancellation,
   isPruneLeaseCancelled,
+  isPruneLeaseCancellation,
   mountPruneLeaseOwner,
-  type PruneLeaseAdmission,
   releasePruneLeasesByOwner,
   withPruneLease,
+  type PruneLeaseAdmission,
 } from "../utils/pruneLease";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
@@ -165,10 +165,10 @@ interface PlaytimeState {
 
 import {
   onRommConnectionChange,
-  type RommConnectionState,
   setRommConnectionState,
   setVersionError,
   useRommConnectionState,
+  type RommConnectionState,
 } from "../utils/connectionState";
 import { registerConnectionHeartbeat } from "../utils/connectionHeartbeat";
 import { useVersionError } from "./VersionErrorCard";
@@ -274,9 +274,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       const offline = await probeReachability()
         .then((r) => r.online === false)
         .catch((e) => {
-          detach(
-            debugLog(`RomMPlaySection: fast reachability probe failed (no signal — deferring to testConnection): ${e}`),
-          );
+          detach(debugLog(`RomMPlaySection: fast reachability probe failed (no signal — deferring to testConnection): ${e}`));
           return false;
         });
       // The fast probe is an EARLY hint, not the authority. Bail if testConnection
@@ -609,9 +607,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         if (c > 0) {
           showToast(`${c} conflict(s) need resolution`);
         }
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
         // Refresh save sync status — last_sync_check_at was just set by the backend
         noteSaveSyncDisplay(appId, romId, { status: "synced", label: "Just now", last_sync_check_at: null });
       } else {
@@ -740,34 +736,28 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     successBody: string,
     admission: PruneLeaseAdmission,
   ) => {
-    await withPruneLease(
-      result.prune_lease_token,
-      "Core selection",
-      async (signal) => {
-        if (!result.success) {
-          showToast(result.message || "Failed to set core");
+    await withPruneLease(result.prune_lease_token, "Core selection", async (signal) => {
+      if (!result.success) {
+        showToast(result.message || "Failed to set core");
+        return;
+      }
+      // Installed + bound: confirm the re-baked launch_options landed before
+      // claiming success. app_id can be null/undefined for an unbound ROM.
+      if (result.launch_options !== undefined && result.app_id != null) {
+        if (isPruneLeaseCancelled(signal)) return;
+        const confirmed = await setLaunchOptionsConfirmed(result.app_id, result.launch_options);
+        if (isPruneLeaseCancelled(signal)) return;
+        if (!confirmed) {
+          // Never toast success on an unconfirmed bake. Keep the DB row — a Steam
+          // restart (or the next migration/re-sync) re-bakes from the override.
+          showToast("Core saved — restart Steam to apply");
           return;
         }
-        // Installed + bound: confirm the re-baked launch_options landed before
-        // claiming success. app_id can be null/undefined for an unbound ROM.
-        if (result.launch_options !== undefined && result.app_id != null) {
-          if (isPruneLeaseCancelled(signal)) return;
-          const confirmed = await setLaunchOptionsConfirmed(result.app_id, result.launch_options);
-          if (isPruneLeaseCancelled(signal)) return;
-          if (!confirmed) {
-            // Never toast success on an unconfirmed bake. Keep the DB row — a Steam
-            // restart (or the next migration/re-sync) re-bakes from the override.
-            showToast("Core saved — restart Steam to apply");
-            return;
-          }
-        }
-        // Confirmed (or uninstalled/unbound: nothing to confirm) → success.
-        showToast(successBody);
-        await refreshCoreDisplay(platformSlug);
-      },
-      `game-detail:${appId}`,
-      admission,
-    );
+      }
+      // Confirmed (or uninstalled/unbound: nothing to confirm) → success.
+      showToast(successBody);
+      await refreshCoreDisplay(platformSlug);
+    }, `game-detail:${appId}`, admission);
   };
 
   const handleChangeGameCore = async (coreLabel: string) => {
@@ -833,6 +823,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       getEventTarget(e),
     );
   };
+
 
   const showRomMMenu = (e: Event) => {
     showContextMenu(
@@ -953,9 +944,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // Achievements badge (only when RA data available)
   if (detail.raId) {
     const hasEarned = detail.achievementEarned > 0;
-    const countLabel = detail.achievementTotal > 0
-      ? `${detail.achievementEarned}/${detail.achievementTotal}`
-      : `${detail.achievementEarned}`;
+    const countLabel =
+      detail.achievementTotal > 0 ? `${detail.achievementEarned}/${detail.achievementTotal}` : `${detail.achievementEarned}`;
 
     // Generate sparkle dots at random fixed positions (only when earned > 0)
     // Positions are deterministic per-index so they don't shift on re-render
@@ -970,17 +960,17 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     const sparkleDelays = [0, 0.9, 0.3, 1.6, 1.1];
     const sparkleDots = hasEarned
       ? sparklePositions.map((pos, i) => {
-        // Hoisted and annotated, not inlined into `style={{...}}`: an inline
-        // literal is excess-property checked against React's own
-        // CSSProperties, which rejects the `--*` keys outright.
-        const dotStyle: CSSPropertiesWithVars = {
-          "--romm-sparkle-top": pos.top,
-          "--romm-sparkle-left": pos.left,
-          "--romm-sparkle-delay": `${sparkleDelays[i]}s`,
-          "--romm-sparkle-dur": `${sparkleDurs[i]}s`,
-        };
-        return <span key={`sparkle-${pos.top}-${pos.left}`} className="romm-sparkle-dot" style={dotStyle} />;
-      })
+          // Hoisted and annotated, not inlined into `style={{...}}`: an inline
+          // literal is excess-property checked against React's own
+          // CSSProperties, which rejects the `--*` keys outright.
+          const dotStyle: CSSPropertiesWithVars = {
+            "--romm-sparkle-top": pos.top,
+            "--romm-sparkle-left": pos.left,
+            "--romm-sparkle-delay": `${sparkleDelays[i]}s`,
+            "--romm-sparkle-dur": `${sparkleDurs[i]}s`,
+          };
+          return <span key={`sparkle-${pos.top}-${pos.left}`} className="romm-sparkle-dot" style={dotStyle} />;
+        })
       : [];
 
     infoItems.push(
@@ -1087,19 +1077,17 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           <FaGamepad size={18} color="#553e98" />
         </DialogButton>
         {/* Core selection button (only when multiple emulators to choose between) */}
-        {detail.emulators.length > 1
-          ? (
-            <DialogButton
-              key="core-btn"
-              className="romm-gear-btn"
-              onClick={showCoreMenu}
-              onFocus={scrollToTop}
-              title="Emulator Core"
-            >
-              <FaMicrochip size={18} color={detail.activeCoreIsDefault ? "#8f98a0" : "#d4a72c"} />
-            </DialogButton>
-          )
-          : null}
+        {detail.emulators.length > 1 ? (
+          <DialogButton
+            key="core-btn"
+            className="romm-gear-btn"
+            onClick={showCoreMenu}
+            onFocus={scrollToTop}
+            title="Emulator Core"
+          >
+            <FaMicrochip size={18} color={detail.activeCoreIsDefault ? "#8f98a0" : "#d4a72c"} />
+          </DialogButton>
+        ) : null}
         {/* Steam properties button */}
         <DialogButton className="romm-gear-btn" onClick={showSteamMenu} onFocus={scrollToTop} title="Steam Properties">
           <FaCog size={18} color="#8f98a0" />
@@ -1123,15 +1111,13 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // no DOM node, so the row stays a direct child of the injected panel either way.
   return (
     <Fragment>
-      {detail.savefilesInContentDir && detail.saveSyncEnabled
-        ? (
-          <WarningCard
-            key="savefiles-content-dir-warning"
-            title="Save sync off"
-            message="RetroArch's 'Write Saves to Content Directory' is enabled, so saves go next to the ROM and can't be synced. Turn it off in RetroArch → Settings → Saving to re-enable save sync."
-          />
-        )
-        : null}
+      {detail.savefilesInContentDir && detail.saveSyncEnabled ? (
+        <WarningCard
+          key="savefiles-content-dir-warning"
+          title="Save sync off"
+          message="RetroArch's 'Write Saves to Content Directory' is enabled, so saves go next to the ROM and can't be synced. Turn it off in RetroArch → Settings → Saving to re-enable save sync."
+        />
+      ) : null}
       {playSectionRow}
     </Fragment>
   );

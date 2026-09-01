@@ -10,36 +10,36 @@
 // pickBiosColor, ...) are pure. We pick a unique appId per test to keep
 // any module-scope mock state isolated.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render } from "@testing-library/react";
-import { type ComponentProps, createElement, useSyncExternalStore } from "react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { render, act } from "@testing-library/react";
+import { createElement, useSyncExternalStore, type ComponentProps } from "react";
 import { RomMGameInfoPanel } from "./RomMGameInfoPanel";
 import * as backend from "../api/backend";
 import type { CachedGameDetail } from "../api/backend";
 import * as cachedStore from "../utils/cachedGameDetailStore";
-import { _resetSharedReadsForTests, getBiosStatusShared } from "../api/sharedReads";
+import { getBiosStatusShared, _resetSharedReadsForTests } from "../api/sharedReads";
 import * as slotState from "../utils/slotState";
 import {
-  domListenerCount,
   installDomEventListenerSpy,
   uninstallDomEventListenerSpy,
+  domListenerCount,
 } from "../test-utils/dom-event-listener-spy";
-import { deckyEventListenerCount, emitDeckyEvent } from "../test-utils/decky-api-mock";
+import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
 import { useVersionError } from "./VersionErrorCard";
 import {
-  getRommConnectionState,
-  getServerRetryProgress,
-  reportServerReachable,
   setRommConnectionState,
+  reportServerReachable,
+  getRommConnectionState,
   setServerRetryProgress,
+  getServerRetryProgress,
 } from "../utils/connectionState";
 import type {
-  CoreInfo,
-  DownloadCompleteEvent,
-  InstalledRom,
   MigrationStatus,
-  RomMetadata,
   SaveSortMigrationStatus,
+  RomMetadata,
+  DownloadCompleteEvent,
+  CoreInfo,
+  InstalledRom,
   SaveStatus,
 } from "../types";
 

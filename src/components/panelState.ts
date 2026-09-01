@@ -9,25 +9,25 @@
 
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import {
-  debugLog,
-  getArtworkBase64,
   getCachedGameDetail,
   getInstalledRom,
+  getArtworkBase64,
   getSaveSlots,
   isSaveTrackingConfigured,
+  debugLog,
 } from "../api/backend";
 import type { BiosAnswer } from "../api/backend";
 import { getBiosStatusShared, getPlatformCoreInfoShared, getRomMetadataShared } from "../api/sharedReads";
 import type {
+  RomMetadata,
+  InstalledRom,
   BiosLevel,
   BiosStatus,
   CoreInfo,
-  InstalledRom,
-  LastKnownSlots,
-  RomMetadata,
-  SaveSlotSummary,
   SaveStatus,
   SyncConflict,
+  SaveSlotSummary,
+  LastKnownSlots,
 } from "../types";
 import { applyRefreshSlotResult } from "../utils/slotState";
 import { detach } from "../utils/detach";

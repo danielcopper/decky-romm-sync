@@ -15,8 +15,9 @@ export type FirmwareWanted = "needed" | "optional" | "not_needed" | "unknown";
 
 interface FirmwareFile {
   /** `null` for a file an installed emulator asks for that the RomM library does
-   *  not hold — there is nothing to download, and that absence is what the page
-   *  reads to withhold the button. */
+   *  not hold — there is no server record to name. Nothing reads it: what the
+   *  page filters the download buttons and its progress totals on is
+   *  `on_server`. */
   id: number | null;
   file_name: string;
   size: number;

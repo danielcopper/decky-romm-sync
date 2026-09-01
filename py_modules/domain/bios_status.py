@@ -280,13 +280,22 @@ def compute_bios_label(status: BiosStatus) -> str:
 
 
 def count_wanted(files: tuple[BiosFileEntry, ...]) -> tuple[int, int]:
-    """``(known, unknown)`` — files an emulator asks for, and files nothing could answer.
+    """``(known, unknown)`` over the server's files — asked for, and unanswerable.
 
     A ``not_needed`` file is in neither: the machine answered for it, and no
     emulator asks for it. Its absence from both counts is what keeps
     ``compute_bios_level`` from reading "nothing here is needed" as "nothing
     could be established".
+
+    **Scoped to ``on_server`` rows**, because ``_nothing_established`` weighs
+    ``known_count`` against ``server_count``, which is the server's rows alone.
+    A row the library does not hold exists only because an emulator declared the
+    file, so it always classifies ``needed``/``optional`` and would always be
+    counted as known: one such row would cancel the ``unknown`` verdict for a
+    platform whose every server file went unanswered, turning the headline green
+    while each row still said nothing could answer for it.
     """
-    known = sum(1 for f in files if f.wanted in (WANTED_NEEDED, WANTED_OPTIONAL))
-    unknown = sum(1 for f in files if f.wanted == WANTED_UNKNOWN)
+    on_server = [f for f in files if f.on_server]
+    known = sum(1 for f in on_server if f.wanted in (WANTED_NEEDED, WANTED_OPTIONAL))
+    unknown = sum(1 for f in on_server if f.wanted == WANTED_UNKNOWN)
     return known, unknown

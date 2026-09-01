@@ -91,12 +91,22 @@ class TestReadingCompleteFor:
         assert catalogue.reading_complete_for(None) is False
 
     def test_an_unresolved_reading_is_never_complete(self):
+        """A scope that would otherwise be complete, so the ``resolved`` gate is what answers."""
         catalogue = _catalogue(resolved=False)
-        assert catalogue.reading_complete_for([]) is False
+        assert catalogue.reading_complete_for(["mgba_libretro"]) is False
 
-    def test_an_empty_scope_on_a_resolved_reading_is_complete(self):
+    def test_an_empty_scope_is_never_complete(self):
+        """Vacuously every core was asked — and that is exactly the trap.
+
+        A platform ES-DE offers no libretro core for (35 of its 172 systems,
+        ``ps3`` among them) yields an empty scope. Answering ``True`` would let
+        every server file classify ``not_needed`` and the platform read a green
+        "All ready" off asking nobody, which is the collapse the four-valued
+        vocabulary exists to prevent. Asking no one establishes nothing, so an
+        empty scope answers like ``None``.
+        """
         catalogue = _catalogue(unread=frozenset({"fbalpha_libretro"}))
-        assert catalogue.reading_complete_for([]) is True
+        assert catalogue.reading_complete_for([]) is False
 
 
 class TestByFileName:

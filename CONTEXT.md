@@ -259,10 +259,12 @@ Three distinct notions in core selection, kept separate because they have differ
 
 ### Wanted (firmware): needed / optional / not needed / unknown
 
-What the machine says about one firmware file the RomM server holds. The first two are the resolver's per-file answer —
+What the machine says about one firmware file on a platform's list. The first two are the resolver's per-file answer —
 an installed emulator will not run without it (**needed**), or can use it and will run without it (**optional**). The
-last two are not properties of the file at all but of the **reading**: every emulator the platform offers stated what it
-wants and none named this file (**not needed**), versus one of them could not be asked (**unknown**).
+last two are not properties of the file at all but of the **reading**: every libretro core the platform offers stated
+what it wants and none named this file (**not needed**), versus the reading was not complete (**unknown**) — one of
+those cores could not be asked, or the platform offers no libretro core to ask at all, standalone emulators being
+outside the scope.
 
 Keeping the last two apart is the whole point of the vocabulary — "nothing wants this" is a finished answer and "nothing
 could be established" is the absence of one, and a single boolean called both _not required_. **Wanted** is a property

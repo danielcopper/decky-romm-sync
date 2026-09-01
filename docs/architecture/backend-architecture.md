@@ -1683,26 +1683,40 @@ again.
 false choice. A file is `needed` / `optional` when any installed libretro core declares it — one answer, so a file
 cannot read differently on two surfaces. Whether an _absence_ may be read as "nothing wants it" is a property of the
 reading, and is scoped to the libretro cores ES-DE offers for the platform being rendered: every one of them read →
-`not_needed`; one unread, or `es_systems.xml` unreadable (the scope itself unestablished), or the resolver unable to
-answer → `unknown`. Collapsing `not_needed` and `unknown` is the defect the swap removes — a file nobody wants and a
-file nothing could be asked about are different answers, and the old boolean called both "not required".
+`not_needed`; one unread, or `es_systems.xml` unreadable, or the platform offering no libretro core at all (both of
+those leave the scope itself unestablished), or the resolver unable to answer → `unknown`. Collapsing `not_needed` and
+`unknown` is the defect the swap removes — a file nobody wants and a file nothing could be asked about are different
+answers, and the old boolean called both "not required".
 
 Scoping completeness machine-wide instead would retire the fourth value: a stock RetroDECK ships five bundled cores
-without a `.info`, so no absence could ever be ruled out. Per platform, exactly one of 172 ES-DE systems is affected
-(`arcadia`, which offers `amiarcadia_libretro`) — rare and reachable, which is what `unknown` is for.
+without a `.info`, so no absence could ever be ruled out. Per platform, exactly one of 172 ES-DE systems is affected by
+an unread core (`arcadia`, which offers `amiarcadia_libretro`) — rare and reachable, which is what `unknown` is for.
 
-**Standalone emulators are outside the scope by deferral, not by capability.** ADR-0020 defers standalone BIOS accuracy
-(inheriting ADR-0012's) and `get_active_core` is libretro-only for that reason. The resolver answers for standalone
-emulators through its per-system route; it is only `firmware_inventory()`, the one whole-machine call this service
-makes, that enumerates libretro cores. When the deferral is lifted the capability is already there.
+**An empty scope is not a complete reading, and both ends say so.** 35 of those 172 systems carry no libretro command at
+all; `ps3` is one, is a mapped RomM platform (`playstation-3` → `ps3`), and offers only RPCS3. `_core_scope` therefore
+answers `None` for "ES-DE unreadable" and for "no libretro core offered" alike, and
+`FirmwareCatalogue.reading_complete_for` refuses an empty collection as well as `None`. Read as complete, an empty scope
+is a finished reading of nobody: every server file classifies `not_needed`, `required_count` falls to 0, and the
+platform reports a green "All ready" over firmware RPCS3 will not boot without. Grey `unknown` is what the deferral
+below actually licenses.
+
+**Standalone emulators are outside the scope by deferral.** ADR-0020 defers standalone BIOS accuracy (inheriting
+ADR-0012's) and `get_active_core` is libretro-only for that reason. Widening `_core_scope` is not by itself the lifting
+of it: the resolver does answer for standalone emulators through its per-system route — it is only
+`firmware_inventory()`, the one whole-machine call this service makes, that enumerates libretro cores — but
+`_vendor/atlas/data/standalone_firmware.json` carries cards for five emulators (CEMU, DUCKSTATION, MELONDS, PCSX2, XEMU)
+against the 23 distinct standalone tokens RetroDECK offers, and the other 18 answer `declaration="unsupported"`, which
+upstream documents as meaning unknown. So lifting the deferral waits on upstream coverage, not on a wider scope here.
 
 **A platform's file list is the union of two sources.** The RomM library holds files nothing wants; an emulator can want
-a file the library has never had. That third kind is shown like any other, marked `on_server: False` with no id to
-download by — it counts towards readiness (it is genuinely required and genuinely absent) and never towards a download
-button. It stays out of `server_count` / `local_count` too: that ratio is a progress bar over a set the user can
-complete, and a stock RetroDECK's SNES emulators declare 26 optional files, so folding them in would report
-`0 / 26
-files, 26 missing` for a system no core requires anything from. Readiness therefore needs no server at all:
+a file the library has never had. That third kind is shown like any other and marked `on_server: False` — the one field
+every consumer reads, the row's `id: None` being an honest absence nothing consults. It counts towards readiness (it is
+genuinely required and genuinely absent) and never towards a download button. It stays out of `server_count` /
+`local_count` too: that ratio is a progress bar over a set the user can complete, and a stock RetroDECK's SNES emulators
+declare 26 optional files, so folding them in would report `0 / 26 files, 26 missing` for a system no core requires
+anything from. `known_count` / `unknown_count` are scoped to the server's rows for the same reason — they are weighed
+against `server_count`, and a beyond-server row always classifies `needed`/`optional`, so counting one would cancel the
+`unknown` verdict for a platform whose every server file went unanswered. Readiness therefore needs no server at all:
 ES-DE names the active emulator, the resolver says what it wants, the filesystem says what is there. An unreachable RomM
 costs the files only it knows about and the ability to fetch anything — not the answer.
 

@@ -1,10 +1,14 @@
-# Vendored third-party packages
+# Vendored copies
 
-Decky Loader has no plugin-level package manager, so third-party runtime dependencies are vendored here and imported as
-`from _vendor import <package>`. Only adapters import from `_vendor.*`. The release zip redistributes this directory, so
-each package keeps its upstream licence — inside the package directory, or beside it as `<package>.LICENSE` where the
-copy is pinned against upstream's own file manifest — and the provenance below makes updating a vendored dep a
-deliberate diff rather than "diff and pray". See the `_vendor/` rules in [`CLAUDE.md`](../../CLAUDE.md).
+What this directory holds is **verbatim upstream code we do not own** — pinned by the provenance below, excluded from
+our own linters and gates, and redistributed in the release zip, so each copy keeps its upstream licence (inside the
+package directory, or beside it as `<package>.LICENSE` where the copy is pinned against upstream's own file manifest).
+That, and not any one import mechanism, is what puts something here; keeping the copies under one root is what lets a
+single set of exclusions cover them all. See the `_vendor/` rules in [`CLAUDE.md`](../../CLAUDE.md).
+
+Everything here today is a third-party runtime dependency, vendored because Decky Loader has no plugin-level package
+manager and imported as `from _vendor import <package>` — and only adapters import `_vendor.*`. The provenance entries
+below make updating any of them a deliberate diff rather than "diff and pray".
 
 ## atlas
 

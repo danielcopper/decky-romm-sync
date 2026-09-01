@@ -1,21 +1,21 @@
-import { FC, useEffect, useState } from "react";
+import { useState, useEffect, FC } from "react";
 import {
-  ButtonItem,
-  ConfirmModal,
-  Field,
-  Focusable,
   PanelSection,
   PanelSectionRow,
+  ButtonItem,
+  Field,
+  Focusable,
+  ConfirmModal,
   showContextMenu,
   showModal,
 } from "@decky/ui";
 import {
-  debugLog,
-  deletePlatformBios,
+  getFirmwareStatus,
   downloadAllFirmware,
   downloadRequiredFirmware,
-  getFirmwareStatus,
+  deletePlatformBios,
   setSystemCore,
+  debugLog,
 } from "../api/backend";
 import type { FirmwarePlatformExt, FirmwareWanted } from "../types";
 import { scrollToTop } from "../utils/scrollHelpers";
