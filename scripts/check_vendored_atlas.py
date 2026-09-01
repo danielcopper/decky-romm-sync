@@ -5,7 +5,7 @@
 tagged `emu-atlas <https://github.com/danielcopper/emu-atlas>`_ wheel — there is
 no source for it in this repo, so the only thing separating "the pinned release"
 from "whatever happens to be on disk" is a checksum. The copy is also large
-enough (52 files) that reviewing it as a diff reads as noise, which is exactly
+enough (53 files) that reviewing it as a diff reads as noise, which is exactly
 the condition under which a hand-edit or a half-finished re-copy survives review.
 
 This gate asserts three things against ``_vendor/atlas.SHA256SUMS`` — upstream's

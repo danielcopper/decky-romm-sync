@@ -25,7 +25,6 @@ import json
 import os
 import shlex
 import tomllib
-import xml.etree.ElementTree as _ET
 from glob import escape as _glob_escape
 from typing import (
     Any,
@@ -41,6 +40,7 @@ from typing import (
 
 from dataclasses import dataclass, replace as _dc_replace
 
+from . import _xml as _ET
 from .content_path import (
     content_basename,
     content_file_name,
@@ -9039,7 +9039,7 @@ def _vita3k_listed_user(machine: Machine, user_root: str, user: str) -> _Vita3kL
     skipped — and that is mirrored here. A user.xml atlas could not read is
     neither: the emulator may load it, so the fate says so and the caller
     refuses to decide. The file is local trusted configuration, parsed with
-    stdlib etree the way ``atlas/esde.py`` documents.
+    stdlib expat the way ``atlas/esde.py`` documents.
     """
     result = machine.read_text(os.path.join(user_root, user, "user.xml"))
     if result.status == READ_MISSING:
