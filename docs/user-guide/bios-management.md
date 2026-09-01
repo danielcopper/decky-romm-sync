@@ -212,8 +212,11 @@ you at a glance which core the plugin is filtering for.
 3. The plugin reads RetroDECK's ES-DE configuration (`es_systems.xml`) from the flatpak installation to find the default
    emulator for each platform — for BIOS filtering it uses the platform's first RetroArch core. This live file is the
    only source; there is no bundled fallback snapshot.
-4. If a platform's default is a **standalone emulator** (no RetroArch core) or the live configuration can't be read, all
-   BIOS files for the platform are shown — the safe default
+4. If a platform offers **only standalone emulators** (no RetroArch core at all), or the live configuration can't be
+   read, the plugin has nothing to filter with — so it does not filter, and it does not guess either. Every BIOS file
+   the platform has is listed, each marked _unknown_, and the platform's summary reads **BIOS requirement unknown** with
+   a grey dot. That is the honest answer for a platform like PS3, whose emulators the plugin cannot yet ask: saying
+   nothing is needed would report it ready over firmware the emulator will not boot without.
 
 Whatever this chain resolves to is the **same core the game launches on** — the plugin bakes the resolved core into the
 Steam shortcut, so the core shown for BIOS, saves, and the core badge always matches the core that runs.

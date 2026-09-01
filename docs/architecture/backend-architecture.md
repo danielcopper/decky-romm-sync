@@ -1705,8 +1705,11 @@ ADR-0012's) and `get_active_core` is libretro-only for that reason. Widening `_c
 of it: the resolver does answer for standalone emulators through its per-system route — it is only
 `firmware_inventory()`, the one whole-machine call this service makes, that enumerates libretro cores — but
 `_vendor/atlas/data/standalone_firmware.json` carries cards for five emulators (CEMU, DUCKSTATION, MELONDS, PCSX2, XEMU)
-against the 23 distinct standalone tokens RetroDECK offers, and the other 18 answer `declaration="unsupported"`, which
-upstream documents as meaning unknown. So lifting the deferral waits on upstream coverage, not on a wider scope here.
+— those five answer `declaration="packaged"`, and every standalone emulator without a card answers
+`declaration="unsupported"`, which upstream documents as meaning unknown rather than "needs nothing". Measured against
+the RetroDECK release here, `es_systems.xml` offers 20 distinct standalone emulators, leaving 15 uncovered; the count
+moves with each RetroDECK release, the shape does not. So lifting the deferral waits on upstream coverage, not on a
+wider scope here.
 
 **A platform's file list is the union of two sources.** The RomM library holds files nothing wants; an emulator can want
 a file the library has never had. That third kind is shown like any other and marked `on_server: False` — the one field

@@ -144,11 +144,13 @@ class FirmwareService:
         reason. Widening the scope is not the whole of lifting it — the resolver
         does answer per-system for standalone emulators, but
         ``_vendor/atlas/data/standalone_firmware.json`` holds cards for five of
-        them (CEMU, DUCKSTATION, MELONDS, PCSX2, XEMU) against the 23 distinct
-        standalone tokens RetroDECK offers, and the other 18 answer
+        them (CEMU, DUCKSTATION, MELONDS, PCSX2, XEMU), and those five answer
+        ``declaration="packaged"``. Every other standalone emulator answers
         ``declaration="unsupported"``, which upstream documents as meaning
-        unknown. So the deferral outlives this scope: upstream coverage has to
-        arrive first.
+        unknown, not "needs nothing" — measured here, 20 distinct standalone
+        emulators in ``es_systems.xml`` and so 15 of them uncovered, though that
+        count moves with each RetroDECK release. So the deferral outlives this
+        scope: upstream coverage has to arrive first.
 
         Takes the already-read options rather than the system name so a caller
         that needs the emulator list anyway reads it once.
