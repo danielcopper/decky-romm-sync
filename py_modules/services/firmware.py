@@ -9,12 +9,22 @@ stored answer would drift silently. Raw filesystem I/O is delegated to the
 the classification scope, the destination layout, and the per-core filtering
 remain this service's responsibility.
 
-The list of files is the server's and the demand for them is the machine's, so
-every classification is a join of the two. The scope of that join is what keeps
-one file from answering differently on two surfaces: the demand is read once for
-the whole machine, and only the question "may an absence be read as *nothing
-wants it*" is narrowed to the emulators ES-DE offers for the platform being
-rendered.
+A platform's file list is the **union** of what the RomM library offers and what
+the platform's emulators ask for. The two overlap but neither contains the
+other: the library holds files nothing wants, and an emulator can want a file
+the library has never had. That third kind is shown like any other and marked
+``on_server: False`` — it is real, it may be missing, and nothing here can fetch
+it, so it counts towards readiness and never towards a download button.
+
+Readiness therefore needs no server at all. Which emulator is active comes from
+ES-DE, what it wants comes from the resolver, what is on disk comes from the
+filesystem; RomM contributes the download and nothing else. What an unreachable
+server costs is the files only it knows about.
+
+The demand is read once for the whole machine, so one file cannot answer
+differently on two surfaces. Only the question "may an absence be read as
+*nothing wants it*" is narrowed, to the libretro cores ES-DE offers for the
+platform being rendered.
 """
 
 from __future__ import annotations
@@ -116,12 +126,13 @@ class FirmwareService:
         could not be read — means the scope itself is unestablished, so nothing
         may be ruled out for this platform.
 
-        Standalone entries are deliberately not in the scope. The BIOS surface
-        is a libretro answer throughout (``get_active_core`` is libretro-only
-        for exactly this reason) and standalone BIOS accuracy is deferred by
-        ADR-0020; counting a standalone entry as an unread emulator would sink
-        every platform that offers one into a permanent "unknown" while
-        answering nothing better.
+        Standalone entries are deliberately not in the scope, and the reason is
+        a recorded deferral rather than a gap: ADR-0020 defers standalone BIOS
+        accuracy (inheriting ADR-0012's), and ``get_active_core`` is libretro-only
+        for that same reason. The resolver answers for standalone emulators
+        perfectly well through its per-system route — it is only the
+        whole-machine inventory this service asks that enumerates libretro cores
+        — so when the deferral is lifted the capability is already there.
 
         Takes the already-read options rather than the system name so a caller
         that needs the emulator list anyway reads it once.
@@ -174,6 +185,50 @@ class FirmwareService:
             self._logger.warning(f"Skipping firmware with unsafe file name: {e}")
             return None
 
+    def _wanted_beyond_server(
+        self, placements: Mapping[str, FirmwarePlacement], scope: list[str] | None, in_library: set[str]
+    ) -> list[dict[str, Any]]:
+        """Items for files this platform's emulators want that the library lacks.
+
+        A placement belongs to this platform when one of the libretro cores
+        ES-DE offers for it declares the file — the same scope the completeness
+        question uses, so a platform never claims a requirement from an emulator
+        it does not offer. ``scope`` is ``None`` when ``es_systems.xml`` could
+        not be read, and then no requirement can be attributed to any platform.
+
+        ``in_library`` is every file name the RomM listing carries, across all
+        platforms — not just this one's. A core that serves several systems
+        declares the same file for each of them while RomM files it under one
+        directory, so a per-platform check would tell the user a file is not in
+        their library while it sits there under the neighbouring system. It is
+        one download either way: the destination comes from the placement, so
+        fetching it anywhere satisfies every core that asked.
+        """
+        if not scope:
+            return []
+        cores = set(scope)
+        bios_base = self._retrodeck_paths.bios_path()
+        items: list[dict[str, Any]] = []
+        for placement in sorted(placements.values(), key=lambda entry: entry.file_name):
+            if placement.file_name in in_library:
+                continue
+            if not any(want.core_so in cores for want in placement.wants):
+                continue
+            try:
+                dest = safe_join(bios_base, placement.destination)
+            except PathTraversalError as e:
+                self._logger.warning(f"Skipping firmware with unsafe placement: {e}")
+                continue
+            items.append(
+                {
+                    "file_name": placement.file_name,
+                    "downloaded": self._firmware_file_store.exists(dest),
+                    "dest": dest,
+                    "on_server": False,
+                }
+            )
+        return items
+
     def _build_firmware_status_items(
         self, firmware_iter, placements: Mapping[str, FirmwarePlacement]
     ) -> list[dict[str, Any]]:
@@ -208,9 +263,9 @@ class FirmwareService:
         The ``firmware_cache`` table is a thin record per ADR-0003 — it carries
         the already-parsed ``platform_slug`` and ``name`` but not the raw RomM
         ``file_path`` or ``md5_hash``. We synthesize a ``bios/<slug>/<name>``
-        ``file_path`` that round-trips through ``parse_firmware_slug`` so the
-        cache-only consumers (``check_platform_bios_cached``) keep working after
-        a restart; ``md5_hash`` is intentionally absent (display-only).
+        ``file_path`` that round-trips through ``parse_firmware_slug`` so a
+        restart still has a listing to answer from while the server is
+        unreachable; ``md5_hash`` is intentionally absent (display-only).
         """
         try:
             with self._uow_factory() as uow:
@@ -318,12 +373,22 @@ class FirmwareService:
 
         One derivation for the per-game paths and the System page, so a platform
         and its games can never show a different level for the same files.
-        ``required_count`` is scoped to the launching core (the badge's axis)
-        while ``known_count`` / ``unknown_count`` are the machine's answer about
-        the files themselves.
+
+        Three axes, and each counts a different set on purpose.
+        ``required_count`` is the launching core's — the badge's — and includes a
+        required file the library does not hold, because that file is a
+        prerequisite whether or not anything here can fetch it.
+        ``server_count`` / ``local_count`` are the library's, and count only what
+        it holds: "N/M files ready" is a progress bar over a set the user can
+        actually complete, and folding in files that were never uploaded would
+        read as work outstanding on a system that needs nothing — a SNES page
+        would say ``0 / 26 files, 26 missing`` for twenty-six optional files no
+        core requires. ``known_count`` / ``unknown_count`` are the machine's
+        answer about the files themselves and count every row.
         """
-        server_count = len(files)
-        local_count = sum(1 for f in files if f.downloaded)
+        on_server = [f for f in files if f.on_server]
+        server_count = len(on_server)
+        local_count = sum(1 for f in on_server if f.downloaded)
         required_count, required_downloaded = count_required(files)
         known_count, unknown_count = count_wanted(files)
 
@@ -349,50 +414,6 @@ class FirmwareService:
         """The aggregates plus the per-file rows — what the per-game surfaces read."""
         return {**self._bios_aggregates(files, platform_slug), "files": [asdict(f) for f in files]}
 
-    def check_platform_bios_cached(self, platform_slug, active_core_so=None) -> dict[str, Any] | None:
-        """Return BIOS status without touching the network — no HTTP.
-
-        The *server's* file list comes from the in-memory cache (``None`` when it
-        was never fetched); what the emulators want is read live, like everywhere
-        else, because it is a property of the machine rather than of the server
-        and there is no cache of it to be stale.
-
-        Includes ``cached_at`` so the frontend can decide staleness.
-        ``active_core_so`` is the pre-resolved core that drives core-aware BIOS
-        filtering — it is an INPUT to ``collect_firmware_status``, never served
-        back to the UI. ``None`` means "use the system default" (resolved here
-        via ``get_active_core(system)``); the per-game game-detail path passes
-        the ROM's resolved ``.so`` directly. Core info (active core, available
-        cores) reaches the frontend through the dedicated
-        ``get_platform_core_info`` path, not this BIOS payload (#923).
-        """
-        if self._firmware_cache is None:
-            return None
-
-        system = self._resolve_system(platform_slug)
-        fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        active_core_so = self._resolve_bios_filter_core(system, active_core_so)
-
-        catalogue = self._firmware_resolver()
-        placements = catalogue.by_file_name()
-        items = self._build_firmware_status_items(
-            (
-                fw
-                for fw in self._firmware_cache
-                if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
-            ),
-            placements,
-        )
-        files = collect_firmware_status(items, placements, self._reading_complete(catalogue, system), active_core_so)
-
-        if not files:
-            return {
-                "needs_bios": False,
-                "cached_at": self._firmware_cache_epoch,
-            }
-
-        return {**self._bios_payload(files, platform_slug), "cached_at": self._firmware_cache_epoch}
-
     # ── Public API ───────────────────────────────────────────
 
     def _group_server_firmware(self, firmware_list, placements: Mapping[str, FirmwarePlacement]):
@@ -414,21 +435,32 @@ class FirmwareService:
                     "md5": fw.get("md5_hash", ""),
                     "local_path": dest,
                     "downloaded": self._firmware_file_store.exists(dest),
+                    "on_server": True,
                 }
             )
         return platforms_map
 
-    def _group_synced_platforms(self, synced_slugs):
-        """Platform entries with no file list — the offline shape of the overview.
+    @staticmethod
+    def _seed_synced_platforms(platforms_map, synced_slugs) -> set[str]:
+        """Add an empty entry for every synced platform the listing did not name.
 
-        The server's firmware list is the only source of *which files exist*, so
-        with the server unreachable and nothing cached there is no list to show.
-        What survives is the platform itself, which the synced-library rows
-        already name: the System page keeps its per-platform emulator picker (the
-        one control that works offline) and states no requirement rather than one
-        it cannot source.
+        A platform whose emulators want firmware the library has never held would
+        otherwise be absent from a page that is about exactly that — and with the
+        server unreachable, every platform is in that position. Returns the slugs
+        it seeded so the caller can drop the ones that turn out to want nothing.
+
+        A slug is seeded only when none of its firmware-directory spellings is
+        already a key: RomM files a platform's firmware under its own directory
+        name (``psx`` → ``bios/ps/``), so the raw slug and the listing's key are
+        routinely different words for one platform.
         """
-        return {slug: {"platform_slug": slug, "files": []} for slug in sorted(synced_slugs)}
+        seeded: set[str] = set()
+        for slug in sorted(synced_slugs):
+            if any(fw_slug in platforms_map for fw_slug in firmware_paths.resolve_firmware_slugs(slug)):
+                continue
+            platforms_map[slug] = {"platform_slug": slug, "files": []}
+            seeded.add(slug)
+        return seeded
 
     def _read_synced_slugs(self) -> set[str]:
         """Return platform slugs with at least one ROM bound to a Steam shortcut.
@@ -444,7 +476,7 @@ class FirmwareService:
                 if rom.platform_slug and rom.shortcut_app_id is not None
             }
 
-    def _enrich_platform_map(self, platforms_map, synced_slugs, catalogue: FirmwareCatalogue, *, files_known: bool):
+    def _enrich_platform_map(self, platforms_map, synced_slugs, catalogue: FirmwareCatalogue, in_library: set[str]):
         """Add core info, wants, and game-installed flags to each platform entry.
 
         The core read seams key by the resolved RetroDECK ``system`` (ADR-0010
@@ -465,12 +497,9 @@ class FirmwareService:
         *catalogue* is read once by the caller and shared across every platform:
         it is one machine-wide question costing hundreds of milliseconds, and
         asking it per platform would multiply that by the platform count while
-        answering the same thing each time.
-
-        *files_known* is clear on the offline fallback, where the entries carry
-        no file list at all. An empty list is not "everything is here" — the
-        counts would read 0/0 and the level would come out ``ok``, which is the
-        one answer a page with no data must not give.
+        answering the same thing each time. *in_library* is likewise the whole
+        listing's file names rather than one platform's slice — see
+        :meth:`_wanted_beyond_server`.
         """
         placements = catalogue.by_file_name()
         for plat in platforms_map.values():
@@ -482,19 +511,28 @@ class FirmwareService:
             plat["active_core_label"] = self._resolve_platform_emulator_label(slug, options["options"])
             plat["emulators"] = options_to_payload(options["options"])
             plat["emulator_data_available"] = options["available"]
+            scope = self._core_scope(options)
+            plat["files"].extend(
+                _overview_row(item) for item in self._wanted_beyond_server(placements, scope, in_library)
+            )
             files = collect_firmware_status(
                 [
-                    {"file_name": f["file_name"], "downloaded": f["downloaded"], "dest": f["local_path"]}
+                    {
+                        "file_name": f["file_name"],
+                        "downloaded": f["downloaded"],
+                        "dest": f["local_path"],
+                        "on_server": f["on_server"],
+                    }
                     for f in plat["files"]
                 ],
                 placements,
-                catalogue.reading_complete_for(self._core_scope(options)),
+                catalogue.reading_complete_for(scope),
                 core_so,
             )
             plat["files"] = [{**raw, **_wanted_fields(entry)} for raw, entry in zip(plat["files"], files, strict=True)]
             plat["has_games"] = slug in synced_slugs
             plat["all_downloaded"] = all(f["downloaded"] for f in plat["files"])
-            self._set_platform_bios_aggregates(plat, slug, files, files_known=files_known)
+            self._set_platform_bios_aggregates(plat, slug, files)
 
     def _resolve_platform_emulator_label(self, platform_slug: str, options: list[Any]) -> str | None:
         """Resolve the System-page active-emulator display label for a platform.
@@ -515,7 +553,7 @@ class FirmwareService:
         default = select_default_option(options)
         return default.label if default is not None else None
 
-    def _set_platform_bios_aggregates(self, plat: dict[str, Any], slug: str, files, *, files_known: bool) -> None:
+    def _set_platform_bios_aggregates(self, plat: dict[str, Any], slug: str, files) -> None:
         """Stamp the per-platform BIOS aggregates onto a ``get_firmware_status`` entry.
 
         Adds ``server_count`` / ``local_count`` / ``required_count`` /
@@ -531,28 +569,34 @@ class FirmwareService:
         plat["local_count"] = payload["local_count"]
         plat["required_count"] = payload["required_count"]
         plat["required_downloaded"] = payload["required_downloaded"]
-        plat["bios_level"] = payload["bios_level"] if files_known else "unknown"
+        plat["bios_level"] = payload["bios_level"]
 
     async def get_firmware_status(self) -> dict[str, Any]:
-        """Return BIOS/firmware status for all platforms on the RomM server.
+        """Return BIOS/firmware status for every platform the page can speak for.
 
-        When the server is unreachable and nothing is cached, falls back to the
-        synced platforms with no file list, so core switching remains available
-        offline.
+        An unreachable server removes the files only it knows about and the
+        ability to download; what the installed emulators want is read locally,
+        so the platforms, their emulator pickers and their readiness all survive.
         """
         server_offline = False
         catalogue, synced_slugs = await self._loop.run_in_executor(None, self._read_status_inputs)
         placements = catalogue.by_file_name()
+        firmware_list: list[dict[str, Any]] = []
         try:
             firmware_list = await self._loop.run_in_executor(None, self._get_firmware_list)
             platforms_map = self._group_server_firmware(firmware_list, placements)
         except Exception as e:
-            self._logger.warning(f"Failed to fetch firmware from server: {e}")
+            self._logger.warning(f"Building the firmware overview without the server listing: {e}")
             server_offline = True
-            platforms_map = self._group_synced_platforms(synced_slugs)
+            platforms_map = {}
 
-        self._enrich_platform_map(platforms_map, synced_slugs, catalogue, files_known=not server_offline)
-        platforms = sorted(platforms_map.values(), key=lambda p: p["platform_slug"])
+        seeded = self._seed_synced_platforms(platforms_map, synced_slugs)
+        in_library = {fw.get("file_name", "") for fw in firmware_list}
+        self._enrich_platform_map(platforms_map, synced_slugs, catalogue, in_library)
+        platforms = sorted(
+            (plat for slug, plat in platforms_map.items() if slug not in seeded or plat["files"]),
+            key=lambda p: p["platform_slug"],
+        )
         return {"success": True, "server_offline": server_offline, "platforms": platforms}
 
     def _read_status_inputs(self) -> tuple[FirmwareCatalogue, set[str]]:
@@ -738,23 +782,24 @@ class FirmwareService:
         reaches the frontend through the dedicated ``get_platform_core_info``
         path, not this payload (#923).
 
-        The server's file list is the only source of WHICH files exist, so a
-        failed fetch with nothing cached leaves nothing to answer from: the
-        ``needs_bios: False`` that comes back then carries
+        An unreachable server costs the files only it knows about, not the
+        answer: what the platform's emulators want is read locally either way.
+        The one payload that still says nothing is a platform with no requirement
+        AND no complete reading — that ``needs_bios: False`` carries
         ``bios_status_unknown: True`` and no consumer may read it as "this
         platform needs none" (#1693).
         """
         system = self._resolve_system(platform_slug)
         fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
+        options = self._core_info.get_emulator_options(system)
+        scope = self._core_scope(options)
         active_core_so = self._resolve_bios_filter_core(system, active_core_so)
 
         try:
             firmware_list = await self._loop.run_in_executor(None, self._get_firmware_list)
-        except Exception:
-            return {
-                "needs_bios": False,
-                "bios_status_unknown": True,
-            }
+        except Exception as e:
+            self._logger.warning(f"Answering BIOS status without the server listing: {e}")
+            firmware_list = []
 
         catalogue = await self._loop.run_in_executor(None, self._firmware_resolver)
         placements = catalogue.by_file_name()
@@ -762,12 +807,12 @@ class FirmwareService:
             (fw for fw in firmware_list if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs),
             placements,
         )
-        files = collect_firmware_status(items, placements, self._reading_complete(catalogue, system), active_core_so)
+        items.extend(self._wanted_beyond_server(placements, scope, {fw.get("file_name", "") for fw in firmware_list}))
+        complete = catalogue.reading_complete_for(scope)
+        files = collect_firmware_status(items, placements, complete, active_core_so)
 
         if not files:
-            return {
-                "needs_bios": False,
-            }
+            return {"needs_bios": False} if complete else {"needs_bios": False, "bios_status_unknown": True}
 
         return self._bios_payload(files, platform_slug)
 
@@ -837,6 +882,23 @@ class FirmwareService:
                 "message": f"Deleted {deleted} file(s), {len(errors)} error(s)",
             }
         return {"success": True, "deleted_count": deleted, "message": f"Deleted {deleted} BIOS file(s)"}
+
+
+def _overview_row(item: dict[str, Any]) -> dict[str, Any]:
+    """The System-page row for a file the library does not hold.
+
+    ``id`` is ``None`` because there is nothing to download — that absence is
+    what the page reads to withhold the affordance, so it is not a placeholder.
+    """
+    return {
+        "id": None,
+        "file_name": item["file_name"],
+        "size": 0,
+        "md5": "",
+        "local_path": item["dest"],
+        "downloaded": item["downloaded"],
+        "on_server": False,
+    }
 
 
 def _wanted_fields(entry) -> dict[str, Any]:

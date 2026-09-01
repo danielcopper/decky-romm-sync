@@ -200,18 +200,19 @@ class RetryStrategy(Protocol):
 class BiosChecker(Protocol):
     """BIOS status checking consumed by GameDetailService and CoreService.
 
-    Both methods take a pre-resolved ``active_core_so`` rather than a ROM
-    filename: the per-game active core is resolved upstream (GameDetailService
-    runs ``ActiveCoreReader.active_core_for_rom`` where it already holds the
+    One entry point, and it is live. There is deliberately no cheap cached twin:
+    a BIOS answer may not outlive the page that asked for it, so a page that
+    wants one asks for it, and a page that has not asked yet shows that it does
+    not know.
+
+    ``active_core_so`` is pre-resolved rather than a ROM filename: the per-game
+    active core is resolved upstream (GameDetailService runs
+    ``ActiveCoreReader.active_core_for_rom`` where it already holds the
     ``rom_id``) so the BIOS filter never re-derives the core. ``None`` means "use
     the system default" — the standalone platform-level checks (the
     ``check_platform_bios`` callable, the post-system-core-write recheck) pass
     ``None``; the per-game game-detail path passes the resolved ``.so``.
     """
-
-    def check_platform_bios_cached(
-        self, platform_slug: str, active_core_so: str | None = None
-    ) -> dict[str, Any] | None: ...
 
     async def check_platform_bios(self, platform_slug: str, active_core_so: str | None = None) -> dict[str, Any]: ...
 

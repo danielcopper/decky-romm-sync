@@ -14,7 +14,10 @@
 export type FirmwareWanted = "needed" | "optional" | "not_needed" | "unknown";
 
 interface FirmwareFile {
-  id: number;
+  /** `null` for a file an installed emulator asks for that the RomM library does
+   *  not hold — there is nothing to download, and that absence is what the page
+   *  reads to withhold the button. */
+  id: number | null;
   file_name: string;
   size: number;
   md5: string;
@@ -26,6 +29,7 @@ interface FirmwareFile {
    *  axis the "BIOS needed" badge and the required counts key off, distinct
    *  from `wanted`, which is about every installed emulator. */
   required_by_active: boolean;
+  on_server: boolean;
 }
 
 interface FirmwarePlatform {
@@ -74,6 +78,10 @@ export interface CoreInfo {
  * page can render the combined core+BIOS overview for every platform from one
  * call. This is the system-wide overview path — distinct from the per-game
  * `check_platform_bios` payload, which no longer carries any core fields (#923).
+ *
+ * `files` is the union of what the RomM library offers for the platform and what
+ * the platform's emulators ask for, so a row can be present with `on_server`
+ * false — wanted, possibly missing, and not downloadable from here.
  */
 export interface FirmwarePlatformExt extends FirmwarePlatform {
   has_games?: boolean;
@@ -114,6 +122,9 @@ export interface BiosFileStatus {
   required_by_active: boolean;
   cores?: Record<string, { required: boolean }>;
   used_by_active?: boolean;
+  /** False for a file an emulator asks for that the RomM library does not hold.
+   *  It still counts as missing — it just cannot be fetched from the plugin. */
+  on_server?: boolean;
 }
 
 /**

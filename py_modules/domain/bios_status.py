@@ -44,12 +44,17 @@ class AvailableCore:
 
 @dataclass(frozen=True)
 class BiosFileEntry:
-    """Status of a single BIOS/firmware file the RomM server holds.
+    """Status of a single BIOS/firmware file on a platform's list.
 
     ``wanted`` is the machine's answer about the file (one of
     :data:`domain.firmware_wants.WANTED_VALUES`); ``required_by_active`` is the
     launching core's, and only that one decides whether the file is counted as a
     missing prerequisite.
+
+    ``on_server`` is clear for a file an installed emulator asks for that the
+    RomM library does not hold. Such a file is real, and missing, and nothing on
+    this page can fetch it — so it is shown, and it is kept out of every count
+    that offers the user an action.
     """
 
     file_name: str
@@ -60,6 +65,7 @@ class BiosFileEntry:
     required_by_active: bool
     cores: dict[str, dict[str, Any]]  # {core_so: {"required": bool}}
     used_by_active: bool
+    on_server: bool = True
 
 
 @dataclass(frozen=True)
@@ -99,6 +105,7 @@ def format_bios_status(bios: dict[str, Any], platform_slug: str, *, cached_at: f
                 required_by_active=f.get("required_by_active", False),
                 cores=f.get("cores", {}),
                 used_by_active=f.get("used_by_active", True),
+                on_server=f.get("on_server", True),
             )
             for f in raw_files
         )
@@ -139,6 +146,8 @@ def build_file_entry(
     placement: FirmwarePlacement | None,
     complete: bool,
     active_core_so: str | None,
+    *,
+    on_server: bool = True,
 ) -> BiosFileEntry:
     """Build a single file status entry from the machine's answer about it.
 
@@ -166,6 +175,7 @@ def build_file_entry(
         required_by_active=required_by_active,
         cores=cores,
         used_by_active=used_by_active,
+        on_server=on_server,
     )
 
 
@@ -177,7 +187,8 @@ def collect_firmware_status(
 ) -> tuple[BiosFileEntry, ...]:
     """Build BiosFileEntry objects for a list of pre-resolved firmware items.
 
-    Each item must have keys: file_name, downloaded, dest.
+    Each item must have keys: file_name, downloaded, dest; ``on_server``
+    defaults to ``True`` for the items that came off the RomM listing.
     """
     return tuple(
         build_file_entry(
@@ -187,6 +198,7 @@ def collect_firmware_status(
             placements.get(item["file_name"]),
             complete,
             active_core_so,
+            on_server=item.get("on_server", True),
         )
         for item in items
     )
@@ -196,7 +208,11 @@ def count_required(files: tuple[BiosFileEntry, ...]) -> tuple[int, int]:
     """``(required, of those downloaded)`` for the core the game will launch with.
 
     The badge's two numbers, derived in one place so the System page and the
-    game-detail page can never disagree about which files count.
+    game-detail page can never disagree about which files count. A file the
+    library does not hold counts here — it is genuinely required and genuinely
+    absent, and excluding it would make the badge read ready for a game that
+    cannot launch. What it must never do is imply a download; whether anything
+    is fetchable is a separate question, asked where the buttons are.
     """
     required = [f for f in files if f.required_by_active]
     return len(required), sum(1 for f in required if f.downloaded)

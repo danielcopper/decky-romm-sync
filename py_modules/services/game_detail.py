@@ -49,7 +49,6 @@ if TYPE_CHECKING:
 _PLATFORM_NAMES_KEY = "platform_names"
 
 METADATA_TTL_SEC = 7 * 24 * 3600  # 7 days
-BIOS_TTL_SEC = 3600  # 1 hour
 ACHIEVEMENT_TTL_SEC = 3600  # 1 hour
 
 
@@ -200,22 +199,23 @@ class GameDetailService:
         *,
         now: float,
         metadata: MetadataCacheEntry | None,
-        bios_status: dict[str, Any] | None,
         platform_slug: str,
         ra_id: int | None,
         achievement_summary: dict[str, Any] | None,
     ) -> list[str]:
-        """Return list of cache keys that are stale and need background refresh."""
+        """Return list of cache keys that are stale and need background refresh.
+
+        ``bios`` is stale for every platform, unconditionally: this payload never
+        carries a BIOS answer, so there is always one to fetch. It has no TTL for
+        the same reason — a staleness marker needs something stored to age.
+        """
         stale: list[str] = []
 
         meta_cached_at = metadata.get("cached_at", 0) if metadata else 0
         if not metadata or (now - meta_cached_at) > METADATA_TTL_SEC:
             stale.append("metadata")
 
-        if bios_status is not None:
-            if (now - bios_status.get("cached_at", 0)) > BIOS_TTL_SEC:
-                stale.append("bios")
-        elif platform_slug:
+        if platform_slug:
             stale.append("bios")
 
         if ra_id:
@@ -283,23 +283,14 @@ class GameDetailService:
         # Platform display name from the offline cache, degrading to the slug.
         platform_name = platform_names.get(platform_slug, platform_slug) if platform_slug else ""
 
-        # BIOS status from firmware cache (no HTTP — cache-only read)
+        # No BIOS answer rides this payload. What an emulator wants is read off
+        # the machine, and an answer read for a previous page open may not stand
+        # in for this one — so the page opens not-knowing and fills the answer in
+        # from the live ``get_bios_status`` a moment later.
         bios_status = None
         bios_level = None
         bios_label = None
-        # A cold firmware cache answers None — this payload then carries no BIOS
-        # answer at all, which is not the same as "the active core needs none".
-        bios_status_unknown = False
-        if platform_slug:
-            active_core_so, _ = self._active_core.active_core_for_rom(rom_id)
-            cached_bios = self._bios_checker.check_platform_bios_cached(platform_slug, active_core_so=active_core_so)
-            if cached_bios is None:
-                bios_status_unknown = True
-            elif cached_bios.get("needs_bios"):
-                bios_obj = format_bios_status(cached_bios, platform_slug, cached_at=cached_bios.get("cached_at", 0.0))
-                bios_status = asdict(bios_obj)
-                bios_level = compute_bios_level(bios_obj)
-                bios_label = compute_bios_label(bios_obj)
+        bios_status_unknown = bool(platform_slug)
 
         # Achievement summary (for badge rendering)
         achievement_summary = self._build_achievement_summary(rom_id_str, ra_id)
@@ -307,7 +298,6 @@ class GameDetailService:
         stale_fields = self._compute_stale_fields(
             now=self._clock.time(),
             metadata=metadata,
-            bios_status=bios_status,
             platform_slug=platform_slug,
             ra_id=ra_id,
             achievement_summary=achievement_summary,

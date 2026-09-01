@@ -103,8 +103,8 @@ async def test_cached_game_detail_unknown_app_id_is_not_found(harness):
 # An absent ``bios_status`` means "the active core needs no BIOS" and clears a
 # shown requirement (#1690); ``bios_status_unknown`` marks the payload that has
 # no answer at all, which must not. Both callables are pinned in both directions.
-# The uncovered platform (psvita) is the one where the BIOS registry cannot stand
-# in for a failed firmware fetch.
+# The harness has no emulator installation, so every answer here is the one a
+# machine that cannot state its own scope gives.
 
 
 async def test_cached_game_detail_cold_firmware_cache_is_unknown(harness):
@@ -117,21 +117,26 @@ async def test_cached_game_detail_cold_firmware_cache_is_unknown(harness):
     assert result["bios_status_unknown"] is True
 
 
-async def test_cached_game_detail_warm_cache_without_firmware_is_answered(harness):
-    """A warm cache finding no firmware is the real negative — unflagged."""
+async def test_cached_game_detail_never_carries_a_bios_answer(harness):
+    """However warm the caches are, this payload answers "not known here".
+
+    What an emulator wants is read off the machine, and an answer read for a
+    previous page open may not stand in for this one — so the page opens
+    not-knowing and the live ``get_bios_status`` fills it in a moment later.
+    """
     app_id = _seed_versioned_rom(harness, platform_slug="psvita")
-    # The System-page read fills the in-memory firmware cache the game-detail
-    # path reads; the fake server has no firmware files.
+    # The System-page read fills every cache the game-detail path could draw on.
     await harness.plugin.get_firmware_status()
 
     result = await harness.plugin.get_cached_game_detail(app_id)
 
     assert result["bios_status"] is None
-    assert result["bios_status_unknown"] is False
+    assert result["bios_status_unknown"] is True
+    assert "bios" in result["stale_fields"]
 
 
 async def test_bios_status_unreachable_server_is_unknown(harness):
-    """A failed firmware fetch with no registry coverage answers "unknown"."""
+    """An unreachable server on a machine that states no emulators answers "unknown"."""
     _seed_versioned_rom(harness, platform_slug="psvita")
     harness.romm.list_firmware_side_effect = RuntimeError("offline")
 
@@ -143,11 +148,18 @@ async def test_bios_status_unreachable_server_is_unknown(harness):
     assert result["bios_status_unknown"] is True
 
 
-async def test_bios_status_reachable_server_without_firmware_is_answered(harness):
-    """A reachable server with no firmware for the platform is the real negative."""
+async def test_bios_status_without_an_emulator_list_is_unknown(harness):
+    """A reachable server answers half the question; the machine answers the other.
+
+    The harness has no ``es_systems.xml``, so which emulators the platform offers
+    — the scope an absence is judged against — cannot be established. An empty
+    result then states nothing: an emulator outside the plugin's view could want
+    a file the server has never held, and "needs none" would clear a real
+    warning on ignorance (#1693).
+    """
     _seed_versioned_rom(harness, platform_slug="psvita")
 
     result = await harness.plugin.get_bios_status(42)
 
     assert result["bios_status"] is None
-    assert result["bios_status_unknown"] is False
+    assert result["bios_status_unknown"] is True

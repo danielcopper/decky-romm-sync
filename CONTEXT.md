@@ -270,6 +270,11 @@ of the machine and does not move with the core the user picked; the launch-scope
 core**, which is what the missing-BIOS badge counts. The foil to **BIOS level** (the platform-wide readiness verdict:
 unknown / ok / partial / missing).
 
+A wanted file need not be one the RomM library holds — the two sets overlap without either containing the other, and a
+platform's list is their **union**. A row the library does not hold is marked **not on server**: it counts towards
+readiness, because it is a real prerequisite that is really absent, and never towards a download or a progress ratio,
+because nothing in the plugin can fetch it.
+
 ### Safely-bakeable
 
 An ES-DE `<command>` the plugin can bake into a Steam shortcut's `-e` override: a real emulator invocation that **ends

@@ -608,19 +608,27 @@ class TestGetFirmwareStatusBiosAggregates:
         assert plat["local_count"] == 0
 
     @pytest.mark.asyncio
-    async def test_no_required_files_falls_back_to_all_downloaded(self, tmp_path):
-        """No required files at all → level keys off the all-downloaded fallback.
+    async def test_a_wanted_file_the_library_lacks_is_still_a_row(self, tmp_path):
+        """The third row kind: wanted, missing, and not downloadable from here.
 
-        With zero required files compute_bios_level returns 'ok' (0 >= 0), which
-        the System page treats as the no-required branch (it selects phrasing by
-        required_count, not the level) — required_count is 0 here.
+        The listing carries only the optional file; the two the dc core will not
+        run without are wanted all the same, so they are shown — marked
+        ``on_server`` false and with no id to download by.
         """
         plat = await self._run(tmp_path, self._firmware("opt1.bin"), downloaded={"opt1.bin"})
-        assert plat["required_count"] == 0
+
+        rows = {f["file_name"]: f for f in plat["files"]}
+        assert set(rows) == {"opt1.bin", "req1.bin", "req2.bin"}
+        assert rows["opt1.bin"]["on_server"] is True
+        for name in ("req1.bin", "req2.bin"):
+            assert rows[name]["on_server"] is False
+            assert rows[name]["id"] is None
+            assert rows[name]["wanted"] == "needed"
+
+        # They are missing prerequisites, so the platform is not ready.
+        assert plat["required_count"] == 2
         assert plat["required_downloaded"] == 0
-        assert plat["server_count"] == 1
-        assert plat["local_count"] == 1
-        assert plat["bios_level"] == "ok"
+        assert plat["bios_level"] == "missing"
 
     @pytest.mark.asyncio
     async def test_unanswerable_platform_projects_unknown_level(self, tmp_path):
@@ -691,6 +699,115 @@ class TestGetFirmwareStatusBiosAggregates:
         assert plat["bios_level"] == "ok"
 
     @pytest.mark.asyncio
+    async def test_the_library_ratio_counts_only_what_the_library_holds(self, tmp_path):
+        """ "N of M files" is a progress bar over a set the user can complete.
+
+        Optional files no library holds are shown as rows but stay out of the
+        ratio — folding them in reports work outstanding on a system that needs
+        nothing. Measured: a stock RetroDECK's SNES emulators declare 26 optional
+        files, so the header would have read "0 / 26 files, 26 missing" for a
+        system no core requires anything from.
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {"id": 1, "file_name": "held.bin", "file_path": "bios/snes/held.bin", "file_size_bytes": 1, "md5_hash": ""},
+        ]
+        resolver = FakeFirmwareResolver()
+        resolver.declare("held.bin", optional_for=["snes9x_libretro"])
+        for name in ("absent1.bin", "absent2.bin"):
+            resolver.declare(name, optional_for=["snes9x_libretro"])
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(options=[libretro_option("snes9x_libretro", "Snes9x")]),
+        )
+        _inline_executor(fw)
+
+        result = await fw.get_firmware_status()
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "snes")
+
+        # All three are listed — the machine wants them and the user should see so.
+        assert len(plat["files"]) == 3
+        # Only the one the library holds is in the ratio.
+        assert plat["server_count"] == 1
+        assert plat["local_count"] == 0
+        # None is required, so the badge stays quiet either way.
+        assert plat["required_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_required_file_the_library_lacks_still_counts_as_required(self, tmp_path):
+        """The other side of the same split: readiness is not a progress bar.
+
+        A required file nobody can fetch is still a prerequisite, so it raises
+        ``required_count`` and holds the level down — the download affordance is
+        what withholds itself, not the count.
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = []
+        resolver = FakeFirmwareResolver()
+        resolver.declare("lynxboot.img", required_by=["handy_libretro"], description="Boot ROM")
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=("handy_libretro", "Handy"),
+                options=[libretro_option("handy_libretro", "Handy")],
+            ),
+        )
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("atarilynx")
+
+        assert result["required_count"] == 1
+        assert result["required_downloaded"] == 0
+        assert result["bios_level"] == "missing"
+        assert result["server_count"] == 0
+        assert result["files"][0]["on_server"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_file_the_library_files_under_another_platform_is_not_called_absent(self, tmp_path):
+        """ "Not in your library" is a claim about the library, not about a directory.
+
+        A core that serves several systems declares the same file for each of
+        them while RomM files it under one directory. Checking only this
+        platform's slice of the listing would tell the user to upload a file they
+        already have — and it is one download either way, because the destination
+        comes from the placement rather than from the directory it was listed
+        under.
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {
+                "id": 1,
+                "file_name": "bios.gg",
+                "file_path": "bios/gamegear/bios.gg",
+                "file_size_bytes": 1,
+                "md5_hash": "",
+            },
+        ]
+        resolver = FakeFirmwareResolver()
+        resolver.declare("bios.gg", optional_for=["genesis_plus_gx_libretro"], description="Game Gear BIOS")
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(options=[libretro_option("genesis_plus_gx_libretro", "Genesis Plus GX")]),
+        )
+        _inline_executor(fw)
+
+        result = await fw.get_firmware_status()
+
+        # The listing names one platform, so only that one carries the row —
+        # and it carries it as a library file, not as an absent one.
+        assert [p["platform_slug"] for p in result["platforms"]] == ["gamegear"]
+        assert [f["on_server"] for f in result["platforms"][0]["files"]] == [True]
+
+    @pytest.mark.asyncio
     async def test_the_machine_is_asked_once_for_the_whole_overview(self, tmp_path):
         """One whole-machine question per call, not one per platform.
 
@@ -714,31 +831,54 @@ class TestGetFirmwareStatusBiosAggregates:
         assert resolver.calls == 1
 
     @pytest.mark.asyncio
-    async def test_server_offline_lists_synced_platforms_without_files(self, plugin, fw, tmp_path):
-        """Offline, the overview keeps the platforms so core switching still works.
+    async def test_server_offline_still_answers_readiness(self, plugin, tmp_path):
+        """Readiness needs no server: ES-DE, the resolver and the disk answer it.
 
-        The server's listing is the only source of WHICH firmware files exist, so
-        with it unreachable and nothing cached the page states no requirement
-        rather than one it cannot source — but the synced platforms still appear,
-        because that is what the emulator picker is attached to.
+        What an unreachable RomM costs is the files only it knows about and the
+        ability to download — not the requirement, and not the platform.
         """
         _seed_rom(plugin._uow, rom_id=42, platform_slug="dc", app_id=1)
-        _seed_rom(plugin._uow, rom_id=43, platform_slug="ps2", app_id=None)
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True, exist_ok=True)
+        (bios_dir / "req1.bin").write_bytes(b"\x00" * 100)
+
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=_dc_resolver(),
+            core_info=_dc_core_info(),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+        )
         fw._loop = asyncio.get_event_loop()
 
         with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
             result = await fw.get_firmware_status()
 
         assert result["server_offline"] is True
-        assert [p["platform_slug"] for p in result["platforms"]] == ["dc"]
-        dc = result["platforms"][0]
-        assert dc["files"] == []
+        dc = next(p for p in result["platforms"] if p["platform_slug"] == "dc")
         assert dc["has_games"] is True
-        assert dc["required_count"] == 0
-        # An empty file list is not "everything is here": with the listing
-        # unavailable the counts would read 0/0 and the level would come out
-        # "ok", which is the one answer a page with no data must not give.
-        assert dc["bios_level"] == "unknown"
+        assert {f["file_name"] for f in dc["files"]} == {"req1.bin", "req2.bin", "opt1.bin"}
+        assert all(f["on_server"] is False for f in dc["files"])
+        # One of the two required files is on disk — a real, partial answer.
+        assert dc["required_count"] == 2
+        assert dc["required_downloaded"] == 1
+        assert dc["bios_level"] == "partial"
+
+    @pytest.mark.asyncio
+    async def test_a_synced_platform_nothing_wants_stays_off_the_page(self, plugin, tmp_path):
+        """Seeding every synced platform would fill the page with 0/0 rows."""
+        _seed_rom(plugin._uow, rom_id=44, platform_slug="nes", app_id=1)
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=FakeFirmwareResolver(),
+        )
+        fw._loop = asyncio.get_event_loop()
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await fw.get_firmware_status()
+
+        assert result["platforms"] == []
 
     @pytest.mark.asyncio
     async def test_no_exists_read_escapes_the_bios_directory(self, plugin, fw, tmp_path):
@@ -829,8 +969,10 @@ class TestCheckPlatformBiosUnknown:
     async def test_an_unread_core_outside_the_platform_does_not_make_it_unknown(self, tmp_path):
         """The doubt is scoped to the emulators THIS platform offers.
 
-        A stock RetroDECK ships a handful of cores without a ``.info``; letting
-        any one of them silence every platform's answer would make ``not_needed``
+        Measured on a stock RetroDECK (211 cores, 172 ES-DE systems): five
+        installed cores ship without a ``.info``, and exactly one of them —
+        ``amiarcadia_libretro`` — is offered by any system. Letting an unread
+        core silence platforms that do not offer it would make ``not_needed``
         unreachable and put the four-value model back at three.
         """
         from tests.fakes.fake_core_info_provider import libretro_option
@@ -847,7 +989,7 @@ class TestCheckPlatformBiosUnknown:
         ]
         fw = _make_firmware_service(
             romm_api=romm_api,
-            firmware_resolver=FakeFirmwareResolver(unread_cores=frozenset({"fbalpha_libretro"})),
+            firmware_resolver=FakeFirmwareResolver(unread_cores=frozenset({"amiarcadia_libretro"})),
             core_info=FakeCoreInfoProvider(options=[libretro_option("snes9x_libretro", "Snes9x")]),
         )
         _inline_executor(fw)
@@ -856,6 +998,40 @@ class TestCheckPlatformBiosUnknown:
 
         assert result["unknown_count"] == 0
         assert [f["wanted"] for f in result["files"]] == ["not_needed"]
+
+    @pytest.mark.asyncio
+    async def test_the_platform_that_does_offer_the_unread_core_is_unknown(self, tmp_path):
+        """The other half of the same machine, and the reason the value exists.
+
+        ``arcadia`` (Emerson Arcadia 2001) is the one system of 172 that offers
+        ``amiarcadia_libretro``, whose ``.info`` RetroDECK does not ship. It is
+        the whole population of ``unknown`` on a stock install — rare, and
+        reachable, which is what the fourth value is for.
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        romm_api = MagicMock()
+        romm_api.list_firmware.return_value = [
+            {
+                "id": 1,
+                "file_name": "stray.bin",
+                "file_path": "bios/arcadia/stray.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        fw = _make_firmware_service(
+            romm_api=romm_api,
+            firmware_resolver=FakeFirmwareResolver(unread_cores=frozenset({"amiarcadia_libretro"})),
+            core_info=FakeCoreInfoProvider(options=[libretro_option("amiarcadia_libretro", "Amiarcadia")]),
+        )
+        _inline_executor(fw)
+
+        result = await fw.check_platform_bios("arcadia")
+
+        assert result["unknown_count"] == 1
+        assert [f["wanted"] for f in result["files"]] == ["unknown"]
+        assert result["bios_level"] == "unknown"
 
     @pytest.mark.asyncio
     async def test_an_unreadable_emulator_list_leaves_the_scope_unestablished(self, tmp_path):
@@ -923,7 +1099,8 @@ class TestCheckPlatformBiosUnknown:
 
         result = await fw.check_platform_bios("dc")
 
-        assert result["known_count"] == 2
+        # Three declared files: two the listing carries, one it does not.
+        assert result["known_count"] == 3
         assert result["bios_level"] != "unknown"
 
 
@@ -1594,8 +1771,8 @@ class TestCheckPlatformBiosNoCoreFields:
         assert "available_cores" not in result
 
     @pytest.mark.asyncio
-    async def test_offline_no_registry_omits_core_fields(self, plugin, fw):
-        """Server unreachable + no registry entries → no core fields."""
+    async def test_offline_with_no_demand_omits_core_fields(self, plugin, fw):
+        """Server unreachable and no emulator wants anything → no core fields."""
         core_info = FakeCoreInfoProvider(
             active_core=("genesisplusgx_libretro", "Genesis Plus GX"),
             available_cores=[
@@ -1610,9 +1787,10 @@ class TestCheckPlatformBiosNoCoreFields:
         with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
             result = await fw.check_platform_bios("sms")
 
-        # Uncovered platform with the fetch failed — the answer is "we don't
-        # know" (#1693), and it still carries no core fields.
-        assert result == {"needs_bios": False, "bios_status_unknown": True}
+        # No emulator wants anything and the whole scope was read, so "needs
+        # none" is a real answer even with the listing unavailable — and it
+        # still carries no core fields.
+        assert result == {"needs_bios": False}
         assert "active_core" not in result
         assert "available_cores" not in result
 
@@ -1793,45 +1971,45 @@ class TestDownloadRequiredFirmware:
 class TestCheckPlatformBiosOffline:
     """What ``check_platform_bios`` answers when the RomM listing cannot be fetched.
 
-    WHICH firmware files exist is the server's answer and nothing local
-    substitutes for it, so a failed fetch with nothing cached is reported as
-    ignorance rather than as a negative (#1693). What the emulators want is a
-    separate question the resolver still answers, but it says nothing about which
-    of those files this library holds.
+    Readiness is assembled from three local inputs — which emulator is active
+    (ES-DE), what it wants (the resolver), what is on disk — so an unreachable
+    server does not take the answer away. It takes away the files only the server
+    knows about, and the ability to download anything.
     """
 
     @pytest.mark.asyncio
-    async def test_offline_answers_unknown_even_where_the_machine_declared_files(self, plugin, fw, tmp_path):
-        """A declared requirement is not a substitute for the server's listing.
-
-        The emulators' demand is known here; the platform's file list is not. The
-        payload says it does not know rather than reporting a requirement built
-        out of half the inputs.
-        """
+    async def test_offline_still_answers_from_the_machine(self, plugin, tmp_path):
+        """The emulators' demand is local, so the requirement survives the outage."""
         bios_dir = tmp_path / "bios"
         bios_dir.mkdir(parents=True)
-        (bios_dir / "scph5501.bin").write_bytes(b"\x00" * 512)
+        (bios_dir / "req1.bin").write_bytes(b"\x00" * 512)
 
-        _declare(
-            fw,
-            ("scph5501.bin", "PS1 US BIOS", True),
-            ("scph5502.bin", "PS1 EU BIOS", True),
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            firmware_resolver=_dc_resolver(),
+            core_info=_dc_core_info(),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
         )
+        fw._loop = asyncio.get_event_loop()
 
-        with (
-            patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")),
-            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
-        ):
-            result = await fw.check_platform_bios("psx")
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await fw.check_platform_bios("dc")
 
-        assert result == {"needs_bios": False, "bios_status_unknown": True}
+        assert result["needs_bios"] is True
+        assert result["required_count"] == 2
+        assert result["required_downloaded"] == 1
+        assert result["bios_level"] == "partial"
+        # Every row came from the machine, so none of them can be fetched.
+        assert all(f["on_server"] is False for f in result["files"])
+        # The answer is real, so nothing is flagged as unestablished (#1693).
+        assert "bios_status_unknown" not in result
 
     @pytest.mark.asyncio
-    async def test_offline_with_nothing_declared_is_also_unknown(self, plugin, fw, tmp_path):
-        """The same answer where no emulator declared anything either (#1693).
+    async def test_offline_with_a_complete_reading_and_no_demand_is_a_real_negative(self, plugin, fw, tmp_path):
+        """Every emulator read, none wants anything — "needs none" is an answer.
 
-        Reporting a confident "needs none" here would clear a shown requirement
-        on ignorance.
+        The server could still be holding files for this platform, but none of
+        them is a requirement, so there is no warning to withhold.
         """
         with (
             patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")),
@@ -1839,12 +2017,32 @@ class TestCheckPlatformBiosOffline:
         ):
             result = await fw.check_platform_bios("n64")
 
-        assert result["needs_bios"] is False
-        assert result["bios_status_unknown"] is True
+        assert result == {"needs_bios": False}
 
     @pytest.mark.asyncio
-    async def test_a_cached_listing_still_answers_while_the_server_is_down(self, plugin, fw, tmp_path):
-        """The listing cache is what keeps a real answer available offline."""
+    async def test_offline_with_an_incomplete_reading_says_it_does_not_know(self, plugin, tmp_path):
+        """Nothing to show AND nothing established — the one payload that answers nothing.
+
+        Reporting a confident "needs none" here would clear a shown requirement
+        on ignorance (#1693).
+        """
+        from tests.fakes.fake_core_info_provider import libretro_option
+
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            firmware_resolver=FakeFirmwareResolver(unread_cores=frozenset({"n64_libretro"})),
+            core_info=FakeCoreInfoProvider(options=[libretro_option("n64_libretro", "Mupen64")]),
+        )
+        fw._loop = asyncio.get_event_loop()
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await fw.check_platform_bios("n64")
+
+        assert result == {"needs_bios": False, "bios_status_unknown": True}
+
+    @pytest.mark.asyncio
+    async def test_a_cached_listing_still_contributes_its_own_files(self, plugin, fw, tmp_path):
+        """The listing cache is what keeps the server-only rows available offline."""
         fw._firmware_cache = [
             {
                 "id": 1,
@@ -1862,13 +2060,13 @@ class TestCheckPlatformBiosOffline:
 
         assert result["needs_bios"] is True
         assert result["required_count"] == 1
-        assert "bios_status_unknown" not in result
+        assert result["files"][0]["on_server"] is True
 
     @pytest.mark.asyncio
     async def test_online_no_firmware_is_a_real_negative(self, plugin, fw, tmp_path):
         """A successful fetch finding no firmware answers needs_bios False, unflagged.
 
-        The counterpart to the offline case above: this negative IS an answer, so
+        The counterpart to the offline cases above: this negative IS an answer, so
         it stays unflagged and consumers may clear a shown requirement on it.
         """
         with (
@@ -2274,177 +2472,6 @@ class TestFirmwareListCache:
 
         with pytest.raises(Exception, match="connection refused"):
             fw._get_firmware_list()
-
-
-class TestCheckPlatformBiosCached:
-    """Tests for check_platform_bios_cached — cache-only BIOS status read."""
-
-    def _make_service(
-        self,
-        firmware_cache=None,
-        firmware_cache_epoch: float = 0,
-        declare=(),
-        resolve_system=None,
-    ) -> tuple[FirmwareService, FakeCoreInfoProvider]:
-        import logging
-
-        core_info = FakeCoreInfoProvider()
-        fw = _make_firmware_service(
-            logger=logging.getLogger("test"),
-            core_info=core_info,
-            resolve_system=resolve_system,
-        )
-        fw._firmware_cache = firmware_cache
-        fw._firmware_cache_epoch = firmware_cache_epoch
-        _declare(fw, *declare)
-        return fw, core_info
-
-    def test_returns_none_when_cache_empty(self):
-        """No firmware cache → returns None."""
-        fw, _ = self._make_service(firmware_cache=None)
-        result = fw.check_platform_bios_cached("gba")
-        assert result is None
-
-    def test_returns_needs_bios_false_no_matching_firmware(self):
-        """Cache populated but no firmware for this platform → needs_bios=False."""
-        fw, core_info = self._make_service(
-            firmware_cache=[
-                {"file_path": "bios/snes/some.bin", "file_name": "some.bin", "file_size_bytes": 100, "md5_hash": ""}
-            ],
-            firmware_cache_epoch=1000.0,
-        )
-
-        core_info.active_core = (None, None)
-        result = fw.check_platform_bios_cached("gba")
-
-        assert result is not None
-        assert result["needs_bios"] is False
-        assert result["cached_at"] == 1000.0
-
-    def test_no_bios_platform_omits_core_fields(self):
-        """No-BIOS platform → needs_bios=False carries no core fields (#923).
-
-        Master System needs no firmware. After #923, core info is served via the
-        dedicated ``get_platform_core_info`` path, so the BIOS payload omits
-        ``active_core`` / ``active_core_label`` / ``available_cores`` entirely.
-        """
-        fw, core_info = self._make_service(
-            firmware_cache=[
-                {"file_path": "bios/snes/some.bin", "file_name": "some.bin", "file_size_bytes": 100, "md5_hash": ""}
-            ],
-            firmware_cache_epoch=1000.0,
-        )
-
-        core_info.active_core = ("genesisplusgx_libretro", "Genesis Plus GX")
-        core_info.available_cores = [
-            {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro"},
-            {"label": "PicoDrive", "so": "picodrive_libretro"},
-        ]
-        result = fw.check_platform_bios_cached("sms")
-
-        assert result is not None
-        assert result == {"needs_bios": False, "cached_at": 1000.0}
-        assert "active_core" not in result
-        assert "active_core_label" not in result
-        assert "available_cores" not in result
-
-    def test_returns_bios_status_from_cache(self, tmp_path):
-        """Cache populated with matching firmware → BIOS status with cached_at, no core fields."""
-        fw, core_info = self._make_service(
-            firmware_cache=[
-                {
-                    "file_path": "bios/gba/gba_bios.bin",
-                    "file_name": "gba_bios.bin",
-                    "file_size_bytes": 16384,
-                    "md5_hash": "abc123",
-                    "id": 1,
-                },
-            ],
-            firmware_cache_epoch=42.0,
-        )
-
-        core_info.active_core = ("mgba_libretro", "mGBA")
-        core_info.available_cores = [{"label": "mGBA", "so": "mgba_libretro"}]
-        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path))):
-            result = fw.check_platform_bios_cached("gba")
-
-        assert result is not None
-        assert result["needs_bios"] is True
-        assert result["cached_at"] == 42.0
-        assert result["server_count"] == 1
-        assert result["local_count"] == 0
-        # Core fields are never served from the BIOS payload (#923).
-        assert "active_core" not in result
-        assert "active_core_label" not in result
-        assert "available_cores" not in result
-        assert len(result["files"]) == 1
-        assert result["files"][0]["file_name"] == "gba_bios.bin"
-
-    def test_does_not_call_http(self):
-        """Cache-only method must not invoke any HTTP calls."""
-        import logging
-
-        api = MagicMock()
-        core_info = FakeCoreInfoProvider()
-        fw = _make_firmware_service(
-            romm_api=api,
-            logger=logging.getLogger("test"),
-            core_info=core_info,
-        )
-        fw._firmware_cache = []
-        fw._firmware_cache_epoch = 1.0
-
-        core_info.active_core = (None, None)
-        fw.check_platform_bios_cached("gba")
-
-        api.list_firmware.assert_not_called()
-        api.get_firmware.assert_not_called()
-
-    @pytest.mark.parametrize(
-        ("slug", "system"),
-        [
-            ("dc", "dreamcast"),
-            ("sms", "mastersystem"),
-            ("neo-geo-pocket", "ngp"),
-            ("gba", "gba"),  # identity: slug already equals system
-        ],
-    )
-    def test_resolves_system_for_cores_keeps_raw_slug_for_bios(self, tmp_path, slug, system):
-        """Active-core INPUT gets the NORMALIZED system; BIOS folder lookup uses RAW slug.
-
-        The firmware cache ``file_path`` is keyed on the raw platform slug
-        (BIOS-folder vocabulary). Both core read seams — the active core the
-        filter keys on, and the emulator list the completeness scope comes from
-        — must instead receive the resolved RetroDECK system.
-        """
-        resolver = FakeSystemResolver(mapping={"dc": "dreamcast", "sms": "mastersystem", "neo-geo-pocket": "ngp"})
-        fw, core_info = self._make_service(
-            firmware_cache=[
-                {
-                    "file_path": f"bios/{slug}/boot.bin",
-                    "file_name": "boot.bin",
-                    "file_size_bytes": 512,
-                    "md5_hash": "abc",
-                    "id": 1,
-                },
-            ],
-            firmware_cache_epoch=7.0,
-            declare=[("boot.bin", "Boot", True)],
-            resolve_system=resolver,
-        )
-        core_info.active_core = ("flycast_libretro", "Flycast")
-        core_info.available_cores = [{"label": "Flycast", "so": "flycast_libretro"}]
-
-        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path))):
-            result = fw.check_platform_bios_cached(slug)
-
-        assert result is not None
-        # The RAW slug matched the cache + registry, so a file is found.
-        assert result["needs_bios"] is True
-        assert result["server_count"] == 1
-        # The active-core read seam received the NORMALIZED system.
-        assert core_info.active_core_calls == [system]
-        assert resolver.calls == [(slug, None)]
 
 
 class TestFirmwareCachePersistence:

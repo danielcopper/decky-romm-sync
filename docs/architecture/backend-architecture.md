@@ -1679,14 +1679,36 @@ again.
 - **Caveats are the only degradation channel** — the resolver never logs. The adapter carries their stable `code` values
   (never the human `message`, which may change freely) and traces them through the injected `DebugLogger`.
 
-**Classification is four-valued**, and the two halves come from different places. Whether an emulator asks for a file is
-the resolver's per-file answer (`needed` / `optional`); whether an _absence_ may be read as "nothing wants it" is a
-property of the reading, and is scoped to the libretro cores ES-DE offers for the platform being rendered. Every
-emulator in that scope read → `not_needed`; one of them unread, or `es_systems.xml` unreadable, or the resolver unable
-to answer → `unknown`. Collapsing those two into one value is the defect the swap removes: a file nobody wants and a
-file nothing could be asked about are different answers, and the old boolean called both "not required". Standalone
-emulators stay outside the scope — the BIOS surface is a libretro answer throughout and standalone accuracy is deferred
-by ADR-0020.
+**Matching is machine-wide; completeness is per platform.** They are different questions and collapsing them forces a
+false choice. A file is `needed` / `optional` when any installed libretro core declares it — one answer, so a file
+cannot read differently on two surfaces. Whether an _absence_ may be read as "nothing wants it" is a property of the
+reading, and is scoped to the libretro cores ES-DE offers for the platform being rendered: every one of them read →
+`not_needed`; one unread, or `es_systems.xml` unreadable (the scope itself unestablished), or the resolver unable to
+answer → `unknown`. Collapsing `not_needed` and `unknown` is the defect the swap removes — a file nobody wants and a
+file nothing could be asked about are different answers, and the old boolean called both "not required".
+
+Scoping completeness machine-wide instead would retire the fourth value: a stock RetroDECK ships five bundled cores
+without a `.info`, so no absence could ever be ruled out. Per platform, exactly one of 172 ES-DE systems is affected
+(`arcadia`, which offers `amiarcadia_libretro`) — rare and reachable, which is what `unknown` is for.
+
+**Standalone emulators are outside the scope by deferral, not by capability.** ADR-0020 defers standalone BIOS accuracy
+(inheriting ADR-0012's) and `get_active_core` is libretro-only for that reason. The resolver answers for standalone
+emulators through its per-system route; it is only `firmware_inventory()`, the one whole-machine call this service
+makes, that enumerates libretro cores. When the deferral is lifted the capability is already there.
+
+**A platform's file list is the union of two sources.** The RomM library holds files nothing wants; an emulator can want
+a file the library has never had. That third kind is shown like any other, marked `on_server: False` with no id to
+download by — it counts towards readiness (it is genuinely required and genuinely absent) and never towards a download
+button. It stays out of `server_count` / `local_count` too: that ratio is a progress bar over a set the user can
+complete, and a stock RetroDECK's SNES emulators declare 26 optional files, so folding them in would report
+`0 / 26
+files, 26 missing` for a system no core requires anything from. Readiness therefore needs no server at all:
+ES-DE names the active emulator, the resolver says what it wants, the filesystem says what is there. An unreachable RomM
+costs the files only it knows about and the ability to fetch anything — not the answer.
+
+**No BIOS answer outlives the page that asked for it.** `get_cached_game_detail` carries none and says so
+(`bios_status_unknown`), and the live `get_bios_status` fills it in a moment later; there is deliberately no cached twin
+of `check_platform_bios` for it to read. That is why `BiosChecker` has one method.
 
 ### Domain (`py_modules/domain/`)
 

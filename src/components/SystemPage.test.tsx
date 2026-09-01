@@ -224,6 +224,7 @@ describe("SystemPage", () => {
                 description: "BIOS",
                 wanted: "needed",
                 required_by_active: true,
+                on_server: true,
               },
             ],
           }),
@@ -335,6 +336,7 @@ describe("SystemPage", () => {
             description: "Optional",
             wanted: "optional",
             required_by_active: false,
+            on_server: true,
           },
         ],
       });
@@ -533,10 +535,60 @@ describe("SystemPage", () => {
             description: "Required BIOS",
             wanted: "needed",
             required_by_active: true,
+            on_server: true,
           },
         ],
       });
     }
+
+    it("offers no download for a required file the RomM library does not hold", async () => {
+      // The third row kind: an emulator asks for it, the library has never had
+      // it, and nothing in the plugin can fetch it. It still makes the platform
+      // not ready — the title says so — but a button here would do nothing.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "snes",
+            required_count: 1,
+            required_downloaded: 0,
+            bios_level: "missing",
+            files: [
+              {
+                id: null,
+                file_name: "lynxboot.img",
+                local_path: "lynxboot.img",
+                size: 0,
+                md5: "",
+                downloaded: false,
+                description: "Boot ROM",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: false,
+              },
+            ],
+          }),
+        ],
+      });
+      const { queryByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(queryByText("Download Required")).toBeNull();
+      expect(queryByText("Download All")).toBeNull();
+      // The platform is still flagged: not fetchable is not the same as not needed.
+      expect(container.textContent).toContain("BIOS needed");
+    });
+
+    it("shows a missing required file the library does hold as downloadable", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithMissingRequired()],
+      });
+      const { queryByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(queryByText("Download Required")).not.toBeNull();
+    });
 
     it("calls downloadRequiredFirmware(slug) and refreshes on success", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
@@ -711,6 +763,7 @@ describe("SystemPage", () => {
                 description: "OK File",
                 wanted: "optional",
                 required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -750,6 +803,7 @@ describe("SystemPage", () => {
                 description: "ReqMissing",
                 wanted: "needed",
                 required_by_active: true,
+                on_server: true,
               },
             ],
           }),
@@ -782,6 +836,7 @@ describe("SystemPage", () => {
                 description: "OptMissing",
                 wanted: "optional",
                 required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -814,6 +869,7 @@ describe("SystemPage", () => {
                 description: "?",
                 wanted: "unknown",
                 required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -850,6 +906,7 @@ describe("SystemPage", () => {
                 description: "Req",
                 wanted: "needed",
                 required_by_active: true,
+                on_server: true,
               },
             ],
           }),
@@ -878,6 +935,7 @@ describe("SystemPage", () => {
                 description: "Req",
                 wanted: "needed",
                 required_by_active: true,
+                on_server: true,
               },
               {
                 id: 2,
@@ -889,6 +947,7 @@ describe("SystemPage", () => {
                 description: "Opt",
                 wanted: "optional",
                 required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -916,6 +975,7 @@ describe("SystemPage", () => {
                 description: "Req",
                 wanted: "needed",
                 required_by_active: true,
+                on_server: true,
               },
             ],
           }),
@@ -943,6 +1003,7 @@ describe("SystemPage", () => {
                 description: "Opt",
                 wanted: "optional",
                 required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -971,6 +1032,7 @@ describe("SystemPage", () => {
                 description: "Opt",
                 wanted: "optional",
                 required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -1004,6 +1066,7 @@ describe("SystemPage", () => {
                 description: "?",
                 wanted: "unknown",
                 required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -1012,7 +1075,7 @@ describe("SystemPage", () => {
       const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
       expect(container.textContent).toContain("BIOS requirement unknown");
-      expect(container.textContent).toContain("1 file(s) on server nothing installed could answer for");
+      expect(container.textContent).toContain("1 file(s) nothing installed could answer for");
       // Neutral grey dot via the shared helper — never green.
       expect(container.innerHTML).toContain("#8f98a0");
       expect(container.innerHTML).not.toContain("#5ba32b");
@@ -1555,6 +1618,7 @@ describe("SystemPage", () => {
             description: "PS1 BIOS",
             wanted: "needed",
             required_by_active: true,
+            on_server: true,
           },
         ],
       });
@@ -1574,6 +1638,7 @@ describe("SystemPage", () => {
             description: "PS1 BIOS",
             wanted: "needed",
             required_by_active: true,
+            on_server: true,
           },
         ],
       });

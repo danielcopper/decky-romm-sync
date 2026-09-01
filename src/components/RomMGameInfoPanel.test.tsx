@@ -3185,6 +3185,54 @@ describe("RomMGameInfoPanel", () => {
       }
     });
 
+    it("never prints a required-file verdict over an all-files ratio (#1762)", async () => {
+      // The reported shape, from the live tab: PlayStation, active core
+      // SwanStation, twenty server files, none downloaded. SwanStation requires
+      // none of them, so required_count is 0 and the old header paired "All
+      // required ready" with "(0/20)" — a green all-clear over twenty missing
+      // files, because the sentence and the ratio counted different sets.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        bios_status: {
+          needs_bios: true,
+          platform_slug: "psx",
+          server_count: 20,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 0,
+          required_downloaded: 0,
+          known_count: 5,
+          unknown_count: 0,
+          files: [
+            {
+              file_name: "scph5501.bin",
+              downloaded: false,
+              local_path: "",
+              description: "PS1 US BIOS",
+              wanted: "optional",
+              required_by_active: false,
+              cores: { swanstation_libretro: { required: false } },
+              used_by_active: true,
+              on_server: true,
+            },
+          ],
+        } as never,
+        bios_level: "ok",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).not.toContain("All required ready");
+      expect(container.textContent).toContain("0/20 files ready");
+    });
+
     it("unknown: grey header dot + honest text, and the 'files on server' note survives (#1520)", async () => {
       // No installed emulator's answer could be established for any server file
       // → backend ships bios_level "unknown". The panel must render the neutral

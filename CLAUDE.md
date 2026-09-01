@@ -258,6 +258,24 @@ Format: **invariant** — tier — enforced by.
   is one careless `or` away from returning. The scope itself is the second unguarded half: `_core_scope` returning
   `None` (ES-DE unreadable) is the only thing between an unestablished scope and a confident "nothing needs these", and
   a caller that passes an empty list instead of `None` has silently claimed a complete reading
+- **A firmware row the RomM library does not hold (`on_server: False`) counts towards readiness, and never towards a
+  download affordance or a progress ratio** — test + prompt-only — `tests/services/test_firmware.py` pins the row's
+  shape (`id` absent, `on_server` clear), that it raises `required_count`, and that it stays out of `server_count`;
+  `src/components/SystemPage.test.tsx` pins that the buttons key off the fetchable set. **The three axes live in three
+  places and nothing joins them.** `domain/bios_status.py::count_required` is readiness and counts every required row;
+  `services/firmware.py::_bios_aggregates` scopes `server_count` / `local_count` to `on_server` rows; the download
+  buttons' condition is a filter inside `SystemPage.tsx` and exists nowhere else. Each fold has its own quiet failure:
+  drop the row from readiness and a platform reads ready while a required file is absent; add it to the ratio and a SNES
+  page reports `0 / 26 files, 26 missing` for twenty-six optional files no core wants; add it to the buttons and the
+  page offers a download that cannot succeed. The `id: None` is load-bearing — it is what the page reads to withhold the
+  affordance, so it is not a placeholder to be filled in
+- **No BIOS answer outlives the page that asked for it** — test + prompt-only —
+  `tests/services/test_game_detail.py::TestGetCachedGameDetailCarriesNoBiosAnswer` and the two contract cases in
+  `tests/contract/test_game_detail_read.py`. `get_cached_game_detail` carries none and says so (`bios_status_unknown`,
+  plus an unconditional `bios` stale field); the live `get_bios_status` fills it in. What holds the rule is an absence —
+  `BiosChecker` has one method, so there is no cheap cached twin to reach for — and an absence is exactly what a future
+  change restores without noticing. Re-adding a stored answer would look like a performance win and would put a previous
+  page open's requirement on this page
 - **Aggregate state mutated only via verb-named methods (no field assignment)** — check —
   `scripts/check_aggregate_field_assignment.py`
 - **No UoW-opening seam (ActiveCoreResolver, RelaunchOptionsResolver, uow_factory) is called while a UoW is open on the

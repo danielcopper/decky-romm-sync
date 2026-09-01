@@ -81,3 +81,9 @@ apply to a path handed over explicitly. That is how a formatter reaches a verbat
   markdown under `_vendor/`, and the hook reformats staged `.md` too. The emu-atlas wheel ships no markdown, so there is
   nothing to exclude today — but the next vendored package may, and reformatted prose breaks byte-identity exactly like
   reformatted code.
+
+**The trap is not limited to vendored trees.** Any directory a _different_ formatter owns is exposed the same way, and
+there it costs a whole tree rather than one file: the markdown formatter is configured for `**/*.md`, but handed `src/`
+as an explicit path it reformats the TypeScript that prettier owns — 186 files in one command, every one a real diff,
+and `pnpm format:check` is the only thing that notices. Hand a formatter the paths it owns, never a directory that
+merely contains them.

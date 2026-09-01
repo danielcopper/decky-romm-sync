@@ -18,6 +18,11 @@
  * while the rows below it show the first, so nothing is silently dropped from
  * the list for belonging to a core the user is not using.
  *
+ * A row can also be a file an emulator wants that the RomM library does not hold
+ * (`on_server` false). It is missing in the fullest sense — and unfixable from
+ * anywhere in the plugin — so it says so rather than looking like a download
+ * nobody has started.
+ *
  * CSS classes prefixed with `romm-panel-` are injected separately by
  * styleInjector.
  */
@@ -125,6 +130,17 @@ function fileDotColor(file: BiosFileStatus): string {
 }
 
 /**
+ * The note after a file's name. Empty for every row this pane has always shown —
+ * downloaded state is the dot's job, and repeating it in text would be a
+ * redesign rather than a fix. The one row that needs words is the file no page
+ * in the plugin can fetch, because nothing else on screen tells it apart from a
+ * download nobody has started yet.
+ */
+function fileNote(file: BiosFileStatus): string {
+  return file.on_server === false ? " — missing, not in your RomM library" : "";
+}
+
+/**
  * One row per firmware file an installed emulator asks for, plus a note for the rest.
  *
  * The rows are the files with an owning emulator — the ones whose per-core lines
@@ -153,7 +169,7 @@ function buildBiosFileList(bios: BiosStatus, coreInfo: CoreInfo | null): ReactEl
       <div key={f.file_name} className="romm-panel-file-row">
         <span key="dot" className="romm-status-dot" style={{ backgroundColor: fileDotColor(f) }} />
         <span key="name" className="romm-panel-file-name">
-          {f.description || f.file_name}
+          {`${f.description || f.file_name}${fileNote(f)}`}
         </span>
         {coreLines.length > 0 ? (
           <div

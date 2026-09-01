@@ -294,10 +294,13 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     const unansweredFiles = platform.files.filter((f) => f.wanted === "unknown");
     // Display counts come from the backend aggregates (computed from the same
     // core-aware files); fall back to local derivation only if a payload omits
-    // them. The optional-missing breakdown stays a local file-level axis — the
-    // 3-state bios_level doesn't model it.
-    const total = platform.server_count ?? platform.files.length;
-    const done = platform.local_count ?? platform.files.filter((f) => f.downloaded).length;
+    // them. `total` is the LIBRARY's file count, not the row count — the rows
+    // include files no library holds, and a progress ratio over those would
+    // report work the user cannot do. The expander below names the row count
+    // instead, because that is the list it opens. The optional-missing
+    // breakdown stays a local file-level axis — the level doesn't model it.
+    const total = platform.server_count ?? platform.files.filter((f) => f.on_server).length;
+    const done = platform.local_count ?? platform.files.filter((f) => f.on_server && f.downloaded).length;
     const allDone = done === total;
     const isDownloading = downloading === platform.platform_slug;
     const isExpanded = expanded[platform.platform_slug] ?? false;
@@ -325,16 +328,15 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     const { summaryLabel, summaryDescription } = isUnknown
       ? {
           summaryLabel: "BIOS requirement unknown",
-          // With no file list there is nothing to count — offline, WHICH files
-          // exist is the unknown, not what wants them.
-          summaryDescription:
-            total > 0
-              ? `${total} file(s) on server nothing installed could answer for`
-              : "The list of BIOS files could not be read",
+          summaryDescription: `${total} file(s) nothing installed could answer for`,
         }
       : getBiosSummary(requiredCount, requiredDone, requiredReady, optionalMissing, done, total, allDone);
-    const hasRequiredMissing = requiredCount > 0 && !requiredReady;
-    const hasOptionalMissing = optionalMissing > 0;
+    // The download affordances key off what is missing AND fetchable, never off
+    // readiness: a required file the RomM library does not hold leaves the
+    // platform not ready and still gives the user nothing to press here.
+    const fetchableMissing = platform.files.filter((f) => f.on_server && !f.downloaded);
+    const hasRequiredMissing = fetchableMissing.some((f) => f.required_by_active);
+    const hasOptionalMissing = fetchableMissing.some((f) => !f.required_by_active);
 
     const hasMultipleCores = !!platform.emulators && platform.emulators.length > 1;
 
@@ -396,7 +398,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
               }))
             }
           >
-            {isExpanded ? "Hide Files" : `Show Files (${total})`}
+            {isExpanded ? "Hide Files" : `Show Files (${platform.files.length})`}
           </ButtonItem>
         </PanelSectionRow>
         {isExpanded && (
@@ -412,8 +414,9 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
               } else {
                 dotColor = "#8f98a0";
               }
+              const missingNote = file.on_server ? "Missing" : "Missing — not in your RomM library";
               return (
-                <PanelSectionRow key={file.id}>
+                <PanelSectionRow key={file.file_name}>
                   <Field
                     label={
                       <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -430,7 +433,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
                         {`${file.description || file.file_name} (${WANTED_LABELS[file.wanted]})`}
                       </span>
                     }
-                    description={file.downloaded ? file.file_name : `${file.file_name} — Missing`}
+                    description={file.downloaded ? file.file_name : `${file.file_name} — ${missingNote}`}
                     bottomSeparator="none"
                   />
                 </PanelSectionRow>
