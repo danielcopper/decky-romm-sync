@@ -1,0 +1,142 @@
+{
+  "schema": 1,
+  "spec": "Standalone firmware cards: what a standalone emulator expects beside its content, for the firmware questions. World knowledge under DESIGN.md's boundary rule — a standalone emulator ships no .info to read, so which file it probes and where is established from its source at the shipped release and packaged here with citations, while everything about THIS machine (whether the file is there, what kind of path sits at the destination) is read live. Each file names the XDG base and the emulator-relative path the emulator itself probes — never the staging spot an arrangement's installer uses, because the emulator's probe is the only door that matters at run time. 'need' speaks the firmware model's own vocabulary (required | optional): optional states that the emulator runs without the file and the caveat prose says what stops working. Cards are keyed by the %EMULATOR_…% token, like the standalone save cards beside them.",
+  "emulators": {
+    "CEMU": {
+      "systems": [
+        "wiiu"
+      ],
+      "files": [
+        {
+          "name": "keys.txt",
+          "base": "data",
+          "subdir": "Cemu",
+          "need": "optional",
+          "purpose": "user-supplied title and disc keys — encrypted dumps do not decrypt without their key; decrypted content runs without the file, and Cemu creates an empty commented one where none exists",
+          "citation": "KeyCache.cpp:63 at Cemu 2.6 — the one probe is ActiveSettings::GetUserDataPath(\"keys.txt\"); :70-80 creates it with comments when absent"
+        }
+      ],
+      "provenance": {
+        "source": "Cemu 2.6. The keys file lives below the user data path (KeyCache.cpp:63), which is the XDG data home's Cemu directory on a non-portable Linux build (CemuApp.cpp DeterminePaths, Linux branch: XDG_DATA_HOME else ~/.local/share, plus /Cemu; a 'portable' directory next to the executable — for an AppImage, next to the AppImage file — outranks it). RetroDECK stages the file at bios/cemu/keys.txt and links it to exactly that probe path when present (component_prepare.sh). EmuDeck's installer moves a found keys.txt into the config directory instead (emuDeckCemu.sh, CemuNative[configDir]) — a path the shipped Linux build's key probe never reads, which is precisely why the card states the emulator's door and not the installer's."
+      }
+    },
+    "MELONDS": {
+      "systems": [
+        "nds"
+      ],
+      "config_files": [
+        {
+          "key": "DS.BIOS9Path",
+          "purpose": "the DS-mode ARM9 BIOS dump, exactly 4 KB — probed only while Emu.ExternalBIOSEnable is on; with the switch off the built-in replacement boots DS games without any file",
+          "citation": "verifyDSBIOS, EmuInstance.cpp:487-517 at 1.1; gated by verifySetup :637-644"
+        },
+        {
+          "key": "DS.BIOS7Path",
+          "purpose": "the DS-mode ARM7 BIOS dump, exactly 16 KB — probed only while Emu.ExternalBIOSEnable is on",
+          "citation": "verifyDSBIOS, EmuInstance.cpp:487-517 at 1.1"
+        },
+        {
+          "key": "DS.FirmwarePath",
+          "purpose": "the DS firmware image — 256 or 512 KB boots the DS menu, a 128 KB dump is accepted but not bootable — and it must be writable: melonDS stores Wi-Fi settings back into it; probed in DS mode while Emu.ExternalBIOSEnable is on",
+          "citation": "verifyDSFirmware, EmuInstance.cpp:553-583 at 1.1; the write-back is getEffectiveFirmwareSavePath :673-686"
+        },
+        {
+          "key": "DSi.BIOS9Path",
+          "purpose": "the DSi ARM9 BIOS dump, exactly 64 KB — required whenever the console type is DSi, external-BIOS switch or not",
+          "citation": "verifyDSiBIOS, EmuInstance.cpp:519-551 at 1.1; verifySetup :646-650"
+        },
+        {
+          "key": "DSi.BIOS7Path",
+          "purpose": "the DSi ARM7 BIOS dump, exactly 64 KB — required whenever the console type is DSi",
+          "citation": "verifyDSiBIOS, EmuInstance.cpp:519-551 at 1.1"
+        },
+        {
+          "key": "DSi.FirmwarePath",
+          "purpose": "the DSi firmware image, exactly 128 KB and writable — probed in DSi mode while Emu.ExternalBIOSEnable is on",
+          "citation": "verifyDSiFirmware, EmuInstance.cpp:585-610 at 1.1"
+        },
+        {
+          "key": "DSi.NANDPath",
+          "purpose": "the DSi NAND image, opened read-write — required whenever the console type is DSi; the DSi's own storage, titles and all, which melonDS writes into",
+          "citation": "verifyDSiNAND, EmuInstance.cpp:612-631 at 1.1; verifySetup :656-658"
+        }
+      ],
+      "provenance": {
+        "source": "melonDS 1.1, the release both arrangements run. Which of these files a launch probes is verifySetup's decision (EmuInstance.cpp:633-667), taken from two configuration switches read live: Emu.ExternalBIOSEnable — default off, the built-in replacement boots DS games with no file at all — and Emu.ConsoleType (DS or DSi). Every path is a configuration value in melonDS.toml (or the pre-1.0 melonDS.ini it migrates), resolved the way OpenLocalFile resolves it: absolute as spelled, anything else below the melonDS config directory (Platform.cpp:157-178). RetroDECK switches external BIOS on and points the DS set at its bios directory (component_prepare.sh). EmuDeck writes all seven paths but ships ExternalBIOSEnable=0 in its template (configs/net.kuribo64.melonDS/config/melonDS/melonDS.ini:77) — parked paths behind a switch that is off, so the answer reads the switch, not the intention."
+      }
+    },
+    "PCSX2": {
+      "systems": [
+        "ps2"
+      ],
+      "config_files": [
+        {
+          "key": "Folders/Bios",
+          "purpose": "the directory PCSX2 looks for BIOS images in — not a file itself, but what the chosen file name resolves against",
+          "citation": "Pcsx2Config.cpp:2282 at v2.6.3 reads it through LoadPathFromSettings (:2272-2278), compiled default 'bios' below the DataRoot; :2256 writes that default into a fresh ini"
+        },
+        {
+          "key": "Filenames/BIOS",
+          "purpose": "the BIOS image the user picked, a name inside the BIOS directory — a PlayStation 2 does not boot without one, and the emulator composes no path at all while the name is empty",
+          "citation": "FullpathToBios, Pcsx2Config.cpp:2057-2062 at v2.6.3 — Path::Combine(EmuFolders::Bios, BaseFilenames.Bios), and an empty name returns the empty string; the key is [Filenames] BIOS (:1667-1671)"
+        }
+      ],
+      "provenance": {
+        "source": "PCSX2 v2.6.3, the release RetroDECK ships. The expectation takes two settings rather than one: [Folders] Bios names the directory, read through the same LoadPathFromSettings helper as the memory-card and texture directories (Pcsx2Config.cpp:2272-2278, :2282), and [Filenames] BIOS names the image inside it (:1667-1671). FullpathToBios combines them and returns the empty string when no name is set (:2057-2062), which is the shipped state: RetroDECK points the directory at its BIOS root (component_prepare.sh:16, :80) and leaves the name empty for the user to choose in the emulator. So an unset name is the normal starting state rather than a broken configuration — but it does mean no game boots yet, which the answer states rather than passing over. Every name here is a whole string in the shipped binary."
+      }
+    },
+    "XEMU": {
+      "systems": [
+        "xbox"
+      ],
+      "config_files": [
+        {
+          "key": "sys.files/bootrom_path",
+          "purpose": "the MCPX boot ROM, exactly 512 bytes — the first thing the console runs, and xemu refuses to start without it",
+          "citation": "the shipped binary carries \"Failed to open BootROM file '%s'. Please check machine settings.\" and \"Invalid BootROM file '%s' size %d. Expected 512 bytes.\" as whole strings (xemu v0.8.135)"
+        },
+        {
+          "key": "sys.files/flashrom_path",
+          "purpose": "the Xbox BIOS image the console boots into after the MCPX hands over — xemu refuses to start without it",
+          "citation": "the shipped binary carries \"Failed to open flash file '%s'. Please check machine settings.\" as a whole string (xemu v0.8.135)"
+        },
+        {
+          "key": "sys.files/hdd_path",
+          "purpose": "the emulated Xbox hard disk — required to start, and the same image every game's save lives inside, which the save answer states from its own side",
+          "citation": "the shipped binary carries \"Failed to open hard disk image file '%s'. Please check machine settings.\" as a whole string (xemu v0.8.135); RetroDECK copies a blank image in where none exists (component_prepare.sh:31-32)"
+        }
+      ],
+      "provenance": {
+        "source": "xemu v0.8.135, the release the shipped binary carries as a whole version string. Four files sit in [sys.files] (config_spec.yml:359-364, all plain strings with no compiled default, so an unset one names nothing), and they are deliberately not all firmware. Three refuse the start when missing, and the emulator says so itself in whole strings: the MCPX boot ROM, the flash image, and the hard disk. The fourth, eeprom_path, is left to the save answer on purpose: xemu generates an EEPROM where none exists — the binary carries 'Failed to generate EEPROM file' beside 'Failed to open EEPROM file' — and it holds the console's own settings, which the standalone save card already states as a named settings group. Claiming it here too would file save data under firmware and state one file twice. The hard disk is the opposite case and is claimed twice on purpose: a console does not start without one, and every game's save lives inside it, so both answers name it and each says which aspect it means. RetroDECK points the boot ROM and flash at its BIOS root (component_prepare.sh:23-24), keeps the EEPROM under saves (:26), and copies a blank hard disk in where none exists (:31-32)."
+      }
+    },
+    "DUCKSTATION": {
+      "systems": [
+        "psx"
+      ],
+      "search": {
+        "directory_key": "BIOS/SearchDirectory",
+        "directory_default": "bios",
+        "region_keys": [
+          {
+            "region": "ntsc-u",
+            "key": "BIOS/PathNTSCU"
+          },
+          {
+            "region": "ntsc-j",
+            "key": "BIOS/PathNTSCJ"
+          },
+          {
+            "region": "pal",
+            "key": "BIOS/PathPAL"
+          }
+        ],
+        "purpose": "a PlayStation BIOS image — the console runs it before any disc, and DuckStation starts nothing without one",
+        "citation": "the shipped binary carries \"No BIOS image found for {} region.\", \"DuckStation requires a PS1 or PS2 BIOS in order to run.\" and \"Searching for a {} BIOS in '{}'...\" as whole strings, beside the table's own descriptions (\"SCPH-1001, DTL-H1001 (v2.0 05-07-95 A)\"); the search itself is bios.cpp:364-400 at stenzek/duckstation@64655818e"
+      },
+      "provenance": {
+        "source": "The DuckStation build RetroDECK ships as 'DuckStation (Legacy)' — the fork release frozen 2024-09-19, which the shipped binary carries as its own build stamp (components/duckstation/bin/duckstation-qt); citations pin stenzek/duckstation@64655818e, the last commit before that freeze. DuckStation names no BIOS file. [BIOS] SearchDirectory names a directory, read the LoadPathFromSettings way every folder of this emulator is read (settings.cpp:1966 with :1953-1962: unset or empty is the default 'bios', and anything relative hangs off the DataRoot), and three per-region keys may name an image inside it — PathNTSCU, PathNTSCJ and PathPAL, picked by the console region the disc sets (bios.cpp:321-339). A value there is combined with the search directory rather than read as a path of its own (bios.cpp:350), which is why a name is what belongs in the setting. Where a key is empty — the state both arrangements ship, RetroDECK setting only SearchDirectory (component_prepare.sh:15,:33) — the emulator keeps every file in the directory whose size is exactly one of three (bios.h:24-26: 512 KiB, and the PS2 and PS3 sizes) and recognises what is left by hashing the whole file against a table of 104 images compiled into the binary (bios.cpp:47-152, :364-400). That table is packaged as atlas/data/duckstation_bios.json, generated from the same revision: the hashes are constexpr and compile to byte arrays, so the shipped binary carries the descriptions beside them but not the hashes themselves. A PlayStation boots nothing without an image, so this answer is required — but an image the table does not know still boots, with 'Using an unknown BIOS: {}', so unrecognised is not wrong, and a region mismatch is a warning rather than a refusal (bios.cpp:353-359), which is why the regions left to the search share one answer. Two limits are stated where they are met: the OpenBIOS replacement is recognised by an eight-byte signature at offset 0x78 rather than by a hash (bios.cpp:157-161), which no read through atlas's seam reaches; and where two images rank alike the emulator keeps the last one the directory hands it, an order no read reproduces."
+      }
+    }
+  }
+}

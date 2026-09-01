@@ -1,0 +1,179 @@
+{
+  "schema": 1,
+  "spec": "An arrangement's content-tree wiring: the symlink pairs its preparation step promises, recorded so health() can state when a hub directory exists that no emulator-side link reaches. This is ARRANGEMENT knowledge, not emulator knowledge, and that is why the texture and mods cards cannot carry it: a card states where the emulator reads (Citra: <savefile_directory>/citra-emu/load/textures), while the arrangement wires what its installer decided (RetroDECK links saves/Citra/load/textures — a different name under a different root, the very gap issue #98 tracks), and a check built on card paths would probe paths the installer never linked. Each row is one dir_prep call: 'family' names the hub the pair belongs to (texture_packs or mods, the two content-tree roots retrodeck.json declares), 'hub' the tree below that family root the installer creates, 'base' + 'path' the emulator-side location it replaces with a symlink — 'bios' and 'storage' resolve from the marker's bios_path/storage_path (their unset fallback is the same <rd_home>/<name> join the shipped default config carries), 'xdg-data' and 'xdg-config' are the two XDG homes the flatpak pins. The table is pinned to ONE arrangement version and the check is version-gated fail-closed: dir_prep runs from component_prepare.sh only where prepare_component sources it (framework.sh:613-655) — first setup, reset, and folder moves (the 'postmove' action) — while a flatpak upgrade runs only the version-gated component_update.sh patches (post_update.sh:53-58) and then stamps the new version into the marker, so a marker claiming this version is exactly the machine whose wiring can be measured against this promise — and a marker naming any other version is a promise this table does not know, so no row is checked and no finding fires. Three absences are deliberate, not gaps. PCSX2 standalone wires its texture hub by configuration, not by link (component_prepare.sh:46-47 writes the hub path into Folders/Textures), so there is no link whose absence could be observed. MAME standalone routes its plugin trees through mame.ini the same way (see mods.json). And the legacy rows in component_update.sh files (framework's citra-emu/yuzu links, pcsx2's one-time dir_prep) are upgrade migrations for emulators or layouts this version no longer prepares — recording them would state a dead version's promise under a live pin.",
+  "arrangements": {
+    "retrodeck": {
+      "version": "0.10.9b",
+      "rows": [
+        {
+          "family": "texture_packs",
+          "hub": "retroarch-core/LRPS2/textures",
+          "base": "bios",
+          "path": "pcsx2/textures",
+          "source": "[V-script] components/retroarch/component_prepare.sh:103 (reset section; the postmove section does not repeat it — upgrades crossing 0.10.9b wire it via component_update.sh instead) in the Flatpak's components tree."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "retroarch-core/Mesen/HdPacks",
+          "base": "bios",
+          "path": "HdPacks",
+          "source": "[V-script] components/retroarch/component_prepare.sh:154 (reset) and :186 (postmove)."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "retroarch-core/Mupen64Plus/cache",
+          "base": "bios",
+          "path": "Mupen64plus/cache",
+          "source": "[V-script] components/retroarch/component_prepare.sh:155 (reset) and :187 (postmove)."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "retroarch-core/Mupen64Plus/hires_texture",
+          "base": "bios",
+          "path": "Mupen64plus/hires_texture",
+          "source": "[V-script] components/retroarch/component_prepare.sh:156 (reset) and :188 (postmove)."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "retroarch-core/Citra/textures",
+          "base": "xdg-config",
+          "path": "retroarch/saves/Citra/load/textures",
+          "source": "[V-script] components/retroarch/component_prepare.sh:157 (reset) and :189 (postmove). The installer's own spelling — capital-C 'Citra' under the RetroArch config tree's saves directory — which is not the path the core's literals derive; issue #98 tracks that gap, and this row states only what the installer links."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "retroarch-core/Dolphin/Textures",
+          "base": "xdg-config",
+          "path": "retroarch/saves/dolphin-emu/User/Load/Textures",
+          "source": "[V-script] components/retroarch/component_prepare.sh:158 (reset) and :190 (postmove); the script spells the target with a trailing slash, normalized away here."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "retroarch-core/PPSSPP/TEXTURES",
+          "base": "xdg-config",
+          "path": "retroarch/saves/PPSSPP/PSP/TEXTURES",
+          "source": "[V-script] components/retroarch/component_prepare.sh:159 (reset) and :191 (postmove)."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "retroarch-core/Flycast/textures",
+          "base": "bios",
+          "path": "dc/textures",
+          "source": "[V-script] components/retroarch/component_prepare.sh:160 (reset) and :192 (postmove)."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "Dolphin/Textures",
+          "base": "xdg-data",
+          "path": "dolphin-emu/Load/Textures",
+          "source": "[V-script] components/dolphin/component_prepare.sh:26 (reset) and :45 (postmove); the target is component_functions.sh:18."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "Primehack",
+          "base": "xdg-data",
+          "path": "primehack/Load/Textures",
+          "source": "[V-script] components/primehack/component_prepare.sh:22 (reset) and :40 (postmove). The hub side is the emulator's directory itself, not a tree below it — the one pair wired without a subdivision."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "PPSSPP/TEXTURES",
+          "base": "xdg-config",
+          "path": "ppsspp/PSP/TEXTURES",
+          "source": "[V-script] components/ppsspp/component_prepare.sh:18 (reset) and :48 (postmove); the target is component_functions.sh:9."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "Duckstation/textures",
+          "base": "xdg-config",
+          "path": "duckstation/textures",
+          "source": "[V-script] components/duckstation/component_prepare.sh:21 (reset) and :39 (postmove); the target is component_functions.sh:5."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "Cemu/graphicPacks",
+          "base": "xdg-data",
+          "path": "Cemu/graphicPacks",
+          "source": "[V-script] components/cemu/component_prepare.sh:20 (reset) and :32 (postmove); the target is component_functions.sh:8."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "Azahar/textures",
+          "base": "xdg-data",
+          "path": "azahar-emu/load/textures",
+          "source": "[V-script] components/azahar/component_prepare.sh:28 (reset) and :46 (postmove); the target is component_functions.sh:6."
+        },
+        {
+          "family": "texture_packs",
+          "hub": "Vita3K/import",
+          "base": "storage",
+          "path": "psvita/Vita3K/ux0/textures/import",
+          "source": "[V-script] components/vita3k/component_prepare.sh:20 (reset) and :32 (postmove); the target is component_functions.sh:8 — the one row below the storage root rather than a bios or XDG one."
+        },
+        {
+          "family": "mods",
+          "hub": "retroarch-core/fbneo/patched",
+          "base": "bios",
+          "path": "fbneo/patched",
+          "source": "[V-script] components/retroarch/component_prepare.sh:113 (reset) and :203 (postmove)."
+        },
+        {
+          "family": "mods",
+          "hub": "retroarch-core/fbneo/ips",
+          "base": "bios",
+          "path": "fbneo/ips",
+          "source": "[V-script] components/retroarch/component_prepare.sh:114 (reset) and :204 (postmove)."
+        },
+        {
+          "family": "mods",
+          "hub": "retroarch-core/fbneo/romdata",
+          "base": "bios",
+          "path": "fbneo/romdata",
+          "source": "[V-script] components/retroarch/component_prepare.sh:115 (reset) and :205 (postmove)."
+        },
+        {
+          "family": "mods",
+          "hub": "retroarch-core/Citra/mods",
+          "base": "xdg-config",
+          "path": "retroarch/saves/Citra/load/mods",
+          "source": "[V-script] components/retroarch/component_prepare.sh:163 (reset) and :201 (postmove). The installer's spelling, as with the texture row beside it (issue #98)."
+        },
+        {
+          "family": "mods",
+          "hub": "retroarch-core/Dolphin/GraphicMods",
+          "base": "xdg-config",
+          "path": "retroarch/saves/dolphin-emu/User/Load/GraphicMods",
+          "source": "[V-script] components/retroarch/component_prepare.sh:164 (reset) and :202 (postmove)."
+        },
+        {
+          "family": "mods",
+          "hub": "Dolphin/GraphicMods",
+          "base": "xdg-data",
+          "path": "dolphin-emu/Load/GraphicMods",
+          "source": "[V-script] components/dolphin/component_prepare.sh:25 (reset) and :44 (postmove); the target is component_functions.sh:19."
+        },
+        {
+          "family": "mods",
+          "hub": "Primehack",
+          "base": "xdg-data",
+          "path": "primehack/Load/GraphicMods",
+          "source": "[V-script] components/primehack/component_prepare.sh:21 (reset) and :39 (postmove). The hub side is the emulator's directory itself, as with the texture row beside it."
+        },
+        {
+          "family": "mods",
+          "hub": "PPSSPP/PLUGINS",
+          "base": "xdg-config",
+          "path": "ppsspp/PSP/PLUGINS",
+          "source": "[V-script] components/ppsspp/component_prepare.sh:20 (reset) and :51 (postmove); the target is component_functions.sh:12."
+        },
+        {
+          "family": "mods",
+          "hub": "Azahar/mods",
+          "base": "xdg-data",
+          "path": "azahar-emu/load/mods",
+          "source": "[V-script] components/azahar/component_prepare.sh:27 (reset) and :45 (postmove); the target is component_functions.sh:5."
+        }
+      ]
+    }
+  }
+}

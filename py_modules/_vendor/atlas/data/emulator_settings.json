@@ -1,0 +1,346 @@
+{
+  "schema": 3,
+  "spec": "Where each standalone emulator keeps a settings file, and which flatpak app the arrangement installs it as, keyed by the %EMULATOR_…% token and then by the file's own name. This exists because the location was being stated once per question — a save card, a texture card and a mod card naming one path between them, with a fourth copy in the firmware resolver's code — and two of those statements had already drifted apart in shipped releases (#250, #256: one route read the config home while another read the data home for the same file). A card now names a file by NAME and the address lives here, once, so a disagreement is not expressible. What is here is only WHERE: the app id whose per-app trees below ~/.var/app a flatpak launch reads, the emulator's own directory, the bases in the order a launch may pick them, and the path below. What the file means for a question — which keys govern a save tree, whether a switch exists, how a legacy file is migrated — stays with the card and the code that read it. 'bases' is a list because one emulator's root is a property of its launch rather than of the emulator: DuckStation picks $XDG_CONFIG_HOME where that variable is set and absolute and the data home otherwise, so a reader probes in the stated order and the file that exists speaks. 'flatpak' is required on every row and states an app id or a cited no, because the id is a property of the INSTALLATION rather than of any one question: it used to sit on the save card, where an emulator without such a card could not reach its own trees at all (#288).",
+  "emulators": {
+    "DOLPHIN": {
+      "flatpak": {
+        "app_id": "org.DolphinEmu.dolphin-emu",
+        "citation": "[V-script] EmuDeck installs it as the org.DolphinEmu.dolphin-emu flatpak — emuDeckDolphin.sh:4-5 sets emuType to $emuDeckEmuTypeFlatpak and emuPath to the id, and installEmuFP.sh:32 hands emuPath to `flatpak install flathub \"$ID\" -y --user` and :33 grants it --filesystem=host; at EmuDeck 863ab69 and acc45fc, where the lines are identical"
+      },
+      "directory": {
+        "name": "dolphin-emu",
+        "citation": "[V-script] components/dolphin/component_functions.sh:3 pins $XDG_CONFIG_HOME/dolphin-emu/Dolphin.ini, and component_functions.sh:16 and component_functions.sh:18-19 the Load trees below $XDG_DATA_HOME/dolphin-emu (the line between them names the component's own rd_config, not a Dolphin tree) — one directory name under both bases, which is how Dolphin's own user directory works",
+        "anchors": {
+          "binary": "dolphin/bin/dolphin-emu",
+          "names": {
+            "dolphin-emu": {
+              "literal": ".dolphin-emu/"
+            }
+          }
+        }
+      },
+      "files": {
+        "Dolphin.ini": {
+          "bases": [
+            "config"
+          ],
+          "path": "Dolphin.ini",
+          "citation": "[V-script] components/dolphin/component_functions.sh:3 pins it at $XDG_CONFIG_HOME/dolphin-emu/Dolphin.ini"
+        },
+        "GFX.ini": {
+          "bases": [
+            "config"
+          ],
+          "path": "GFX.ini",
+          "citation": "[V-live] the graphics settings sit beside the Dolphin.ini components/dolphin/component_functions.sh:3 pins, in the same emulator-owned config directory"
+        }
+      }
+    },
+    "PRIMEHACK": {
+      "flatpak": {
+        "app_id": "io.github.shiiion.primehack",
+        "citation": "[V-script] EmuDeck installs it as the io.github.shiiion.primehack flatpak — emuDeckPrimehack.sh:5-6 sets emuType to $emuDeckEmuTypeFlatpak and emuPath to the id, and installEmuFP.sh:32 hands emuPath to `flatpak install flathub \"$ID\" -y --user` and :33 grants it --filesystem=host; at EmuDeck 863ab69 and acc45fc, where the lines are identical"
+      },
+      "directory": {
+        "name": "primehack",
+        "citation": "[V-source/V-binary] the build RetroDECK ships (component master-230724.27) is shiiion/dolphin 81bfb96, whose CommonPaths.h:22 sets NORMAL_USER_DIR \"primehack\"; the shipped components/primehack/bin/primehack carries \".primehack/\" as the legacy directory it would migrate from and no \".dolphin-emu/\", and components/primehack/component_functions.sh:3 pins $XDG_CONFIG_HOME/primehack to match",
+        "anchors": {
+          "binary": "primehack/bin/primehack",
+          "names": {
+            "primehack": {
+              "literal": ".primehack/"
+            }
+          }
+        },
+        "installations": {
+          "io.github.shiiion.primehack": {
+            "name": "dolphin-emu",
+            "citation": "[V-source/V-binary/V-live] the Flathub flatpak EmuDeck installs (emuDeckPrimehack.sh:5-6, version 1.0.9) is built from shiiion/dolphin 53f53e0, whose CommonPaths.h:21 sets NORMAL_USER_DIR \"dolphin-emu\"; its bin/dolphin-emu carries \".dolphin-emu/\" and no \".primehack/\", EmuDeck names ~/.var/app/io.github.shiiion.primehack/config/dolphin-emu/Dolphin.ini (:7) and links the save trees below .../data/dolphin-emu (:57-59). The fork renamed its user directory to primehack and later renamed it back; the two arrangements ship builds from either side of that change",
+            "anchors": {
+              "flatpak": "io.github.shiiion.primehack",
+              "binary": "bin/dolphin-emu",
+              "names": {
+                "dolphin-emu": {
+                  "literal": ".dolphin-emu/"
+                }
+              }
+            }
+          }
+        }
+      },
+      "files": {
+        "GFX.ini": {
+          "bases": [
+            "config"
+          ],
+          "path": "GFX.ini",
+          "citation": "[V-live] the fork's graphics settings sit beside the Dolphin.ini components/primehack/component_functions.sh:3 pins at $XDG_CONFIG_HOME/primehack"
+        },
+        "Dolphin.ini": {
+          "bases": [
+            "config"
+          ],
+          "path": "Dolphin.ini",
+          "citation": "[V-script] components/primehack/component_functions.sh:3 pins it at $XDG_CONFIG_HOME/primehack/Dolphin.ini, and EmuDeck names the same file below the flatpak's own config home (emuDeckPrimehack.sh:7)"
+        }
+      }
+    },
+    "PPSSPP": {
+      "flatpak": {
+        "app_id": "org.ppsspp.PPSSPP",
+        "citation": "[V-script] EmuDeck installs it as the org.ppsspp.PPSSPP flatpak — emuDeckPPSSPP.sh:4-5 sets emuType to $emuDeckEmuTypeFlatpak and emuPath to the id, and installEmuFP.sh:32 hands emuPath to `flatpak install flathub \"$ID\" -y --user` and :33 grants it --filesystem=host; at EmuDeck 863ab69 and acc45fc, where the lines are identical"
+      },
+      "directory": {
+        "name": "ppsspp",
+        "citation": "[V-script] components/ppsspp/component_functions.sh:3-5 and component_functions.sh:9-13 each pin a PPSSPP path below $XDG_CONFIG_HOME/ppsspp (the lines between name the component's own rd_ trees, no PPSSPP path elsewhere)",
+        "anchors": {
+          "binary": "ppsspp/bin/PPSSPPSDL",
+          "names": {
+            "ppsspp": {
+              "literal": ".ppsspp/"
+            }
+          }
+        }
+      },
+      "files": {
+        "ppsspp.ini": {
+          "bases": [
+            "config"
+          ],
+          "path": "PSP/SYSTEM/ppsspp.ini",
+          "citation": "[V-script] components/ppsspp/component_functions.sh:3 pins it at $XDG_CONFIG_HOME/ppsspp/PSP/SYSTEM/ppsspp.ini"
+        }
+      }
+    },
+    "XEMU": {
+      "flatpak": {
+        "app_id": "app.xemu.xemu",
+        "citation": "[V-script] EmuDeck installs it as the app.xemu.xemu flatpak — emuDeckXemu.sh:4-5 sets emuType to $emuDeckEmuTypeFlatpak and emuPath to the id, and installEmuFP.sh:32 hands emuPath to `flatpak install flathub \"$ID\" -y --user` and :33 grants it --filesystem=host; at EmuDeck 863ab69 and acc45fc, where the lines are identical"
+      },
+      "directory": {
+        "name": "xemu/xemu",
+        "citation": "[V-live] xemu keeps its own tree at $XDG_DATA_HOME/xemu/xemu, the doubled segment its own base path — not the config-home spelling components/xemu/component_functions.sh:3 names, which is the file the arrangement writes and not the one xemu reads (#250)",
+        "anchors": {
+          "binary": "xemu/bin/xemu",
+          "names": {
+            "xemu": {
+              "literal": "xemu"
+            }
+          }
+        }
+      },
+      "files": {
+        "xemu.toml": {
+          "bases": [
+            "data"
+          ],
+          "path": "xemu.toml",
+          "citation": "[V-binary/V-script] the shipped binary takes its base path from SDL_GetPrefPath, which on Linux is $XDG_DATA_HOME/<org>/<app>/; RetroDECK says the same while linking a config-tree directory there — 'linking back to original location where component will look' (components/xemu/component_prepare.sh:16-17)"
+        }
+      }
+    },
+    "CEMU": {
+      "flatpak": {
+        "app_id": null,
+        "citation": "[V-script] EmuDeck installs it as the Cemu AppImage below $emusFolder rather than a flatpak (emuDeckCemu.sh:10-11; at EmuDeck 863ab69 and acc45fc, where the lines are identical), so no app id is established for it — a flatpak a user installed by hand is not this arrangement's install and names no id atlas has read"
+      },
+      "directory": {
+        "name": "Cemu",
+        "citation": "[V-script] components/cemu/component_functions.sh:3 pins $XDG_CONFIG_HOME/Cemu/settings.xml and :8 $XDG_DATA_HOME/Cemu/graphicPacks",
+        "anchors": {
+          "binary": "cemu/bin/Cemu_relwithdebinfo",
+          "names": {
+            "Cemu": {
+              "literal": "Cemu"
+            }
+          }
+        }
+      },
+      "files": {
+        "settings.xml": {
+          "bases": [
+            "config"
+          ],
+          "path": "settings.xml",
+          "citation": "[V-script] components/cemu/component_functions.sh:3 pins it at $XDG_CONFIG_HOME/Cemu/settings.xml"
+        }
+      }
+    },
+    "AZAHAR": {
+      "flatpak": {
+        "app_id": null,
+        "citation": "[V-script] EmuDeck installs it as the azahar AppImage below $emusFolder rather than a flatpak (emuDeckAzahar.sh:4-5; at EmuDeck 863ab69 and acc45fc, where the lines are identical), so no app id is established for it — a flatpak a user installed by hand is not this arrangement's install and names no id atlas has read"
+      },
+      "directory": {
+        "name": "azahar-emu",
+        "citation": "[V-script] components/azahar/component_functions.sh:3 pins $XDG_CONFIG_HOME/azahar-emu and :5-9 the load, shader, log and cheat trees below $XDG_DATA_HOME/azahar-emu",
+        "anchors": {
+          "binary": "azahar/bin/azahar",
+          "names": {
+            "azahar-emu": {
+              "literal": "azahar-emu"
+            }
+          }
+        }
+      },
+      "files": {
+        "qt-config.ini": {
+          "bases": [
+            "config"
+          ],
+          "path": "qt-config.ini",
+          "citation": "[V-script] components/azahar/component_functions.sh:3-4 pins it at $XDG_CONFIG_HOME/azahar-emu/qt-config.ini"
+        }
+      }
+    },
+    "DUCKSTATION": {
+      "flatpak": {
+        "app_id": null,
+        "citation": "[V-script] EmuDeck installs it as the DuckStation AppImage below $emusFolder rather than a flatpak (emuDeckDuckStation.sh:5-6; at EmuDeck 863ab69 and acc45fc, where the lines are identical), so no app id is established for it — a flatpak a user installed by hand is not this arrangement's install and names no id atlas has read"
+      },
+      "directory": {
+        "name": "duckstation",
+        "citation": "[V-source] the DataRoot is the duckstation directory below whichever base the launch picks (qthost.cpp:562-582 at stenzek/duckstation@64655818e); components/duckstation/component_functions.sh:3-12 pin the config-home spelling",
+        "anchors": {
+          "binary": "duckstation/bin/duckstation-qt",
+          "names": {
+            "duckstation": {
+              "literal": "duckstation"
+            }
+          }
+        }
+      },
+      "files": {
+        "settings.ini": {
+          "bases": [
+            "config",
+            "data"
+          ],
+          "path": "settings.ini",
+          "citation": "[V-source] the DataRoot is $XDG_CONFIG_HOME/duckstation where that variable is set and absolute, else ~/.local/share/duckstation (qthost.cpp:562-582 at stenzek/duckstation@64655818e), and settings.ini lives inside it; no file records which branch a launch took, so both are candidates in that order"
+        }
+      }
+    },
+    "PCSX2": {
+      "flatpak": {
+        "app_id": null,
+        "citation": "[V-script] EmuDeck installs it as the pcsx2-Qt AppImage below $emusFolder rather than a flatpak (emuDeckPCSX2QT.sh:4-5; at EmuDeck 863ab69 and acc45fc, where the lines are identical), so no app id is established for it — a flatpak a user installed by hand is not this arrangement's install and names no id atlas has read"
+      },
+      "directory": {
+        "name": "PCSX2",
+        "citation": "[V-script] components/pcsx2/component_functions.sh:3-6 and component_functions.sh:9-14 each pin a PCSX2 path below $XDG_CONFIG_HOME/PCSX2 (the two lines between name the component's own rd_ trees, no PCSX2 path elsewhere)",
+        "anchors": {
+          "binary": "pcsx2/bin/pcsx2-qt",
+          "names": {
+            "PCSX2": {
+              "literal": "PCSX2"
+            }
+          }
+        }
+      },
+      "files": {
+        "PCSX2.ini": {
+          "bases": [
+            "config"
+          ],
+          "path": "inis/PCSX2.ini",
+          "citation": "[V-script] components/pcsx2/component_functions.sh:3 pins it at $XDG_CONFIG_HOME/PCSX2/inis/PCSX2.ini"
+        }
+      }
+    },
+    "MELONDS": {
+      "flatpak": {
+        "app_id": "net.kuribo64.melonDS",
+        "citation": "[V-script] EmuDeck installs it as the net.kuribo64.melonDS flatpak — emuDeckMelonDS.sh:4-5 sets emuType to $emuDeckEmuTypeFlatpak and emuPath to the id, and installEmuFP.sh:32 hands emuPath to `flatpak install flathub \"$ID\" -y --user` and :33 grants it --filesystem=host; at EmuDeck 863ab69 and acc45fc, where the lines are identical"
+      },
+      "directory": {
+        "name": "melonDS",
+        "citation": "[V-script] components/melonds/component_functions.sh:3 pins $XDG_CONFIG_HOME/melonDS/melonDS.toml",
+        "anchors": {
+          "binary": "melonds/bin/melonDS",
+          "names": {
+            "melonDS": {
+              "literal": "melonDS"
+            }
+          }
+        }
+      },
+      "files": {
+        "melonDS.toml": {
+          "bases": [
+            "config"
+          ],
+          "path": "melonDS.toml",
+          "citation": "[V-script] components/melonds/component_functions.sh:3 pins it at $XDG_CONFIG_HOME/melonDS/melonDS.toml"
+        },
+        "melonDS.ini": {
+          "bases": [
+            "config"
+          ],
+          "path": "melonDS.ini",
+          "citation": "[V-source] the pre-1.0 file Config::Load falls back to where no TOML exists, read line by line as the built-in migration (LoadLegacyFile, Config.cpp:705-717 at melonDS 1.1) from the same directory as the TOML"
+        }
+      }
+    },
+    "RPCS3": {
+      "flatpak": {
+        "app_id": null,
+        "citation": "[V-script] EmuDeck installs it as the rpcs3 AppImage below $emusFolder rather than a flatpak (emuDeckRPCS3.sh:4-5; at EmuDeck 863ab69 and acc45fc, where the lines are identical), so no app id is established for it — a flatpak a user installed by hand is not this arrangement's install and names no id atlas has read; a legacy script beside it still names net.rpcs3.RPCS3 (emuDeckRPCS3Legacy.sh:4-5) and nothing in the deployed backend references it, so it establishes no install either"
+      },
+      "directory": {
+        "name": "rpcs3",
+        "citation": "[V-script] components/rpcs3/component_functions.sh:3-4 and component_functions.sh:6-9 each pin an rpcs3 path below $XDG_CONFIG_HOME/rpcs3 (the line between pins the log below $XDG_CACHE_HOME, a tree no answer names)",
+        "anchors": {
+          "binary": "rpcs3/bin/rpcs3",
+          "names": {
+            "rpcs3": {
+              "literal": "rpcs3"
+            }
+          }
+        }
+      },
+      "files": {
+        "vfs.yml": {
+          "bases": [
+            "config"
+          ],
+          "path": "vfs.yml",
+          "citation": "[V-source/V-script] the emulator keeps its VFS mapping beside the config.yml components/rpcs3/component_functions.sh:3 pins at $XDG_CONFIG_HOME/rpcs3; vfs_config.cpp:14-62 at build 7c6b3dcd is what reads it"
+        }
+      }
+    },
+    "VITA3K": {
+      "flatpak": {
+        "app_id": null,
+        "citation": "[V-script] EmuDeck installs it as an executable it unpacks below $emusFolder rather than a flatpak (emuDeckVita3K.sh:5-6; at EmuDeck 863ab69 and acc45fc, where the lines are identical), so no app id is established for it — a flatpak a user installed by hand is not this arrangement's install and names no id atlas has read"
+      },
+      "directory": {
+        "name": "Vita3K",
+        "citation": "[V-script] components/vita3k/component_functions.sh:3-4 pin $XDG_CONFIG_HOME/Vita3K and :9-10 the language and patch trees below $XDG_DATA_HOME/Vita3K",
+        "anchors": {
+          "binary": "vita3k/bin/Vita3K",
+          "names": {
+            "Vita3K": {
+              "literal": "Vita3K"
+            }
+          }
+        }
+      },
+      "files": {
+        "config.yml": {
+          "bases": [
+            "config"
+          ],
+          "path": "config.yml",
+          "citation": "[V-script] components/vita3k/component_functions.sh:3 pins it at $XDG_CONFIG_HOME/Vita3K/config.yml"
+        }
+      }
+    },
+    "MAME": {
+      "flatpak": {
+        "app_id": "org.mamedev.MAME",
+        "citation": "[V-script] EmuDeck installs it as the org.mamedev.MAME flatpak — emuDeckMAME.sh:4-5 sets emuType to $emuDeckEmuTypeFlatpak and emuPath to the id, and installEmuFP.sh:32 hands emuPath to `flatpak install flathub \"$ID\" -y --user` and :33 grants it --filesystem=host; at EmuDeck 863ab69 and acc45fc, where the lines are identical"
+      }
+    }
+  }
+}

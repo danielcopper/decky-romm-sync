@@ -1,0 +1,519 @@
+{
+  "schema": 1,
+  "spec": "Where each emulator reads texture packs, for the part of that answer no read of the machine recovers. Two blocks, because the two kinds of emulator are handed their root by different parties. 'cores' covers libretro cores: the ROOT is never here — it is resolved live, per root kind, exactly as the save routes resolve theirs — and neither is the option's VALUE, which is read from the options file RetroArch would read first or from the default the installed core registers; what is here is the fragment below the root, the setting that governs replacement and which of its values mean on, and the keying of the tree. 'emulators' covers standalone emulators, keyed by the %EMULATOR_…% token the frontend's own launch command names, because for a standalone entry that token is the only identifier there is: a standalone emulator opens its own default directory below an XDG base, so a card names the base and the subpath and the arrangement resolves where that base is. What no standalone card carries is the switch — whether replacement is on lives in that emulator's own settings file, which this file names and atlas does not read (emulator-config-unread). Every recorded fact in either block is per-emulator behaviour written nowhere on a machine, so every one carries provenance and is refused by the loader without it. An emulator absent from this file is not one without texture packs: it is one whose wiring atlas has not established, and the resolver says exactly that. Two absences are deliberate. PCSX2 standalone and Vita3K: their texture root is not an emulator default at all — RetroDECK writes it into the emulator's own configuration (Folders/Textures in PCSX2.ini, components/pcsx2/component_prepare.sh:46-47,:90; pref-path in Vita3K's config.yml, components/vita3k/component_prepare.sh:18,:36) — so reading it means modelling that configuration, and quoting the path the installer intended would state an arrangement's directory as an emulator's read location, which is the mistake this file exists to avoid. A third thing a core card can say about the switch, beside naming an option and saying nothing: 'absent_switch' states that the build compiles the feature in and offers no way to turn it on — the setting exists in the emulator's vocabulary, nothing in the shipped build writes it, and 'enabled' is then a fact about the binary rather than a reading of any file. It is the strongest negative here, so it is the one pinned to a core generation: core_audit.json records the build it was proven against, and a machine running another one gets the claim with unverified-version beside it. A card states an option or an absent switch, never both.",
+  "emulators": {
+    "DOLPHIN": {
+      "textures": {
+        "base": "data",
+        "subdir": "Load/Textures",
+        "keying": {
+          "value": "game-id",
+          "citation": "[V-binary] the shipped dolphin-emu (RetroDECK 0.10.9b components/dolphin/bin/dolphin-emu) carries the setting description \"Loads custom textures from User/Load/Textures/<game_id>/ …\" as a NUL-delimited literal — the emulator states the keying itself. ('User/' is the portable-build spelling of the user directory; on Linux that directory IS $XDG_DATA_HOME/dolphin-emu.)"
+        },
+        "settings": "GFX.ini"
+      },
+      "provenance": {
+        "source": "[V-binary/V-script] The shipped binary carries \"dolphin-emu\" as its user-directory name and \"Load/\" beside the description literal above; RetroDECK names the same path in components/dolphin/component_functions.sh:18 ($XDG_DATA_HOME/dolphin-emu/Load/Textures) and links it into its shared tree (component_prepare.sh:26,:45). The replacement switch lives in GFX.ini, which RetroDECK ships into the emulator's config directory (components/dolphin/rd_config/GFX.ini beside the Dolphin.ini that component_functions.sh:3 pins to $XDG_CONFIG_HOME/dolphin-emu) — atlas does not read it."
+      },
+      "anchors": {
+        "binary": "dolphin/bin/dolphin-emu",
+        "names": {
+          "GFX.ini": {
+            "literal": "GFX.ini"
+          },
+          "Load": {
+            "literal": "Load"
+          },
+          "Textures": {
+            "literal": "Textures"
+          }
+        }
+      }
+    },
+    "PRIMEHACK": {
+      "textures": {
+        "base": "data",
+        "subdir": "Load/Textures",
+        "keying": {
+          "value": "game-id",
+          "citation": "[V-binary] the shipped primehack (RetroDECK 0.10.9b components/primehack/bin/primehack) carries the same Dolphin-line description literal \"Loads custom textures from User/Load/Textures/<game_id>/ …\" — the fork inherits the keying with the code that reads it."
+        },
+        "settings": "GFX.ini"
+      },
+      "provenance": {
+        "source": "[V-script/D-binary] A Dolphin fork with its own user directory: RetroDECK links $XDG_DATA_HOME/primehack/Load/Textures (components/primehack/component_prepare.sh:22,:40), and the binary carries the Dolphin description literal but no directory name of its own, so the 'primehack' component is [D] from the fork's own user-directory convention as the script spells it. Its GFX.ini ships under components/primehack/rd_config/config/GFX.ini, next to the Dolphin.ini component_functions.sh:3 pins to $XDG_CONFIG_HOME/primehack."
+      },
+      "anchors": {
+        "binary": "primehack/bin/primehack",
+        "names": {
+          "GFX.ini": {
+            "literal": "GFX.ini"
+          },
+          "Load": {
+            "literal": "Load"
+          },
+          "Textures": {
+            "literal": "Textures"
+          }
+        }
+      }
+    },
+    "PPSSPP": {
+      "textures": {
+        "base": "config",
+        "subdir": "PSP/TEXTURES",
+        "settings": "ppsspp.ini"
+      },
+      "provenance": {
+        "source": "[V-binary/V-script] The shipped PPSSPPSDL carries \"ppsspp\", \"TEXTURES\" and the pack manifest name \"textures.ini\" as whole NUL-delimited literals; \"PSP/\" is NOT one there — it appears only inside longer runs (\"ms:/PSP/\", \"PSP/GAME/\") and as an instruction immediate, so that component rests on the arrangement script rather than on the binary (the libretro core does carry \"PSP/\" whole, which is a different build). RetroDECK names the joined path in components/ppsspp/component_functions.sh:9 ($XDG_CONFIG_HOME/ppsspp/PSP/TEXTURES) and links it (component_prepare.sh:18,:48). The replacement switch lives in ppsspp.ini, pinned by component_functions.sh:3 — atlas does not read it. [O] how the tree below TEXTURES is keyed is not stated in the binary, so no keying is recorded."
+      },
+      "anchors": {
+        "binary": "ppsspp/bin/PPSSPPSDL",
+        "names": {
+          "PSP": {
+            "literal": "PSP"
+          },
+          "TEXTURES": {
+            "literal": "TEXTURES"
+          },
+          "ppsspp.ini": {
+            "literal": "ppsspp.ini"
+          }
+        }
+      }
+    },
+    "DUCKSTATION": {
+      "textures": {
+        "directory": {
+          "section": "Folders",
+          "key": "Textures",
+          "default": "textures",
+          "citation": "settings.cpp:1978 at stenzek/duckstation@64655818e reads it through LoadPathFromSettings (:1953-1962), which falls back to the compiled default and resolves a relative value against the DataRoot; the shipped binary carries \"Textures\" and \"textures\" as whole NUL-delimited runs"
+        },
+        "settings": "settings.ini"
+      },
+      "provenance": {
+        "source": "[V-binary/V-source/V-script] The DuckStation build RetroDECK ships as 'DuckStation (Legacy)', the fork release frozen 2024-09-19; citations pin stenzek/duckstation@64655818e. The directory is a configuration value rather than a default the emulator opens at a fixed XDG join: [Folders] Textures, read through the same LoadPathFromSettings helper every folder of this emulator goes through (settings.cpp:1978 with :1953-1962), so an unset or empty key means the compiled default 'textures' below the DataRoot and a relative value hangs off it. That DataRoot is what makes the fixed shape wrong here: it is $XDG_CONFIG_HOME/duckstation where that variable is set and absolute, else ~/.local/share/duckstation (qthost.cpp:562-582), so the config-side join is right on RetroDECK — whose flatpak sets the variable — and wrong on an EmuDeck AppImage, where the same emulator's mod answer already read the other root. RetroDECK writes no such key: it links its shared tree at the default location (component_functions.sh:5, component_prepare.sh:21,:39), which is why the answer there is unchanged. settings.ini is named as the config-side spelling the arrangement pins (component_functions.sh:3); the resolver probes both DataRoot candidates and names the one that spoke. [O] the binary's serial machinery is about file names elsewhere and does not establish how the texture tree is keyed, so no keying is recorded."
+      },
+      "anchors": {
+        "binary": "duckstation/bin/duckstation-qt",
+        "names": {
+          "Folders": {
+            "literal": "Folders"
+          },
+          "Textures": {
+            "literal": "Textures"
+          },
+          "settings.ini": {
+            "literal": "settings.ini"
+          },
+          "textures": {
+            "literal": "textures"
+          }
+        }
+      }
+    },
+    "CEMU": {
+      "textures": {
+        "base": "data",
+        "subdir": "graphicPacks",
+        "keying": {
+          "value": "pack",
+          "citation": "[V-binary] the shipped Cemu_relwithdebinfo carries \"graphicPacks\", \"graphicPacks/downloadedGraphicPacks/{}\" and \"rules.txt\" as NUL-delimited literals: the level below the root is a pack directory holding a rules.txt, not a per-game directory — which is why this row is 'pack' where every other row is keyed by the content."
+        },
+        "settings": "settings.xml"
+      },
+      "provenance": {
+        "source": "[V-binary/V-script] The shipped binary carries \"Cemu\" and \"graphicPacks\"; RetroDECK names the joined path in components/cemu/component_functions.sh:8 ($XDG_DATA_HOME/Cemu/graphicPacks) and links it (component_prepare.sh:20,:32). settings.xml is pinned by component_functions.sh:3 and is not read here."
+      },
+      "anchors": {
+        "binary": "cemu/bin/Cemu_relwithdebinfo",
+        "names": {
+          "graphicPacks": {
+            "literal": "graphicPacks"
+          },
+          "settings.xml": {
+            "literal": "settings.xml"
+          }
+        }
+      }
+    },
+    "AZAHAR": {
+      "textures": {
+        "base": "data",
+        "subdir": "load/textures",
+        "keying": {
+          "value": "title-id",
+          "citation": "[V-binary] the shipped azahar (RetroDECK 0.10.9b components/azahar/bin/azahar) carries the custom-texture loader's path template \"{}textures/{:016X}/\" as a NUL-delimited literal — a 16-hex-digit component is a 3DS title id."
+        },
+        "settings": "qt-config.ini"
+      },
+      "provenance": {
+        "source": "[V-binary/V-script] The shipped binary carries \"/azahar-emu/\" as its user-directory name and the loader template above; RetroDECK names the joined path in components/azahar/component_functions.sh:6 ($XDG_DATA_HOME/azahar-emu/load/textures) and links it (component_prepare.sh:28,:46). qt-config.ini is pinned by component_functions.sh:4 and is not read here. Unlike the azahar libretro core's row, this one has no open root question: a standalone emulator opens its own XDG directory, and both the binary and the arrangement name the same one."
+      },
+      "anchors": {
+        "binary": "azahar/bin/azahar",
+        "names": {
+          "load": {
+            "literal": "load"
+          },
+          "qt-config.ini": {
+            "literal": "qt-config.ini"
+          },
+          "textures": {
+            "literal": "textures"
+          }
+        }
+      }
+    },
+    "PCSX2": {
+      "textures": {
+        "directory": {
+          "section": "Folders",
+          "key": "Textures",
+          "default": "textures",
+          "citation": "Pcsx2Config.cpp:2293 at v2.6.3 reads it through LoadPathFromSettings (:2272-2278), which falls back to the compiled default and resolves a relative value against the DataRoot; :2265 writes that default into a fresh ini"
+        },
+        "switch": {
+          "section": "EmuCore/GS",
+          "key": "LoadTextureReplacements",
+          "default": "false",
+          "citation": "Pcsx2Config.cpp:774 is the compiled default and :1004 the ini key, the section at :908; ReloadReplacementMap returns before scanning while it is off (GSTextureReplacements.cpp:391-393 at v2.6.3)"
+        },
+        "keying": {
+          "value": "serial",
+          "citation": "[V-source] GetGameTextureDirectory is Path::Combine(EmuFolders::Textures, s_current_serial) (GSTextureReplacements.cpp:262-265 at v2.6.3), and the serial is the running disc's (:335)"
+        },
+        "settings": "PCSX2.ini"
+      },
+      "provenance": {
+        "source": "[V-source/V-binary/V-live] PCSX2 v2.6.3, the release RetroDECK ships. The directory is a configuration value rather than a default the emulator opens: [Folders] Textures, read through the same helper the memory-card directory goes through (LoadPathFromSettings, Pcsx2Config.cpp:2272-2278, :2293), with the compiled default 'textures' and a relative value resolved against the DataRoot — the config side on Linux either way (:2197-2217). Below it the tree is staged per game and both stages are named: replacements load from <Textures>/<serial>/replacements and dumps are written to <Textures>/<serial>/dumps (GSTextureReplacements.cpp:39-40, :262-265, :274, :281). The answer therefore states the load stage rather than the root, because a client placing a pack at the root would place it where nothing reads it. Case is not forgiven on a case-sensitive filesystem: a wrongly-cased serial or replacements directory is warned about and left unused (:400-412). Every name here is a whole string in the shipped binary. RetroDECK points [Folders] Textures at its own texture_packs/PCSX2/textures tree (component_prepare.sh:47), observed live. Both readings are the global ones: a running game installs <DataRoot>/gamesettings/<serial>_<crc>.ini as a layer over the whole configuration and every core key is read through it (UpdateGameSettingsLayer, VMManager.cpp:932-969; GetGameSettingsPath, :774-781; the directory is [Folders] GameSettings, default 'gamesettings' below the DataRoot, Pcsx2Config.cpp:2290), so the switch and the directory can both answer differently for one game. Which game runs is not a fact atlas holds, so the answer stays the global reading and states per-game-overrides-present where such files exist on the machine."
+      },
+      "anchors": {
+        "binary": "pcsx2/bin/pcsx2-qt",
+        "names": {
+          "PCSX2.ini": {
+            "literal": "PCSX2.ini"
+          },
+          "Folders": {
+            "literal": "Folders"
+          },
+          "Textures": {
+            "literal": "Textures"
+          },
+          "textures": {
+            "literal": "textures"
+          },
+          "EmuCore/GS": {
+            "literal": "EmuCore/GS"
+          },
+          "LoadTextureReplacements": {
+            "literal": "LoadTextureReplacements"
+          }
+        }
+      }
+    }
+  },
+  "cores": {
+    "flycast": {
+      "identifiers": {
+        "library_name": [
+          "Flycast"
+        ]
+      },
+      "textures": {
+        "root": "system_directory",
+        "subdir": "dc/textures",
+        "keying": {
+          "value": "game-id",
+          "citation": "[V-binary] flycast_libretro.so (1dac369): the reicast_custom_textures option description is the NUL-delimited literal \"Load custom textures located in the 'system/dc/textures/<game-id>/' folder.\" — the core states the keying itself, in the same sentence that states the directory."
+        },
+        "replacement_option": {
+          "setting": "reicast_custom_textures",
+          "values": {
+            "enabled": true,
+            "disabled": false
+          }
+        }
+      },
+      "provenance": {
+        "source": "[V-binary] flycast_libretro.so (1dac369) carries \"system/dc/textures/<game-id>/\" and the option key \"reicast_custom_textures\" as NUL-delimited literals; 'system' is the directory RetroArch hands the core, so the fragment recorded here is what follows it. [V-live] RetroDECK 0.10.9b links $bios_path/dc/textures into its shared texture tree (components/retroarch/component_prepare.sh:160), and EmuDeck leaves the same path a real directory under its bios root — two arrangements arriving at the directory the core names."
+      },
+      "anchors": {
+        "names": {
+          "dc": {
+            "literal": "dc"
+          },
+          "reicast_custom_textures": {
+            "literal": "reicast_custom_textures"
+          },
+          "textures": {
+            "literal": "textures"
+          }
+        }
+      }
+    },
+    "mesen": {
+      "identifiers": {
+        "library_name": [
+          "Mesen"
+        ]
+      },
+      "textures": {
+        "root": "system_directory",
+        "subdir": "HdPacks",
+        "replacement_option": {
+          "setting": "mesen_hdpacks",
+          "values": {
+            "enabled": true,
+            "disabled": false
+          }
+        }
+      },
+      "provenance": {
+        "source": "[V-binary] mesen_libretro.so (0.9.9) carries \"HdPacks\", the pack manifest name \"hires.txt\" and the option key \"mesen_hdpacks\" as NUL-delimited literals. [V-live] RetroDECK 0.10.9b links $bios_path/HdPacks (components/retroarch/component_prepare.sh:154) and EmuDeck creates it as a real directory under its bios root (functions/createFolders.sh:11). [O] how the tree below HdPacks is keyed is not stated in the binary, so no keying is recorded — upstream names packs after the ROM, and a derived answer is not one atlas gives."
+      },
+      "anchors": {
+        "names": {
+          "HdPacks": {
+            "literal": "HdPacks"
+          },
+          "mesen_hdpacks": {
+            "literal": "mesen_hdpacks"
+          }
+        }
+      }
+    },
+    "mupen64plus_next": {
+      "identifiers": {
+        "library_name": [
+          "Mupen64Plus-Next"
+        ]
+      },
+      "textures": {
+        "root": "system_directory",
+        "subdir": "Mupen64plus/hires_texture",
+        "replacement_option": {
+          "setting": "mupen64plus-txHiresEnable",
+          "values": {
+            "True": true,
+            "False": false
+          }
+        }
+      },
+      "provenance": {
+        "source": "[V-binary] mupen64plus_next_libretro.so (2.8-Vulkan 680e033) carries \"Mupen64plus/\" as an 8-bit NUL-delimited literal and \"/hires_texture\" as a 32-bit wide-character one — the second is invisible to a plain strings pass and was read with the wide encodings, which is why the recorded fragment is the join of the two. The option key \"mupen64plus-txHiresEnable\" is an 8-bit literal, described there as \"(GLN64) Enable High-Res Texture packs if available.\". The sibling \"/cache\" (the compiled texture cache, same encoding) is deliberately not the answer: it holds what the loader wrote, not what a caller installs. [V-live] RetroDECK 0.10.9b links both under $bios_path/Mupen64plus (components/retroarch/component_prepare.sh:155-156); EmuDeck creates $biosPath/Mupen64plus/cache and leaves the loader to create hires_texture beside it (functions/createFolders.sh:12)."
+      },
+      "anchors": {
+        "names": {
+          "Mupen64plus": {
+            "literal": "Mupen64plus"
+          },
+          "hires_texture": {
+            "literal": "hires_texture",
+            "encoding": "utf-32le"
+          },
+          "mupen64plus-txHiresEnable": {
+            "literal": "mupen64plus-txHiresEnable"
+          }
+        }
+      }
+    },
+    "pcsx2": {
+      "identifiers": {
+        "library_name": [
+          "LRPS2"
+        ]
+      },
+      "textures": {
+        "root": "system_directory",
+        "subdir": "pcsx2/textures",
+        "keying": {
+          "value": "serial",
+          "citation": "[V-source] pcsx2@14d19f8 GSTextureReplacements.cpp:260-262 builds the per-game level from the running disc's serial, and :304 appends the fixed 'replacements' subdirectory below it — so the full read shape is textures/<serial>/replacements/ and the level a caller keys by is the serial. The fixed sub-level is stated here and in provenance rather than in a field of its own: no decided field carries a constant below the keyed level, and inventing one would be new contract surface."
+        },
+        "absent_switch": {
+          "setting": "EmuCore/GS/LoadTextureReplacements",
+          "enabled": false,
+          "verified_core": "14d19f8",
+          "citation": "[V-source] The setting defaults false (pcsx2@14d19f8 Pcsx2Config.cpp:433) and nothing in this build can write it true: the libretro frontend installs a memory-only settings store (libretro/main.cpp:85) whose sole LAYER_BASE load is at :1915, there is no ini, and the one writer is the defaults pass itself: VMManager::SetDefaultSettings reaches SettingsWrapBitBool in the save direction (VMManager.cpp:1100-1102, called from libretro/main.cpp:1918) and writes the compiled false once into that store. Nothing anywhere in the build can write true. So replacement is compiled in, aimed at the directory above, and permanently off; it is not a core option and no configuration on any machine can turn it on. The claim is scoped to the build it was proven against by this block's own verified_core, and the answer says so when the shipped core no longer matches."
+        }
+      },
+      "provenance": {
+        "source": "[V-source/V-binary] The shipped 14d19f8 build carries 'LoadTextureReplacements' and 'replacements' as NUL-delimited literals, and its two path components as tail-merged suffixes — 'textures' inside GL_EXT_protected_textures (0x8e6d6a), 'Textures' inside glBindTextures (0x8e7813) — which is why an earlier token scan recorded them as absent (see the third trap in docs/research/core-audit.md). [V-live] RetroDECK 0.10.9b links $bios_path/pcsx2/textures into its shared tree (components/retroarch/component_prepare.sh:103,:131). One thing the filesystem cannot tell you here: the core CREATES <system_directory>/pcsx2/textures on every retro_load_game (libretro/main.cpp:1922 -> Pcsx2Config.cpp:1084-1085), so the directory's existence — or its emptiness — is evidence of nothing about whether packs are read."
+      },
+      "anchors": {
+        "names": {
+          "EmuCore/GS/LoadTextureReplacements": {
+            "literal": "LoadTextureReplacements"
+          },
+          "pcsx2": {
+            "literal": "pcsx2"
+          },
+          "textures": {
+            "literal": "textures"
+          }
+        }
+      }
+    },
+    "azahar": {
+      "identifiers": {
+        "library_name": [
+          "Azahar"
+        ]
+      },
+      "textures": {
+        "root": "savefile_directory",
+        "subdir": "azahar-emu/load/textures",
+        "keying": {
+          "value": "title-id",
+          "citation": "[V-binary] azahar_libretro.so (9701a3d): the custom-texture loader's path template is the NUL-delimited literal \"{}textures/{:016X}/\" beside \"/builds/libretro/azahar/src/video_core/custom_textures/custom_tex_manager.cpp\" — a 16-hex-digit component is a 3DS title id, so the core states the keying even where it does not state the whole path."
+        },
+        "replacement_option": {
+          "setting": "citra_custom_textures",
+          "values": {
+            "enabled": true,
+            "disabled": false
+          }
+        }
+      },
+      "provenance": {
+        "source": "[V-binary/O-root] azahar_libretro.so (9701a3d) carries all three components as whole NUL-delimited literals: \"/azahar-emu/\" (0x22d90e2) as its user-directory name, \"load/\" (0x22d9140) in the user-path table beside \"config/\", \"cache/\", \"sdmc/\", \"nand/\", \"shaders/\" and \"states/\" around SetUserPath in src/common/file_util.cpp, and \"{}textures/{:016X}/\" as the loader's template. The standalone build carries the same table (\"load/\" at 0x1ae6865), so neither row's 'load/' rests on the Citra line's layout being inherited. [O] which root that user directory hangs off is the open question the audit already carries for this core's saves (core_audit.json: azahar, verdict 'suspect'): RetroDECK 0.10.9b prepares its link under the RetroArch config tree's own saves directory rather than the configured one (components/retroarch/component_prepare.sh:157, and it names Citra rather than azahar-emu), and nothing has been observed reading either. So the location recorded here is the one the libretro save-directory contract derives, and every answer built on it states emulator-read-unestablished until issue #98 closes the verdict."
+      },
+      "anchors": {
+        "names": {
+          "azahar-emu": {
+            "literal": "azahar-emu"
+          },
+          "citra_custom_textures": {
+            "literal": "citra_custom_textures"
+          },
+          "load": {
+            "literal": "load"
+          },
+          "textures": {
+            "literal": "textures"
+          }
+        }
+      }
+    },
+    "dolphin": {
+      "identifiers": {
+        "library_name": [
+          "dolphin-emu"
+        ]
+      },
+      "textures": {
+        "root": "savefile_directory",
+        "subdir": "dolphin-emu/User/Load/Textures",
+        "replacement_option": {
+          "setting": "dolphin_load_custom_textures",
+          "values": {
+            "enabled": true,
+            "disabled": false
+          }
+        }
+      },
+      "provenance": {
+        "source": "[D] dolphin_libretro.so (fd1aca3a) carries \"/dolphin-emu/User\" and \"Load/\" as NUL-delimited literals and the option key \"dolphin_load_custom_textures\" beside the menu path \"Graphics > Enhancements > Load Custom Textures\"; the final \"Textures\" component is upstream Dolphin's own Load-directory layout and is not a literal here. This core registers no options a probe can capture, so a machine whose options file does not state the key leaves 'enabled' unanswered rather than defaulted. [O] the root is the same open question as azahar's (core_audit.json: dolphin, verdict 'suspect') — RetroDECK 0.10.9b prepares the link under the config tree's saves directory (components/retroarch/component_prepare.sh:158) and nothing has been observed reading it."
+      },
+      "anchors": {
+        "names": {
+          "Load": {
+            "literal": "Load"
+          },
+          "Textures": {
+            "literal": "Textures"
+          },
+          "User": {
+            "literal": "User"
+          },
+          "dolphin-emu": {
+            "literal": "dolphin-emu"
+          },
+          "dolphin_load_custom_textures": {
+            "literal": "dolphin_load_custom_textures"
+          }
+        }
+      }
+    },
+    "ppsspp": {
+      "identifiers": {
+        "library_name": [
+          "PPSSPP"
+        ]
+      },
+      "textures": {
+        "root": "savefile_directory",
+        "subdir": "PPSSPP/PSP/TEXTURES",
+        "replacement_option": {
+          "setting": "ppsspp_texture_replacement",
+          "values": {
+            "enabled": true,
+            "disabled": false
+          }
+        }
+      },
+      "provenance": {
+        "source": "[V-binary/O-root] ppsspp_libretro.so (c1581e6) carries all three components as NUL-delimited literals — \"PPSSPP/%s\" for the memory-stick directory, \"PSP/\" and \"TEXTURES\" — beside the pack manifest name \"textures.ini\" and the option key \"ppsspp_texture_replacement\". [O] which root the memory-stick directory hangs off is the open question the audit carries for this core's saves (core_audit.json: ppsspp, verdict 'suspect'): RetroDECK 0.10.9b prepares its link under the config tree's saves directory (components/retroarch/component_prepare.sh:159) while EmuDeck wires no texture tree for this core at all, and nothing has been observed reading either."
+      },
+      "anchors": {
+        "names": {
+          "PPSSPP": {
+            "literal": "PPSSPP"
+          },
+          "PSP": {
+            "literal": "PSP"
+          },
+          "TEXTURES": {
+            "literal": "TEXTURES"
+          },
+          "ppsspp_texture_replacement": {
+            "literal": "ppsspp_texture_replacement"
+          }
+        }
+      }
+    },
+    "citra": {
+      "identifiers": {
+        "library_name": [
+          "Citra"
+        ]
+      },
+      "textures": {
+        "root": "savefile_directory",
+        "subdir": "citra-emu/load/textures",
+        "keying": {
+          "value": "title-id",
+          "citation": "[V-binary] citra_libretro.so (5263fae): the custom-texture loader's path template is the NUL-delimited literal \"{}textures/{:016X}/\" (0x17f14d5) beside \"/builds/libretro/citra/src/video_core/custom_textures/custom_tex_manager.cpp\" (0x17f1718) — a 16-hex-digit component is a 3DS title id, so the core states the keying even where it does not state the whole path."
+        },
+        "replacement_option": {
+          "setting": "citra_custom_textures",
+          "values": {
+            "enabled": true,
+            "disabled": false
+          }
+        }
+      },
+      "provenance": {
+        "source": "[V-binary/O-root] citra_libretro.so (5263fae, the revision the shipped core names in its library_version) carries all three components as whole NUL-delimited literals: \"/citra-emu/\" (0x1724a4b) as its user-directory name, \"load/\" (0x1724a8e) in the user-path table beside \"config/\", \"cache/\", \"sdmc/\", \"nand/\", \"shaders/\", \"dump/\" and \"states/\" around SetUserPath in src/common/file_util.cpp (0x1723180), and \"{}textures/{:016X}/\" as the loader's template. [O] which root that user directory hangs off is the open question the audit carries for this core's saves (core_audit.json: citra, verdict 'suspect'): RetroDECK 0.10.9b prepares its link under the RetroArch config tree's own saves directory rather than the configured one, and names Citra rather than citra-emu (components/retroarch/component_prepare.sh:157 for textures, :163 for mods), and nothing has been observed reading either. So the location recorded here is the one the libretro save-directory contract derives, and every answer built on it states emulator-read-unestablished until issue #98 closes the verdict."
+      },
+      "anchors": {
+        "names": {
+          "citra-emu": {
+            "literal": "citra-emu"
+          },
+          "citra_custom_textures": {
+            "literal": "citra_custom_textures"
+          },
+          "load": {
+            "literal": "load"
+          },
+          "textures": {
+            "literal": "textures"
+          }
+        }
+      }
+    }
+  }
+}

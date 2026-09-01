@@ -193,6 +193,13 @@ jobs:
       # a deliberate defaults/README.md update when pulling a newer emu-atlas release).
       - name: Check vendored BIOS registry checksum
         run: cd defaults && sha256sum -c bios_registry.json.sha256
+      # The emu-atlas resolver is vendored as a verbatim copy of a tagged wheel.
+      # No form of `sha256sum -c` can guard it: upstream's manifest lists nine
+      # entries we never vendor, so the plain form fails on a perfect copy, and
+      # --ignore-missing skips a deleted file and exits 0. The check below asserts
+      # the file set EQUALS the manifest as well as matching it byte for byte.
+      - name: Check vendored emu-atlas copy against its release manifest
+        run: python scripts/check_vendored_atlas.py
 
   # Skipped when SONAR_TOKEN is structurally unavailable: Dependabot PRs and
   # PRs from forks (GitHub withholds secrets from `pull_request` runs whose head

@@ -112,10 +112,15 @@ jobs:
           # All three bootstrap modules are listed, not just the package marker:
           # __init__.py is a re-export shim, so asserting it alone would pass a
           # packaging regression that dropped the composition root's actual code.
+          # py_modules/_vendor/atlas is the vendored emu-atlas resolver — the same
+          # marker-vs-payload split applies, so a data/ file is listed beside the
+          # package marker: the tree's JSON is half of what the package IS, and a
+          # packaging change that carried only *.py would drop it in silence.
           for required in main.py plugin.json package.json dist/index.js bin/rom-launcher \
               py_modules/bootstrap/__init__.py py_modules/bootstrap/adapters.py py_modules/bootstrap/services.py \
               py_modules/db/migrations/001_initial.sql py_modules/db/migrations/002_add_emulator_override.sql \
-              bios_registry.json py_modules/native/libgavel-x86_64-linux.so; do
+              bios_registry.json py_modules/native/libgavel-x86_64-linux.so \
+              py_modules/_vendor/atlas/__init__.py py_modules/_vendor/atlas/data/system_ids.json; do
             if ! unzip -l "$BUILT_ZIP" | grep -qE "/$required\b"; then
               echo "ERROR: release zip is missing $required"
               unzip -l "$BUILT_ZIP"

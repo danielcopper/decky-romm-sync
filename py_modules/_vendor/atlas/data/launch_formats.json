@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "spec": "The launchability question's world knowledge, in two blocks (issues #36 and #66). 'systems' records formats that are real content for a platform and still launch nothing until an installation step has run: a file whose extension is outside a system's accept-list earns 'not-accepted', and the consumer's remedy there is to pick another file or another entry — but some of those files are the *distribution form* of the content itself (a PSN package is the only form many digital-only PS3 titles exist in), and telling that consumer 'not accepted' sends them looking for a file that does not exist. Keyed by the atlas system id and the exact extension token ES-DE would derive (case-sensitive, leading dot); consulted only where the extension is already outside the machine's own accept-list — what the catalogue declares launchable, is launchable, and this file never overrides a read. 'emulators' records what a STANDALONE launch entry's own loader reads — the per-entry half of the same question, keyed by the %EMULATOR_…% token the way every standalone card family is. A standalone emulator is its own gate: unlike a libretro entry, whose claims are read live off the installed core and whose archives RetroArch opens for it, a standalone opens the file itself and refuses what its loader does not know — so ES-DE's per-SYSTEM accept-list (the union over every entry) can say yes while the entry that actually runs loads nothing. 'accepts' are extension tokens matched case-insensitively (the gate is the emulator's loader, not ES-DE's case-exact scan), 'archives' whether the loader opens archive containers at all. An emulator absent from this block is one whose loader nobody has read: the answer states unestablished, never 'refuses' — the same discipline the mods table spells out for its absences.",
+  "emulators": {
+    "AZAHAR": {
+      "accepts": [".cia", ".cci", ".3dsx", ".cxi", ".3ds", ".zcia", ".zcci", ".z3dsx", ".zcxi"],
+      "archives": false,
+      "source": "[D] The shipped azahar binary's own load surface (RetroDECK 0.10.9b, components/azahar/bin/azahar): the dialog filters '3DS ROM Files (*.cia *.cci *.3dsx *.cxi *.3ds)' and '3DS Compressed ROM Files (*.zcia *zcci *z3dsx *zcxi)' are whole literals — the latter three spelled without their dot upstream, a glob that still matches the dotted names, recorded here in the dotted form a file yields. archives=false is the unfiltered scan's negative: the only strings containing 'zip' are gzip fragments (no archive loader), and the load error literal 'the selected file is not a compatible 3DS ROM format or is encrypted' names the gate a wrong format hits. Upstream source not yet read, hence [D]; issue #66 carries the case that founded this (a zipped 3DS ROM handed to Azahar starts a process that loads nothing)."
+    }
+  },
+  "systems": {
+    "ps3": {
+      ".pkg": {
+        "statement": "a PSN package — an installer, not loadable content: RPCS3 installs it into its dev_hdd0 tree first, and the title is then launched by its installed form",
+        "source": "[D] RPCS3's own quickstart routes packages through 'File > Install Packages/Raps/Edats' into dev_hdd0 and launches the title from the game list afterwards (rpcs3.net/quickstart, read 2026-08-19); ES-DE's ps3 accept-list carries no .pkg (RetroDECK 0.10.9b declares .desktop .iso .ps3 .ps3dir), so the frontend never scans one. Upstream RPCS3 source not yet read, hence [D]. Surfaced by decky-romm-sync#1582: a largest-file fallback picked the multi-gigabyte package and baked a command RPCS3 could not act on."
+      },
+      ".rap": {
+        "statement": "a PSN license file — installed alongside its package, never launched: without the matching .pkg installed it activates nothing",
+        "source": "[D] The same RPCS3 flow installs licenses beside packages ('File > Install Packages/Raps/Edats', rpcs3.net/quickstart, read 2026-08-19); ES-DE's ps3 accept-list carries no .rap. Upstream RPCS3 source not yet read, hence [D]."
+      }
+    }
+  }
+}

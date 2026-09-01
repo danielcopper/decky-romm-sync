@@ -1,0 +1,1898 @@
+{
+  "schema": 1,
+  "spec": "Which of the two files RetroArch writes per content a core actually fills, per core and per system. The NAME is not here and never will be: RetroArch builds it from the content's own stem plus '.srm' (runloop.c:8720-8723 at RetroArch a79435a) and derives the '.rtc' twin from it, registering the pair as RETRO_MEMORY_SAVE_RAM and RETRO_MEMORY_RTC before any core is asked (save.c:710-724, reached for all non-subsystem content at runloop.c:4461), and the three remaining RETRO_MEMORY_* ids never reach a file at all. That rule is code, not data — no machine states it and no core changes it. What IS here is the one part no machine states: RetroArch writes a file only where the core answers with a pointer and a non-zero size (save.c:480), and a core answers that only once content is loaded, which atlas never does. So the claim is read out of the core's own source at the revision the machine ships, and 'verified_core' pins it to that build — for these cores the core's own library_version names the very commit, which is what makes the citation checkable. Records are keyed by core AND system because a core is not one behaviour: mGBA answers a Game Boy cartridge's clock and a Game Boy Advance cartridge's not at all, so a record spelled 'mgba' alone would have to be wrong about one of the two. Every entry is an upper bound and nothing more: whether THIS cartridge carries a battery or a clock is a fact about the game — mGBA reads it out of the ROM, gambatte off header byte 0x147 — and no table can hold it. A core absent from this file is not one that writes nothing; it is one whose source nobody has read yet, and the resolver states that as an unknown file set rather than inventing a set. Method note, hard-won on the first two records: mGBA's retro_get_memory_data has no 'break' in its RTC branch, so for a Game Boy Advance cartridge that id falls through and returns a valid work-RAM pointer — reading only that function would put a '.rtc' into an answer for every GBA game. The size function is the one that decides, because save.c:480 requires both.",
+  "cores": {
+    "81": {
+      "identifiers": {
+        "library_name": [
+          "EightyOne"
+        ]
+      },
+      "systems": {
+        "zx81": {
+          "memory_types": [],
+          "verified_core": "1.0a ffc99f2",
+          "citation": "[V] src/libretro.cpp:424-427 at 81-libretro ffc99f2 — retro_get_memory_size returns 0 for every id, so RetroArch writes neither .srm nor .rtc."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "DoubleCherryGB": {
+      "identifiers": {
+        "library_name": [
+          "DoubleCherryGB"
+        ]
+      },
+      "systems": {
+        "gb": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "v0.17.0 5dbc8c9",
+          "citation": "[V] libretro/libretro.cpp:425-451 at TimOelrichs/doublecherryGB-libretro 5dbc8c9 — a tgbdual fork with the same answer: RETRO_MEMORY_SAVE_RAM answers the cartridge's get_sram_size() and RETRO_MEMORY_RTC sizeof(render[id]->fixed_time), a compile-time 4 that never depends on the cartridge, so both files are written and the .rtc appears for every game. Worth noting for anyone re-reading it: both containers are indexed by the memory id rather than by the emulated device, and RETRO_MEMORY_SAVE_RAM is 0 while RETRO_MEMORY_RTC is 1, so the clock pointer comes from the second of the sixteen Game Boys retro_load_game builds (:173-187, max_gbs = 16 at libretro/inline/inline_variables.h:178) — all of which load the same ROM. It changes which instance the bytes come from, not which ids are filled."
+        },
+        "gbc": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "v0.17.0 5dbc8c9",
+          "citation": "[V] libretro/libretro.cpp:425-451 at TimOelrichs/doublecherryGB-libretro 5dbc8c9 — the core has one code path for both handhelds and reads the model off the loaded cartridge (get_info()->gb_type), so the memory ids it fills are the same pair as for the Game Boy."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "a5200": {
+      "identifiers": {
+        "library_name": [
+          "a5200"
+        ]
+      },
+      "systems": {
+        "atari5200": {
+          "memory_types": [],
+          "verified_core": "2.0.2  5264040",
+          "citation": "[V] libretro/libretro.c:1534-1537 at a5200 5264040 — retro_get_memory_size returns 0 for every id."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "amiarcadia": {
+      "identifiers": {
+        "library_name": [
+          "AmiArcadia"
+        ]
+      },
+      "systems": {
+        "arcadia": {
+          "memory_types": [],
+          "verified_core": "4.50",
+          "citation": "[V] src/libretro.c:956-972 at warmenhoven/amiarcadia (release 4.50) — every id but RETRO_MEMORY_SYSTEM_RAM returns 0, and system RAM never reaches a file."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a release, not a commit, so the pin is that release rather than a revision"
+      }
+    },
+    "arduous": {
+      "identifiers": {
+        "library_name": [
+          "arduous"
+        ]
+      },
+      "systems": {
+        "arduboy": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "0.1.0",
+          "citation": "[V] src/libretro/libretro.cpp:190-201 at libretro/arduous (release 0.1.0) — RETRO_MEMORY_SAVE_RAM answers the Arduboy's EEPROM size, so RetroArch writes <rom_stem>.srm; no RTC branch exists."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a release, not a commit, so the pin is that release rather than a revision"
+      }
+    },
+    "atari800": {
+      "identifiers": {
+        "library_name": [
+          "Atari800"
+        ]
+      },
+      "systems": {
+        "atari5200": {
+          "memory_types": [],
+          "verified_core": "3.1.0 6a18cb2",
+          "citation": "[V] libretro/libretro-core.c:1502-1508 at libretro-atari800 6a18cb2 — only RETRO_MEMORY_SYSTEM_RAM answers (65536 bytes); every other id returns 0."
+        },
+        "atari800": {
+          "memory_types": [],
+          "verified_core": "3.1.0 6a18cb2",
+          "citation": "[V] libretro/libretro-core.c:1502-1508 at libretro-atari800 6a18cb2 — only RETRO_MEMORY_SYSTEM_RAM answers (65536 bytes); every other id returns 0."
+        },
+        "atarixe": {
+          "memory_types": [],
+          "verified_core": "3.1.0 6a18cb2",
+          "citation": "[V] libretro/libretro-core.c:1502-1508 at libretro-atari800 6a18cb2 — only RETRO_MEMORY_SYSTEM_RAM answers (65536 bytes); every other id returns 0."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "bluemsx": {
+      "identifiers": {
+        "library_name": [
+          "blueMSX"
+        ]
+      },
+      "systems": {
+        "colecovision": {
+          "memory_types": [],
+          "verified_core": "git 036376d",
+          "citation": "[V] libretro.c:1723-1728 at blueMSX-libretro 036376d — only RETRO_MEMORY_SYSTEM_RAM answers (g_mainRamSize); every other id returns 0."
+        },
+        "msx": {
+          "memory_types": [],
+          "verified_core": "git 036376d",
+          "citation": "[V] libretro.c:1723-1728 at blueMSX-libretro 036376d — only RETRO_MEMORY_SYSTEM_RAM answers (g_mainRamSize); every other id returns 0."
+        },
+        "msx1": {
+          "memory_types": [],
+          "verified_core": "git 036376d",
+          "citation": "[V] libretro.c:1723-1728 at blueMSX-libretro 036376d — only RETRO_MEMORY_SYSTEM_RAM answers (g_mainRamSize); every other id returns 0."
+        },
+        "msx2": {
+          "memory_types": [],
+          "verified_core": "git 036376d",
+          "citation": "[V] libretro.c:1723-1728 at blueMSX-libretro 036376d — only RETRO_MEMORY_SYSTEM_RAM answers (g_mainRamSize); every other id returns 0."
+        },
+        "msxturbor": {
+          "memory_types": [],
+          "verified_core": "git 036376d",
+          "citation": "[V] libretro.c:1723-1728 at blueMSX-libretro 036376d — only RETRO_MEMORY_SYSTEM_RAM answers (g_mainRamSize); every other id returns 0."
+        },
+        "sg-1000": {
+          "memory_types": [],
+          "verified_core": "git 036376d",
+          "citation": "[V] libretro.c:1723-1728 at blueMSX-libretro 036376d — only RETRO_MEMORY_SYSTEM_RAM answers (g_mainRamSize); every other id returns 0."
+        },
+        "spectravideo": {
+          "memory_types": [],
+          "verified_core": "git 036376d",
+          "citation": "[V] libretro.c:1723-1728 at blueMSX-libretro 036376d — only RETRO_MEMORY_SYSTEM_RAM answers (g_mainRamSize); every other id returns 0."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "bsnes_mercury_accuracy": {
+      "identifiers": {
+        "library_name": [
+          "bsnes-mercury"
+        ]
+      },
+      "systems": {
+        "satellaview": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v094 (Accuracy) 0f35d04",
+          "citation": "[V] target-libretro/libretro.cpp:1305-1348 at libretro/bsnes-mercury 0f35d04 — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, so RetroArch writes <rom_stem>.srm; RETRO_MEMORY_RTC is a case of its own and returns 0, so no .rtc is ever written. The remaining branches (BS-X, Sufami Turbo, Super Game Boy) are SNES-side memory ids that reach no file. Two guards return 0 for every id: no cartridge loaded, and the core's manifest mode."
+        },
+        "sfc": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v094 (Accuracy) 0f35d04",
+          "citation": "[V] target-libretro/libretro.cpp:1305-1348 at libretro/bsnes-mercury 0f35d04 — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, so RetroArch writes <rom_stem>.srm; RETRO_MEMORY_RTC is a case of its own and returns 0, so no .rtc is ever written. The remaining branches (BS-X, Sufami Turbo, Super Game Boy) are SNES-side memory ids that reach no file. Two guards return 0 for every id: no cartridge loaded, and the core's manifest mode."
+        },
+        "snes": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v094 (Accuracy) 0f35d04",
+          "citation": "[V] target-libretro/libretro.cpp:1305-1348 at libretro/bsnes-mercury 0f35d04 — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, so RetroArch writes <rom_stem>.srm; RETRO_MEMORY_RTC is a case of its own and returns 0, so no .rtc is ever written. The remaining branches (BS-X, Sufami Turbo, Super Game Boy) are SNES-side memory ids that reach no file. Two guards return 0 for every id: no cartridge loaded, and the core's manifest mode."
+        },
+        "snesna": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v094 (Accuracy) 0f35d04",
+          "citation": "[V] target-libretro/libretro.cpp:1305-1348 at libretro/bsnes-mercury 0f35d04 — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, so RetroArch writes <rom_stem>.srm; RETRO_MEMORY_RTC is a case of its own and returns 0, so no .rtc is ever written. The remaining branches (BS-X, Sufami Turbo, Super Game Boy) are SNES-side memory ids that reach no file. Two guards return 0 for every id: no cartridge loaded, and the core's manifest mode."
+        },
+        "sufami": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v094 (Accuracy) 0f35d04",
+          "citation": "[V] target-libretro/libretro.cpp:1305-1348 at libretro/bsnes-mercury 0f35d04 — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, so RetroArch writes <rom_stem>.srm; RETRO_MEMORY_RTC is a case of its own and returns 0, so no .rtc is ever written. The remaining branches (BS-X, Sufami Turbo, Super Game Boy) are SNES-side memory ids that reach no file. Two guards return 0 for every id: no cartridge loaded, and the core's manifest mode."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "chailove": {
+      "identifiers": {
+        "library_name": [
+          "ChaiLove"
+        ]
+      },
+      "systems": {
+        "chailove": {
+          "memory_types": [],
+          "verified_core": "2.0.0 467cd45",
+          "citation": "[V] libretro/ChaiLove 467cd45 — the core defines no retro_get_memory_size at all across its sources, so every id answers the libretro default of nothing."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "craft": {
+      "identifiers": {
+        "library_name": [
+          "Craft"
+        ]
+      },
+      "systems": {
+        "ports": {
+          "memory_types": [],
+          "verified_core": "675c",
+          "citation": "[V] libretro/libretro.c:446-449 at libretro/Craft — retro_get_memory_size returns 0 for every id, so RetroArch writes no save file. This unit asks the frontend for no save directory at all and contains no file write: no fopen, no mkdir, no GET_SAVE_DIRECTORY. Where this port keeps a world is therefore unestablished rather than established as nowhere."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "dice": {
+      "identifiers": {
+        "library_name": [
+          "dice"
+        ]
+      },
+      "systems": {
+        "arcade": {
+          "memory_types": [],
+          "verified_core": "0.4.2",
+          "citation": "[V] libretro.cpp:581-591 at mittonk/dice-libretro 0.4.2 — retro_get_memory_size returns 0 for every id and retro_get_memory_data returns NULL, both casting the id to void without looking at it, so RetroArch writes no save file. The unit opens no file at all: DICE simulates discrete-logic arcade boards, which predate battery-backed memory."
+        },
+        "mame": {
+          "memory_types": [],
+          "verified_core": "0.4.2",
+          "citation": "[V] libretro.cpp:581-591 at mittonk/dice-libretro 0.4.2 — retro_get_memory_size returns 0 for every id and retro_get_memory_data returns NULL, both casting the id to void without looking at it, so RetroArch writes no save file. The unit opens no file at all: DICE simulates discrete-logic arcade boards, which predate battery-backed memory."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "dirksimple": {
+      "identifiers": {
+        "library_name": [
+          "dirksimple"
+        ]
+      },
+      "systems": {
+        "daphne": {
+          "memory_types": [],
+          "verified_core": "0.3",
+          "citation": "[V] dirksimple_libretro.c:875-885 at icculus/DirkSimple 0.3 — retro_get_memory_size returns 0 for every id and retro_get_memory_data returns NULL, so RetroArch writes no save file. The unit's only file access is a read (:165); nothing in it writes."
+        },
+        "laserdisc": {
+          "memory_types": [],
+          "verified_core": "0.3",
+          "citation": "[V] dirksimple_libretro.c:875-885 at icculus/DirkSimple 0.3 — retro_get_memory_size returns 0 for every id and retro_get_memory_data returns NULL, so RetroArch writes no save file. The unit's only file access is a read (:165); nothing in it writes."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "ecwolf": {
+      "identifiers": {
+        "library_name": [
+          "ECWolf"
+        ]
+      },
+      "systems": {
+        "ports": {
+          "memory_types": [],
+          "verified_core": "v0.01",
+          "citation": "[V] src/libretro/libretro.cpp:2292-2295 at libretro/ecwolf — retro_get_memory_size returns 0 for every id."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "fceumm": {
+      "identifiers": {
+        "library_name": [
+          "FCEUmm"
+        ]
+      },
+      "systems": {
+        "famicom": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "(SVN) 5cd4a43",
+          "citation": "[V] src/drivers/libretro/libretro.c:3804-3828 at libretro/libretro-fceumm 5cd4a43 — RETRO_MEMORY_SAVE_RAM answers the cartridge's battery-backed save length (iNES or UNIF header), or the whole Famicom Disk System image size for FDS content, so RetroArch writes <rom_stem>.srm. No RETRO_MEMORY_RTC case exists."
+        },
+        "fds": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "(SVN) 5cd4a43",
+          "citation": "[V] src/drivers/libretro/libretro.c:3804-3828 at libretro/libretro-fceumm 5cd4a43 — RETRO_MEMORY_SAVE_RAM answers the cartridge's battery-backed save length (iNES or UNIF header), or the whole Famicom Disk System image size for FDS content, so RetroArch writes <rom_stem>.srm. No RETRO_MEMORY_RTC case exists."
+        },
+        "nes": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "(SVN) 5cd4a43",
+          "citation": "[V] src/drivers/libretro/libretro.c:3804-3828 at libretro/libretro-fceumm 5cd4a43 — RETRO_MEMORY_SAVE_RAM answers the cartridge's battery-backed save length (iNES or UNIF header), or the whole Famicom Disk System image size for FDS content, so RetroArch writes <rom_stem>.srm. No RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "freechaf": {
+      "identifiers": {
+        "library_name": [
+          "FreeChaF"
+        ]
+      },
+      "systems": {
+        "channelf": {
+          "memory_types": [],
+          "verified_core": "1.0 cdb8ad6",
+          "citation": "[V] src/libretro.c:663-684 at FreeChaF cdb8ad6 — the switch answers system RAM, video RAM and two core-private ids; the RETRO_MEMORY_SAVE_RAM and RETRO_MEMORY_RTC cases are present as commented-out lines, so both fall through to 0."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "freeintv": {
+      "identifiers": {
+        "library_name": [
+          "FreeIntv"
+        ]
+      },
+      "systems": {
+        "intellivision": {
+          "memory_types": [],
+          "verified_core": "1.2  1b51f41",
+          "citation": "[V] src/libretro.c:492-499 at FreeIntv 1b51f41 — only RETRO_MEMORY_SYSTEM_RAM answers (0x10000); every other id returns 0."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "fuse": {
+      "identifiers": {
+        "library_name": [
+          "fuse"
+        ]
+      },
+      "systems": {
+        "zxspectrum": {
+          "memory_types": [],
+          "verified_core": "1.6.0 cad85b7",
+          "citation": "[V] src/libretro.c:1021-1024 at fuse-libretro cad85b7 — retro_get_memory_size returns 0 for every id."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "gambatte": {
+      "identifiers": {
+        "library_name": [
+          "Gambatte"
+        ]
+      },
+      "systems": {
+        "gb": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "v0.5.0-netlink 6924c76",
+          "citation": "[V] libgambatte/libretro/libretro.cpp:2676-2683 at gambatte-libretro 6924c76 — SAVE_RAM answers gb.savedata_size() and RTC answers gb.rtcdata_size(). The size that decides the write is Cartridge::rtcdata_size (libgambatte/src/mem/cartridge_libretro.cpp:70-80, its pointer twin at :58-68): both gate on hasRtc(romdata[0x147]) (:30-41) and return 0 for every cartridge without a clock, so the file appears for exactly the games that carry the hardware — MBC3 and HuC3 alike."
+        },
+        "gbc": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "v0.5.0-netlink 6924c76",
+          "citation": "[V] libgambatte/libretro/libretro.cpp:2676-2683 at gambatte-libretro 6924c76 — the core has one code path for both handhelds and tells them apart by the loaded cartridge (gb.isCgb()), so the memory ids it fills are the same pair as for the Game Boy."
+        }
+      },
+      "provenance": {
+        "source": "Read at the revision the installed binary names: the core reports library_version 'v0.5.0-netlink 6924c76', which is the upstream commit. The shipped .info file's display_version disagrees with the binary on the sibling core and was not used."
+      }
+    },
+    "gearboy": {
+      "identifiers": {
+        "library_name": [
+          "Gearboy"
+        ]
+      },
+      "systems": {
+        "gb": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "3.7.4-8-g37c21f7",
+          "citation": "[V] platforms/libretro/libretro.cpp:573-586 at drhelius/Gearboy 37c21f7 — RETRO_MEMORY_SAVE_RAM answers the loaded cartridge's memory rule GetRamSize() and RETRO_MEMORY_RTC its GetRTCSize(), so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. Both are virtual and the base rule returns 0 for each (src/MemoryRule.cpp:56-66); the clock is overridden by MBC3 alone, and there only where the cartridge declares one (src/MBC3MemoryRule.cpp:379-382, IsRTCPresent), so the .rtc appears for exactly the games that carry the hardware."
+        },
+        "gbc": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "3.7.4-8-g37c21f7",
+          "citation": "[V] platforms/libretro/libretro.cpp:573-586 at drhelius/Gearboy 37c21f7 — the core has one code path for both handhelds and tells them apart by the loaded cartridge (core->IsCGB()), so the memory ids it fills are the same pair as for the Game Boy."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "gearsystem": {
+      "identifiers": {
+        "library_name": [
+          "Gearsystem"
+        ]
+      },
+      "systems": {
+        "gamegear": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "3.8.5-12-gaf2652e",
+          "citation": "[V] platforms/libretro/libretro.cpp:372-383 at drhelius/Gearsystem af2652e — RETRO_MEMORY_SAVE_RAM answers the loaded cartridge's own RAM size (GetCurrentRule()->GetRamSize()), so RetroArch writes <rom_stem>.srm for a cartridge that has battery RAM. There is no RETRO_MEMORY_RTC case, so no .rtc is ever written."
+        },
+        "mark3": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "3.8.5-12-gaf2652e",
+          "citation": "[V] platforms/libretro/libretro.cpp:372-383 at drhelius/Gearsystem af2652e — RETRO_MEMORY_SAVE_RAM answers the loaded cartridge's own RAM size (GetCurrentRule()->GetRamSize()), so RetroArch writes <rom_stem>.srm for a cartridge that has battery RAM. There is no RETRO_MEMORY_RTC case, so no .rtc is ever written."
+        },
+        "mastersystem": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "3.8.5-12-gaf2652e",
+          "citation": "[V] platforms/libretro/libretro.cpp:372-383 at drhelius/Gearsystem af2652e — RETRO_MEMORY_SAVE_RAM answers the loaded cartridge's own RAM size (GetCurrentRule()->GetRamSize()), so RetroArch writes <rom_stem>.srm for a cartridge that has battery RAM. There is no RETRO_MEMORY_RTC case, so no .rtc is ever written."
+        },
+        "multivision": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "3.8.5-12-gaf2652e",
+          "citation": "[V] platforms/libretro/libretro.cpp:372-383 at drhelius/Gearsystem af2652e — RETRO_MEMORY_SAVE_RAM answers the loaded cartridge's own RAM size (GetCurrentRule()->GetRamSize()), so RetroArch writes <rom_stem>.srm for a cartridge that has battery RAM. There is no RETRO_MEMORY_RTC case, so no .rtc is ever written."
+        },
+        "sg-1000": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "3.8.5-12-gaf2652e",
+          "citation": "[V] platforms/libretro/libretro.cpp:372-383 at drhelius/Gearsystem af2652e — RETRO_MEMORY_SAVE_RAM answers the loaded cartridge's own RAM size (GetCurrentRule()->GetRamSize()), so RetroArch writes <rom_stem>.srm for a cartridge that has battery RAM. There is no RETRO_MEMORY_RTC case, so no .rtc is ever written."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "gpsp": {
+      "identifiers": {
+        "library_name": [
+          "gpSP"
+        ]
+      },
+      "systems": {
+        "gba": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v1.1.0-74db5e5",
+          "citation": "[V] libretro/libretro.c:1190-1198 at libretro/gpsp 74db5e5 — RETRO_MEMORY_SAVE_RAM answers a flat 0x20000 with the core's own comment on the line, \"Assume 128KiB, biggest possible save\", and the pointer is the static gamepak_backup buffer (:1180-1188, cleared at :1133). Neither depends on the cartridge, so RetroArch writes a 128 KiB <rom_stem>.srm for every game this core loads — including one whose hardware has no save at all, where the file is the 0xff fill. There is no RETRO_MEMORY_RTC case, so no .rtc is written."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "handy": {
+      "identifiers": {
+        "library_name": [
+          "Handy"
+        ]
+      },
+      "systems": {
+        "atarilynx": {
+          "memory_types": [],
+          "verified_core": "0.97 fca2392",
+          "citation": "[V] libretro/libretro.cpp:1302-1307 at libretro-handy fca2392 — only RETRO_MEMORY_SYSTEM_RAM answers (64 KB); every other id returns 0."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "holani": {
+      "identifiers": {
+        "library_name": [
+          "holani"
+        ]
+      },
+      "systems": {
+        "atarilynx": {
+          "memory_types": [],
+          "verified_core": "0.9.6-1",
+          "citation": "[V] src/lib.rs:144-163 at LLeny/holani-retro 0.9.6-1 — the core is written in Rust and implements GetMemoryRegionCore rather than exporting the C functions itself. get_memory_size names all four standard ids and answers 0 for SaveRam, RTC and VideoRam, and the Lynx's RAM size for SystemRam; get_memory_data returns None for the same three. So RetroArch writes no save file. The core's only file access is a read of lynxboot.img out of the system directory (:85-92)."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "jollycv": {
+      "identifiers": {
+        "library_name": [
+          "JollyCV"
+        ]
+      },
+      "systems": {
+        "crvision": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.0.0",
+          "citation": "[V] libretro/libretro.c:795-806 at libretro/jollycv — RETRO_MEMORY_SAVE_RAM answers jcv_memory_get_size(JCV_MEM_SAVEDATA), so RetroArch writes <rom_stem>.srm; there is no RETRO_MEMORY_RTC case."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "lowresnx": {
+      "identifiers": {
+        "library_name": [
+          "LowRes NX"
+        ]
+      },
+      "systems": {
+        "lowresnx": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "1.2",
+          "citation": "[V] libretro/libretro_main.c:548-557 at timoinutilis/lowres-nx — RETRO_MEMORY_SAVE_RAM answers PERSISTENT_RAM_SIZE unconditionally, so every program gets a <rom_stem>.srm; no other id answers."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "lutro": {
+      "identifiers": {
+        "library_name": [
+          "Lutro"
+        ]
+      },
+      "systems": {
+        "lutro": {
+          "memory_types": [],
+          "verified_core": "0.0.1 72c8754",
+          "citation": "[V] libretro.c:295-302 at libretro/libretro-lutro (master) — retro_get_memory_size returns 0, with the RETRO_MEMORY_SAVE_RAM branch and its game_data_size() call present as commented-out lines."
+        }
+      },
+      "provenance": {
+        "source": "the revision the binary names (72c8754) is not reachable upstream, so the reading is at master and the pin records what the binary claims rather than what was read"
+      }
+    },
+    "mednafen_lynx": {
+      "identifiers": {
+        "library_name": [
+          "Beetle Lynx"
+        ]
+      },
+      "systems": {
+        "atarilynx": {
+          "memory_types": [],
+          "verified_core": "v1.24.0 efd1797",
+          "citation": "[V] libretro.cpp:612-624 at libretro/beetle-lynx-libretro efd1797 — only RETRO_MEMORY_SYSTEM_RAM answers, with 64 KiB of the Lynx's RAM; RETRO_MEMORY_SAVE_RAM and RETRO_MEMORY_RTC fall past both conditions and return 0 and NULL, so RetroArch writes no save file. The unit asks the frontend for no save directory and opens no file of its own."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "mednafen_ngp": {
+      "identifiers": {
+        "library_name": [
+          "Beetle NeoPop"
+        ]
+      },
+      "systems": {
+        "ngp": {
+          "memory_types": [],
+          "verified_core": "v1.29.0.0 139fe34",
+          "citation": "[V] libretro.c:785-790 at beetle-ngp-libretro 139fe34 — only RETRO_MEMORY_SYSTEM_RAM answers (16384); save RAM returns 0. The core keeps Neo Geo Pocket saves in a file of its own, which this record does not describe."
+        },
+        "ngpc": {
+          "memory_types": [],
+          "verified_core": "v1.29.0.0 139fe34",
+          "citation": "[V] libretro.c:785-790 at beetle-ngp-libretro 139fe34 — only RETRO_MEMORY_SYSTEM_RAM answers (16384); save RAM returns 0. The core keeps Neo Geo Pocket saves in a file of its own, which this record does not describe."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "mednafen_pce": {
+      "identifiers": {
+        "library_name": [
+          "Beetle PCE"
+        ]
+      },
+      "systems": {
+        "pcengine": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v1.29.0 9a301c0",
+          "citation": "[V] libretro.cpp:2082-2096 at beetle-pce-libretro 9a301c0 — RETRO_MEMORY_SAVE_RAM answers 2048 bytes, or 32768 for Populous, so the id is always filled and RetroArch writes <rom_stem>.srm; there is no RETRO_MEMORY_RTC case."
+        },
+        "pcenginecd": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v1.29.0 9a301c0",
+          "citation": "[V] libretro.cpp:2082-2096 at beetle-pce-libretro 9a301c0 — RETRO_MEMORY_SAVE_RAM answers 2048 bytes, or 32768 for Populous, so the id is always filled and RetroArch writes <rom_stem>.srm; there is no RETRO_MEMORY_RTC case."
+        },
+        "supergrafx": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v1.29.0 9a301c0",
+          "citation": "[V] libretro.cpp:2082-2096 at beetle-pce-libretro 9a301c0 — RETRO_MEMORY_SAVE_RAM answers 2048 bytes, or 32768 for Populous, so the id is always filled and RetroArch writes <rom_stem>.srm; there is no RETRO_MEMORY_RTC case."
+        },
+        "tg-cd": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v1.29.0 9a301c0",
+          "citation": "[V] libretro.cpp:2082-2096 at beetle-pce-libretro 9a301c0 — RETRO_MEMORY_SAVE_RAM answers 2048 bytes, or 32768 for Populous, so the id is always filled and RetroArch writes <rom_stem>.srm; there is no RETRO_MEMORY_RTC case."
+        },
+        "tg16": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v1.29.0 9a301c0",
+          "citation": "[V] libretro.cpp:2082-2096 at beetle-pce-libretro 9a301c0 — RETRO_MEMORY_SAVE_RAM answers 2048 bytes, or 32768 for Populous, so the id is always filled and RetroArch writes <rom_stem>.srm; there is no RETRO_MEMORY_RTC case."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "mednafen_pcfx": {
+      "identifiers": {
+        "library_name": [
+          "Beetle PC-FX"
+        ]
+      },
+      "systems": {
+        "pcfx": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v0.9.36.5 dd04cef",
+          "citation": "[V] libretro.cpp:1735-1748 at beetle-pcfx-libretro dd04cef — RETRO_MEMORY_SAVE_RAM answers sizeof(SaveRAM) unconditionally; no RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "mednafen_supergrafx": {
+      "identifiers": {
+        "library_name": [
+          "Beetle SuperGrafx"
+        ]
+      },
+      "systems": {
+        "supergrafx": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v1.29.0 a776133",
+          "citation": "[V] libretro.cpp:2025-2046 at beetle-supergrafx-libretro a776133 — RETRO_MEMORY_SAVE_RAM answers 2048 bytes, or 32768 for Populous, so the id is always filled; no RETRO_MEMORY_RTC case exists."
+        },
+        "tg16": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v1.29.0 a776133",
+          "citation": "[V] libretro.cpp:2025-2046 at beetle-supergrafx-libretro a776133 — RETRO_MEMORY_SAVE_RAM answers 2048 bytes, or 32768 for Populous, so the id is always filled; no RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "mednafen_vb": {
+      "identifiers": {
+        "library_name": [
+          "Beetle VB"
+        ]
+      },
+      "systems": {
+        "virtualboy": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v1.31.0 8f837eb",
+          "citation": "[V] libretro.cpp:2649-2662 at beetle-vb-libretro 8f837eb — RETRO_MEMORY_SAVE_RAM answers GPRAM_Mask + 1, the Virtual Boy cartridge's general-purpose RAM, so RetroArch writes <rom_stem>.srm. No RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "mednafen_wswan": {
+      "identifiers": {
+        "library_name": [
+          "Beetle Cygne"
+        ]
+      },
+      "systems": {
+        "wonderswan": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v0.9.35.1 2aeb47d",
+          "citation": "[V] libretro.c:1496-1513 at beetle-wswan-libretro 2aeb47d — RETRO_MEMORY_SAVE_RAM answers the cartridge's EEPROM size, or its SRAM size where there is no EEPROM, and 0 where the cartridge has neither. No RETRO_MEMORY_RTC case exists."
+        },
+        "wonderswancolor": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v0.9.35.1 2aeb47d",
+          "citation": "[V] libretro.c:1496-1513 at beetle-wswan-libretro 2aeb47d — RETRO_MEMORY_SAVE_RAM answers the cartridge's EEPROM size, or its SRAM size where there is no EEPROM, and 0 where the cartridge has neither. No RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "melondsds": {
+      "identifiers": {
+        "library_name": [
+          "melonDS DS"
+        ]
+      },
+      "systems": {
+        "nds": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "1.2.0",
+          "citation": "[V] src/libretro/core/core.cpp:937-960 at JesseTG/melonds-ds v1.2.0 — RETRO_MEMORY_SAVE_RAM answers the save manager's SramLength(), so RetroArch writes <rom_stem>.srm. Every other id, RETRO_MEMORY_RTC among them, falls to the switch's default and returns 0. The exported function is a one-line forward to it (src/libretro/libretro.cpp:264-268). This is the only Nintendo DS core read so far that puts its save through the libretro interface at all — melonDS, DeSmuME and DeSmuME 2015 each keep a file of their own instead. A guard above the switch returns 0 for every id while the core is showing an error screen (:938-939), so the claim is about a loaded game."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "mesen": {
+      "identifiers": {
+        "library_name": [
+          "Mesen"
+        ]
+      },
+      "systems": {
+        "famicom": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "0.9.9",
+          "citation": "[V] Libretro/libretro.cpp:1205-1213 at libretro/Mesen — RETRO_MEMORY_SAVE_RAM answers the loaded mapper's own save-RAM size (GetMemorySize(DebugMemoryType::SaveRam)), so a cartridge with battery RAM gets <rom_stem>.srm; there is no RETRO_MEMORY_RTC case."
+        },
+        "fds": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "0.9.9",
+          "citation": "[V] Libretro/libretro.cpp:1205-1213 at libretro/Mesen — RETRO_MEMORY_SAVE_RAM answers the loaded mapper's own save-RAM size (GetMemorySize(DebugMemoryType::SaveRam)), so a cartridge with battery RAM gets <rom_stem>.srm; there is no RETRO_MEMORY_RTC case."
+        },
+        "nes": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "0.9.9",
+          "citation": "[V] Libretro/libretro.cpp:1205-1213 at libretro/Mesen — RETRO_MEMORY_SAVE_RAM answers the loaded mapper's own save-RAM size (GetMemorySize(DebugMemoryType::SaveRam)), so a cartridge with battery RAM gets <rom_stem>.srm; there is no RETRO_MEMORY_RTC case."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "mesen-s": {
+      "identifiers": {
+        "library_name": [
+          "Mesen-S"
+        ]
+      },
+      "systems": {
+        "gb": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "0.4.0",
+          "citation": "[V] Libretro/libretro.cpp:778-793 at libretro/Mesen-S — RETRO_MEMORY_SAVE_RAM answers the cartridge's save-RAM size, taking the Game Boy cartridge's RAM where a Game Boy is loaded (the Super Game Boy case this system is) and the SNES cartridge's otherwise. No RETRO_MEMORY_RTC case exists."
+        },
+        "gbc": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "0.4.0",
+          "citation": "[V] Libretro/libretro.cpp:778-793 at libretro/Mesen-S — RETRO_MEMORY_SAVE_RAM answers the cartridge's save-RAM size, taking the Game Boy cartridge's RAM where a Game Boy is loaded (the Super Game Boy case this system is) and the SNES cartridge's otherwise. No RETRO_MEMORY_RTC case exists."
+        },
+        "satellaview": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "0.4.0",
+          "citation": "[V] Libretro/libretro.cpp:778-793 at libretro/Mesen-S — RETRO_MEMORY_SAVE_RAM answers the cartridge's save-RAM size, taking the Game Boy cartridge's RAM where a Game Boy is loaded (the Super Game Boy case this system is) and the SNES cartridge's otherwise. No RETRO_MEMORY_RTC case exists."
+        },
+        "sfc": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "0.4.0",
+          "citation": "[V] Libretro/libretro.cpp:778-793 at libretro/Mesen-S — RETRO_MEMORY_SAVE_RAM answers the cartridge's save-RAM size, taking the Game Boy cartridge's RAM where a Game Boy is loaded (the Super Game Boy case this system is) and the SNES cartridge's otherwise. No RETRO_MEMORY_RTC case exists."
+        },
+        "sgb": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "0.4.0",
+          "citation": "[V] Libretro/libretro.cpp:778-793 at libretro/Mesen-S — RETRO_MEMORY_SAVE_RAM answers the cartridge's save-RAM size, taking the Game Boy cartridge's RAM where a Game Boy is loaded (the Super Game Boy case this system is) and the SNES cartridge's otherwise. No RETRO_MEMORY_RTC case exists."
+        },
+        "snes": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "0.4.0",
+          "citation": "[V] Libretro/libretro.cpp:778-793 at libretro/Mesen-S — RETRO_MEMORY_SAVE_RAM answers the cartridge's save-RAM size, taking the Game Boy cartridge's RAM where a Game Boy is loaded (the Super Game Boy case this system is) and the SNES cartridge's otherwise. No RETRO_MEMORY_RTC case exists."
+        },
+        "snesna": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "0.4.0",
+          "citation": "[V] Libretro/libretro.cpp:778-793 at libretro/Mesen-S — RETRO_MEMORY_SAVE_RAM answers the cartridge's save-RAM size, taking the Game Boy cartridge's RAM where a Game Boy is loaded (the Super Game Boy case this system is) and the SNES cartridge's otherwise. No RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "mgba": {
+      "identifiers": {
+        "library_name": [
+          "mGBA"
+        ]
+      },
+      "systems": {
+        "gb": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "0.11-dev c758314",
+          "citation": "[V] src/platform/libretro/libretro.c:2349-2351 and :2357-2366 at mgba c758314 — for mPLATFORM_GB the SAVE_RAM size is the cartridge's sramSize, and the RTC size is sizeof(struct GBMBCRTCSaveBuffer) for a GB_MBC3_RTC cartridge and 0 for every other mapper. Both are read off the loaded cartridge, so each file appears for the games that carry the hardware."
+        },
+        "gba": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "0.11-dev c758314",
+          "citation": "[V] src/platform/libretro/libretro.c:2338-2347 at mgba c758314 — for mPLATFORM_GBA the SAVE_RAM size is GBA_SIZE_FLASH1M while the save type is still GBA_SAVEDATA_AUTODETECT and GBASavedataSize() once it is detected, so the id is filled for any GBA content. RTC has no mPLATFORM_GBA branch and falls to 'default: break' (:2357-2370), returning 0 — which stops the write at save.c:480 even though the data pointer for that id is non-NULL (:2288-2302, a fall-through into the SYSTEM_RAM branch)."
+        },
+        "gbc": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "0.11-dev c758314",
+          "citation": "[V] src/platform/libretro/libretro.c:2349-2351 and :2357-2366 at mgba c758314 — the Game Boy Color is the same mPLATFORM_GB branch as the Game Boy: mGBA distinguishes the two by the cartridge it loaded, not by a separate libretro platform, so the memory ids it fills are the same pair."
+        },
+        "sgb": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "0.11-dev c758314",
+          "citation": "[V] src/platform/libretro/libretro.c:2349-2351 and :2357-2366 at mgba c758314 — for mPLATFORM_GB the SAVE_RAM size is the cartridge's sramSize, and the RTC size is sizeof(struct GBMBCRTCSaveBuffer) for a GB_MBC3_RTC cartridge and 0 for every other mapper. Both are read off the loaded cartridge, so each file appears for the games that carry the hardware."
+        }
+      },
+      "provenance": {
+        "source": "Read at the revision the installed binary names: the core reports library_version '0.11-dev c758314', which is the upstream commit, and the source was read there rather than at master (master's file differs by 31 lines)."
+      }
+    },
+    "mojozork": {
+      "identifiers": {
+        "library_name": [
+          "MojoZork"
+        ]
+      },
+      "systems": {
+        "zmachine": {
+          "memory_types": [],
+          "verified_core": "0.3",
+          "citation": "[V] mojozork-libretro.c:1975-1979 at icculus/mojozork — retro_get_memory_size discards the id and returns 0."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "mrboom": {
+      "identifiers": {
+        "library_name": [
+          "Mr.Boom"
+        ]
+      },
+      "systems": {
+        "ports": {
+          "memory_types": [],
+          "verified_core": "5.5 d011acf",
+          "citation": "[V] libretro/retro.cpp:695-699 at libretro/mrboom-libretro d011acf — retro_get_memory_size returns 0 for every id, so RetroArch writes no save file. The core takes the frontend's save directory into a static buffer (:144-153) and never reads it again: 'retro_save_directory' occurs three times in the unit and all three are the declaration and its two assignments. Whether anything else in the build writes a save is what core-own-writes-unestablished leaves open."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "mu": {
+      "identifiers": {
+        "library_name": [
+          "Mu"
+        ]
+      },
+      "systems": {
+        "palm": {
+          "memory_types": [],
+          "verified_core": "v1.3.3 d9766f1",
+          "citation": "[V] libretroBuildSystem/libretro.c:936-938 at libretro/Mu d9766f1 — retro_get_memory_size returns 0 for every id."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "mupen64plus_next": {
+      "identifiers": {
+        "library_name": [
+          "Mupen64Plus-Next"
+        ]
+      },
+      "systems": {
+        "n64": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.8-Vulkan 680e033",
+          "citation": "[V] libretro/libretro.c:2109-2120 at mupen64plus-libretro-nx 680e033 — RETRO_MEMORY_SAVE_RAM answers sizeof(saved_memory), the block holding the cartridge's EEPROM, SRAM, FlashRAM and the controller paks together, so RetroArch writes one <rom_stem>.srm for all of them. No RETRO_MEMORY_RTC case exists."
+        },
+        "n64dd": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.8-Vulkan 680e033",
+          "citation": "[V] libretro/libretro.c:2109-2120 at mupen64plus-libretro-nx 680e033 — RETRO_MEMORY_SAVE_RAM answers sizeof(saved_memory), the block holding the cartridge's EEPROM, SRAM, FlashRAM and the controller paks together, so RetroArch writes one <rom_stem>.srm for all of them. No RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "neocd": {
+      "identifiers": {
+        "library_name": [
+          "NeoCD"
+        ]
+      },
+      "systems": {
+        "neogeocd": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2022 5eca2c8",
+          "citation": "[V] src/libretro.cpp:220-232 at neocd_libretro 5eca2c8 — RETRO_MEMORY_SAVE_RAM answers Memory::BACKUPRAM_SIZE, the Neo Geo CD's battery-backed memory, so RetroArch writes <rom_stem>.srm. No RETRO_MEMORY_RTC case exists."
+        },
+        "neogeocdjp": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2022 5eca2c8",
+          "citation": "[V] src/libretro.cpp:220-232 at neocd_libretro 5eca2c8 — RETRO_MEMORY_SAVE_RAM answers Memory::BACKUPRAM_SIZE, the Neo Geo CD's battery-backed memory, so RetroArch writes <rom_stem>.srm. No RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "nestopia": {
+      "identifiers": {
+        "library_name": [
+          "Nestopia"
+        ]
+      },
+      "systems": {
+        "famicom": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "1.53.2 5deada5",
+          "citation": "[V] libretro/libretro.cpp:1806-1819 at libretro/nestopia 5deada5 — RETRO_MEMORY_SAVE_RAM answers sram_size, so RetroArch writes <rom_stem>.srm. Only RETRO_MEMORY_SYSTEM_RAM answers besides it; every other id falls through to 0, so no .rtc is ever written."
+        },
+        "fds": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "1.53.2 5deada5",
+          "citation": "[V] libretro/libretro.cpp:1806-1819 at libretro/nestopia 5deada5 — RETRO_MEMORY_SAVE_RAM answers sram_size, so RetroArch writes <rom_stem>.srm. Only RETRO_MEMORY_SYSTEM_RAM answers besides it; every other id falls through to 0, so no .rtc is ever written."
+        },
+        "nes": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "1.53.2 5deada5",
+          "citation": "[V] libretro/libretro.cpp:1806-1819 at libretro/nestopia 5deada5 — RETRO_MEMORY_SAVE_RAM answers sram_size, so RetroArch writes <rom_stem>.srm. Only RETRO_MEMORY_SYSTEM_RAM answers besides it; every other id falls through to 0, so no .rtc is ever written."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "np2kai": {
+      "identifiers": {
+        "library_name": [
+          "Neko Project II kai"
+        ]
+      },
+      "systems": {
+        "pc98": {
+          "memory_types": [],
+          "verified_core": "rev.22 cfac20d",
+          "citation": "[V] sdl/libretro/libretro.c:820-825 at NP2kai cfac20d — only RETRO_MEMORY_SYSTEM_RAM answers (CPU_EXTMEMSIZE); every other id returns 0."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "o2em": {
+      "identifiers": {
+        "library_name": [
+          "O2EM"
+        ]
+      },
+      "systems": {
+        "odyssey2": {
+          "memory_types": [],
+          "verified_core": "1.18 3ba4231",
+          "citation": "[V] libretro.c:1070-1075 at libretro-o2em 3ba4231 — only RETRO_MEMORY_SYSTEM_RAM answers; every other id returns 0."
+        },
+        "videopac": {
+          "memory_types": [],
+          "verified_core": "1.18 3ba4231",
+          "citation": "[V] libretro.c:1070-1075 at libretro-o2em 3ba4231 — only RETRO_MEMORY_SYSTEM_RAM answers; every other id returns 0."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "parallel_n64": {
+      "identifiers": {
+        "library_name": [
+          "ParaLLEl N64"
+        ]
+      },
+      "systems": {
+        "n64": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.0-rc2 50d3ddd",
+          "citation": "[V] libretro/libretro.c:2014-2032 at parallel-n64 50d3ddd — RETRO_MEMORY_SAVE_RAM answers sizeof(saved_memory), less the disk region unless a 64DD disk is loaded, so RetroArch writes one <rom_stem>.srm covering the cartridge's save hardware. (The branch opens with a guard comparing type against the case it is already in, which can never be true; it changes nothing.) No RETRO_MEMORY_RTC case exists."
+        },
+        "n64dd": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.0-rc2 50d3ddd",
+          "citation": "[V] libretro/libretro.c:2014-2032 at parallel-n64 50d3ddd — RETRO_MEMORY_SAVE_RAM answers sizeof(saved_memory), less the disk region unless a 64DD disk is loaded, so RetroArch writes one <rom_stem>.srm covering the cartridge's save hardware. (The branch opens with a guard comparing type against the case it is already in, which can never be true; it changes nothing.) No RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "picodrive": {
+      "identifiers": {
+        "library_name": [
+          "PicoDrive"
+        ]
+      },
+      "systems": {
+        "gamegear": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.05-046e5ff",
+          "citation": "[V] platform/libretro/libretro.c:1732-1762 at libretro/picodrive 046e5ff — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, but only once the game has written to it: the core scans the buffer and returns 0 while it is still blank, with the reason in its own comment, so RetroArch does not write out a zeroed .srm. A Mega CD without a cartridge answers its backup RAM instead (0x12000 with the RAM cart option on, 0x2000 otherwise). No RETRO_MEMORY_RTC case exists."
+        },
+        "genesis": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.05-046e5ff",
+          "citation": "[V] platform/libretro/libretro.c:1732-1762 at libretro/picodrive 046e5ff — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, but only once the game has written to it: the core scans the buffer and returns 0 while it is still blank, with the reason in its own comment, so RetroArch does not write out a zeroed .srm. A Mega CD without a cartridge answers its backup RAM instead (0x12000 with the RAM cart option on, 0x2000 otherwise). No RETRO_MEMORY_RTC case exists."
+        },
+        "mark3": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.05-046e5ff",
+          "citation": "[V] platform/libretro/libretro.c:1732-1762 at libretro/picodrive 046e5ff — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, but only once the game has written to it: the core scans the buffer and returns 0 while it is still blank, with the reason in its own comment, so RetroArch does not write out a zeroed .srm. A Mega CD without a cartridge answers its backup RAM instead (0x12000 with the RAM cart option on, 0x2000 otherwise). No RETRO_MEMORY_RTC case exists."
+        },
+        "mastersystem": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.05-046e5ff",
+          "citation": "[V] platform/libretro/libretro.c:1732-1762 at libretro/picodrive 046e5ff — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, but only once the game has written to it: the core scans the buffer and returns 0 while it is still blank, with the reason in its own comment, so RetroArch does not write out a zeroed .srm. A Mega CD without a cartridge answers its backup RAM instead (0x12000 with the RAM cart option on, 0x2000 otherwise). No RETRO_MEMORY_RTC case exists."
+        },
+        "megacd": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.05-046e5ff",
+          "citation": "[V] platform/libretro/libretro.c:1706-1711, :1740-1746 at libretro/picodrive 046e5ff — the memory interface has an explicit Sega CD branch: for CD content (PAHW_MCD with no cartridge loaded) RETRO_MEMORY_SAVE_RAM answers the console's internal backup RAM (Pico_mcd->bram, 0x2000), and with the RAM-cart option enabled the combined buffer (Pico.sv.data, 0x12000). RetroArch's .srm therefore IS the Sega CD backup RAM here — the opposite wiring from Genesis Plus GX, whose CD path never reaches the interface and writes its own .brm files instead."
+        },
+        "megacdjp": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.05-046e5ff",
+          "citation": "[V] platform/libretro/libretro.c:1706-1711, :1740-1746 at libretro/picodrive 046e5ff — the memory interface has an explicit Sega CD branch: for CD content (PAHW_MCD with no cartridge loaded) RETRO_MEMORY_SAVE_RAM answers the console's internal backup RAM (Pico_mcd->bram, 0x2000), and with the RAM-cart option enabled the combined buffer (Pico.sv.data, 0x12000). RetroArch's .srm therefore IS the Sega CD backup RAM here — the opposite wiring from Genesis Plus GX, whose CD path never reaches the interface and writes its own .brm files instead."
+        },
+        "megadrive": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.05-046e5ff",
+          "citation": "[V] platform/libretro/libretro.c:1732-1762 at libretro/picodrive 046e5ff — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, but only once the game has written to it: the core scans the buffer and returns 0 while it is still blank, with the reason in its own comment, so RetroArch does not write out a zeroed .srm. A Mega CD without a cartridge answers its backup RAM instead (0x12000 with the RAM cart option on, 0x2000 otherwise). No RETRO_MEMORY_RTC case exists."
+        },
+        "megadrivejp": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.05-046e5ff",
+          "citation": "[V] platform/libretro/libretro.c:1732-1762 at libretro/picodrive 046e5ff — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, but only once the game has written to it: the core scans the buffer and returns 0 while it is still blank, with the reason in its own comment, so RetroArch does not write out a zeroed .srm. A Mega CD without a cartridge answers its backup RAM instead (0x12000 with the RAM cart option on, 0x2000 otherwise). No RETRO_MEMORY_RTC case exists."
+        },
+        "sega32x": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.05-046e5ff",
+          "citation": "[V] platform/libretro/libretro.c:1732-1762 at libretro/picodrive 046e5ff — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, but only once the game has written to it: the core scans the buffer and returns 0 while it is still blank, with the reason in its own comment, so RetroArch does not write out a zeroed .srm. A Mega CD without a cartridge answers its backup RAM instead (0x12000 with the RAM cart option on, 0x2000 otherwise). No RETRO_MEMORY_RTC case exists."
+        },
+        "sega32xjp": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.05-046e5ff",
+          "citation": "[V] platform/libretro/libretro.c:1732-1762 at libretro/picodrive 046e5ff — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, but only once the game has written to it: the core scans the buffer and returns 0 while it is still blank, with the reason in its own comment, so RetroArch does not write out a zeroed .srm. A Mega CD without a cartridge answers its backup RAM instead (0x12000 with the RAM cart option on, 0x2000 otherwise). No RETRO_MEMORY_RTC case exists."
+        },
+        "sega32xna": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.05-046e5ff",
+          "citation": "[V] platform/libretro/libretro.c:1732-1762 at libretro/picodrive 046e5ff — RETRO_MEMORY_SAVE_RAM answers the cartridge's SRAM size, but only once the game has written to it: the core scans the buffer and returns 0 while it is still blank, with the reason in its own comment, so RetroArch does not write out a zeroed .srm. A Mega CD without a cartridge answers its backup RAM instead (0x12000 with the RAM cart option on, 0x2000 otherwise). No RETRO_MEMORY_RTC case exists."
+        },
+        "segacd": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.05-046e5ff",
+          "citation": "[V] platform/libretro/libretro.c:1706-1711, :1740-1746 at libretro/picodrive 046e5ff — the memory interface has an explicit Sega CD branch: for CD content (PAHW_MCD with no cartridge loaded) RETRO_MEMORY_SAVE_RAM answers the console's internal backup RAM (Pico_mcd->bram, 0x2000), and with the RAM-cart option enabled the combined buffer (Pico.sv.data, 0x12000). RetroArch's .srm therefore IS the Sega CD backup RAM here — the opposite wiring from Genesis Plus GX, whose CD path never reaches the interface and writes its own .brm files instead."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "potator": {
+      "identifiers": {
+        "library_name": [
+          "Potator"
+        ]
+      },
+      "systems": {
+        "supervision": {
+          "memory_types": [],
+          "verified_core": "1.0.5  ad87bc6",
+          "citation": "[V] platform/libretro/libretro.c:509-512 at libretro/potator ad87bc6 — retro_get_memory_size returns 0 for every id."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "prosystem": {
+      "identifiers": {
+        "library_name": [
+          "ProSystem"
+        ]
+      },
+      "systems": {
+        "atari7800": {
+          "memory_types": [],
+          "verified_core": "1.3e acae250",
+          "citation": "[V] core/libretro.c:629-634 at prosystem-libretro acae250 — only RETRO_MEMORY_SYSTEM_RAM answers; every other id returns 0."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "puae": {
+      "identifiers": {
+        "library_name": [
+          "PUAE"
+        ]
+      },
+      "systems": {
+        "amiga": {
+          "memory_types": [],
+          "verified_core": "5.3.0 0043cf9",
+          "citation": "[V] libretro/libretro-core.c:8881-8886 at libretro-uae 0043cf9 — only RETRO_MEMORY_SYSTEM_RAM answers (chipmem_bank.allocated_size); every other id returns 0. An Amiga's saves live inside the disk images the core manages, which is outside what this record describes."
+        },
+        "amiga1200": {
+          "memory_types": [],
+          "verified_core": "5.3.0 0043cf9",
+          "citation": "[V] libretro/libretro-core.c:8881-8886 at libretro-uae 0043cf9 — only RETRO_MEMORY_SYSTEM_RAM answers (chipmem_bank.allocated_size); every other id returns 0. An Amiga's saves live inside the disk images the core manages, which is outside what this record describes."
+        },
+        "amiga600": {
+          "memory_types": [],
+          "verified_core": "5.3.0 0043cf9",
+          "citation": "[V] libretro/libretro-core.c:8881-8886 at libretro-uae 0043cf9 — only RETRO_MEMORY_SYSTEM_RAM answers (chipmem_bank.allocated_size); every other id returns 0. An Amiga's saves live inside the disk images the core manages, which is outside what this record describes."
+        },
+        "amigacd32": {
+          "memory_types": [],
+          "verified_core": "5.3.0 0043cf9",
+          "citation": "[V] libretro/libretro-core.c:8881-8886 at libretro-uae 0043cf9 — only RETRO_MEMORY_SYSTEM_RAM answers (chipmem_bank.allocated_size); every other id returns 0. An Amiga's saves live inside the disk images the core manages, which is outside what this record describes."
+        },
+        "cdtv": {
+          "memory_types": [],
+          "verified_core": "5.3.0 0043cf9",
+          "citation": "[V] libretro/libretro-core.c:8881-8886 at libretro-uae 0043cf9 — only RETRO_MEMORY_SYSTEM_RAM answers (chipmem_bank.allocated_size); every other id returns 0. An Amiga's saves live inside the disk images the core manages, which is outside what this record describes."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "px68k": {
+      "identifiers": {
+        "library_name": [
+          "PX68k"
+        ]
+      },
+      "systems": {
+        "x68000": {
+          "memory_types": [],
+          "verified_core": "0.15+ 9dfa6ab",
+          "citation": "[V] libretro.c:1785-1790 at px68k-libretro 9dfa6ab — only RETRO_MEMORY_SYSTEM_RAM answers; every other id returns 0."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "quicknes": {
+      "identifiers": {
+        "library_name": [
+          "QuickNES"
+        ]
+      },
+      "systems": {
+        "famicom": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "1.0-WIP dbf19f7",
+          "citation": "[V] libretro/libretro.cpp:1443-1458 at libretro/QuickNES_Core dbf19f7 — RETRO_MEMORY_SAVE_RAM answers Nes_Emu::high_mem_size for a cartridge with battery RAM and 0 without, so RetroArch writes <rom_stem>.srm for the ones that have it. No RETRO_MEMORY_RTC case exists."
+        },
+        "nes": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "1.0-WIP dbf19f7",
+          "citation": "[V] libretro/libretro.cpp:1443-1458 at libretro/QuickNES_Core dbf19f7 — RETRO_MEMORY_SAVE_RAM answers Nes_Emu::high_mem_size for a cartridge with battery RAM and 0 without, so RetroArch writes <rom_stem>.srm for the ones that have it. No RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "same_cdi": {
+      "identifiers": {
+        "library_name": [
+          "SAME CDi"
+        ]
+      },
+      "systems": {
+        "cdimono1": {
+          "memory_types": [],
+          "verified_core": "0.239",
+          "citation": "[V] src/osd/libretro/libretro-internal/libretro.cpp:933-961 at libretro/same_cdi — the function inspects the machine's address spaces for RETRO_MEMORY_SYSTEM_RAM alone; for any other id the candidate sizes stay 0 and 0 is returned."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "sameboy": {
+      "identifiers": {
+        "library_name": [
+          "SameBoy"
+        ]
+      },
+      "systems": {
+        "gb": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "1.0.2 be2c352",
+          "citation": "[V] libretro/libretro.c:1744-1774 at libretro/SameBoy be2c352 — for an ordinary single-cartridge launch RETRO_MEMORY_SAVE_RAM answers mbc_ram_size where the cartridge has a battery, and RETRO_MEMORY_RTC answers GB_SECTION_SIZE(rtc), a compile-time span between two struct offsets (Core/save_state.h:21). That case is gated on has_battery alone and not on the cartridge carrying a clock, so the .rtc appears for every battery cartridge rather than only for the MBC3 and HuC3 ones. The second branch of both functions belongs to the two-player link subsystem, which raises emulated_devices to 2 (:1540-1547) and answers its own ids — RetroArch registers .srm and .rtc for non-subsystem content only, so that branch never names these files."
+        },
+        "gbc": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "1.0.2 be2c352",
+          "citation": "[V] libretro/libretro.c:1744-1774 at libretro/SameBoy be2c352 — the core has one code path for every handheld it emulates and picks the model from the sameboy_model option, falling back to what the loaded cartridge says (:648-656, the option read at :757-773), so the memory ids it fills are the same pair as for the Game Boy."
+        },
+        "sgb": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "1.0.2 be2c352",
+          "citation": "[V] libretro/libretro.c:1744-1774 at libretro/SameBoy be2c352 — the core has one code path for every handheld it emulates and picks the model from the sameboy_model option, falling back to what the loaded cartridge says (:648-656, the option read at :757-773), so the memory ids it fills are the same pair as for the Game Boy."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "sameduck": {
+      "identifiers": {
+        "library_name": [
+          "SameDuck"
+        ]
+      },
+      "systems": {
+        "megaduck": {
+          "memory_types": [],
+          "verified_core": "0.13.6 f0286ee",
+          "citation": "[V] libretro/libretro.c:1211-1248 at libretro/sameduck f0286ee — RETRO_MEMORY_SAVE_RAM and RETRO_MEMORY_RTC are both written out as cases and both set the size to 0; only system and video RAM answer."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "snes9x": {
+      "identifiers": {
+        "library_name": [
+          "Snes9x"
+        ]
+      },
+      "systems": {
+        "satellaview": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "1.63 5a40cd5",
+          "citation": "[V] libretro/libretro.cpp:2065-2097 at libretro/snes9x 5a40cd5 — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. Neither id is decided per system — one function serves all five, and which of the two a given cartridge fills is a fact about the cartridge. The core writes no save file of its own: S9xAutoSaveSRAM (:2362-2365) has an empty body and the shipped binary carries no save path format at all."
+        },
+        "sfc": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "1.63 5a40cd5",
+          "citation": "[V] libretro/libretro.cpp:2065-2097 at libretro/snes9x 5a40cd5 — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. Neither id is decided per system — one function serves all five, and which of the two a given cartridge fills is a fact about the cartridge. The core writes no save file of its own: S9xAutoSaveSRAM (:2362-2365) has an empty body and the shipped binary carries no save path format at all."
+        },
+        "snes": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "1.63 5a40cd5",
+          "citation": "[V] libretro/libretro.cpp:2065-2097 at libretro/snes9x 5a40cd5 — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. Neither id is decided per system — one function serves all five, and which of the two a given cartridge fills is a fact about the cartridge. The core writes no save file of its own: S9xAutoSaveSRAM (:2362-2365) has an empty body and the shipped binary carries no save path format at all."
+        },
+        "snesna": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "1.63 5a40cd5",
+          "citation": "[V] libretro/libretro.cpp:2065-2097 at libretro/snes9x 5a40cd5 — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. Neither id is decided per system — one function serves all five, and which of the two a given cartridge fills is a fact about the cartridge. The core writes no save file of its own: S9xAutoSaveSRAM (:2362-2365) has an empty body and the shipped binary carries no save path format at all."
+        },
+        "sufami": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "1.63 5a40cd5",
+          "citation": "[V] libretro/libretro.cpp:2065-2097 at libretro/snes9x 5a40cd5 — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. Neither id is decided per system — one function serves all five, and which of the two a given cartridge fills is a fact about the cartridge. The core writes no save file of its own: S9xAutoSaveSRAM (:2362-2365) has an empty body and the shipped binary carries no save path format at all."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "snes9x2005_plus": {
+      "identifiers": {
+        "library_name": [
+          "Snes9x 2005 Plus"
+        ]
+      },
+      "systems": {
+        "satellaview": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "v1.36 74d871d",
+          "citation": "[V] libretro.c:1151-1177 at libretro/snes9x2005 74d871d — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. One function serves every system this core is launched for and asks nothing about which."
+        },
+        "sfc": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "v1.36 74d871d",
+          "citation": "[V] libretro.c:1151-1177 at libretro/snes9x2005 74d871d — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. One function serves every system this core is launched for and asks nothing about which."
+        },
+        "snes": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "v1.36 74d871d",
+          "citation": "[V] libretro.c:1151-1177 at libretro/snes9x2005 74d871d — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. One function serves every system this core is launched for and asks nothing about which."
+        },
+        "snesna": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "v1.36 74d871d",
+          "citation": "[V] libretro.c:1151-1177 at libretro/snes9x2005 74d871d — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. One function serves every system this core is launched for and asks nothing about which."
+        },
+        "sufami": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "v1.36 74d871d",
+          "citation": "[V] libretro.c:1151-1177 at libretro/snes9x2005 74d871d — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. One function serves every system this core is launched for and asks nothing about which."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "snes9x2010": {
+      "identifiers": {
+        "library_name": [
+          "Snes9x 2010"
+        ]
+      },
+      "systems": {
+        "satellaview": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "1.52.4 f9ae8fd",
+          "citation": "[V] libretro/libretro.c:574-603 at libretro/snes9x2010 f9ae8fd — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. One function serves every system this core is launched for and asks nothing about which."
+        },
+        "sfc": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "1.52.4 f9ae8fd",
+          "citation": "[V] libretro/libretro.c:574-603 at libretro/snes9x2010 f9ae8fd — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. One function serves every system this core is launched for and asks nothing about which."
+        },
+        "snes": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "1.52.4 f9ae8fd",
+          "citation": "[V] libretro/libretro.c:574-603 at libretro/snes9x2010 f9ae8fd — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. One function serves every system this core is launched for and asks nothing about which."
+        },
+        "snesna": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "1.52.4 f9ae8fd",
+          "citation": "[V] libretro/libretro.c:574-603 at libretro/snes9x2010 f9ae8fd — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. One function serves every system this core is launched for and asks nothing about which."
+        },
+        "sufami": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "1.52.4 f9ae8fd",
+          "citation": "[V] libretro/libretro.c:574-603 at libretro/snes9x2010 f9ae8fd — RETRO_MEMORY_SAVE_RAM answers the cartridge's own SRAM size (capped at 128 KB) and RETRO_MEMORY_RTC answers 20 bytes whenever the loaded cartridge drives S-RTC or the SPC7110 clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. One function serves every system this core is launched for and asks nothing about which."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "squirreljme": {
+      "identifiers": {
+        "library_name": [
+          "SquirrelJME"
+        ]
+      },
+      "systems": {
+        "j2me": {
+          "memory_types": [],
+          "verified_core": "0.3.0",
+          "citation": "[V] nanocoat/frontend/libretro/save.c:42-45 at XerTheSquirrel/SquirrelJME — retro_get_memory_size returns 0 for every id."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "stella": {
+      "identifiers": {
+        "library_name": [
+          "Stella"
+        ]
+      },
+      "systems": {
+        "atari2600": {
+          "memory_types": [],
+          "verified_core": "8.0_pre 7c4e3b2",
+          "citation": "[V] src/os/libretro/libretro.cxx:956-966 at stella-emu/stella 7c4e3b2 — only RETRO_MEMORY_SYSTEM_RAM answers (stella.getRAMSize()); every other id returns 0."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "superbroswar": {
+      "identifiers": {
+        "library_name": [
+          "Super Bros War"
+        ]
+      },
+      "systems": {
+        "ports": {
+          "memory_types": [],
+          "verified_core": "0.1",
+          "citation": "[V] libretro/libretro.cpp:606-610 at libretro/superbroswar-libretro — retro_get_memory_size returns 0 for every id, so RetroArch writes no save file. The save directory is taken in the boilerplate block many cores copy verbatim, beside the system and content directories (:459-463), and the variable is not read anywhere in the unit; the game's own file layer (src/common/FileIO.cpp) does not mention it either. That is not the same as establishing the core writes nothing, which is what the caveat beside this record says."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "tgbdual": {
+      "identifiers": {
+        "library_name": [
+          "TGB Dual"
+        ]
+      },
+      "systems": {
+        "gb": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "v0.8.3 933707c",
+          "citation": "[V] libretro/libretro.cpp:484-508 at libretro/tgbdual-libretro 933707c — in the single-cartridge modes, which are the two retro_load_game can reach (:299-316), RETRO_MEMORY_SAVE_RAM answers the cartridge's own get_sram_size() and RETRO_MEMORY_RTC answers sizeof(render[0]->fixed_time). That field is a dword (libretro/dmy_renderer.h:40), so the clock size is a compile-time 4 and never depends on the cartridge: the .rtc appears for every game this core loads, clock hardware or not."
+        },
+        "gbc": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "v0.8.3 933707c",
+          "citation": "[V] libretro/libretro.cpp:484-508 at libretro/tgbdual-libretro 933707c — the core has one code path for both handhelds and reads the model off the loaded cartridge (get_info()->gb_type), so the memory ids it fills are the same pair as for the Game Boy."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "theodore": {
+      "identifiers": {
+        "library_name": [
+          "theodore"
+        ]
+      },
+      "systems": {
+        "moto": {
+          "memory_types": [],
+          "verified_core": "242e932",
+          "citation": "[V] libretro.c:850-858 at Zlika/theodore 242e932 — only RETRO_MEMORY_SYSTEM_RAM answers (RAM_SIZE); every other id returns 0."
+        },
+        "to8": {
+          "memory_types": [],
+          "verified_core": "242e932",
+          "citation": "[V] libretro.c:850-858 at Zlika/theodore 242e932 — only RETRO_MEMORY_SYSTEM_RAM answers (RAM_SIZE); every other id returns 0."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "tic80": {
+      "identifiers": {
+        "library_name": [
+          "TIC-80"
+        ]
+      },
+      "systems": {
+        "tic80": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "1.0.162-dev (e199ef2)",
+          "citation": "[V] libretro.c:1158-1169 at libretro/TIC-80 e199ef2 — RETRO_MEMORY_SAVE_RAM answers the size of the cartridge's persistent memory block, so RetroArch writes <rom_stem>.srm. No RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "uzem": {
+      "identifiers": {
+        "library_name": [
+          "Uzem"
+        ]
+      },
+      "systems": {
+        "uzebox": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v2.0",
+          "citation": "[V] uzem_libretro.cpp:416-426 at libretro/libretro-uzem — RETRO_MEMORY_SAVE_RAM answers eepromSize, the Uzebox's EEPROM, so RetroArch writes <rom_stem>.srm. No RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "vba_next": {
+      "identifiers": {
+        "library_name": [
+          "VBA Next"
+        ]
+      },
+      "systems": {
+        "gba": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v1.0.2 d0ec7f3",
+          "citation": "[V] libretro/libretro.cpp:47-57 at libretro/vba-next d0ec7f3 — RETRO_MEMORY_SAVE_RAM answers libretro_save_size, the size the core detected for this cartridge's save hardware, so RetroArch writes <rom_stem>.srm. No RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "vbam": {
+      "identifiers": {
+        "library_name": [
+          "VBA-M"
+        ]
+      },
+      "systems": {
+        "gb": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "2.2.3 d0787ae",
+          "citation": "[V] src/libretro/libretro.cpp:384-401 at libretro/vbam-libretro d0787ae — for IMAGE_GB content RETRO_MEMORY_SAVE_RAM answers the cartridge's RAM size where it has a battery, and RETRO_MEMORY_RTC answers gb_rtcdata_size() where the cartridge has a clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. The function switches on the loaded image type first, which is why this core states different ids for its Game Boy and Game Boy Advance systems."
+        },
+        "gba": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "2.2.3 d0787ae",
+          "citation": "[V] src/libretro/libretro.cpp:364-382 at libretro/vbam-libretro d0787ae — for IMAGE_GBA content RETRO_MEMORY_SAVE_RAM answers whichever save hardware the core detected (EEPROM, flash or SRAM), so RetroArch writes <rom_stem>.srm. The GBA branch has no RETRO_MEMORY_RTC case at all — only the Game Boy branch does — so no .rtc is written for GBA content."
+        },
+        "gbc": {
+          "memory_types": [
+            "save_ram",
+            "rtc"
+          ],
+          "verified_core": "2.2.3 d0787ae",
+          "citation": "[V] src/libretro/libretro.cpp:384-401 at libretro/vbam-libretro d0787ae — for IMAGE_GB content RETRO_MEMORY_SAVE_RAM answers the cartridge's RAM size where it has a battery, and RETRO_MEMORY_RTC answers gb_rtcdata_size() where the cartridge has a clock, so RetroArch writes <rom_stem>.srm and <rom_stem>.rtc. The function switches on the loaded image type first, which is why this core states different ids for its Game Boy and Game Boy Advance systems."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "vecx": {
+      "identifiers": {
+        "library_name": [
+          "vecx"
+        ]
+      },
+      "systems": {
+        "vectrex": {
+          "memory_types": [],
+          "verified_core": "1.2 841229a",
+          "citation": "[V] libretro.c:150-155 at libretro-vecx 841229a — only RETRO_MEMORY_SYSTEM_RAM answers (1024); every other id returns 0."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "vice_x64sc": {
+      "identifiers": {
+        "library_name": [
+          "VICE x64sc"
+        ]
+      },
+      "systems": {
+        "c64": {
+          "memory_types": [],
+          "verified_core": "3.9 e9f8ac0",
+          "citation": "[V] libretro/libretro-core.c:8803-8808 at vice-libretro e9f8ac0 — only RETRO_MEMORY_SYSTEM_RAM answers (mem_ram_size); every other id returns 0. All three VICE builds RetroDECK ships come from this one source tree and report the same revision, so the reading covers each of them. A Commodore machine's saves live on the disk and tape images the core mounts, which is outside what this record describes."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "vice_xplus4": {
+      "identifiers": {
+        "library_name": [
+          "VICE xplus4"
+        ]
+      },
+      "systems": {
+        "plus4": {
+          "memory_types": [],
+          "verified_core": "3.9 e9f8ac0",
+          "citation": "[V] libretro/libretro-core.c:8803-8808 at vice-libretro e9f8ac0 — only RETRO_MEMORY_SYSTEM_RAM answers (mem_ram_size); every other id returns 0. All three VICE builds RetroDECK ships come from this one source tree and report the same revision, so the reading covers each of them. A Commodore machine's saves live on the disk and tape images the core mounts, which is outside what this record describes."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "vice_xvic": {
+      "identifiers": {
+        "library_name": [
+          "VICE xvic"
+        ]
+      },
+      "systems": {
+        "vic20": {
+          "memory_types": [],
+          "verified_core": "3.9 e9f8ac0",
+          "citation": "[V] libretro/libretro-core.c:8803-8808 at vice-libretro e9f8ac0 — only RETRO_MEMORY_SYSTEM_RAM answers (mem_ram_size); every other id returns 0. All three VICE builds RetroDECK ships come from this one source tree and report the same revision, so the reading covers each of them. A Commodore machine's saves live on the disk and tape images the core mounts, which is outside what this record describes."
+        }
+      },
+      "provenance": {
+        "source": "read at the revision the installed binary names in its library_version"
+      }
+    },
+    "vircon32": {
+      "identifiers": {
+        "library_name": [
+          "Vircon32"
+        ]
+      },
+      "systems": {
+        "vircon32": {
+          "memory_types": [],
+          "verified_core": "2025.1.18",
+          "citation": "[V] libretro.cpp:719-723 at vircon32/vircon32-libretro — retro_get_memory_size returns 0 for every id, with 'not implemented' as its only body comment."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "wasm4": {
+      "identifiers": {
+        "library_name": [
+          "WASM-4"
+        ]
+      },
+      "systems": {
+        "wasm4": {
+          "memory_types": [
+            "save_ram"
+          ],
+          "verified_core": "v1",
+          "citation": "[V] runtimes/native/src/backend/main_libretro.c:170-179 at aduros/wasm4 — RETRO_MEMORY_SAVE_RAM answers sizeof(disk), the cartridge's persistent storage, so RetroArch writes <rom_stem>.srm. No RETRO_MEMORY_RTC case exists."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    },
+    "x1": {
+      "identifiers": {
+        "library_name": [
+          "X Millennium"
+        ]
+      },
+      "systems": {
+        "x1": {
+          "memory_types": [],
+          "verified_core": "0.60",
+          "citation": "[V] libretro/libretro.c:496-506 at libretro/xmil-libretro — only RETRO_MEMORY_SYSTEM_RAM answers (sizeof(mainmem)); every other id returns 0."
+        }
+      },
+      "provenance": {
+        "source": "the binary names a version without a commit, so the pin is that version"
+      }
+    }
+  }
+}
