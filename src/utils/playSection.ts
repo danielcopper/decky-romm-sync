@@ -20,9 +20,11 @@ export interface BiosInfoFields {
   biosLabel: string;
   /** Whether a file the ACTIVE CORE requires is not on disk — the whole of the
    *  play-row badge's rule, and the reason it is derived here rather than at the
-   *  row: it is a local fact (`required_downloaded` counts `os.path.exists`),
-   *  and reassembling it from two numbers at the call site is how it drifted
-   *  into keying off the readiness verdict instead.
+   *  row: it is a local fact (`required_downloaded` counts what the reading
+   *  found at each destination), and reassembling it from the numbers at the
+   *  call site is how it drifted into keying off the readiness verdict instead.
+   *  A required row whose verdict was withheld is out of both sides of the
+   *  comparison — it is not on disk and not shown to be missing either.
    *
    *  The four-valued `bios_level` is deliberately NOT projected. The badge has
    *  one appearance, so it needs no colour input, and the BIOS tab reads the
@@ -105,10 +107,16 @@ export function extractBiosInfo(answer: BiosAnswer): BiosInfoFields | null {
   }
   const requiredCount = answer.bios_status.required_count ?? 0;
   const requiredDownloaded = answer.bios_status.required_downloaded ?? 0;
+  // A required row nothing could judge is neither present nor absent, so it is
+  // taken out of the count before the comparison: the badge says a required file
+  // is NOT THERE, and a folder the reading did not look inside has not shown
+  // that. Leaving it in raised the badge on every PS2 game, whose core requires
+  // a folder RetroDECK links onto the BIOS root.
+  const requiredJudged = requiredCount - (answer.bios_status.required_withheld ?? 0);
   return {
     biosNeeded: true,
     biosLabel: answer.bios_label ?? "",
-    biosRequiredMissing: requiredCount > 0 && requiredDownloaded < requiredCount,
+    biosRequiredMissing: requiredJudged > 0 && requiredDownloaded < requiredJudged,
   };
 }
 

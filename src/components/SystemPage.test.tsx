@@ -145,9 +145,19 @@ function makeBiosPlatform(overrides: Partial<FirmwarePlatformExt> = {}): Firmwar
   const localCount = files.filter((f) => f.downloaded).length;
   const requiredFiles = files.filter((f) => f.required_by_active);
   const requiredCount = requiredFiles.length;
-  const requiredDownloaded = requiredFiles.filter((f) => f.downloaded).length;
+  // A folder is where the reading stops: something is at the destination and
+  // nothing about the requirement was established, so it raises neither the
+  // done count nor the level's confidence.
+  const requiredWithheld = requiredFiles.filter((f) => f.is_directory).length;
+  const requiredDownloaded = requiredFiles.filter((f) => f.downloaded && !f.is_directory).length;
   const biosLevel: BiosLevel =
-    requiredDownloaded >= requiredCount ? "ok" : requiredDownloaded > 0 ? "partial" : "missing";
+    requiredWithheld > 0
+      ? "unknown"
+      : requiredDownloaded >= requiredCount
+        ? "ok"
+        : requiredDownloaded > 0
+          ? "partial"
+          : "missing";
   return {
     platform_slug: "snes",
     files: [],
@@ -156,6 +166,7 @@ function makeBiosPlatform(overrides: Partial<FirmwarePlatformExt> = {}): Firmwar
     local_count: localCount,
     required_count: requiredCount,
     required_downloaded: requiredDownloaded,
+    required_withheld: requiredWithheld,
     bios_level: biosLevel,
     // Not derived from the files, because the backend cannot derive it from them
     // either: it counts the plugin's own download records, and a row says
@@ -1159,8 +1170,9 @@ describe("SystemPage", () => {
 
     it("keeps every download on an answered platform whose files nothing wants", async () => {
       // The foil, and the reason the condition is per platform rather than per
-      // file: psx holds seventeen files no installed core asks for. "Nothing
-      // wants this" is an answer, so each of them stays fetchable.
+      // file: a psx page typically lists a good number of regional BIOS dumps no
+      // installed core asks for. "Nothing wants this" is an answer, so each of
+      // them stays fetchable.
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
@@ -1190,13 +1202,110 @@ describe("SystemPage", () => {
       expect(queryByText("Download All")).not.toBeNull();
       expect(container.textContent).not.toContain("is not supported for this system yet");
     });
+
+    it("declines the readiness claim over a required folder it cannot look inside", async () => {
+      // LRPS2 requires the `pcsx2/bios` FOLDER, which RetroDECK links onto the
+      // BIOS root — so it is always there, and counting it as satisfied read
+      // "All required ready" over a PS2 install with no BIOS file in it.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "ps2",
+            files: [
+              {
+                id: null,
+                file_name: "bios",
+                local_path: "bios",
+                size: 0,
+                md5: "",
+                downloaded: true,
+                description: "'pcsx2/bios' folder",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: false,
+                is_directory: true,
+              },
+              {
+                id: null,
+                file_name: "GameIndex.yaml",
+                local_path: "pcsx2/resources/GameIndex.yaml",
+                size: 0,
+                md5: "",
+                downloaded: true,
+                description: "GameIndex.yaml (Game Database)",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: false,
+              },
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("BIOS readiness unknown");
+      expect(container.textContent).toContain("A required folder is here and its contents cannot be checked");
+      expect(container.textContent).not.toContain("All required ready");
+      expect(container.textContent).not.toContain("required missing");
+      // Not a "nothing could be established" platform: its rows were answered,
+      // so it keeps the words and the buttons that state belongs to.
+      expect(container.textContent).not.toContain("is not supported for this system yet");
+      expect(container.textContent).not.toContain("BIOS needed");
+    });
+
+    it("keeps a fetchable file downloadable while the readiness verdict declines", async () => {
+      // The declined verdict is about one unjudgeable row, not about the
+      // platform: the library's own PS2 dumps were answered for, and fetching
+      // them is the one thing that still moves the system along.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "ps2",
+            files: [
+              {
+                id: null,
+                file_name: "bios",
+                local_path: "bios",
+                size: 0,
+                md5: "",
+                downloaded: true,
+                description: "'pcsx2/bios' folder",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: false,
+                is_directory: true,
+              },
+              {
+                id: 7,
+                file_name: "scph39001.bin",
+                local_path: "scph39001.bin",
+                size: 100,
+                md5: "x",
+                downloaded: false,
+                description: "PS2 BIOS",
+                wanted: "not_needed",
+                required_by_active: false,
+                on_server: true,
+              },
+            ],
+          }),
+        ],
+      });
+      const { queryByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(queryByText("Download All")).not.toBeNull();
+    });
   });
 
   // ------------------------------------------------------------------
   // M2. What a file row says about itself
   // ------------------------------------------------------------------
   describe("file row notes", () => {
-    async function expandedRowText(file: Partial<FirmwarePlatformExt["files"][number]>) {
+    async function expandedRow(file: Partial<FirmwarePlatformExt["files"][number]>) {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
@@ -1223,7 +1332,11 @@ describe("SystemPage", () => {
       const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(getByText("Show Files (1)"));
-      return container.textContent;
+      return container;
+    }
+
+    async function expandedRowText(file: Partial<FirmwarePlatformExt["files"][number]>) {
+      return (await expandedRow(file)).textContent;
     }
 
     it("names the distribution that supplied the file instead of the library it is not in", async () => {
@@ -1233,11 +1346,15 @@ describe("SystemPage", () => {
       expect(text).not.toContain("not in your RomM library");
     });
 
-    it("says what a directory requirement is satisfied by", async () => {
-      const text = await expandedRowText({ file_name: "bios", is_directory: true });
+    it("says a folder's contents were never checked", async () => {
+      const container = await expandedRow({ file_name: "bios", is_directory: true });
 
-      expect(text).toContain("bios — BIOS files go in this folder");
-      expect(text).not.toContain("Missing");
+      expect(container.textContent).toContain("bios — a folder is here — its contents cannot be checked");
+      expect(container.textContent).not.toContain("Missing");
+      // Amber, never the green a present file gets: `downloaded` is true for a
+      // folder, and green would claim an all-clear over contents nobody read.
+      expect(container.innerHTML).toContain("#d4a72c");
+      expect(container.innerHTML).not.toContain("#5ba32b");
     });
 
     it("still says a library file is missing in the page's own words", async () => {

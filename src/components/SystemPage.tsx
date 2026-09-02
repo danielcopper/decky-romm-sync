@@ -326,40 +326,64 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     // local count comparison only when the level is absent from the payload.
     const requiredReady = platform.bios_level == null ? requiredDone === requiredCount : platform.bios_level === "ok";
 
-    // "unknown": no installed emulator's answer could be established for this
-    // platform, so the plugin makes no readiness claim. Render neutral grey +
-    // honest text instead of a false all-clear. requiredCount is always 0 here,
-    // so it is never counted as a "BIOS needed" platform. The description splits
-    // on whether there are rows to point at: a platform whose emulators are all
-    // standalone has none at all, and "0 file(s) nothing installed could answer
-    // for" would read as a finished count of nothing rather than as silence.
+    // "unknown": the plugin makes no readiness claim. Render neutral grey +
+    // honest text instead of a false all-clear — and never a "BIOS needed" flag
+    // either, since that is a claim in the other direction.
+    //
+    // Two shapes reach it and they are different sentences. `requiredWithheld`
+    // above zero is a platform whose emulators DID answer and one of whose
+    // required rows nothing could judge — a folder, whose contents the reading
+    // does not inspect. Everything else here was answered, so the rows below
+    // stand and so do the downloads. Zero is the older shape: no installed
+    // emulator's answer could be established for this platform at all. Its
+    // description splits again on whether there are rows to point at, because a
+    // platform whose emulators are all standalone has none, and "0 file(s)
+    // nothing installed could answer for" would read as a finished count of
+    // nothing rather than as silence.
     const isUnknown = platform.bios_level === "unknown";
+    const requiredWithheld = platform.required_withheld ?? 0;
+    const nothingEstablished = isUnknown && requiredWithheld === 0;
 
-    const needsAttention = platform.has_games && requiredCount > 0 && !requiredReady;
-    const { summaryLabel, summaryDescription } = isUnknown
-      ? {
-          summaryLabel: "BIOS requirement unknown",
-          summaryDescription:
-            total > 0
-              ? `${total} file(s) nothing installed could answer for`
-              : "Nothing installed could answer for this system",
-        }
-      : getBiosSummary(requiredCount, requiredDone, requiredReady, optionalMissing, done, total);
+    const needsAttention = platform.has_games && !isUnknown && requiredCount > 0 && !requiredReady;
+    let summary: { summaryLabel: string; summaryDescription: string };
+    if (nothingEstablished) {
+      summary = {
+        summaryLabel: "BIOS requirement unknown",
+        summaryDescription:
+          total > 0
+            ? `${total} file(s) nothing installed could answer for`
+            : "Nothing installed could answer for this system",
+      };
+    } else if (isUnknown) {
+      summary = {
+        summaryLabel: "BIOS readiness unknown",
+        summaryDescription:
+          requiredWithheld === 1
+            ? "A required folder is here and its contents cannot be checked"
+            : `${requiredWithheld} required folders are here and their contents cannot be checked`,
+      };
+    } else {
+      summary = getBiosSummary(requiredCount, requiredDone, requiredReady, optionalMissing, done, total);
+    }
+    const { summaryLabel, summaryDescription } = summary;
     // The download affordances key off what is missing AND fetchable, never off
     // readiness: a required file the RomM library does not hold leaves the
     // platform not ready and still gives the user nothing to press here.
     //
-    // `isUnknown` withdraws them entirely, and that is a PLATFORM condition,
-    // never a per-file one: a platform whose reading finished may hold plenty of
-    // files no installed emulator asks for — a PlayStation page typically does —
-    // and every one of them stays fetchable, because "nothing wants this" is an
-    // answer.
+    // `nothingEstablished` withdraws them entirely, and that is a PLATFORM
+    // condition, never a per-file one: a platform whose reading finished may
+    // hold plenty of files no installed emulator asks for — a PlayStation page
+    // typically does — and every one of them stays fetchable, because "nothing
+    // wants this" is an answer.
     // Where nothing could be established there is no answer to download
     // against, so the page says so instead of offering to fetch files it cannot
-    // reason about. Nothing here is keyed to a platform name — the condition is
-    // the backend's verdict, so a system starts offering downloads again the
-    // moment anything can speak for it.
-    const fetchableMissing = isUnknown ? [] : platform.files.filter((f) => f.on_server && !f.downloaded);
+    // reason about. A declined READINESS verdict is not that state and keeps its
+    // buttons: its rows were answered, and downloading the files the library
+    // holds is the one thing that can still move the platform along. Nothing
+    // here is keyed to a platform name — the condition is the backend's verdict,
+    // so a system starts offering downloads again the moment anything can speak
+    // for it.
+    const fetchableMissing = nothingEstablished ? [] : platform.files.filter((f) => f.on_server && !f.downloaded);
     const hasRequiredMissing = fetchableMissing.some((f) => f.required_by_active);
     const hasOptionalMissing = fetchableMissing.some((f) => !f.required_by_active);
 
@@ -417,7 +441,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
             precisely does not have. It says which of the two it is, and what the
             user can still do — the files are theirs to place, the plugin just
             cannot say which ones are wanted. */}
-        {isUnknown && (
+        {nothingEstablished && (
           <PanelSectionRow>
             <div style={{ fontSize: "11px", color: "#8f98a0", padding: "0 16px 4px" }}>
               BIOS management is not supported for this system yet, so there is nothing to download here. You can still
@@ -447,7 +471,11 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
           <Focusable>
             {platform.files.map((file) => {
               let dotColor: string;
-              if (file.wanted === "unknown") {
+              // A folder is amber for the same reason an unanswerable row is:
+              // `downloaded` is true for one — something is at the destination —
+              // and green would claim an all-clear over contents nothing looked
+              // inside.
+              if (file.wanted === "unknown" || file.is_directory) {
                 dotColor = "#d4a72c";
               } else if (file.downloaded) {
                 dotColor = "#5ba32b";

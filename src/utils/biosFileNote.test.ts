@@ -28,11 +28,13 @@ describe("biosFileNote", () => {
     expect(biosFileNote({ downloaded: true, on_server: false, supplied_by: "retrodeck" })).not.toContain("RomM");
   });
 
-  it("says what a directory requirement is satisfied by", () => {
+  it("says a folder's contents were never checked", () => {
     // LRPS2 declares `pcsx2/bios`, a folder — "missing, not in your RomM
-    // library" read as though the folder itself were the file to fetch.
+    // library" read as though the folder itself were the file to fetch, and
+    // saying only that a folder is there would read as an all-clear over
+    // contents nothing looked at.
     expect(biosFileNote({ downloaded: true, on_server: false, is_directory: true })).toBe(
-      "BIOS files go in this folder",
+      "a folder is here — its contents cannot be checked",
     );
   });
 

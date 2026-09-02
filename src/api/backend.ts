@@ -150,6 +150,7 @@ export interface BiosAnswer {
     all_downloaded: boolean;
     required_count?: number;
     required_downloaded?: number;
+    required_withheld?: number;
     cached_at?: number;
     files?: BiosFileStatus[];
   } | null;

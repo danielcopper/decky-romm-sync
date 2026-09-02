@@ -108,10 +108,12 @@ function buildBiosHeader(bios: BiosStatus, biosLevel: BiosTabProps["biosLevel"])
   const biosColor = biosColorForLevel(biosLevel);
   let biosLabel: string;
   if (biosLevel === "unknown") {
-    // Nothing installed could say whether these files are wanted. Honest text
-    // over the neutral grey dot, never the "Nothing required" below — which is
-    // an answer, and this is the absence of one.
-    biosLabel = "BIOS requirement unknown";
+    // Two ignorances behind one grey dot, and they are not the same sentence.
+    // With a required row nothing could judge, the requirement IS known — a
+    // folder is wanted — and it is the readiness that cannot be stated. Without
+    // one, nothing installed could say whether these files are wanted at all.
+    // Neither is the "Nothing required" below, which is an answer.
+    biosLabel = (bios.required_withheld ?? 0) > 0 ? "BIOS readiness unknown" : "BIOS requirement unknown";
   } else if (reqCount > 0) {
     biosLabel =
       reqDone >= reqCount
@@ -134,6 +136,11 @@ function buildBiosHeader(bios: BiosStatus, biosLevel: BiosTabProps["biosLevel"])
 
 /** The dot beside one file row: what it means for THIS launch, then for others. */
 function fileDotColor(file: BiosFileStatus): string {
+  // A folder is checked first because `downloaded` is true for one — something
+  // is at the destination — and green would read as an all-clear over contents
+  // nothing looked at. Amber is the colour this surface already gives a row it
+  // cannot call settled.
+  if (file.is_directory) return "#d4a72c";
   if (file.downloaded) return "#5ba32b";
   if (file.required_by_active) return "#d94126";
   // Missing and not required here, but demanded by some other installed core:

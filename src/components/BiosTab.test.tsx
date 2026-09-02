@@ -86,6 +86,45 @@ describe("BiosTab", () => {
     expect(container.textContent).not.toContain("files held");
   });
 
+  it("draws a folder row amber rather than the green a present file gets", () => {
+    // The colours are the pane's own, so they are pinned here rather than
+    // through the panel: `downloaded` is true for a folder — something is at the
+    // destination — and green over contents nothing looked inside is the false
+    // all-clear this row exists to avoid. No core matches `coreInfo`'s active
+    // one, so the amber cannot have come from the active-core highlight.
+    const { container } = render(
+      <BiosTab
+        biosStatus={{
+          needs_bios: true,
+          server_count: 0,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: 0,
+          required_withheld: 1,
+          files: [
+            {
+              file_name: "bios",
+              downloaded: true,
+              local_path: "",
+              description: "'pcsx2/bios' folder",
+              wanted: "needed",
+              required_by_active: true,
+              cores: {},
+              on_server: false,
+              is_directory: true,
+            },
+          ],
+        }}
+        biosLevel="unknown"
+        coreInfo={coreInfo}
+        isActive={true}
+      />,
+    );
+    expect(container.innerHTML).toContain("#d4a72c");
+    expect(container.innerHTML).not.toContain("#5ba32b");
+  });
+
   it("falls back to 'Default' when no active core is resolved", () => {
     const { container } = render(
       <BiosTab

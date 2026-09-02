@@ -12,8 +12,8 @@
  * Precedence is deliberate. A file the distribution itself put there is not a
  * gap in the RomM library — it is not the library's file at all, and telling
  * the user it is missing from RomM is true and useless — so that note wins.
- * A directory comes next, because "missing" is the wrong word for a folder
- * whose requirement is about what is inside it. Only then does the library
+ * A directory comes next, because neither "missing" nor "present" is the word
+ * for a folder the reading did not look inside. Only then does the library
  * note stand, which is honest for every row nothing else was established for.
  */
 
@@ -32,7 +32,7 @@ export type BiosNoteRow = Pick<BiosFileStatus, "downloaded" | "on_server" | "sup
  */
 export function biosFileNote(row: BiosNoteRow): string {
   if (row.supplied_by) return `provided by ${row.supplied_by}`;
-  if (row.is_directory) return "BIOS files go in this folder";
+  if (row.is_directory) return "a folder is here — its contents cannot be checked";
   if (row.on_server === false) {
     return row.downloaded ? "not in your RomM library" : "missing, not in your RomM library";
   }

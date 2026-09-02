@@ -41,6 +41,7 @@ from domain.bios_status import (
     compute_bios_label,
     compute_bios_level,
     count_required,
+    count_required_withheld,
     count_wanted,
     format_bios_status,
 )
@@ -183,8 +184,21 @@ class FirmwareService:
 
         Only the placement branch accepts the BIOS root itself as a
         destination, because only a declared location can legitimately resolve
-        onto it (``allow_base``); a server-supplied name landing there would be
-        the empty string, which is not a file.
+        onto it (``allow_base``); a server-supplied name landing there would
+        have to be the empty string, ``.``, or a link in the root pointing back
+        at the root, and none of those three is a file.
+
+        That leaves one shape this returns a directory for: a server file whose
+        name matches a directory declaration — ``bios``, say, against LRPS2's
+        ``pcsx2/bios``, which RetroDECK links onto the root. The read paths want
+        exactly that (it is the row's destination, and its verdict is withheld
+        there). The write path would want a file position and does not get one,
+        so ``_download_one``'s ``dest + ".tmp"`` would be a sibling of the root
+        rather than a path under it. Nothing reaches it today: no callable
+        downloads a single firmware file by id, and the batch that could skips
+        every destination that already exists, which a directory always does.
+        The shape is recorded rather than guarded because a guard here would be
+        a refusal invented for a case no caller can produce.
         """
         bios_base = self._retrodeck_paths.bios_path()
         if placement is not None:
@@ -211,13 +225,14 @@ class FirmwareService:
         """Is the file at *dest* there? The resolver answers wherever it has a requirement.
 
         The boundary, and it is drawn rather than incidental: **a row the
-        resolver declared is a row the resolver answers for**, because it read
-        that destination the way the emulator will reach it — following the
-        symlinks a distribution strings through the BIOS tree — while a bare
-        existence check answers about whatever the path assembled here happens
-        to name. Two derivations of one fact is one too many, and the LRPS2 row
-        is what it cost: with the destination wrong, the resolver had the file
-        and this service did not.
+        resolver declared AND placed under this root is a row the resolver
+        answers for**, because it read that destination the way the emulator
+        will reach it — following the symlinks a distribution strings through
+        the BIOS tree — while a bare existence check answers about whatever the
+        path assembled here happens to name. Two derivations of one fact is one
+        too many, and the LRPS2 row is what it cost: with the destination wrong,
+        the resolver had the file and this service did not. Placed elsewhere the
+        boundary falls the other way, and the next paragraph is why.
 
         Our own probe covers what is left, and both halves of it are the same
         rule read backwards — we answer for the destinations the resolver did
@@ -232,10 +247,17 @@ class FirmwareService:
         A ``present`` of ``None`` on a placement we do honour is a destination
         the resolver could not look at. It is not a claim that anything is
         there, so it reads as absent — the safe direction, since the row then
-        shows work outstanding rather than a readiness nobody established. What
-        this never asks is whether the file is the RIGHT one: the resolver
-        withholds that verdict for a directory, and answering it here would
-        turn a withheld verdict into a green one.
+        shows work outstanding rather than a readiness nobody established.
+
+        What this never asks is whether the file is the RIGHT one. For a
+        directory the resolver withholds that verdict, and the withholding is
+        carried on rather than dropped: ``present`` is the honest half here
+        (something is at the destination) and
+        ``BiosFileEntry.verdict_withheld`` is the half this answer cannot
+        carry, which is where the readiness verdict picks it up. Folding the
+        two together in either direction is the failure — a green ``True`` for a
+        folder nobody looked inside, or a red ``False`` for a folder that is
+        plainly there.
         """
         if placement is None or placement.relative_path is None:
             return self._firmware_file_store.exists(dest)
@@ -435,6 +457,9 @@ class FirmwareService:
         ``required_count`` is the launching core's — the badge's — and includes a
         required file the library does not hold, because that file is a
         prerequisite whether or not anything here can fetch it.
+        ``required_withheld`` rides with it as the part of that count nothing
+        could judge, so a surface warning about an absence can subtract what was
+        never established rather than reading a declined verdict as a gap.
         ``server_count`` / ``local_count`` are the library's, and count only what
         it holds: "N/M files ready" is a progress bar over a set the user can
         actually complete, and folding in files that were never uploaded would
@@ -458,6 +483,7 @@ class FirmwareService:
             "all_downloaded": local_count >= server_count,
             "required_count": required_count,
             "required_downloaded": required_downloaded,
+            "required_withheld": count_required_withheld(files),
             "unknown_count": unknown_count,
             "known_count": known_count,
         }
@@ -465,8 +491,9 @@ class FirmwareService:
         # compact bios_label beside it, so every consumer reads the verdict
         # straight off this payload instead of re-deriving the threshold logic.
         # "unknown" replaces the false "ok" a bare count would give, for a
-        # platform whose server files went entirely unanswered and for one
-        # holding no file at all under a reading that never happened.
+        # platform whose server files went entirely unanswered, for one holding
+        # no file at all under a reading that never happened, and for one whose
+        # launching core requires a file nothing could judge.
         #
         # Derived HERE and only here because this is where ``complete`` is known:
         # a second derivation elsewhere would have to be handed the same reading
@@ -659,12 +686,17 @@ class FirmwareService:
         """Stamp the per-platform BIOS aggregates onto a ``get_firmware_status`` entry.
 
         Adds ``server_count`` / ``local_count`` / ``required_count`` /
-        ``required_downloaded`` and the ``bios_level`` state
-        (``"unknown"`` / ``"ok"`` / ``"partial"`` / ``"missing"``) so the System
-        page reads the decision and the display counts straight off this payload
-        instead of re-deriving the threshold logic in the frontend. The whole
-        payload comes from the same builder the per-game path uses, so the level
-        a platform shows and the level its games show cannot diverge.
+        ``required_downloaded`` / ``required_withheld`` and the ``bios_level``
+        state (``"unknown"`` / ``"ok"`` / ``"partial"`` / ``"missing"``) so the
+        System page reads the decision and the display counts straight off this
+        payload instead of re-deriving the threshold logic in the frontend. The
+        whole payload comes from the same builder the per-game path uses, so the
+        level a platform shows and the level its games show cannot diverge.
+
+        ``required_withheld`` is what tells the page's two unknowns apart: a
+        platform nothing could speak for withdraws its downloads, while one whose
+        rows were answered and whose verdict was declined by a single unjudgeable
+        requirement keeps every one of them.
 
         *complete* is the reading state for the platform's own emulators, and it
         is what stops a platform with no file at all from reading a green "all
@@ -675,6 +707,7 @@ class FirmwareService:
         plat["local_count"] = payload["local_count"]
         plat["required_count"] = payload["required_count"]
         plat["required_downloaded"] = payload["required_downloaded"]
+        plat["required_withheld"] = payload["required_withheld"]
         plat["bios_level"] = payload["bios_level"]
 
     async def get_firmware_status(self) -> dict[str, Any]:

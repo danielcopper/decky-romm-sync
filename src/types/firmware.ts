@@ -101,6 +101,11 @@ export interface FirmwarePlatformExt extends FirmwarePlatform {
   bios_level?: BiosLevel | null;
   required_count?: number;
   required_downloaded?: number;
+  /** How many of `required_count` nothing could judge — see `BiosStatus`. Above
+   *  zero it is why `bios_level` is `"unknown"`, and it is what separates that
+   *  from a platform nothing could speak for: here the rows have answers and
+   *  only the one-line verdict declines, so the downloads stay. */
+  required_withheld?: number;
   server_count?: number;
   local_count?: number;
   known_count?: number;
@@ -138,18 +143,24 @@ export interface BiosFileStatus {
    *  display form of ours. Absent claims nothing: the resolver states it only
    *  where it established the provenance. */
   supplied_by?: string | null;
-  /** A directory was found at the destination. A requirement that names a
-   *  folder is satisfied by what is IN it, which is a different claim from a
-   *  file being there, and nothing can say it while the folder is absent. */
+  /** A directory was FOUND at the destination — not a property of what the
+   *  emulator declared, which the reading cannot tell apart: a core asking for a
+   *  folder and a folder sitting where a core's file belongs arrive the same
+   *  way. Either way what would satisfy the requirement is inside it, the
+   *  reading does not look, and the row's verdict is withheld rather than
+   *  present or missing. Nothing can say it while the folder is absent. */
   is_directory?: boolean;
 }
 
 /**
  * The backend's readiness decision for a platform's BIOS. `"unknown"` means no
- * readiness claim could be established — either the server holds firmware and
- * not one file of it could be answered for, or the platform holds no file at all
- * and its reading was not complete, which is already the case when a single core
- * the system offers went unread. A neutral state, never a green all-clear.
+ * readiness claim could be established, in one of three shapes: the server holds
+ * firmware and not one file of it could be answered for; the platform holds no
+ * file at all and its reading was not complete, which is already the case when a
+ * single core the system offers went unread; or the launching core requires a
+ * file nothing could judge (`required_withheld`). A neutral state, never a green
+ * all-clear — and in the third shape not a red one either, which is why the
+ * count comes with it.
  */
 export type BiosLevel = "ok" | "partial" | "missing" | "unknown";
 
@@ -160,6 +171,14 @@ export interface BiosStatus {
   all_downloaded?: boolean;
   required_count?: number;
   required_downloaded?: number;
+  /** How many of `required_count` nothing could judge: rows the reading found a
+   *  folder at, whose contents it does not inspect. Something is at the
+   *  destination and nothing about the requirement was established, so such a
+   *  row raises neither `required_downloaded` nor the count of files known to be
+   *  absent — subtract it from `required_count` for that. Above zero, the
+   *  readiness verdict declines (`bios_level` `"unknown"`) while the file rows
+   *  keep their own answers. */
+  required_withheld?: number;
   // Server files an installed emulator asks for, and files nothing could answer
   // about. A `not_needed` file is in neither — it is answered for, and wanted by
   // nothing — which is what keeps "nothing here is needed" apart from "nothing

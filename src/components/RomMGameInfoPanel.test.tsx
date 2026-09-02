@@ -3355,9 +3355,12 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).not.toContain("not in your RomM library");
     });
 
-    it("says a directory requirement is met by what is in it", async () => {
-      // LRPS2 declares `pcsx2/bios`, which is a folder PS2 BIOS files go into.
-      // The library note read as though the folder were the thing to fetch.
+    it("declines the readiness claim over a folder it cannot look inside", async () => {
+      // LRPS2 requires `pcsx2/bios`, a FOLDER that RetroDECK links onto the BIOS
+      // root — so it is always there. Read as a satisfied requirement it said
+      // "All required ready (1/1)" over a PS2 install with no BIOS file in it;
+      // read as a missing one it said the folder was the thing to fetch. The
+      // header declines, and the row says which of its files is which.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
@@ -3368,8 +3371,9 @@ describe("RomMGameInfoPanel", () => {
           local_count: 0,
           all_downloaded: false,
           required_count: 1,
-          required_downloaded: 1,
-          known_count: 1,
+          required_downloaded: 0,
+          required_withheld: 1,
+          known_count: 0,
           unknown_count: 0,
           files: [
             {
@@ -3386,7 +3390,7 @@ describe("RomMGameInfoPanel", () => {
             },
           ],
         } as never,
-        bios_level: "ok",
+        bios_level: "unknown",
         metadata: makeMetadata(),
         stale_fields: [],
       });
@@ -3397,7 +3401,11 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
       });
 
-      expect(container.textContent).toContain("'pcsx2/bios' folder — BIOS files go in this folder");
+      expect(container.textContent).toContain("BIOS readiness unknown");
+      expect(container.textContent).not.toContain("BIOS requirement unknown");
+      expect(container.textContent).toContain(
+        "'pcsx2/bios' folder — a folder is here — its contents cannot be checked",
+      );
       expect(container.textContent).not.toContain("missing");
     });
 

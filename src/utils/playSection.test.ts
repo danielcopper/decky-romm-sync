@@ -185,6 +185,30 @@ describe("extractBiosInfo", () => {
         extractBiosInfo({ bios_status: requirement, bios_level: "ok", bios_label: "OK" })!.biosRequiredMissing,
       ).toBe(false);
     });
+
+    it("is clear when the only required file left is one nothing could judge", () => {
+      // PS2: LRPS2 requires a folder RetroDECK links onto the BIOS root, so
+      // `required_downloaded` can never reach `required_count`. The badge says a
+      // required file is NOT THERE, and a folder nobody looked inside has not
+      // shown that — it would be red on every PS2 game forever.
+      const answer = {
+        bios_status: { ...requirement, required_count: 2, required_downloaded: 1, required_withheld: 1 },
+        bios_level: "unknown" as const,
+        bios_label: "Unknown",
+      };
+      expect(extractBiosInfo(answer)!.biosRequiredMissing).toBe(false);
+    });
+
+    it("is still set when a judgeable required file is absent beside the unjudgeable one", () => {
+      // The withheld row is taken out of the comparison, not out of the badge:
+      // GameIndex.yaml really is missing, and that is established.
+      const answer = {
+        bios_status: { ...requirement, required_count: 2, required_downloaded: 0, required_withheld: 1 },
+        bios_level: "unknown" as const,
+        bios_label: "Unknown",
+      };
+      expect(extractBiosInfo(answer)!.biosRequiredMissing).toBe(true);
+    });
   });
 });
 

@@ -503,6 +503,106 @@ class TestDestinationReadingsReachBothSurfaces:
         assert row["downloaded"] is True
 
 
+class TestARequiredFolderIsNotASatisfiedRequirement:
+    """A folder the reading found and did not look inside settles nothing.
+
+    LRPS2 declares ``pcsx2/bios`` — a folder — and declares it required, and
+    RetroDECK links that path onto the BIOS root, so it is present on every
+    install. Counted as satisfied it read "All required ready" over a PS2 system
+    with no BIOS file at all; counted as missing it read red over a folder that
+    is plainly there. The verdict declines instead, and the rows keep theirs.
+    """
+
+    _CORE = "pcsx2_libretro"
+
+    def _service(self, plugin, tmp_path, resolver):
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "LRPS2"), options=[libretro_option(self._CORE, "LRPS2")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        _stub_listing(fw, [])
+        return fw
+
+    def _resolver(self) -> FakeFirmwareResolver:
+        """What LRPS2 asks for: a folder, and a file beside it."""
+        resolver = FakeFirmwareResolver()
+        resolver.declare("bios", required_by=[self._CORE], relative_path="pcsx2/bios", present=True, is_directory=True)
+        resolver.declare(
+            "GameIndex.yaml",
+            required_by=[self._CORE],
+            relative_path="pcsx2/resources/GameIndex.yaml",
+            present=True,
+        )
+        return resolver
+
+    @pytest.mark.asyncio
+    async def test_the_folder_does_not_complete_the_required_ratio(self, plugin, tmp_path):
+        fw = self._service(plugin, tmp_path, self._resolver())
+
+        result = await fw.check_platform_bios("ps2")
+
+        assert result["required_count"] == 2
+        assert result["required_downloaded"] == 1
+        assert result["required_withheld"] == 1
+
+    @pytest.mark.asyncio
+    async def test_the_platform_declines_to_claim_readiness(self, plugin, tmp_path):
+        fw = self._service(plugin, tmp_path, self._resolver())
+
+        result = await fw.check_platform_bios("ps2")
+
+        assert result["bios_level"] == "unknown"
+        assert result["bios_label"] == "Unknown"
+
+    @pytest.mark.asyncio
+    async def test_the_rows_keep_their_own_answers(self, plugin, tmp_path):
+        """Only the one-line verdict declines — the file beside the folder is answered for."""
+        fw = self._service(plugin, tmp_path, self._resolver())
+
+        result = await fw.check_platform_bios("ps2")
+        rows = {row["file_name"]: row for row in result["files"]}
+
+        assert rows["GameIndex.yaml"]["downloaded"] is True
+        assert rows["GameIndex.yaml"]["is_directory"] is False
+        assert rows["GameIndex.yaml"]["wanted"] == "needed"
+        # Present, and not an answer: the row says a folder is there, the verdict
+        # says nothing follows from that.
+        assert rows["bios"]["downloaded"] is True
+        assert rows["bios"]["is_directory"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_folder_no_installed_core_requires_leaves_the_verdict_alone(self, plugin, tmp_path):
+        """The scope is the launching core's requirement, not every folder on the page."""
+        resolver = FakeFirmwareResolver()
+        resolver.declare("bios", optional_for=[self._CORE], relative_path="pcsx2/bios", present=True, is_directory=True)
+        fw = self._service(plugin, tmp_path, resolver)
+
+        result = await fw.check_platform_bios("ps2")
+
+        assert result["required_withheld"] == 0
+        assert result["bios_level"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_the_system_page_platform_declines_too(self, plugin, tmp_path):
+        """The System page reads the same verdict off the same builder."""
+        _seed_rom(plugin._uow, rom_id=52, platform_slug="ps2", app_id=2)
+        fw = self._service(plugin, tmp_path, self._resolver())
+
+        result = await fw.get_firmware_status()
+        platform = next(p for p in result["platforms"] if p["platform_slug"] == "ps2")
+
+        assert platform["bios_level"] == "unknown"
+        assert platform["required_count"] == 2
+        assert platform["required_downloaded"] == 1
+        assert platform["required_withheld"] == 1
+
+
 class TestGetFirmwareStatus:
     @pytest.mark.asyncio
     async def test_returns_grouped_platforms(self, fw, tmp_path):

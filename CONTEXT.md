@@ -277,6 +277,19 @@ platform's list is their **union**. A row the library does not hold is marked **
 readiness, because it is a real prerequisite that is really absent, and never towards a download or a progress ratio,
 because nothing in the plugin can fetch it.
 
+### Withheld verdict (firmware)
+
+A row the reading found something at and established nothing about — today, exactly a **directory**, since the resolver
+states that one is there and does not look inside it. It is neither present nor absent: it does not raise
+`required_downloaded`, it is not counted as a file shown to be missing, and while a **required by active core** row
+carries one the **BIOS level** declines to `unknown` rather than claiming either. The file rows below keep their own
+answers — only the one-line verdict declines. The foil to **not on server**, which is a settled absence and does count
+towards readiness.
+
+Withholding is the resolver's word and a wider one: it withholds `satisfied` for every file whose bytes were not
+verified, which is every file the plugin asks about. That is content verification and a separate question, so only the
+directory case travels here.
+
 ### Safely-bakeable
 
 An ES-DE `<command>` the plugin can bake into a Steam shortcut's `-e` override: a real emulator invocation that **ends
