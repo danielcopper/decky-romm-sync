@@ -419,3 +419,27 @@ IGDB-collection are both `kind="virtual"`, distinguished by `virtual_type` (see 
 Computed backend-side at the reporter's union key (`domain/collection_label.py`), so the wire payload stays name→appIds
 and the frontend needs no change; the mode flip is applied by the ordinary complete-set reconcile on the next normal
 sync (no Force Full Sync). Same-name-**within-one-label** still unions.
+
+### QAM page / Main / wide page
+
+What the plugin's Quick Access Menu panel shows at one time, chosen by the panel's router (`Page` in
+`src/types/navigation.ts`). Exactly one page is mounted at a time; navigating to another unmounts it. **Main** is the
+page the panel opens on: notices, status, the Sync button, the download summary and the menu. A **wide page** is a page
+that widens the panel from 348 px to 854 px for as long as it is mounted — the width belongs to the page, not to a view
+inside it, and it collapses again when the page unmounts, the QAM tab changes, the panel closes or the plugin is
+dismounted. Main and Downloads are narrow; every other page is wide. _Avoid_: sub-page, screen, route (a **route** is a
+Steam page outside the QAM, such as the game detail page).
+
+### List and detail
+
+The layout of a wide page whose entries each carry a detail: the list on the left, the focused entry's detail on the
+right. **Focus selects** — moving through the list changes the detail at once; A operates the control in the row (a sync
+toggle), never the selection. The two regions scroll independently. _Avoid_: master/detail, sidebar.
+
+### Notice / home
+
+A **notice** is a card at the top of Main naming a condition that needs the user (settings were reset, the RetroArch
+input driver is wrong, a sync paused on the session budget). The **home** of a condition is the one page where it is
+acted on. A notice names the condition and jumps to its home; the action exists only there, never on the notice. A
+condition with no home in the plugin stays a notice without a jump, with Dismiss where there is a sensible end to it.
+_Avoid_: banner (component names only), warning, alert.
