@@ -1720,8 +1720,53 @@ declare 26 optional files, so folding them in would report `0 / 26 files, 26 mis
 anything from. `known_count` / `unknown_count` are scoped to the server's rows for the same reason — they are weighed
 against `server_count`, and a beyond-server row always classifies `needed`/`optional`, so counting one would cancel the
 `unknown` verdict for a platform whose every server file went unanswered. Readiness therefore needs no server at all:
-ES-DE names the active emulator, the resolver says what it wants, the filesystem says what is there. An unreachable RomM
-costs the files only it knows about and the ability to fetch anything — not the answer.
+ES-DE names the active emulator, the resolver says what it wants, and the resolver or the filesystem says what is there
+(the split is the next paragraph but one). An unreachable RomM costs the files only it knows about and the ability to
+fetch anything — not the answer.
+
+**Where a file goes comes from what the emulator spelled, not from where the path lands.** A requirement carries both,
+and they answer different questions. `_declared_location` reads `declared` — the name the core will open — because the
+resolved `path` has already followed every symlink: RetroDECK points `<bios>/pcsx2/bios` at `<bios>`, so reconstructing
+LRPS2's location from the resolved path yields `.` and loses the folder the core opens. `path` is still read, for the
+question it does answer — whether the destination is inside the root the plugin owns — and `None` comes back for a
+destination outside it (a standalone emulator's own XDG tree), for a declaration that is absent or absolute, and for one
+normalising to `.` or climbing out. The consumer then falls back to its own flat layout. Joining a declared location
+under the BIOS root needs `safe_join(..., allow_base=True)`: the default "strictly below the base" rule reads that
+legitimate link as an escape and would drop a real requirement. A server-supplied name never opts in — there the base is
+not a destination, and only `""`, `.` or a link back onto the root could reach it.
+
+**Presence follows the same boundary.** `_is_downloaded` takes the resolver's `present` for a row it declared _and_
+placed under this root, because the resolver read that destination the way the emulator will reach it. Everything else
+is this service's own `exists` probe: a library file nothing declares, a placement whose location is outside the root
+(its reading is about somewhere else), and the download batch's re-check, which cannot re-read the whole machine per
+file. Two derivations of one fact is what the LRPS2 row cost — with the destination wrong, the resolver had the file and
+the service did not. `present` is three-valued and a `None` reads as absent: not a claim that anything is there, and the
+safe direction, since the row then shows work outstanding rather than a readiness nobody established. What the reading
+found travels per row beside it — `supplied_by` (the distribution whose own copy sits at the destination, in the
+resolver's identifier space, never a display form of ours) and `is_directory` (a directory was FOUND there, which the
+reading cannot tell apart from one having been declared) — so both surfaces can say what a row IS instead of describing
+every one of them as a gap in the library. All of it goes silent with the location, for the same reason.
+
+**A required row nothing could judge declines the verdict instead of guessing it.** A directory is that row: the
+resolver states one is there and establishes nothing about its contents, and LRPS2 declares `pcsx2/bios` — a folder,
+required, and always present because RetroDECK links it onto the root. Counted as satisfied it read "All required ready
+(2/2)" over a PS2 install with no BIOS file at all; counted as missing it read red over a folder that is plainly there.
+`BiosFileEntry.verdict_withheld` keeps it out of `required_downloaded`, and `_requirement_verdict_withheld` takes both
+`compute_bios_level` and `compute_bios_label` to `unknown` while every file row keeps its own answer. The count travels
+as `required_withheld` because three surfaces need it: the System page tells its two unknowns apart with it, the BIOS
+tab picks between "BIOS requirement unknown" and "BIOS readiness unknown", and the play-row badge subtracts it so a
+required file whose absence _was_ established still warns. The resolver's own `satisfied` is deliberately not read — it
+is withheld for every file whose bytes were not verified, which is every file here, so reading it would withhold a whole
+platform's verdicts rather than the one row nothing can be said about. Checking contents is separate work (#1803, and
+upstream is adding a real verdict); #1820 tracks the interim.
+
+**A withdrawn download is a platform condition, and only one of the unknowns earns it.** Where _nothing_ could be
+established there is no answer to download against, so `SystemPage` withdraws both buttons and says so in words rather
+than silently — silence would read as "there is nothing to fetch", which is the finished answer that platform precisely
+does not have. A declined readiness verdict is not that state: its rows were answered, and fetching the files the
+library holds is the one thing that still moves the platform along, so the buttons stay. `required_withheld` is what
+separates the two on the wire. Neither condition is ever per file — a platform whose reading finished may hold plenty of
+files no installed emulator asks for, and every one of those stays fetchable, because "nothing wants this" is an answer.
 
 **No BIOS answer outlives the page that asked for it.** `get_cached_game_detail` carries none and says so
 (`bios_status_unknown`), and the live `get_bios_status` fills it in a moment later; there is deliberately no cached twin
