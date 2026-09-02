@@ -31,6 +31,8 @@ interface FirmwareFile {
    *  from `wanted`, which is about every installed emulator. */
   required_by_active: boolean;
   on_server: boolean;
+  supplied_by?: string | null;
+  is_directory?: boolean;
 }
 
 interface FirmwarePlatform {
@@ -131,6 +133,15 @@ export interface BiosFileStatus {
   /** False for a file an emulator asks for that the RomM library does not hold.
    *  It still counts as missing — it just cannot be fetched from the plugin. */
   on_server?: boolean;
+  /** The distribution whose own copy is sitting at the destination, as the
+   *  resolver names it (`"retrodeck"`) — printed verbatim, never mapped to a
+   *  display form of ours. Absent claims nothing: the resolver states it only
+   *  where it established the provenance. */
+  supplied_by?: string | null;
+  /** A directory was found at the destination. A requirement that names a
+   *  folder is satisfied by what is IN it, which is a different claim from a
+   *  file being there, and nothing can say it while the folder is absent. */
+  is_directory?: boolean;
 }
 
 /**

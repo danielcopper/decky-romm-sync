@@ -3308,6 +3308,99 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).toContain("Absent — missing, not in your RomM library");
     });
 
+    it("says the distribution provides a file rather than that RomM lacks it", async () => {
+      // The same GameCube row, once the reading establishes whose file it is.
+      // "not in your RomM library" was true of it and useless: no library will
+      // ever hold it, and the repair is a component reset, not a download.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        bios_status: {
+          needs_bios: true,
+          platform_slug: "ngc",
+          server_count: 0,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: 1,
+          known_count: 1,
+          unknown_count: 0,
+          files: [
+            {
+              file_name: "codehandler.bin",
+              downloaded: true,
+              local_path: "",
+              description: "Dolphin 'Sys' folder",
+              wanted: "needed",
+              required_by_active: true,
+              cores: { dolphin_libretro: { required: true } },
+              used_by_active: true,
+              on_server: false,
+              supplied_by: "retrodeck",
+            },
+          ],
+        } as never,
+        bios_level: "ok",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).toContain("Dolphin 'Sys' folder — provided by retrodeck");
+      expect(container.textContent).not.toContain("not in your RomM library");
+    });
+
+    it("says a directory requirement is met by what is in it", async () => {
+      // LRPS2 declares `pcsx2/bios`, which is a folder PS2 BIOS files go into.
+      // The library note read as though the folder were the thing to fetch.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        bios_status: {
+          needs_bios: true,
+          platform_slug: "ps2",
+          server_count: 0,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: 1,
+          known_count: 1,
+          unknown_count: 0,
+          files: [
+            {
+              file_name: "bios",
+              downloaded: true,
+              local_path: "",
+              description: "'pcsx2/bios' folder",
+              wanted: "needed",
+              required_by_active: true,
+              cores: { pcsx2_libretro: { required: true } },
+              used_by_active: true,
+              on_server: false,
+              is_directory: true,
+            },
+          ],
+        } as never,
+        bios_level: "ok",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).toContain("'pcsx2/bios' folder — BIOS files go in this folder");
+      expect(container.textContent).not.toContain("missing");
+    });
+
     it("unknown: grey header dot + honest text, and the 'files on server' note survives (#1520)", async () => {
       // No installed emulator's answer could be established for any server file
       // → backend ships bios_level "unknown". The panel must render the neutral

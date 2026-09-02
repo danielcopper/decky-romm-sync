@@ -22,7 +22,10 @@
  * (`on_server` false). No page in the plugin can fetch it, so it says so rather
  * than looking like a download nobody has started. Not holding it is a separate
  * question from not having it: RetroDECK ships `dolphin-emu/Sys/codehandler.bin`
- * into the BIOS directory, so that row is unfetchable and satisfied at once.
+ * into the BIOS directory, so that row is unfetchable and satisfied at once —
+ * and where the reading establishes whose copy is there, it reads as the
+ * distribution's own file rather than as a gap in a library that will never
+ * hold it (`utils/biosFileNote`).
  *
  * CSS classes prefixed with `romm-panel-` are injected separately by
  * styleInjector.
@@ -31,6 +34,7 @@
 import { FC, type ReactElement } from "react";
 import type { BiosFileStatus, BiosLevel, BiosStatus, CoreInfo, FirmwareWanted } from "../types";
 import { biosColorForLevel } from "../utils/biosColor";
+import { biosFileNote } from "../utils/biosFileNote";
 import { infoRow, section } from "./panelSection";
 
 interface BiosTabProps {
@@ -139,22 +143,16 @@ function fileDotColor(file: BiosFileStatus): string {
 }
 
 /**
- * The note after a file's name. Empty for every row this pane has always shown —
- * downloaded state is the dot's job, and repeating it in text would be a
- * redesign rather than a fix. The one row that needs words is the file no page
- * in the plugin can fetch, because nothing else on screen tells it apart from a
- * download nobody has started yet.
+ * The note after a file's name, as an em-dash suffix.
  *
- * "Missing" is the file's own state and belongs only to a row that IS missing.
- * A file the library does not hold can still be sitting on disk — the emulator
- * shipped it — and saying "missing" over a green dot and an "All required
- * ready" headline is the page contradicting itself on one screen. The System
- * page has always appended its note only when the file is absent; this is the
- * same rule.
+ * The wording is {@link biosFileNote}'s so this pane and the System page cannot
+ * describe one row two ways; what stays here is the framing. Empty for every
+ * plain library row this pane has always shown — downloaded state is the dot's
+ * job, and repeating it in text would be a redesign rather than a fix.
  */
 function fileNote(file: BiosFileStatus): string {
-  if (file.on_server !== false) return "";
-  return file.downloaded ? " — not in your RomM library" : " — missing, not in your RomM library";
+  const note = biosFileNote(file);
+  return note ? ` — ${note}` : "";
 }
 
 /**

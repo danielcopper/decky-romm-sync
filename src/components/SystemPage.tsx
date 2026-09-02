@@ -20,6 +20,7 @@ import {
 import type { FirmwarePlatformExt, FirmwareWanted } from "../types";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { biosColorForLevel } from "../utils/biosColor";
+import { biosFileNote } from "../utils/biosFileNote";
 import { detach } from "../utils/detach";
 import { getEventTarget } from "../utils/events";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
@@ -347,7 +348,18 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     // The download affordances key off what is missing AND fetchable, never off
     // readiness: a required file the RomM library does not hold leaves the
     // platform not ready and still gives the user nothing to press here.
-    const fetchableMissing = platform.files.filter((f) => f.on_server && !f.downloaded);
+    //
+    // `isUnknown` withdraws them entirely, and that is a PLATFORM condition,
+    // never a per-file one: a platform whose reading finished may hold plenty of
+    // files no installed emulator asks for — a PlayStation page typically does —
+    // and every one of them stays fetchable, because "nothing wants this" is an
+    // answer.
+    // Where nothing could be established there is no answer to download
+    // against, so the page says so instead of offering to fetch files it cannot
+    // reason about. Nothing here is keyed to a platform name — the condition is
+    // the backend's verdict, so a system starts offering downloads again the
+    // moment anything can speak for it.
+    const fetchableMissing = isUnknown ? [] : platform.files.filter((f) => f.on_server && !f.downloaded);
     const hasRequiredMissing = fetchableMissing.some((f) => f.required_by_active);
     const hasOptionalMissing = fetchableMissing.some((f) => !f.required_by_active);
 
@@ -400,6 +412,19 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
             bottomSeparator="none"
           />
         </PanelSectionRow>
+        {/* Withdrawing the download buttons without a word would read as "there
+            is nothing to fetch", which is the finished answer this platform
+            precisely does not have. It says which of the two it is, and what the
+            user can still do — the files are theirs to place, the plugin just
+            cannot say which ones are wanted. */}
+        {isUnknown && (
+          <PanelSectionRow>
+            <div style={{ fontSize: "11px", color: "#8f98a0", padding: "0 16px 4px" }}>
+              BIOS management is not supported for this system yet, so there is nothing to download here. You can still
+              put BIOS files in your BIOS folder by hand.
+            </div>
+          </PanelSectionRow>
+        )}
         {/* A platform with no rows at all is on the page because its requirement
             is unknown, not because there is a list to open. */}
         {platform.files.length > 0 && (
@@ -431,7 +456,10 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
               } else {
                 dotColor = "#8f98a0";
               }
-              const missingNote = file.on_server ? "Missing" : "Missing — not in your RomM library";
+              // The provenance/kind note is shared with the BIOS tab so one row
+              // cannot read two ways; plain absence is this page's own word,
+              // because the tab leaves that to its dot.
+              const note = biosFileNote(file) || (file.downloaded ? "" : "Missing");
               return (
                 <PanelSectionRow key={file.file_name}>
                   <Field
@@ -450,7 +478,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
                         {`${file.description || file.file_name} (${WANTED_LABELS[file.wanted]})`}
                       </span>
                     }
-                    description={file.downloaded ? file.file_name : `${file.file_name} — ${missingNote}`}
+                    description={note ? `${file.file_name} — ${note}` : file.file_name}
                     bottomSeparator="none"
                   />
                 </PanelSectionRow>

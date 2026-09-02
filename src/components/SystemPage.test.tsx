@@ -1118,6 +1118,133 @@ describe("SystemPage", () => {
       expect(container.innerHTML).toContain("#8f98a0");
       expect(container.innerHTML).not.toContain("#5ba32b");
     });
+
+    it("offers no download for a platform nothing could answer for, and says why (#1660)", async () => {
+      // The files are on the server and fetchable, so the buttons would appear
+      // on the count alone — offering to fetch files the plugin cannot reason
+      // about, beside a grey line saying it cannot. Withdrawing them silently
+      // would read as "there is nothing to fetch", which is the finished answer
+      // this platform does not have, so the page says which of the two it is.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "switch",
+            bios_level: "unknown",
+            files: [
+              {
+                id: 1,
+                file_name: "prod.keys",
+                local_path: "prod.keys",
+                size: 100,
+                md5: "x",
+                downloaded: false,
+                description: "?",
+                wanted: "unknown",
+                required_by_active: false,
+                on_server: true,
+              },
+            ],
+          }),
+        ],
+      });
+      const { queryByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(queryByText("Download All")).toBeNull();
+      expect(queryByText("Download Required")).toBeNull();
+      expect(container.textContent).toContain("BIOS management is not supported for this system yet");
+      expect(container.textContent).toContain("by hand");
+    });
+
+    it("keeps every download on an answered platform whose files nothing wants", async () => {
+      // The foil, and the reason the condition is per platform rather than per
+      // file: psx holds seventeen files no installed core asks for. "Nothing
+      // wants this" is an answer, so each of them stays fetchable.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "psx",
+            bios_level: "ok",
+            files: [
+              {
+                id: 1,
+                file_name: "scph7003.bin",
+                local_path: "scph7003.bin",
+                size: 100,
+                md5: "x",
+                downloaded: false,
+                description: "PS1 BIOS",
+                wanted: "not_needed",
+                required_by_active: false,
+                on_server: true,
+              },
+            ],
+          }),
+        ],
+      });
+      const { queryByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(queryByText("Download All")).not.toBeNull();
+      expect(container.textContent).not.toContain("is not supported for this system yet");
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // M2. What a file row says about itself
+  // ------------------------------------------------------------------
+  describe("file row notes", () => {
+    async function expandedRowText(file: Partial<FirmwarePlatformExt["files"][number]>) {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "ngc",
+            files: [
+              {
+                id: null,
+                file_name: "codehandler.bin",
+                local_path: "codehandler.bin",
+                size: 0,
+                md5: "",
+                downloaded: true,
+                description: "Dolphin 'Sys' folder",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: false,
+                ...file,
+              },
+            ],
+          }),
+        ],
+      });
+      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Show Files (1)"));
+      return container.textContent;
+    }
+
+    it("names the distribution that supplied the file instead of the library it is not in", async () => {
+      const text = await expandedRowText({ supplied_by: "retrodeck" });
+
+      expect(text).toContain("codehandler.bin — provided by retrodeck");
+      expect(text).not.toContain("not in your RomM library");
+    });
+
+    it("says what a directory requirement is satisfied by", async () => {
+      const text = await expandedRowText({ file_name: "bios", is_directory: true });
+
+      expect(text).toContain("bios — BIOS files go in this folder");
+      expect(text).not.toContain("Missing");
+    });
+
+    it("still says a library file is missing in the page's own words", async () => {
+      const text = await expandedRowText({ downloaded: false, on_server: true });
+
+      expect(text).toContain("codehandler.bin — Missing");
+    });
   });
 
   // ------------------------------------------------------------------
