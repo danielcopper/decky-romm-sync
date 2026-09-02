@@ -176,14 +176,20 @@ class FirmwareService:
         honour.
 
         Both branches go through ``safe_join`` so neither a server-supplied
-        ``file_name`` nor a resolved placement can escape the BIOS directory via
+        ``file_name`` nor a declared placement can escape the BIOS directory via
         ``..`` or an absolute path. Raises :class:`PathTraversalError` on an
         escape attempt — the write path (``download_firmware``) turns that into a
         canonical failure; the read paths skip the poisoned entry.
+
+        Only the placement branch accepts the BIOS root itself as a
+        destination, because only a declared location can legitimately resolve
+        onto it (``allow_base``); a server-supplied name landing there would be
+        the empty string, which is not a file.
         """
         bios_base = self._retrodeck_paths.bios_path()
-        file_name = firmware.get("file_name", "")
-        return safe_join(bios_base, placement.destination if placement is not None else file_name)
+        if placement is not None:
+            return safe_join(bios_base, placement.destination, allow_base=True)
+        return safe_join(bios_base, firmware.get("file_name", ""))
 
     def _safe_firmware_dest_path(self, firmware, placement: FirmwarePlacement | None) -> str | None:
         """Read-path wrapper for ``_firmware_dest_path`` — ``None`` on a poisoned entry.
@@ -200,6 +206,40 @@ class FirmwareService:
         except PathTraversalError as e:
             self._logger.warning(f"Skipping firmware with unsafe file name: {e}")
             return None
+
+    def _is_downloaded(self, placement: FirmwarePlacement | None, dest: str) -> bool:
+        """Is the file at *dest* there? The resolver answers wherever it has a requirement.
+
+        The boundary, and it is drawn rather than incidental: **a row the
+        resolver declared is a row the resolver answers for**, because it read
+        that destination the way the emulator will reach it — following the
+        symlinks a distribution strings through the BIOS tree — while a bare
+        existence check answers about whatever the path assembled here happens
+        to name. Two derivations of one fact is one too many, and the LRPS2 row
+        is what it cost: with the destination wrong, the resolver had the file
+        and this service did not.
+
+        Our own probe covers what is left, and both halves of it are the same
+        rule read backwards — we answer for the destinations the resolver did
+        not read. A library file no installed emulator declares has no
+        requirement at all; a placement with no ``relative_path`` has one, at a
+        destination this service cannot honour, so *dest* is its own flat
+        fallback and the resolver's reading is about somewhere else. The third
+        is the re-check in ``_download_firmware_batch``, where re-reading the
+        whole machine to learn whether one file just landed would cost hundreds
+        of milliseconds.
+
+        A ``present`` of ``None`` on a placement we do honour is a destination
+        the resolver could not look at. It is not a claim that anything is
+        there, so it reads as absent — the safe direction, since the row then
+        shows work outstanding rather than a readiness nobody established. What
+        this never asks is whether the file is the RIGHT one: the resolver
+        withholds that verdict for a directory, and answering it here would
+        turn a withheld verdict into a green one.
+        """
+        if placement is None or placement.relative_path is None:
+            return self._firmware_file_store.exists(dest)
+        return placement.present is True
 
     def _wanted_beyond_server(
         self, placements: Mapping[str, FirmwarePlacement], scope: list[str] | None, in_library: set[str]
@@ -231,14 +271,14 @@ class FirmwareService:
             if not any(want.core_so in cores for want in placement.wants):
                 continue
             try:
-                dest = safe_join(bios_base, placement.destination)
+                dest = safe_join(bios_base, placement.destination, allow_base=True)
             except PathTraversalError as e:
                 self._logger.warning(f"Skipping firmware with unsafe placement: {e}")
                 continue
             items.append(
                 {
                     "file_name": placement.file_name,
-                    "downloaded": self._firmware_file_store.exists(dest),
+                    "downloaded": self._is_downloaded(placement, dest),
                     "dest": dest,
                     "on_server": False,
                 }
@@ -259,13 +299,14 @@ class FirmwareService:
         items: list[dict[str, Any]] = []
         for fw in firmware_iter:
             file_name = fw.get("file_name", "")
-            dest = self._safe_firmware_dest_path(fw, placements.get(file_name))
+            placement = placements.get(file_name)
+            dest = self._safe_firmware_dest_path(fw, placement)
             if dest is None:
                 continue
             items.append(
                 {
                     "file_name": file_name,
-                    "downloaded": self._firmware_file_store.exists(dest),
+                    "downloaded": self._is_downloaded(placement, dest),
                     "dest": dest,
                 }
             )
@@ -452,7 +493,8 @@ class FirmwareService:
         for fw in firmware_list:
             platform_slug = firmware_paths.parse_firmware_slug(fw.get("file_path", "")) or "unknown"
             file_name = fw.get("file_name", "")
-            dest = self._safe_firmware_dest_path(fw, placements.get(file_name))
+            placement = placements.get(file_name)
+            dest = self._safe_firmware_dest_path(fw, placement)
             if dest is None:
                 continue
             if platform_slug not in platforms_map:
@@ -464,7 +506,7 @@ class FirmwareService:
                     "size": fw.get("file_size_bytes", 0),
                     "md5": fw.get("md5_hash", ""),
                     "local_path": dest,
-                    "downloaded": self._firmware_file_store.exists(dest),
+                    "downloaded": self._is_downloaded(placement, dest),
                     "on_server": True,
                 }
             )
@@ -802,6 +844,11 @@ class FirmwareService:
         *placements* is the machine's demand index, read once by the caller: the
         question costs hundreds of milliseconds, and a batch that asked it per
         file would pay that for every download.
+
+        The already-there skip probes the disk rather than reading the
+        catalogue's answer (:meth:`_is_downloaded`) — that answer predates every
+        download this batch has performed, and re-reading the whole machine per
+        file to refresh it is the cost the index exists to avoid.
         """
         downloaded = 0
         errors = []
@@ -1047,6 +1094,8 @@ def _wanted_fields(entry) -> dict[str, Any]:
         "description": entry.description,
         "wanted": entry.wanted,
         "required_by_active": entry.required_by_active,
+        "supplied_by": entry.supplied_by,
+        "is_directory": entry.is_directory,
     }
 
 

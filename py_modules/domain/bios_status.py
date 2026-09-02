@@ -60,6 +60,11 @@ class BiosFileEntry:
     RomM library does not hold. Such a file is real, and missing, and nothing on
     this page can fetch it — so it is shown, and it is kept out of every count
     that offers the user an action.
+
+    ``supplied_by`` and ``is_directory`` are what the reading found at the
+    destination, carried per row so the surfaces can say what a row is instead
+    of describing every one of them as a file the library is missing. Both
+    default to the silent answer, which is the one a row nothing declares has.
     """
 
     file_name: str
@@ -71,6 +76,8 @@ class BiosFileEntry:
     cores: dict[str, dict[str, Any]]  # {core_so: {"required": bool}}
     used_by_active: bool
     on_server: bool = True
+    supplied_by: str | None = None
+    is_directory: bool = False
 
 
 @dataclass(frozen=True)
@@ -123,6 +130,8 @@ def format_bios_status(
                 cores=f.get("cores", {}),
                 used_by_active=f.get("used_by_active", True),
                 on_server=f.get("on_server", True),
+                supplied_by=f.get("supplied_by"),
+                is_directory=f.get("is_directory", False),
             )
             for f in raw_files
         )
@@ -194,6 +203,8 @@ def build_file_entry(
         cores=cores,
         used_by_active=used_by_active,
         on_server=on_server,
+        supplied_by=placement.supplied_by if placement is not None else None,
+        is_directory=placement.is_directory if placement is not None else False,
     )
 
 

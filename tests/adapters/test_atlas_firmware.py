@@ -1,10 +1,11 @@
 """Tests for the atlas firmware adapter — the translation into plugin vocabulary.
 
 What is under test is the adapter's own work: folding the resolver's per-core
-answer into one row per file, naming the cores that could not be asked, turning
-an absolute destination back into a placement under the firmware root, and
+answer into one row per file, naming the cores that could not be asked, deciding
+whether a declared location is one the plugin's own BIOS root can honour, and
 refusing to turn any failure into "nothing needed". The resolver's own decisions
-are upstream's and are not re-tested here.
+are upstream's and are not re-tested here — including what it read at a
+destination, which is carried through rather than re-derived.
 
 Answers are built from real atlas value objects rather than mocks, so every
 invariant the resolver enforces on its own shapes is enforced on the fixtures
@@ -19,11 +20,13 @@ from _vendor.atlas.firmware import (
     CoreFirmware,
     FirmwareAlternatives,
     FirmwareAnswer,
+    FirmwareChecked,
     FirmwareNeed,
     FirmwareRequirement,
     RefusedDeclaration,
+    SuppliedBy,
 )
-from _vendor.atlas.machine import KIND_MISSING
+from _vendor.atlas.machine import KIND_DIRECTORY, KIND_FILE, KIND_INACCESSIBLE, KIND_MISSING, PathKind
 from _vendor.atlas.placement import Caveat
 
 from adapters.atlas_firmware import AtlasFirmwareAdapter
@@ -36,10 +39,21 @@ def _requirement(
     core_so: str | None = "mgba_libretro.so",
     file_name: str = "gba_bios.bin",
     path: str | None = None,
+    declared: str | None = None,
     need: FirmwareNeed = "required",
     description: str = "",
     regions: tuple[str, ...] | None = None,
+    found: PathKind = KIND_MISSING,
+    checked: FirmwareChecked | None = None,
+    supplied_by: SuppliedBy | None = None,
 ) -> FirmwareRequirement:
+    """One (core, declared file) pair, defaulting to a flat destination with nothing there.
+
+    ``declared`` and ``path`` default to the same flat spelling under the root
+    because that is what the overwhelming majority of declarations look like;
+    a test spells them apart when the divergence between the two IS the case
+    under test.
+    """
     return FirmwareRequirement(
         core_so=core_so,
         system="gba",
@@ -47,12 +61,13 @@ def _requirement(
         need=need,
         file_name=file_name,
         path=path if path is not None else f"{_ROOT}/{file_name}",
-        declared=file_name,
+        declared=declared if declared is not None else file_name,
         description=description or f"{file_name} (BIOS)",
         identity=None,
-        found=KIND_MISSING,
-        checked=None,
+        found=found,
+        checked=checked,
         regions=regions,
+        supplied_by=supplied_by,
     )
 
 
@@ -163,7 +178,11 @@ class TestPlacements:
             _core(
                 core_so="dolphin_libretro.so",
                 requirements=(
-                    _requirement(file_name="codehandler.bin", path=f"{_ROOT}/dolphin-emu/Sys/codehandler.bin"),
+                    _requirement(
+                        file_name="codehandler.bin",
+                        declared="dolphin-emu/Sys/codehandler.bin",
+                        path=f"{_ROOT}/dolphin-emu/Sys/codehandler.bin",
+                    ),
                 ),
             )
         )
@@ -182,12 +201,116 @@ class TestPlacements:
 
         assert adapter().placements[0].relative_path is None
 
-    def test_the_root_itself_is_not_a_relative_placement(self, adapter, monkeypatch):
-        """A core declaring the firmware folder states a directory, not a file below it."""
-        answer = _answer(_core(core_so="pcsx2_libretro.so", requirements=(_requirement(file_name="bios", path=_ROOT),)))
+    def test_a_declaration_the_root_symlinks_onto_itself_keeps_its_subdirectory(self, adapter, monkeypatch):
+        """LRPS2 on RetroDECK: ``pcsx2/bios`` is a link back to the BIOS root.
+
+        The resolved destination collapses onto the root, so deriving the
+        location from it yields ``.`` and loses the folder the emulator will
+        actually open. What the emulator spelled survives that.
+        """
+        answer = _answer(
+            _core(
+                core_so="pcsx2_libretro.so",
+                requirements=(_requirement(file_name="bios", declared="pcsx2/bios", path=_ROOT),),
+            )
+        )
+        monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(_Installation(answer)))
+
+        assert adapter().placements[0].relative_path == "pcsx2/bios"
+
+    def test_an_absolute_declaration_has_no_placement_under_our_root(self, adapter, monkeypatch):
+        """A location stated as an address is not one this plugin can join under its own root."""
+        answer = _answer(
+            _core(
+                core_so="duckstation_libretro.so",
+                requirements=(
+                    _requirement(file_name="scph5501.bin", declared=f"{_ROOT}/scph5501.bin", path=f"{_ROOT}/x.bin"),
+                ),
+            )
+        )
         monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(_Installation(answer)))
 
         assert adapter().placements[0].relative_path is None
+
+
+class TestDestinationReadings:
+    """What the resolver read AT the destination, carried instead of re-derived."""
+
+    def _placement(self, adapter, monkeypatch, requirement):
+        answer = _answer(_core(core_so="mgba_libretro.so", requirements=(requirement,)))
+        monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(_Installation(answer)))
+        return adapter().placements[0]
+
+    def test_a_file_at_the_destination_is_present(self, adapter, monkeypatch):
+        placement = self._placement(adapter, monkeypatch, _requirement(found=KIND_FILE, checked="unchecked"))
+
+        assert placement.present is True
+        assert placement.is_directory is False
+
+    def test_nothing_at_the_destination_is_absent(self, adapter, monkeypatch):
+        assert self._placement(adapter, monkeypatch, _requirement()).present is False
+
+    def test_a_destination_that_could_not_be_looked_at_is_neither(self, adapter, monkeypatch):
+        """ "Could not look" is not "not there", and the placement keeps them apart."""
+        placement = self._placement(adapter, monkeypatch, _requirement(found=KIND_INACCESSIBLE))
+
+        assert placement.present is None
+
+    def test_a_directory_at_the_destination_is_named_as_one(self, adapter, monkeypatch):
+        placement = self._placement(
+            adapter,
+            monkeypatch,
+            _requirement(file_name="bios", declared="pcsx2/bios", found=KIND_DIRECTORY, checked="unchecked"),
+        )
+
+        assert placement.is_directory is True
+        assert placement.present is True
+
+    def test_the_supplying_distribution_travels_verbatim(self, adapter, monkeypatch):
+        """The identifier as stated — the plugin has no display form to map it to."""
+        placement = self._placement(
+            adapter,
+            monkeypatch,
+            _requirement(
+                file_name="codehandler.bin",
+                declared="dolphin-emu/Sys/codehandler.bin",
+                path=f"{_ROOT}/dolphin-emu/Sys/codehandler.bin",
+                found=KIND_FILE,
+                checked="unchecked",
+                supplied_by=SuppliedBy(distribution="retrodeck", source="/app/retrodeck/x", card_version="1"),
+            ),
+        )
+
+        assert placement.supplied_by == "retrodeck"
+
+    def test_a_reading_at_a_destination_we_cannot_honour_does_not_travel(self, adapter, monkeypatch):
+        """melonDS keeps its firmware in its own tree, so that file is not the plugin's.
+
+        With no location to honour the caller places the file by its own flat
+        default, and what was read in the emulator's XDG tree says nothing
+        about the BIOS root.
+        """
+        placement = self._placement(
+            adapter,
+            monkeypatch,
+            _requirement(
+                file_name="bios7.bin",
+                path="/home/deck/.local/share/melonDS/bios7.bin",
+                found=KIND_FILE,
+                checked="unchecked",
+                supplied_by=SuppliedBy(distribution="retrodeck", source="/app/x", card_version="1"),
+            ),
+        )
+
+        assert placement.relative_path is None
+        assert placement.present is None
+        assert placement.is_directory is False
+        assert placement.supplied_by is None
+
+    def test_no_stated_provenance_claims_nothing(self, adapter, monkeypatch):
+        placement = self._placement(adapter, monkeypatch, _requirement(found=KIND_FILE, checked="unchecked"))
+
+        assert placement.supplied_by is None
 
     def test_per_region_alternatives_all_reach_the_catalogue(self, adapter, monkeypatch):
         """Which region a launch picks is unknowable here, so every option is a declared want."""

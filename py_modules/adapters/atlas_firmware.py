@@ -33,7 +33,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any
 
-from _vendor.atlas import detect
+from _vendor.atlas import KIND_DIRECTORY, detect
 
 from domain.firmware_wants import FirmwareCatalogue, FirmwarePlacement, FirmwareWant
 
@@ -160,21 +160,35 @@ def _requirement_entries(core: Any) -> list[Any]:
     return entries
 
 
-def _relative_path(path: str, root: str) -> str | None:
-    """*path* relative to the firmware *root*, or ``None`` when it lands outside it.
+def _declared_location(requirement: Any, root: str) -> str | None:
+    """The location the emulator declared, or ``None`` when nothing under *root* honours it.
 
-    The resolver states an absolute, symlink-resolved destination, while the
-    plugin owns its own BIOS directory and joins everything under it through
-    ``safe_join``. Handing back the segment below the root is what lets both
-    stay true: the caller keeps sole authority over where it writes, and the
-    resolver's subdirectory placement (``dc/dc_boot.bin``) is not lost. ``None``
-    for a destination outside the root — a standalone emulator keeping firmware
-    in its own XDG tree — where there is no placement the caller could honour.
+    Two fields of one requirement answer two different questions, and only the
+    first belongs here. ``declared`` is the string the emulator spelled and the
+    name it will open; ``path`` is where that lands once the kernel has followed
+    every symlink, which is what says whether the destination is inside the root
+    the plugin owns. Reconstructing the declaration from ``path`` instead —
+    ``relpath(path, root)`` — agrees with it only while no link re-roots the
+    way: RetroDECK points ``<bios>/pcsx2/bios`` back at ``<bios>``, so LRPS2's
+    ``pcsx2/bios`` collapses onto the root and comes back as ``.``.
+
+    ``None`` where there is no location below the root to honour, so the caller
+    falls back to its own flat layout. Two shapes reach it, and the second is
+    what the declaration being relative changes: a resolved destination outside
+    the root (a standalone emulator's own XDG tree), and a declaration that is
+    absolute or climbs out of the root, which names a place the caller cannot
+    express as a segment under a root that is its to own.
     """
-    relative = os.path.relpath(path, root)
-    if relative == os.curdir or relative.startswith(os.pardir + os.sep) or relative == os.pardir:
+    relative = os.path.relpath(requirement.path, root)
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
         return None
-    return relative
+    declared = requirement.declared
+    if not declared or os.path.isabs(declared):
+        return None
+    normalised = os.path.normpath(declared)
+    if normalised == os.curdir or normalised == os.pardir or normalised.startswith(os.pardir + os.sep):
+        return None
+    return normalised
 
 
 def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
@@ -184,6 +198,18 @@ def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
     Game Boy boot ROM — so the file is the key and the cores are the entries
     under it. That is also what keeps one file from reading differently on two
     surfaces: there is one row per name in the whole answer.
+
+    Everything about the destination — where it is, whether anything is there,
+    what kind of thing, whose copy — is taken from the first requirement under
+    the name, because those are statements about one place and reading them off
+    different requirements would describe two places as one row.
+
+    And they stand or fall together with the location. Where there is none to
+    honour, the caller places the file by its own flat default instead, which is
+    a different place from the one that was read — a standalone emulator's own
+    XDG tree holding the file says nothing about the BIOS root. So the reading
+    is dropped with the location rather than travelling on to describe somewhere
+    the caller will never write.
     """
     root = answer.root
     by_name: dict[str, list[Any]] = {}
@@ -194,10 +220,12 @@ def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
     placements: list[FirmwarePlacement] = []
     for file_name, pairs in by_name.items():
         first = pairs[0][1]
+        location = _declared_location(first, root)
+        supplied = first.supplied_by if location is not None else None
         placements.append(
             FirmwarePlacement(
                 file_name=file_name,
-                relative_path=_relative_path(first.path, root),
+                relative_path=location,
                 description=first.description,
                 wants=tuple(
                     FirmwareWant(
@@ -206,6 +234,9 @@ def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
                     )
                     for core, requirement in pairs
                 ),
+                present=first.present if location is not None else None,
+                is_directory=location is not None and first.found == KIND_DIRECTORY,
+                supplied_by=supplied.distribution if supplied is not None else None,
             )
         )
     return tuple(sorted(placements, key=lambda placement: placement.file_name))

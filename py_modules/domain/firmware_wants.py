@@ -61,11 +61,32 @@ class FirmwareWant:
 class FirmwarePlacement:
     """One firmware file the machine asks for: where it goes and who wants it.
 
-    ``relative_path`` is the destination relative to the firmware root, so a
-    consumer joins it under the BIOS directory it owns rather than trusting an
-    absolute path from outside. ``None`` when the file resolves outside that root
-    — a standalone emulator keeping its firmware in its own XDG tree — and the
-    consumer then has no placement to honour and falls back to its own layout.
+    ``relative_path`` is the location the emulator declared, relative to the
+    firmware root, so a consumer joins it under the BIOS directory it owns
+    rather than trusting an absolute path from outside. ``None`` when there is
+    no location under that root to honour — a standalone emulator keeping its
+    firmware in its own XDG tree — and the consumer then falls back to its own
+    layout.
+
+    ``present`` and ``is_directory`` are what the resolver read AT that
+    destination, and a consumer takes them from here rather than probing the
+    path a second time: the resolver follows the symlinks a distribution
+    strings through the firmware tree, while a bare existence check answers
+    about whatever the consumer's own join happens to name. ``present`` is
+    three-valued because "could not look" is not "not there"; ``is_directory``
+    says a directory was found, which for a requirement that names a folder is
+    the shape its contents have to fill, and which nothing can say while the
+    folder is absent.
+
+    ``supplied_by`` names the distribution whose own copy is sitting at the
+    destination, in the resolver's identifier space (``retrodeck``) and never
+    a display form of our own. ``None`` claims nothing: the resolver states it
+    only where it established the provenance.
+
+    All three go silent together with ``relative_path``: with no location to
+    honour, the consumer's fallback layout is a different place from the one
+    that was read, and a reading carried across would describe somewhere the
+    consumer will never write.
 
     ``wants`` is never empty: a placement exists because at least one emulator
     declared the file, and a placement without an owning emulator is exactly the
@@ -76,6 +97,9 @@ class FirmwarePlacement:
     relative_path: str | None
     description: str
     wants: tuple[FirmwareWant, ...]
+    present: bool | None = None
+    is_directory: bool = False
+    supplied_by: str | None = None
 
     @property
     def required_by_any(self) -> bool:
@@ -86,7 +110,7 @@ class FirmwarePlacement:
     def destination(self) -> str:
         """Where the file belongs under the BIOS directory, relative to its root.
 
-        The resolver's own placement where it has one, and the bare file name
+        The declared location where there is one, and the bare file name
         otherwise — the flat default that has always applied to a file with no
         stated subdirectory. Callers still join this under their own root
         through ``safe_join``; it is a path segment, not an address.

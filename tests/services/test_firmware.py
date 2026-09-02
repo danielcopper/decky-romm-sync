@@ -98,8 +98,22 @@ def _make_firmware_service(
     call-site terse; pass overrides only for the axis under test. The default
     resolver declares nothing and reports every emulator read, so an unseeded
     test sees a machine that genuinely wants no firmware.
+
+    The resolver is pointed at the same BIOS root and file store the service
+    gets, because on a real machine they are one directory read by two
+    readers — so a test that puts a file where the platform expects it gets
+    the same ``present`` from both. A test that hands in a resolver with a root
+    of its own keeps it, and one that wants the two to disagree says so per
+    file (``FakeFirmwareResolver.declare(present=...)``).
     """
     import decky
+
+    store = firmware_file_store if firmware_file_store is not None else FirmwareFileAdapter()
+    paths = retrodeck_paths if retrodeck_paths is not None else FakeRetroDeckPaths()
+    resolver = firmware_resolver if firmware_resolver is not None else FakeFirmwareResolver()
+    if resolver.bios_root is None:
+        resolver.bios_root = paths.bios_path()
+        resolver.present_probe = store.exists
 
     return FirmwareService(
         config=FirmwareServiceConfig(
@@ -107,9 +121,9 @@ def _make_firmware_service(
             loop=asyncio.get_event_loop(),
             logger=logger if logger is not None else decky.logger,
             clock=clock if clock is not None else _make_clock(),
-            firmware_file_store=firmware_file_store if firmware_file_store is not None else FirmwareFileAdapter(),
-            firmware_resolver=firmware_resolver if firmware_resolver is not None else FakeFirmwareResolver(),
-            retrodeck_paths=retrodeck_paths if retrodeck_paths is not None else FakeRetroDeckPaths(),
+            firmware_file_store=store,
+            firmware_resolver=resolver,
+            retrodeck_paths=paths,
             core_info=core_info if core_info is not None else FakeCoreInfoProvider(),
             resolve_system=resolve_system if resolve_system is not None else FakeSystemResolver(),
             platform_core_reader=platform_core_reader if platform_core_reader is not None else FakePlatformCoreReader(),
@@ -141,6 +155,15 @@ def _resolver(fw: FirmwareService) -> FakeFirmwareResolver:
     resolver = fw._firmware_resolver
     assert isinstance(resolver, FakeFirmwareResolver)
     return resolver
+
+
+def _resolver_reads(fw: FirmwareService, bios_dir) -> None:
+    """Point the resolver at *bios_dir* as well — one directory, two readers.
+
+    For a test that swaps the service's BIOS root after construction, where
+    ``_make_firmware_service`` could not wire the pair up itself.
+    """
+    _resolver(fw).bios_root = str(bios_dir)
 
 
 def _stub_listing(fw: FirmwareService, firmware_list: list[dict[str, Any]]) -> None:
@@ -309,6 +332,175 @@ class TestFirmwareDestPath:
             pytest.raises(PathTraversalError),
         ):
             fw._firmware_dest_path({"file_name": "evil.bin"}, placement)
+
+    def test_a_declaration_the_distribution_links_onto_the_root_is_still_a_destination(self, fw, tmp_path):
+        """RetroDECK points ``<bios>/pcsx2/bios`` at ``<bios>``, so LRPS2's folder IS the root.
+
+        ``safe_join`` refuses the base by default, which would drop a real
+        requirement instead of guarding anything — a declared location opts in.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        (bios_dir / "pcsx2").mkdir(parents=True)
+        (bios_dir / "pcsx2" / "bios").symlink_to(bios_dir)
+        placement = _resolver(fw).declare("bios", required_by=["pcsx2_libretro"], relative_path="pcsx2/bios")
+        fw._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+
+        assert fw._firmware_dest_path({"file_name": "bios"}, placement) == os.path.realpath(str(bios_dir))
+
+    def test_a_server_file_name_may_not_land_on_the_root(self, fw, tmp_path):
+        """The opt-in is the declaration's, not the listing's — an empty name is no file."""
+        from lib.path_safety import PathTraversalError
+
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        fw._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+
+        with pytest.raises(PathTraversalError):
+            fw._firmware_dest_path({"file_name": ""}, None)
+
+
+class TestPresenceComesFromTheReading:
+    """Who answers "is the file there": the reading for a declared row, us for the rest."""
+
+    _CORE = "flycast_libretro"
+
+    def _service(self, plugin, tmp_path, resolver, store: FakeFirmwareFileStore | None = None):
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store if store is not None else FakeFirmwareFileStore(),
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "Flycast"), options=[libretro_option(self._CORE, "Flycast")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        _stub_listing(
+            fw,
+            [{"id": 1, "file_name": "dc_boot.bin", "file_path": "bios/dc/dc_boot.bin", "file_size_bytes": 8}],
+        )
+        return fw
+
+    @staticmethod
+    def _store_holding(tmp_path, name: str) -> FakeFirmwareFileStore:
+        """A file store with *name* sitting in the BIOS root, whatever the reading says."""
+        return FakeFirmwareFileStore({os.path.join(str(tmp_path / "bios"), name): b"\x00"})
+
+    @pytest.mark.asyncio
+    async def test_a_declared_row_is_there_when_the_reading_says_so(self, plugin, tmp_path):
+        """Nothing in our own store, and the row still reads present.
+
+        The reading followed the symlinks to the destination the emulator will
+        open; a probe of the path assembled here answers about a different
+        place, and that divergence is what put a satisfied LRPS2 requirement on
+        the page as a red missing row.
+        """
+        resolver = FakeFirmwareResolver()
+        resolver.declare("dc_boot.bin", required_by=[self._CORE], present=True)
+        fw = self._service(plugin, tmp_path, resolver)
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["downloaded"] is True
+        assert result["required_downloaded"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_declared_row_is_absent_when_the_reading_says_so(self, plugin, tmp_path):
+        """And the other direction: our store holding it does not override the reading."""
+        resolver = FakeFirmwareResolver()
+        resolver.declare("dc_boot.bin", required_by=[self._CORE], present=False)
+        fw = self._service(plugin, tmp_path, resolver, self._store_holding(tmp_path, "dc_boot.bin"))
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["downloaded"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_destination_the_reading_could_not_look_at_is_not_a_claim(self, plugin, tmp_path):
+        """ "Could not look" is not "it is there" — the row stays missing."""
+        resolver = FakeFirmwareResolver()
+        resolver.declare("dc_boot.bin", required_by=[self._CORE])
+        resolver.bios_root = ""  # no place for the fake to take a reading, so it withholds one
+        # The store holds it, so a fallback to our own probe would read green here.
+        fw = self._service(plugin, tmp_path, resolver, self._store_holding(tmp_path, "dc_boot.bin"))
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["downloaded"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_row_nothing_declares_is_ours_to_probe(self, plugin, tmp_path):
+        """One of the rows our own check covers: a library file no emulator asked for."""
+        fw = self._service(plugin, tmp_path, FakeFirmwareResolver(), self._store_holding(tmp_path, "dc_boot.bin"))
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["downloaded"] is True
+        assert result["files"][0]["wanted"] == "not_needed"
+
+    @pytest.mark.asyncio
+    async def test_a_placement_we_cannot_honour_is_ours_to_probe_too(self, plugin, tmp_path):
+        """The other one: a declared destination outside the BIOS root.
+
+        The file then goes by this service's own flat default, which is not the
+        destination the reading was taken at — an emulator's own tree holding
+        it says nothing about the BIOS root.
+        """
+        resolver = FakeFirmwareResolver()
+        # The reading says absent; it was taken somewhere this service will not write.
+        resolver.declare("dc_boot.bin", required_by=[self._CORE], relative_path=None, present=False)
+        fw = self._service(plugin, tmp_path, resolver, self._store_holding(tmp_path, "dc_boot.bin"))
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["downloaded"] is True
+
+
+class TestDestinationReadingsReachBothSurfaces:
+    """``supplied_by`` and ``is_directory`` travel to the game page and the System page."""
+
+    _CORE = "flycast_libretro"
+
+    def _service(self, plugin, tmp_path, resolver):
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "Flycast"), options=[libretro_option(self._CORE, "Flycast")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        return fw
+
+    @pytest.mark.asyncio
+    async def test_the_game_page_row_names_the_supplying_distribution(self, plugin, tmp_path):
+        resolver = FakeFirmwareResolver()
+        resolver.declare("codehandler.bin", required_by=[self._CORE], present=True, supplied_by="retrodeck")
+        fw = self._service(plugin, tmp_path, resolver)
+        _stub_listing(fw, [])
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["files"][0]["supplied_by"] == "retrodeck"
+        assert result["files"][0]["is_directory"] is False
+
+    @pytest.mark.asyncio
+    async def test_the_system_page_row_names_the_directory(self, plugin, tmp_path):
+        _seed_rom(plugin._uow, rom_id=51, platform_slug="dc", app_id=1)
+        resolver = FakeFirmwareResolver()
+        resolver.declare("bios", required_by=[self._CORE], relative_path="pcsx2/bios", present=True, is_directory=True)
+        fw = self._service(plugin, tmp_path, resolver)
+        _stub_listing(fw, [])
+
+        result = await fw.get_firmware_status()
+        row = next(p for p in result["platforms"] if p["platform_slug"] == "dc")["files"][0]
+
+        assert row["is_directory"] is True
+        assert row["supplied_by"] is None
+        assert row["downloaded"] is True
 
 
 class TestGetFirmwareStatus:
@@ -1917,11 +2109,12 @@ class TestCheckPlatformBiosRequired:
     @pytest.mark.asyncio
     async def test_all_required_downloaded(self, fw, tmp_path):
         """When all required files are downloaded, counts reflect this."""
-        # Create downloaded required files (flat in bios root — nothing declares a placement)
+        # Flat in the bios root: the declarations below name no subdirectory.
         bios_dir = tmp_path / "retrodeck" / "bios"
         bios_dir.mkdir(parents=True)
         (bios_dir / "required1.bin").write_bytes(b"\x00" * 100)
         (bios_dir / "required2.bin").write_bytes(b"\x00" * 200)
+        _resolver_reads(fw, bios_dir)
         # Leave optional1.bin not downloaded
 
         firmware_list = [
@@ -1976,6 +2169,7 @@ class TestCheckPlatformBiosRequired:
         bios_dir = tmp_path / "retrodeck" / "bios"
         bios_dir.mkdir(parents=True)
         (bios_dir / "required1.bin").write_bytes(b"\x00" * 100)
+        _resolver_reads(fw, bios_dir)
         # Leave required2.bin not downloaded
 
         firmware_list = [
