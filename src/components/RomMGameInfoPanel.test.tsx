@@ -3248,7 +3248,7 @@ describe("RomMGameInfoPanel", () => {
     it("unknown: grey header dot + honest text, and the 'files on server' note survives (#1520)", async () => {
       // No installed emulator's answer could be established for any server file
       // → backend ships bios_level "unknown". The panel must render the neutral
-      // grey dot + honest header text (never a false "All ready"), and the
+      // grey dot + honest header text (never a false "Nothing required"), and the
       // "files on server" note — previously swallowed when the row list is
       // empty — must still render.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
@@ -3301,8 +3301,9 @@ describe("RomMGameInfoPanel", () => {
       expect(container.innerHTML).toContain("#8f98a0");
       expect(container.innerHTML).not.toContain("#5ba32b");
       // Honest header text, never the no-requirement sentence: "nothing is
-      // required" is a claim about every installed emulator, and the point here
-      // is that none of them could be asked.
+      // required" is the ACTIVE CORE's answer (`required_by_active`, falling
+      // back to every declaring core only when no active core resolves), and the
+      // point here is that it could not be asked.
       expect(container.textContent).toContain("BIOS requirement unknown");
       expect(container.textContent).toContain("2 files on server nothing installed could answer for");
       expect(container.textContent).not.toContain("Nothing required");
@@ -3467,10 +3468,11 @@ describe("RomMGameInfoPanel", () => {
       expect(container.innerHTML).not.toContain("#5ba32b");
     });
 
-    it("replaces a shown requirement with the unknown reading, and a failed read does not", async () => {
-      // Both directions off one starting point, because the pair is the rule: an
-      // ANSWER of "unknown" moves the page even when a requirement is already on
-      // it, and a read that never happened leaves that requirement alone.
+    it("replaces a shown requirement with the unknown reading (#1660)", async () => {
+      // An ANSWER of "unknown" moves the page even when a requirement is already
+      // on it: keeping the requirement would assert something no longer
+      // establishable. The other half of the pair — a read that never happened,
+      // which leaves the requirement alone — is the test below.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(staleDetail(biosAnswer(1)));
       vi.mocked(backend.getBiosStatus).mockResolvedValue({
         bios_status: null,

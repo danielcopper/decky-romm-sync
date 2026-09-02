@@ -242,11 +242,17 @@ def _nothing_established(status: BiosStatus) -> bool:
     Two shapes, and the second is why ``reading_complete`` exists. The server
     holds firmware and the machine answered for none of it — every row unknown,
     so there is nothing to base a claim on. Or the platform has no file at all
-    AND its reading never happened: an empty list under a *complete* reading is
+    AND its reading was not complete: an empty list under a complete reading is
     the finished answer "no emulator here wants anything", while under an
-    incomplete one it is silence. Silence read as an answer is the green "All
-    ready" a platform whose only emulator is standalone used to show over
-    firmware that emulator will not boot without.
+    incomplete one it is silence, and silence read as an answer is a claim about
+    a question nothing finished asking. Which surface that claim reaches depends
+    on the caller: the System page renders this level whether or not there are
+    rows, so it is where an empty list would read green.
+
+    ``reading_complete`` is False whenever ANY core in the platform's scope went
+    unread, not only when nothing could be asked at all; the two are the same
+    thing to this function, which is why the shape it names is an empty file
+    list rather than an empty scope.
 
     ``known_count is None`` is a caller that did not supply the counts, and the
     decision is then left to the required-count logic as it always was.

@@ -20,11 +20,17 @@ const coreInfo: CoreInfo = {
   ],
 };
 
+// A state the backend can actually emit: the "missing" level comes from a
+// required file that is absent, so the required counts have to be there. Paired
+// with no `required_count` it would be unreachable — a zero required count
+// always computes "ok".
 const biosStatus: BiosStatus = {
   needs_bios: true,
   server_count: 1,
   local_count: 0,
   all_downloaded: false,
+  required_count: 1,
+  required_downloaded: 0,
 };
 
 describe("BiosTab", () => {
@@ -32,7 +38,7 @@ describe("BiosTab", () => {
     const { container } = render(
       <BiosTab biosStatus={biosStatus} biosLevel="missing" coreInfo={coreInfo} isActive={true} />,
     );
-    expect(container.textContent).toContain("Nothing required (0/1 files held)");
+    expect(container.textContent).toContain("0/1 required files ready");
     expect(container.textContent).toContain("Snes9x");
   });
 

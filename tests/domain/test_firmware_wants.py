@@ -101,9 +101,9 @@ class TestReadingCompleteFor:
         A platform ES-DE offers no libretro core for (35 of its 172 systems,
         ``ps3`` among them) yields an empty scope. Answering ``True`` would let
         every server file classify ``not_needed`` and the platform read a green
-        "All ready" off asking nobody, which is the collapse the four-valued
-        vocabulary exists to prevent. Asking no one establishes nothing, so an
-        empty scope answers like ``None``.
+        "Nothing required" off asking nobody, which is the collapse the
+        four-valued vocabulary exists to prevent. Asking no one establishes
+        nothing, so an empty scope answers like ``None``.
         """
         catalogue = _catalogue(unread=frozenset({"fbalpha_libretro"}))
         assert catalogue.reading_complete_for([]) is False

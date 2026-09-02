@@ -260,7 +260,7 @@ Format: **invariant** — tier — enforced by.
   the platform no libretro core (35 of ES-DE's 172 systems, `ps3` among them — a mapped RomM platform whose only entry
   is RPCS3), and `reading_complete_for` refuses an empty scope as well as a `None` one. An empty scope read as complete
   is a finished reading of nobody: every server file classifies `not_needed`, `required_count` is 0, and the platform
-  reports a green "All ready" over firmware the standalone emulator will not boot without
+  reports a green "Nothing required" over firmware the standalone emulator will not boot without
 - **A firmware row the RomM library does not hold (`on_server: False`) counts towards readiness, and never towards a
   download affordance or a progress ratio** — test + prompt-only — `tests/services/test_firmware.py` pins the row's
   shape (`id` absent, `on_server` clear), that it raises `required_count`, and that it stays out of `server_count`;
@@ -367,20 +367,28 @@ Format: **invariant** — tier — enforced by.
   quarantining a ROM (gigabytes, no sensible retention, re-fetchable from RomM) inverts for a save, and a savestate is
   synced nowhere at all. It is the first caller to hand that funnel a directory outside the saves root: it takes the
   directory it is given, so a savestate's backup lands in `<states>/.romm-backup/`
-- **A BIOS file is deleted only where a `downloaded_bios` record names it under one of the platform's firmware slugs** —
-  test + prompt-only — `tests/services/test_firmware.py::TestDeletePlatformBios` pins all three directions end-to-end
-  through the real `check_platform_bios`: an emulator-shipped file survives, a hand-placed file under a server file's
-  name survives, and our own download is still removed once RomM no longer holds it. What makes the rule concrete for
-  BIOS files is the entry above — authority to delete comes from having placed the file, and the record is the only
-  evidence of that, because `BiosFile.mark_downloaded` is written in the download path and nowhere else. The two
-  authorisations a reader reaches for instead are both wrong, in opposite directions. `downloaded` is `os.path.exists`
-  and nothing more: authorise on it and Delete BIOS destroys firmware RetroDECK ships with its own components, which no
-  RomM library holds and nothing here can fetch back — it did exactly that to `<bios>/dolphin-emu/Sys/codehandler.bin`
-  on a real device. `on_server` describes what the library holds _now_, not who wrote the file: authorise on it and a
-  file dropped from RomM after we downloaded it is stranded on disk with nothing in the UI able to remove it. **Nothing
-  mechanical stands behind any of this.** The guard is one condition inside `_delete_platform_bios_io`, and a second
-  delete path looping the same file list on `downloaded` alone would go green — which is exactly the shape this one had
-  when it destroyed that file
+- **A BIOS file is deleted only where a `downloaded_bios` record names it under one of the platform's firmware slugs,
+  and only at the path that record holds** — test + prompt-only —
+  `tests/services/test_firmware.py::TestDeletePlatformBios` pins every direction end-to-end: an emulator-shipped file
+  survives, a hand-placed file under a server file's name survives, our own download is still removed once RomM no
+  longer holds it, and a download whose placement has since moved is unlinked where it was written rather than where the
+  placement now points. What makes the destructive-op rule (the `backup-or-confirm` entry) concrete for BIOS files is
+  that authority to delete comes from having placed the file, and the record is the only evidence of that, because
+  `BiosFile.mark_downloaded` is written in the download path and nowhere else. So the records are the delete's whole
+  input: it iterates them, not a status listing, which is also what keeps a download RomM has since dropped deletable
+  instead of gated behind a file list that no longer names it. The authorisations a reader reaches for instead are wrong
+  in opposite directions. `downloaded` is `os.path.exists` and nothing more: authorise on it and Delete BIOS destroys
+  firmware RetroDECK ships with its own components, which no RomM library holds and nothing here can fetch back — it did
+  exactly that to `<bios>/dolphin-emu/Sys/codehandler.bin` on a real device. `on_server` describes what the library
+  holds _now_, not who wrote the file: authorise on it and a file dropped from RomM after we downloaded it is stranded
+  on disk with nothing in the UI able to remove it. The PATH has its own version of the same trap: a status row's
+  `local_path` is recomputed from today's placement, so for a file fetched before an emu-atlas bump moved it the name
+  still matches our record while the path names whatever now occupies the new destination — RetroDECK's own
+  `codehandler.bin`, in the case that motivated this. The count the UI offers is bound to the same set:
+  `deletable_count` on the `get_firmware_status` payload is records-still-on-disk, because `local_count` is the
+  library's progress ratio and is wrong in both directions — it hid the button entirely for a platform whose downloads
+  had all left the library. **Nothing mechanical stands behind any of this.** A second delete path looping a status list
+  on `downloaded` alone would go green — which is exactly the shape this one had when it destroyed that file
 - **Every read-mutate-write of a `RomSaveSyncState` runs under `SyncEngine.rom_lock(rom_id)`** — prompt-only — sync
   paths, `get_save_status`, and the four slot mutations hold the lock; mechanize via a `rom_save_sync_states.save`
   call-site audit

@@ -104,7 +104,8 @@ function buildBiosHeader(bios: BiosStatus, biosLevel: BiosTabProps["biosLevel"])
   let biosLabel: string;
   if (biosLevel === "unknown") {
     // Nothing installed could say whether these files are wanted. Honest text
-    // over the neutral grey dot, never a false "All ready".
+    // over the neutral grey dot, never the "Nothing required" below — which is
+    // an answer, and this is the absence of one.
     biosLabel = "BIOS requirement unknown";
   } else if (reqCount > 0) {
     biosLabel =
