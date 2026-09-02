@@ -8,11 +8,10 @@ import {
 import * as backend from "../api/backend";
 import { _resetSharedReadsForTests } from "../api/sharedReads";
 import { libretroEmu } from "../test-utils/coreFixtures";
-import type { BiosLevel, EmulatorOption } from "../types";
+import type { EmulatorOption } from "../types";
 
 interface BiosState {
   biosNeeded: boolean;
-  biosStatus: BiosLevel | null;
   biosLabel: string;
   biosRequiredMissing: boolean;
   unrelated: string;
@@ -79,7 +78,6 @@ describe("refreshBiosInBackground", () => {
     expect(setter).toHaveBeenCalledOnce();
     const next = setter.mock.calls[0]![0]({
       biosNeeded: false,
-      biosStatus: null,
       biosLabel: "",
       biosRequiredMissing: false,
       unrelated: "keep",
@@ -148,14 +146,12 @@ describe("refreshBiosInBackground", () => {
     expect(setter).toHaveBeenCalledOnce();
     const next = setter.mock.calls[0]![0]({
       biosNeeded: true,
-      biosStatus: "missing",
       biosLabel: "0/3",
       biosRequiredMissing: true,
       unrelated: "keep",
     });
     expect(next).toEqual({
       biosNeeded: false,
-      biosStatus: null,
       biosLabel: "",
       biosRequiredMissing: false,
       unrelated: "keep",

@@ -99,7 +99,6 @@ const DEFAULT_STATE: GameDetailState = {
   achievementEarned: 0,
   achievementTotal: 0,
   biosNeeded: false,
-  biosStatus: null,
   biosLabel: "",
   biosRequiredMissing: false,
   activeCoreLabel: null,

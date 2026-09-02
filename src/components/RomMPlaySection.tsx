@@ -62,7 +62,7 @@ import {
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
 import { formatBytes, formatLastPlayed, formatPlaytime } from "../utils/formatters";
-import { biosColorForLevel } from "../utils/biosColor";
+import { BIOS_MISSING_RED } from "../utils/biosColor";
 import { timeoutMs } from "../utils/playSection";
 import {
   getGameDetail,
@@ -1008,10 +1008,14 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // BIOS warning. One local fact decides it: a file the active core requires is
   // not on disk. Everything else the BIOS answer says — a platform whose
   // emulators could not be asked, optional files nobody launching this game
-  // needs — is non-actionable here and lives in the BIOS tab. The COLOUR is
-  // still the backend's verdict (`biosColorForLevel`), never re-derived.
+  // needs — is non-actionable here and lives in the BIOS tab.
+  //
+  // One appearance, always red. This badge is not rendering the four-valued
+  // verdict — the BIOS tab is, off `biosColorForLevel` — it is a warning that
+  // shows only for a state that is never anything but bad. Amber for "1 of 3
+  // required present" would suggest a degree where there is none: the game
+  // still will not launch.
   if (detail.biosRequiredMissing) {
-    const biosColor = biosColorForLevel(detail.biosStatus);
     infoItems.push(
       // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- pointer-only shortcut into the BIOS tab, which the tab bar's DialogButton already reaches from the focus ring; a role/tabIndex here would add a gamepad focus stop to the play row.
       <div
@@ -1024,7 +1028,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       >
         <div className="romm-info-header">BIOS</div>
         <div className="romm-info-value" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          <span className="romm-status-dot" style={{ backgroundColor: biosColor }} />
+          <span className="romm-status-dot" style={{ backgroundColor: BIOS_MISSING_RED }} />
           {detail.biosLabel}
         </div>
       </div>,

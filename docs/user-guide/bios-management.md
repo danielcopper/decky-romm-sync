@@ -51,6 +51,10 @@ or requires only files you already have, there is no badge — however many opti
 the requirement could be worked out at all. Those cases are worth reading, but not worth a warning next to Play, so they
 live in the tab.
 
+The badge is always **red**. It is a warning, not a status: the four-colour dot above belongs to the tab's readiness
+line, and every state that raises the badge is one the game will not launch in. Having one of three required files is
+not a milder version of the problem, so it does not get a milder colour.
+
 A BIOS warning only ever disappears on an **answer**. When a check cannot be run at all — most often right after a BIOS
 download or delete, before the state has been read again — the plugin keeps showing the last status it knew rather than
 reporting "no BIOS needed". So a check that could not be completed never quietly clears a missing-BIOS warning and lets

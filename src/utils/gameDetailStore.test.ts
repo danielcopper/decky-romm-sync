@@ -152,7 +152,14 @@ const progress = (earned: number, total: number): AchievementProgressResult => (
 });
 
 const biosMissing: BiosStatusResult = {
-  bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+  bios_status: {
+    platform_slug: "snes",
+    server_count: 3,
+    local_count: 0,
+    all_downloaded: false,
+    required_count: 3,
+    required_downloaded: 0,
+  },
   bios_level: "missing",
   bios_label: "0/3",
 };
@@ -161,7 +168,14 @@ const biosMissing: BiosStatusResult = {
  *  BIOS level the previous ROM's read would overwrite if it were still folded. */
 const switchedDetail: Partial<CachedGameDetail> = {
   rom_id: 43,
-  bios_status: { platform_slug: "genesis", server_count: 3, local_count: 3, all_downloaded: true },
+  bios_status: {
+    platform_slug: "genesis",
+    server_count: 3,
+    local_count: 3,
+    all_downloaded: true,
+    required_count: 3,
+    required_downloaded: 3,
+  },
   bios_level: "ok",
   bios_label: "3/3",
 };
@@ -253,7 +267,7 @@ describe("gameDetailStore", () => {
       expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledExactlyOnceWith(42);
       // Non-vacuous in the other direction: the JOINED answer is the one folded,
       // so this is sharing rather than the load having skipped the read.
-      expect(getGameDetail(nextAppId)).toMatchObject({ biosStatus: "missing", biosLabel: "0/3" });
+      expect(getGameDetail(nextAppId)).toMatchObject({ biosRequiredMissing: true, biosLabel: "0/3" });
     });
 
     it("serves a second subscriber from the same entry — one cached-detail read, both notified", async () => {
@@ -630,7 +644,14 @@ describe("gameDetailStore", () => {
       vi.mocked(backend.getPlatformCoreInfo).mockClear();
       vi.mocked(backend.getBiosStatus).mockClear();
       vi.mocked(backend.getBiosStatus).mockResolvedValue({
-        bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+        bios_status: {
+          platform_slug: "snes",
+          server_count: 3,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 3,
+          required_downloaded: 0,
+        },
         bios_level: "missing",
         bios_label: "0/3",
       });
@@ -646,7 +667,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({
         activeCoreLabel: "Snes9x",
         biosNeeded: true,
-        biosStatus: "missing",
+        biosRequiredMissing: true,
         biosLabel: "0/3",
       });
     });
@@ -698,7 +719,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({
         romId: 43,
         activeCoreLabel: "Genesis Plus GX",
-        biosStatus: "ok",
+        biosRequiredMissing: false,
         biosLabel: "3/3",
       });
     });
@@ -725,7 +746,14 @@ describe("gameDetailStore", () => {
     it("folds the core answer and keeps the shown BIOS need when the BIOS read fails", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
         found({
-          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_status: {
+            platform_slug: "snes",
+            server_count: 3,
+            local_count: 0,
+            all_downloaded: false,
+            required_count: 3,
+            required_downloaded: 0,
+          },
           bios_level: "missing",
           bios_label: "0/3",
         }),
@@ -745,7 +773,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({
         activeCoreLabel: "Genesis Plus GX",
         biosNeeded: true,
-        biosStatus: "missing",
+        biosRequiredMissing: true,
         biosLabel: "0/3",
       });
       // Non-vacuous: the BIOS read's own catch handled it, so the handler-level
@@ -756,7 +784,14 @@ describe("gameDetailStore", () => {
     it("keeps the shown BIOS need when the BIOS read carries no answer", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
         found({
-          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_status: {
+            platform_slug: "snes",
+            server_count: 3,
+            local_count: 0,
+            all_downloaded: false,
+            required_count: 3,
+            required_downloaded: 0,
+          },
           bios_level: "missing",
           bios_label: "0/3",
         }),
@@ -779,7 +814,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({
         activeCoreLabel: "Snes9x",
         biosNeeded: true,
-        biosStatus: "missing",
+        biosRequiredMissing: true,
         biosLabel: "0/3",
       });
     });
@@ -787,7 +822,14 @@ describe("gameDetailStore", () => {
     it("clears the BIOS need when the re-read reports the new core needs none", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
         found({
-          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_status: {
+            platform_slug: "snes",
+            server_count: 3,
+            local_count: 0,
+            all_downloaded: false,
+            required_count: 3,
+            required_downloaded: 0,
+          },
           bios_level: "missing",
           bios_label: "0/3",
         }),
@@ -802,7 +844,7 @@ describe("gameDetailStore", () => {
       });
       await flush();
 
-      expect(getGameDetail(nextAppId)).toMatchObject({ biosNeeded: false, biosStatus: null, biosLabel: "" });
+      expect(getGameDetail(nextAppId)).toMatchObject({ biosNeeded: false, biosRequiredMissing: false, biosLabel: "" });
     });
   });
 
@@ -829,14 +871,21 @@ describe("gameDetailStore", () => {
     it("clears the BIOS requirement when the switched-to version's core needs none", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
         found({
-          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_status: {
+            platform_slug: "snes",
+            server_count: 3,
+            local_count: 0,
+            all_downloaded: false,
+            required_count: 3,
+            required_downloaded: 0,
+          },
           bios_level: "missing",
           bios_label: "0/3",
         }),
       );
       subscribe(nextAppId);
       await flush();
-      expect(getGameDetail(nextAppId)).toMatchObject({ biosNeeded: true, biosStatus: "missing", biosLabel: "0/3" });
+      expect(getGameDetail(nextAppId)).toMatchObject({ biosNeeded: true, biosRequiredMissing: true, biosLabel: "0/3" });
 
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(found({ rom_id: 43 }));
       await act(async () => {
@@ -848,7 +897,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({
         romId: 43,
         biosNeeded: false,
-        biosStatus: null,
+        biosRequiredMissing: false,
         biosLabel: "",
       });
     });
@@ -856,7 +905,14 @@ describe("gameDetailStore", () => {
     it("keeps the requirement when the switched-to version's core needs BIOS too", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
         found({
-          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_status: {
+            platform_slug: "snes",
+            server_count: 3,
+            local_count: 0,
+            all_downloaded: false,
+            required_count: 3,
+            required_downloaded: 0,
+          },
           bios_level: "missing",
           bios_label: "0/3",
         }),
@@ -874,7 +930,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({
         romId: 43,
         biosNeeded: true,
-        biosStatus: "ok",
+        biosRequiredMissing: false,
         biosLabel: "3/3",
       });
     });
@@ -886,7 +942,14 @@ describe("gameDetailStore", () => {
     it("keeps the shown requirement when the re-derived detail carries no BIOS answer", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
         found({
-          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_status: {
+            platform_slug: "snes",
+            server_count: 3,
+            local_count: 0,
+            all_downloaded: false,
+            required_count: 3,
+            required_downloaded: 0,
+          },
           bios_level: "missing",
           bios_label: "0/3",
         }),
@@ -906,7 +969,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({
         romId: 43,
         biosNeeded: true,
-        biosStatus: "missing",
+        biosRequiredMissing: true,
         biosLabel: "0/3",
       });
     });
@@ -932,7 +995,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({
         romId: 43,
         biosNeeded: false,
-        biosStatus: null,
+        biosRequiredMissing: false,
         biosLabel: "",
       });
     });
@@ -957,7 +1020,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({
         romId: 43,
         biosNeeded: true,
-        biosStatus: "ok",
+        biosRequiredMissing: false,
         biosLabel: "3/3",
       });
     });
@@ -1154,12 +1217,12 @@ describe("gameDetailStore", () => {
         await Promise.resolve();
       });
       await flush();
-      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, biosStatus: "ok", biosLabel: "3/3" });
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, biosRequiredMissing: false, biosLabel: "3/3" });
 
       previousRomBios.resolve(biosMissing);
       await flush();
 
-      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, biosStatus: "ok", biosLabel: "3/3" });
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, biosRequiredMissing: false, biosLabel: "3/3" });
     });
 
     it("does not fold an achievement count read for the rom the load resolved", async () => {
@@ -1611,20 +1674,34 @@ describe("gameDetailStore", () => {
       subscribe(nextAppId);
       await flush();
       vi.mocked(backend.getBiosStatus).mockResolvedValue({
-        bios_status: { platform_slug: "snes", server_count: 3, local_count: 3, all_downloaded: true },
+        bios_status: {
+          platform_slug: "snes",
+          server_count: 3,
+          local_count: 3,
+          all_downloaded: true,
+          required_count: 3,
+          required_downloaded: 3,
+        },
         bios_level: "ok",
         bios_label: "3/3",
       });
 
       await refreshBiosStatus(nextAppId);
 
-      expect(getGameDetail(nextAppId)).toMatchObject({ biosStatus: "ok", biosLabel: "3/3" });
+      expect(getGameDetail(nextAppId)).toMatchObject({ biosRequiredMissing: false, biosLabel: "3/3" });
     });
 
     it("refreshBiosStatus leaves the shown level alone when the read fails", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
         found({
-          bios_status: { platform_slug: "snes", server_count: 3, local_count: 1, all_downloaded: false },
+          bios_status: {
+            platform_slug: "snes",
+            server_count: 3,
+            local_count: 1,
+            all_downloaded: false,
+            required_count: 3,
+            required_downloaded: 1,
+          },
           bios_level: "partial",
           bios_label: "1/3",
         }),
@@ -1635,7 +1712,7 @@ describe("gameDetailStore", () => {
 
       await refreshBiosStatus(nextAppId);
 
-      expect(getGameDetail(nextAppId)).toMatchObject({ biosStatus: "partial", biosLabel: "1/3" });
+      expect(getGameDetail(nextAppId)).toMatchObject({ biosRequiredMissing: true, biosLabel: "1/3" });
     });
 
     it("refreshBiosStatus does not fold a level read for the rom the entry has since left", async () => {
@@ -1652,13 +1729,13 @@ describe("gameDetailStore", () => {
         await Promise.resolve();
       });
       await flush();
-      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, biosStatus: "ok", biosLabel: "3/3" });
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, biosRequiredMissing: false, biosLabel: "3/3" });
 
       previousRom.resolve(biosMissing);
       await inFlight;
       await flush();
 
-      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, biosStatus: "ok", biosLabel: "3/3" });
+      expect(getGameDetail(nextAppId)).toMatchObject({ romId: 43, biosRequiredMissing: false, biosLabel: "3/3" });
     });
 
     it("refreshCoreAndBios does not fold core or BIOS answers for the rom the entry has since left", async () => {
@@ -1687,7 +1764,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({
         romId: 43,
         activeCoreLabel: "Genesis Plus GX",
-        biosStatus: "ok",
+        biosRequiredMissing: false,
         biosLabel: "3/3",
       });
       // The cache drop is not part of the fold: it only forces the next read to
@@ -1699,7 +1776,14 @@ describe("gameDetailStore", () => {
       subscribe(nextAppId);
       await flush();
       vi.mocked(backend.getBiosStatus).mockResolvedValue({
-        bios_status: { platform_slug: "snes", server_count: 1, local_count: 0, all_downloaded: false },
+        bios_status: {
+          platform_slug: "snes",
+          server_count: 1,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: 0,
+        },
         bios_level: "missing",
         bios_label: "0/1",
       });
@@ -1709,7 +1793,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({
         activeCoreLabel: "Snes9x",
         biosNeeded: true,
-        biosStatus: "missing",
+        biosRequiredMissing: true,
       });
       expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(nextAppId);
     });
@@ -1719,7 +1803,14 @@ describe("gameDetailStore", () => {
       // ANSWER saying so still takes the requirement off the row (#1690).
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
         found({
-          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_status: {
+            platform_slug: "snes",
+            server_count: 3,
+            local_count: 0,
+            all_downloaded: false,
+            required_count: 3,
+            required_downloaded: 0,
+          },
           bios_level: "missing",
           bios_label: "0/3",
         }),
@@ -1733,7 +1824,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({
         activeCoreLabel: "Snes9x",
         biosNeeded: false,
-        biosStatus: null,
+        biosRequiredMissing: false,
         biosLabel: "",
       });
     });
@@ -1744,7 +1835,14 @@ describe("gameDetailStore", () => {
       // its required BIOS and said nothing.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
         found({
-          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_status: {
+            platform_slug: "snes",
+            server_count: 3,
+            local_count: 0,
+            all_downloaded: false,
+            required_count: 3,
+            required_downloaded: 0,
+          },
           bios_level: "missing",
           bios_label: "0/3",
         }),
@@ -1759,7 +1857,7 @@ describe("gameDetailStore", () => {
         // The core answer still lands — only the BIOS half is missing.
         activeCoreLabel: "Snes9x",
         biosNeeded: true,
-        biosStatus: "missing",
+        biosRequiredMissing: true,
         biosLabel: "0/3",
       });
     });
@@ -1767,7 +1865,14 @@ describe("gameDetailStore", () => {
     it("refreshCoreAndBios keeps the shown BIOS need when the read carries no answer (#1693)", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
         found({
-          bios_status: { platform_slug: "snes", server_count: 3, local_count: 0, all_downloaded: false },
+          bios_status: {
+            platform_slug: "snes",
+            server_count: 3,
+            local_count: 0,
+            all_downloaded: false,
+            required_count: 3,
+            required_downloaded: 0,
+          },
           bios_level: "missing",
           bios_label: "0/3",
         }),
@@ -1786,7 +1891,7 @@ describe("gameDetailStore", () => {
       expect(getGameDetail(nextAppId)).toMatchObject({
         activeCoreLabel: "Snes9x",
         biosNeeded: true,
-        biosStatus: "missing",
+        biosRequiredMissing: true,
         biosLabel: "0/3",
       });
     });

@@ -33,6 +33,7 @@ import * as playSectionUtils from "../utils/playSection";
 import * as saveStatusUtils from "../utils/saveStatus";
 import * as formatters from "../utils/formatters";
 import { getGameDetail } from "../utils/gameDetailStore";
+import { BIOS_MISSING_RED } from "../utils/biosColor";
 import { useVersionError } from "./VersionErrorCard";
 import { useMigrationStatus } from "../utils/migrationStore";
 
@@ -87,8 +88,8 @@ vi.mock("../utils/playSection", () => ({
   // a fixed return folds a BIOS need into every mount that resolves a rom.
   extractBiosInfo: vi.fn((status: unknown) =>
     status
-      ? { biosNeeded: true, biosStatus: "ok", biosLabel: "OK", biosRequiredMissing: false }
-      : { biosNeeded: false, biosStatus: null, biosLabel: "", biosRequiredMissing: false },
+      ? { biosNeeded: true, biosLabel: "OK", biosRequiredMissing: false }
+      : { biosNeeded: false, biosLabel: "", biosRequiredMissing: false },
   ),
   extractCoreInfo: vi.fn(
     (c: {
@@ -319,8 +320,8 @@ describe("RomMPlaySection", () => {
     vi.mocked(playSectionUtils.extractBiosInfo).mockImplementation((answer) => {
       if (answer.bios_status_unknown) return null;
       return answer.bios_status
-        ? { biosNeeded: true, biosStatus: "ok", biosLabel: "OK", biosRequiredMissing: false }
-        : { biosNeeded: false, biosStatus: null, biosLabel: "", biosRequiredMissing: false };
+        ? { biosNeeded: true, biosLabel: "OK", biosRequiredMissing: false }
+        : { biosNeeded: false, biosLabel: "", biosRequiredMissing: false };
     });
     vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue({
       activeCoreLabel: null,
@@ -2102,7 +2103,6 @@ describe("RomMPlaySection", () => {
       });
       vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
         biosNeeded: true,
-        biosStatus: "missing",
         biosLabel: "0/3",
         biosRequiredMissing: true,
       });
@@ -2151,7 +2151,6 @@ describe("RomMPlaySection", () => {
       // regressed to keying off the verdict, "Unknown" would render.
       vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
         biosNeeded: true,
-        biosStatus: "unknown",
         biosLabel: "Unknown",
         biosRequiredMissing: false,
       });
@@ -3213,7 +3212,6 @@ describe("RomMPlaySection", () => {
       });
       vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
         biosNeeded: true,
-        biosStatus: "ok",
         biosLabel: "OK",
         biosRequiredMissing: false,
       });
@@ -3465,7 +3463,6 @@ describe("RomMPlaySection", () => {
       });
       vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
         biosNeeded: true,
-        biosStatus: "ok",
         biosLabel: "OK",
         biosRequiredMissing: false,
       });
@@ -3690,7 +3687,6 @@ describe("RomMPlaySection", () => {
       });
       vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
         biosNeeded: true,
-        biosStatus: "ok",
         biosLabel: "OK",
         biosRequiredMissing: false,
       });
@@ -4005,7 +4001,7 @@ describe("RomMPlaySection", () => {
       expect(container.textContent).toContain("Legacy save slot");
     });
 
-    it("BIOS warning shows when biosNeeded + biosStatus is 'partial' or 'missing'; click dispatches romm_tab_switch with tab=bios", async () => {
+    it("BIOS warning shows when a required file is missing; click dispatches romm_tab_switch with tab=bios", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 42,
@@ -4020,7 +4016,6 @@ describe("RomMPlaySection", () => {
       });
       vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
         biosNeeded: true,
-        biosStatus: "missing",
         biosLabel: "0/3",
         biosRequiredMissing: true,
       });
@@ -4055,7 +4050,6 @@ describe("RomMPlaySection", () => {
       });
       vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
         biosNeeded: true,
-        biosStatus: "ok",
         biosLabel: "OK",
         biosRequiredMissing: false,
       });
@@ -4065,32 +4059,37 @@ describe("RomMPlaySection", () => {
       expect(container.textContent).not.toContain("BIOS");
     });
 
-    it("BIOS warning follows the missing-required question, not the readiness verdict", async () => {
-      // The badge's whole rule is local: a file the active core requires is not
-      // on disk. The verdict still owns the COLOUR, and a level the row could
-      // not act on ("unknown") does not suppress a requirement it CAN act on.
+    it("BIOS warning is red whatever the readiness verdict says", async () => {
+      // The badge has one appearance. It shows only for a state that is never
+      // anything but bad, so "1 of 3 required present" is red like every other
+      // missing-required case — amber would suggest a degree the game does not
+      // get to enjoy. The four-valued verdict lives on the BIOS tab.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 42,
         bios_status: {
           platform_slug: "snes",
-          server_count: 1,
-          local_count: 0,
+          server_count: 3,
+          local_count: 1,
           all_downloaded: false,
+          required_count: 3,
+          required_downloaded: 1,
         },
-        bios_level: "unknown",
-        bios_label: "Unknown",
+        bios_level: "partial",
+        bios_label: "1/3 required",
       });
       vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
         biosNeeded: true,
-        biosStatus: "unknown",
-        biosLabel: "Unknown",
+        biosLabel: "1/3 required",
         biosRequiredMissing: true,
       });
       const { container } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       expect(container.textContent).toContain("BIOS");
-      expect(container.textContent).toContain("Unknown");
+      expect(container.textContent).toContain("1/3 required");
+      expect(container.innerHTML).toContain(BIOS_MISSING_RED);
+      // The amber a "partial" verdict would have coloured it.
+      expect(container.innerHTML).not.toContain("#d4a72c");
     });
 
     it("core button only renders when availableCores.length > 1", async () => {
@@ -4109,7 +4108,6 @@ describe("RomMPlaySection", () => {
       });
       vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
         biosNeeded: true,
-        biosStatus: "ok",
         biosLabel: "OK",
         biosRequiredMissing: false,
       });
