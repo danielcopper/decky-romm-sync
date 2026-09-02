@@ -42,6 +42,8 @@ Developer-oriented documentation for contributors and those interested in the in
 
 - **[Steam Non-Steam Shortcuts](architecture/steam-non-steam-shortcuts.md)** — AddShortcut API, VDF format, app ID
   generation
+- **[QAM Panel](architecture/qam-panel.md)** — Pages and their widths, the wide-page frame, list-and-detail navigation,
+  notices and their homes
 - **[Backend Architecture](architecture/backend-architecture.md)** — Service/adapter architecture, dependency diagram,
   boundary enforcement
 - **[Config Source Parsers](architecture/config-source-parsers.md)** — One-parser-per-source principle, source catalog,

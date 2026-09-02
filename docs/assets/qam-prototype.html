@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tender QAM Prototype</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --bg: #eef0f3;
+    --surface: #ffffff;
+    --ink: #1b2027;
+    --muted: #5b6470;
+    --line: #d5d9df;
+    --line-strong: #b9c0c9;
+    --mark: #c4731a;
+    --mark-ink: #ffffff;
+    --chip: #e3e7ec;
+    --chip-on: #1b2027;
+    --chip-on-ink: #ffffff;
+    --rec: #2b6a3e;
+    --rec-bg: #e6f2ea;
+    --font-ui: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+    --font-mock: "Motiva Sans", "Noto Sans", "Segoe UI", Roboto, system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151a; --surface: #1a1e25; --ink: #e4e8ee; --muted: #9aa3ae; --line: #2a3038;
+      --line-strong: #3a424c; --mark: #d98a2e; --mark-ink: #12151a; --chip: #262c35; --chip-on: #e4e8ee;
+      --chip-on-ink: #12151a; --rec: #8fd3a5; --rec-bg: #1c2f23;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12151a; --surface: #1a1e25; --ink: #e4e8ee; --muted: #9aa3ae; --line: #2a3038;
+    --line-strong: #3a424c; --mark: #d98a2e; --mark-ink: #12151a; --chip: #262c35; --chip-on: #e4e8ee;
+    --chip-on-ink: #12151a; --rec: #8fd3a5; --rec-bg: #1c2f23;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font-ui); }
+  a { color: inherit; }
+  button { font: inherit; color: inherit; }
+  button:focus-visible, .chip:focus-visible { outline: 2px solid var(--mark); outline-offset: 2px; }
+
+  /* ---------- page chrome ---------- */
+  .top {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 14px 28px;
+    padding: 18px 28px; border-bottom: 1px solid var(--line); background: var(--surface);
+    position: sticky; top: 0; z-index: 5;
+  }
+  .top h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: .01em; }
+  .top h1 small { font-family: var(--font-mono); font-weight: 400; color: var(--muted); margin-left: 10px; font-size: 12px; }
+  .switch { display: flex; align-items: center; gap: 8px; }
+  .switch .lab { font-family: var(--font-mono); font-size: 12px; color: var(--muted); letter-spacing: .04em; }
+  .chip {
+    border: 1px solid var(--line-strong); background: var(--chip); border-radius: 3px;
+    padding: 4px 10px; font-size: 13px; cursor: pointer;
+  }
+  .chip[aria-pressed="true"] { background: var(--chip-on); color: var(--chip-on-ink); border-color: var(--chip-on); }
+  .chip .rec { font-family: var(--font-mono); font-size: 10px; margin-left: 6px; color: var(--rec); letter-spacing: .06em; }
+  .chip[aria-pressed="true"] .rec { color: inherit; opacity: .75; }
+
+  .layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 0; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .index { position: static; border-right: 0; border-bottom: 1px solid var(--line); } }
+  .index { position: sticky; top: 61px; align-self: start; padding: 22px 16px; border-right: 1px solid var(--line); min-height: calc(100vh - 61px); }
+  .index .grp { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 0 6px 10px; }
+  .index button {
+    display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 8px;
+    background: none; border: 0; border-radius: 3px; padding: 7px 10px; text-align: left; cursor: pointer;
+  }
+  .index button:hover { background: var(--chip); }
+  .index button[aria-current="true"] { background: var(--chip-on); color: var(--chip-on-ink); }
+  .index .w { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+  .index button[aria-current="true"] .w { color: inherit; opacity: .7; }
+
+  main { padding: 26px 28px 80px; min-width: 0; }
+  .screen { display: none; }
+  .screen.on { display: block; }
+  .screen > h2 { margin: 0 0 4px; font-size: 22px; font-weight: 600; text-wrap: balance; }
+  .screen > .sub { margin: 0 0 16px; color: var(--muted); max-width: 70ch; }
+  .subtabs { display: flex; gap: 8px; margin: 0 0 12px; }
+
+  .stage { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: #0e1116; }
+  .deck { position: absolute; top: 0; left: 0; width: 1280px; height: 800px; transform-origin: 0 0; overflow: hidden;
+          background: radial-gradient(1100px 620px at 28% 18%, #262c39, #0e1116 70%); }
+  .caption { display: flex; gap: 18px; margin: 8px 0 22px; font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px 36px; max-width: 1100px; }
+  .notes h3 { margin: 0 0 8px; font-size: 13px; font-family: var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  .notes ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+  .notes ol > li { display: grid; grid-template-columns: 22px 1fr; gap: 10px; max-width: 62ch; }
+  .notes ol > li p { margin: 0; }
+  .notes ul { margin: 0; padding-left: 18px; max-width: 62ch; display: grid; gap: 6px; }
+  .mk { width: 20px; height: 20px; border-radius: 50%; background: var(--mark); color: var(--mark-ink); font: 600 11px/20px var(--font-mono); text-align: center; margin-top: 2px; }
+  .recbox { border-left: 3px solid var(--rec); background: var(--rec-bg); padding: 10px 14px; border-radius: 0 3px 3px 0; max-width: 62ch; }
+  .recbox b { color: var(--rec); font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; display: block; margin-bottom: 4px; font-weight: 500; }
+
+  /* structure page */
+  .trees { display: grid; grid-template-columns: repeat(auto-fit, minmax(600px, 1fr)); gap: 20px; max-width: 1100px; margin-bottom: 26px; }
+  .tree { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 16px 18px; }
+  .tree h3 { margin: 0 0 10px; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+  .tree pre { margin: 0; font: 13px/1.6 var(--font-mono); white-space: pre; overflow-x: auto; }
+  .tree .wd { color: var(--mark); }
+  .tag { font-family: var(--font-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 2px 6px; border-radius: 2px; background: var(--rec-bg); color: var(--rec); }
+  .home { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); font-size: 14px; max-width: 1100px; }
+  .home th, .home td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .home th { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  .home td.dup { color: #b3401e; }
+  .home td.dup::after { content: " · duplicate"; font-family: var(--font-mono); font-size: 11px; }
+  .home-wrap { overflow-x: auto; }
+
+  /* ---------- the mock (single theme: Steam Deck QAM) ---------- */
+  .deck { --p: #23262e; --p2: #1a1d23; --t: #dcdedf; --mu: #8b929a; --ln: rgba(255,255,255,.07); --ln2: rgba(255,255,255,.14);
+          --blue: #1a9fff; --ok: #59bf40; --warn: #f0a030; --dng: #e8686a; --fill: rgba(255,255,255,.08); --fill2: rgba(255,255,255,.14);
+          font-family: var(--font-mock); color: var(--t); font-size: 14px; line-height: 1.35; }
+  .bgtile { position: absolute; border-radius: 6px; background: rgba(255,255,255,.035); }
+  .qam { position: absolute; top: 0; right: 0; bottom: 0; width: 348px; display: flex; box-shadow: -12px 0 40px rgba(0,0,0,.45); }
+  .qam.wide { width: 854px; }
+  .rail { width: 48px; background: var(--p2); display: flex; flex-direction: column; align-items: center; padding-top: 14px; gap: 16px; flex: none; }
+  .rail i { width: 18px; height: 18px; border: 2px solid #5a6270; border-radius: 4px; display: block; }
+  .rail i.c { border-radius: 50%; }
+  .rail i.on { border-color: #fff; background: rgba(255,255,255,.15); }
+  .content { flex: 1; min-width: 0; background: var(--p); display: flex; flex-direction: column; overflow: hidden; }
+  .dtitle { height: 40px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px; font-weight: 600; font-size: 15px; border-bottom: 1px solid var(--ln); color: #fff; }
+  .dtitle .ar { color: var(--mu); font-size: 18px; line-height: 1; }
+  .scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 16px 16px; }
+  .phead { display: flex; align-items: center; gap: 12px; padding: 10px 16px 4px; flex: none; }
+  .back { background: var(--fill); padding: 5px 10px; border-radius: 2px; font-size: 13px; color: #fff; }
+  .ptitle { font-size: 18px; font-weight: 600; color: #fff; }
+  .tabs { display: flex; align-items: center; gap: 16px; padding: 6px 16px 0; border-bottom: 1px solid var(--ln2); flex: none; }
+  .tab { padding: 8px 2px 7px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--mu); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tab.on { color: #fff; border-color: #fff; }
+  .bump { font-size: 10px; padding: 1px 7px; border: 1px solid rgba(255,255,255,.4); border-radius: 10px; color: #c7cbd1; margin: 0 2px; }
+  .bump.r { margin-left: auto; }
+  .cols { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: 18px; padding: 12px 16px 16px; flex: 1; min-height: 0; }
+  .cols.set { grid-template-columns: 220px minmax(0, 1fr); }
+  .cols.data { grid-template-columns: 240px minmax(0, 1fr); }
+  .list, .pane { overflow: auto; min-height: 0; }
+  .pane { padding-right: 4px; }
+  .lrow { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-bottom: 1px solid var(--ln); position: relative; }
+  .lrow .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lrow .ct { font-size: 12px; color: var(--mu); font-variant-numeric: tabular-nums; }
+  .lrow.sel { background: var(--fill2); outline: 2px solid #fff; outline-offset: -2px; border-radius: 2px; }
+  .lrow.head { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--mu); padding-top: 4px; }
+  .sec-t { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--mu); padding: 14px 0 4px; display: flex; align-items: center; gap: 8px; }
+  .sec-t .sp { margin-left: auto; letter-spacing: 0; text-transform: none; font-size: 12px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--ln); }
+  .row .lbl { min-width: 0; }
+  .row .val { color: var(--mu); font-variant-numeric: tabular-nums; text-align: right; display: flex; align-items: center; gap: 8px; flex: none; }
+  .row .val.t { color: var(--t); }
+  .desc { font-size: 12px; color: var(--mu); margin-top: 2px; }
+  .tg { width: 38px; height: 20px; border-radius: 10px; background: rgba(255,255,255,.22); position: relative; flex: none; }
+  .tg::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; }
+  .tg.on { background: var(--blue); }
+  .tg.on::after { left: 20px; }
+  .tg.dis { opacity: .4; }
+  .btn { display: flex; justify-content: space-between; align-items: center; gap: 10px; background: var(--fill); padding: 9px 12px; border-radius: 2px; font-weight: 500; margin-top: 8px; color: #fff; }
+  .btn .desc { font-weight: 400; }
+  .btn.pri { background: var(--blue); }
+  .btn.dng { color: var(--dng); }
+  .btn.foc { outline: 2px solid #fff; outline-offset: -2px; background: var(--fill2); }
+  .btn .ar { color: var(--mu); }
+  .btns { display: flex; gap: 8px; margin-top: 8px; }
+  .btns .btn { flex: 1; justify-content: center; margin: 0; }
+  .btn.sm { padding: 5px 10px; font-size: 12px; margin: 0; }
+  .tbl { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+  .tbl th { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--mu); text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--ln2); font-weight: 500; }
+  .tbl td { padding: 7px 8px; border-bottom: 1px solid var(--ln); vertical-align: middle; font-variant-numeric: tabular-nums; }
+  .tbl td.n, .tbl th.n { text-align: right; }
+  .tbl .btn.sm { display: inline-flex; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--ok); flex: none; }
+  .dot.w { background: var(--warn); }
+  .dot.g { background: #6b7280; }
+  .dot.b { background: var(--blue); }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .mu { color: var(--mu); } .dngt { color: var(--dng); }
+  .notice { border-left: 3px solid var(--warn); background: rgba(240,160,48,.09); padding: 9px 12px; margin: 10px 0 0; border-radius: 2px; }
+  .notice .t { font-weight: 600; color: #fff; }
+  .prog { height: 6px; background: rgba(255,255,255,.12); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .prog i { display: block; height: 100%; background: var(--blue); }
+  .sep { height: 1px; background: var(--ln2); margin: 12px 0 2px; }
+  .field { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,.25); border: 1px solid var(--ln2); border-radius: 2px; padding: 7px 10px; color: var(--mu); font-size: 13px; margin-top: 8px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chp { font-size: 12px; padding: 3px 9px; border-radius: 12px; background: var(--fill); color: var(--t); }
+  .chp.on { background: #fff; color: #1a1d23; font-weight: 600; }
+  .card2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+  .card { background: rgba(255,255,255,.05); border: 1px solid var(--ln2); border-radius: 3px; padding: 10px 12px; }
+  .card .t { font-weight: 600; color: #fff; }
+  .card.pick { border-color: var(--blue); }
+  .ptxt { font-size: 13px; color: var(--mu); margin: 6px 0 0; }
+  .m { display: inline-block; width: 17px; height: 17px; border-radius: 50%; background: #c4731a; color: #fff; font: 600 10px/17px var(--font-mono); text-align: center; vertical-align: middle; margin-left: 6px; flex: none; }
+  .wide .m { background: #c4731a; }
+  .hidden { display: none !important; }
+
+  /* ---------- tab switching ---------- */
+  .screen[data-tab="col"] .lib-plat { display: none !important; }
+  .screen[data-tab="plat"] .lib-col { display: none !important; }
+
+  @media (prefers-reduced-motion: no-preference) { .chip, .index button { transition: background .12s; } }
+</style>
+
+</head>
+<body>
+<header class="top">
+  <h1>Tender QAM Prototype <small>static · 1280×800 · panel 348 / 854 px</small></h1>
+  <div class="switch">
+    <span class="lab">DECIDED 2026-09-02</span>
+    <span class="chip" aria-pressed="true" style="cursor:default">everything about one platform in one place</span>
+    <span class="chip" aria-pressed="true" style="cursor:default">Sync as its own page</span>
+    <span class="chip" aria-pressed="true" style="cursor:default">Restart Steam on the Sync page</span>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="index" aria-label="Pages">
+    <div class="grp">Overview</div>
+    <button data-screen="struktur" aria-current="true">Structure <span class="w"></span></button>
+    <div class="grp">Pages</div>
+    <button data-screen="main">Main <span class="w">348</span></button>
+    <button data-screen="sync">Sync <span class="w">854</span></button>
+    <button data-screen="library">Library <span class="w">854</span></button>
+    <button data-screen="settings">Settings <span class="w">854</span></button>
+    <button data-screen="data">Data Management <span class="w">854</span></button>
+    <button data-screen="downloads">Downloads <span class="w">348</span></button>
+  </nav>
+
+  <main>
+
+    <!-- ================= STRUKTUR ================= -->
+    <section class="screen on" id="s-struktur">
+      <h2>Structure</h2>
+      <p class="sub">Main stays narrow and is the entry point. Behind it are pages that are wide, where list and detail sit next to each other. Everything about one platform is in one place, Sync gets its own page.</p>
+
+      <div class="trees">
+        <div class="tree">
+          <h3>New <span class="tag">decided</span></h3>
+<pre>Main <span class="wd">narrow</span>   Notices · Status · Sync button · Downloads · Menu
+├─ Sync <span class="wd">wide</span>            Preview · History · Force Full Sync · Restart Steam
+├─ Library <span class="wd">wide</span>
+│   ├─ Platforms        List + detail: Sync · Core · BIOS · Remove
+│   └─ Collections      Filter + wide list
+├─ Settings <span class="wd">wide</span>        Sections left, content right
+├─ Data Management <span class="wd">wide</span>  only global operations
+└─ Downloads <span class="wd">narrow</span>      like today, through "View All"</pre>
+        </div>
+        <div class="tree">
+          <h3>Today</h3>
+<pre>Main <span class="wd">narrow</span>   Status · Sync · Preview · Downloads · Menu
+├─ Library         Platforms (Sync) · Collections
+├─ System          Core · BIOS per platform
+├─ Settings        eight sections stacked
+├─ Data Management global + per platform (Shortcuts, Saves, BIOS)
+└─ Downloads       reachable only when the queue has entries</pre>
+        </div>
+      </div>
+
+      <div class="home-wrap">
+      <table class="home">
+        <thead><tr><th>Action</th><th>Today</th><th>New</th></tr></thead>
+        <tbody>
+          <tr><td>Start a sync</td><td>Main</td><td>Main, the button opens the Sync page</td></tr>
+          <tr><td>Check and apply the sync preview</td><td>Main, one row</td><td>Sync, as a table</td></tr>
+          <tr><td>Force Full Sync, Skip preview</td><td>Main</td><td>Sync</td></tr>
+          <tr><td>Restart Steam now (session budget)</td><td>Main</td><td>Sync (Main links to it)</td></tr>
+          <tr><td>Turn syncing a platform on/off</td><td>Library</td><td>Library › Platforms</td></tr>
+          <tr><td>Choose the emulator core</td><td>System</td><td>Library › Platforms</td></tr>
+          <tr><td>Download BIOS</td><td>System</td><td>Library › Platforms</td></tr>
+          <tr><td>Delete BIOS</td><td class="dup">System, Data Management</td><td>Library › Platforms</td></tr>
+          <tr><td>Remove a platform's shortcuts</td><td>Data Management (modal)</td><td>Library › Platforms</td></tr>
+          <tr><td>Delete a platform's save files</td><td>Data Management (modal)</td><td>Library › Platforms</td></tr>
+          <tr><td>Repair the RetroArch input_driver</td><td class="dup">Main, Settings</td><td>Settings › Controller (Main links to it)</td></tr>
+          <tr><td>Migrate the save sorting</td><td>Settings (Main links to it)</td><td>Settings › Save Sync (Main links to it)</td></tr>
+          <tr><td>Pause, cancel a download</td><td>Downloads</td><td>Downloads</td></tr>
+          <tr><td>Clean up removed RomM games</td><td>Data Management (modal)</td><td>Data Management, as a page</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="notes" style="margin-top:26px">
+        <div>
+          <h3>Why everything about one platform in one place</h3>
+          <ul>
+            <li>Today there are three platform lists on three pages from three callables. Setting up a platform means Library, then System, then Data Management. Now one list and one detail.</li>
+            <li>"System" disappears as a page, and with it the question of what to call it.</li>
+            <li>Data Management becomes unambiguous: only what concerns the whole library.</li>
+            <li>Rejected: Library keeps only Sync, a page "Emulation" gets Core and BIOS, Data Management keeps the per-platform actions. It separates by topic but leaves three platform lists standing.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Why Sync is its own page</h3>
+          <ul>
+            <li>Main loses eight rows of sync controls and becomes status plus one button.</li>
+            <li>The preview gets the room for a table per platform (#886) and for the import choice (#1364).</li>
+            <li>Everything that concerns a sync run is in one place: preview, progress, history, Force Full Sync, the session budget with Restart Steam.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= MAIN ================= -->
+    <section class="screen" id="s-main">
+      <h2>Main</h2>
+      <p class="sub">Narrow. What you see when you open it: notices, status, the sync button, running downloads, the menu.</p>
+      <div class="stage"><div class="deck">
+        <div class="bgtile" style="left:80px;top:120px;width:420px;height:240px"></div>
+        <div class="bgtile" style="left:80px;top:400px;width:200px;height:120px"></div>
+        <div class="bgtile" style="left:300px;top:400px;width:200px;height:120px"></div>
+        <div class="qam">
+          <div class="rail"><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="on"></i></div>
+          <div class="content">
+            <div class="dtitle"><span class="ar">‹</span> Tender</div>
+            <div class="scroll">
+              <div class="notice"><div class="t">Save file sorting changed <span class="m">1</span></div><div class="desc">12 files still use the old layout.</div>
+                <div class="btn sm" style="margin-top:8px;display:inline-flex">Open Save Sync <span class="ar">›</span></div></div>
+              <div class="notice"><div class="t">Last sync paused</div><div class="desc">Steam's memory was high. Restart Steam, then resume.</div>
+                <div class="btn sm" style="margin-top:8px;display:inline-flex">Open Sync <span class="ar">›</span></div></div>
+              <div class="sec-t" style="padding-top:12px">Status <span class="m">2</span></div>
+              <div class="row"><div class="lbl">Connection</div><div class="val t"><span class="dot"></span> Connected</div></div>
+              <div class="row"><div class="lbl">Last sync<div class="desc">last attempt 09:41 (ok)</div></div><div class="val t">2 h ago</div></div>
+              <div class="row"><div class="lbl">Library</div><div class="val t">412 games · 14 platforms</div></div>
+              <div class="row"><div class="lbl">Steam memory</div><div class="val ok">1.2 GB</div></div>
+              <div class="sep"></div>
+              <div class="btn pri foc">Sync Library <span class="m">3</span></div>
+              <div class="desc" style="margin-top:4px">Shows what would change before it changes anything.</div>
+              <div class="sep"></div>
+              <div class="sec-t">Downloads <span class="m">4</span></div>
+              <div class="row" style="display:block"><div style="display:flex;justify-content:space-between"><span>Example Game A</span><span class="mu">312 / 690 MB</span></div><div class="prog"><i style="width:45%"></i></div></div>
+              <div class="desc" style="padding:6px 0">+1 more downloading</div>
+              <div class="btn">View All <span class="ar">›</span></div>
+              <div class="sep"></div>
+              <div class="sec-t">Menu <span class="m">5</span></div>
+              <div class="btn">Sync <span class="ar">›</span></div>
+              <div class="btn">Library <span class="ar">›</span></div>
+              <div class="btn">Settings <span class="ar">›</span></div>
+              <div class="btn">Data Management <span class="ar">›</span></div>
+            </div>
+          </div>
+        </div>
+      </div></div>
+      <div class="caption"><span>Panel 348 px · content 300 px</span><span>Unchanged: status rows, download summary</span></div>
+
+      <div class="notes">
+        <div><h3>Notes</h3>
+          <ol>
+            <li><span class="mk">1</span><p><strong>Notices report a problem and jump to the place where you fix it.</strong> Without exception. The input driver fix has its button only in Settings › Controller, the save sort migration in Settings › Save Sync, "Restart Steam now" on the Sync page. Main shows the notice and the jump.</p></li>
+            <li><span class="mk">2</span><p><strong>Status stays as it is today.</strong> Connection, Last sync, Library, Steam memory. The block gets a title so the notices above it do not blur into it (#1442).</p></li>
+            <li><span class="mk">3</span><p><strong>One button, four states.</strong> No preview: "Sync Library" computes one and opens the Sync page. A valid preview is waiting: the button reads "Review changes · 13 new" and opens the Sync page with exactly that preview, without computing again. A run is paused: "Resume Sync" continues it with one press, as today. A sync is running: progress and cancel as today. A preview is never discarded on Main, that happens only on the Sync page through Cancel or "Refresh preview".</p></li>
+            <li><span class="mk">4</span><p><strong>Downloads.</strong> Two rows at most, "View All" only when there are entries. As today.</p></li>
+            <li><span class="mk">5</span><p><strong>Menu.</strong> Sync, Library, Settings, Data Management. "System" sits inside Library › Platforms.</p></li>
+          </ol>
+        </div>
+        <div><h3>What goes away</h3>
+          <ul>
+            <li>The preview card with Apply, Cancel, expiry time and budget notice. Skip preview and Force Full Sync. The session budget box with Restart Steam.</li>
+            <li>The duplicated input driver fix and the duplicated save sort card.</li>
+            <li>Four untitled sections separated only by lines.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SYNC ================= -->
+    <section class="screen" id="s-sync">
+      <h2>Sync</h2>
+      <p class="sub">Wide. The preview as a table, the import choice side by side, history and options on the right. Everything that concerns a sync run is here.</p>
+      <div class="stage"><div class="deck">
+        <div class="bgtile" style="left:80px;top:120px;width:300px;height:240px"></div>
+        <div class="qam wide">
+          <div class="rail"><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="on"></i></div>
+          <div class="content">
+            <div class="dtitle"><span class="ar">‹</span> Tender</div>
+            <div class="phead"><span class="back">‹ Back</span><span class="ptitle">Sync</span></div>
+            <div class="cols" style="grid-template-columns:minmax(0,1fr) 270px">
+              <div class="pane">
+                <div class="notice" style="margin-top:10px"><div class="t">Last run paused <span class="m">5</span></div><div class="desc">Steam's memory reached 1.9 GB. Restart Steam to free it, then resume where it stopped.</div>
+                  <div class="btns" style="margin-top:8px"><div class="btn sm">Restart Steam now</div><div class="btn sm">Resume anyway</div></div></div>
+                <div class="sec-t">Preview <span class="m">1</span><span class="sp">computed 09:41 · expires in 4:12 · <span style="color:#fff">Refresh</span></span></div>
+                <table class="tbl">
+                  <thead><tr><th>Scope</th><th class="n">New</th><th class="n">Updated</th><th class="n">Removed</th></tr></thead>
+                  <tbody>
+                    <tr><td>PlayStation</td><td class="n">4</td><td class="n">1</td><td class="n mu">0</td></tr>
+                    <tr><td>SNES</td><td class="n">8</td><td class="n">2</td><td class="n mu">0</td></tr>
+                    <tr><td>Game Boy Advance</td><td class="n mu">0</td><td class="n mu">0</td><td class="n">2</td></tr>
+                    <tr><td class="mu">11 more platforms</td><td class="n mu">0</td><td class="n mu">0</td><td class="n mu">0</td></tr>
+                    <tr><td>Collections</td><td class="n">1</td><td class="n mu">0</td><td class="n">1</td></tr>
+                    <tr><td><strong>Total</strong></td><td class="n"><strong>13</strong></td><td class="n"><strong>3</strong></td><td class="n"><strong>3</strong></td></tr>
+                  </tbody>
+                </table>
+                <div class="row"><div class="lbl">Estimated duration</div><div class="val t">about 2 min</div></div>
+                <div class="desc" style="padding-top:6px">Progress is saved every ~200 games. Keep the Deck awake for runs over 10 min.</div>
+                <div class="sec-t">How to import <span class="m">2</span><span class="sp">later, #1364</span></div>
+                <div class="card2">
+                  <div class="card pick"><div class="t">Import now</div><p class="ptxt">Adds shortcuts while Steam runs. Pauses if Steam's memory gets high.</p></div>
+                  <div class="card"><div class="t">Bulk import + restart</div><p class="ptxt">Writes shortcuts directly and restarts Steam. Faster above ~500 games.</p></div>
+                </div>
+                <div class="btns"><div class="btn pri foc">Apply Sync</div><div class="btn">Cancel</div></div>
+              </div>
+              <div class="pane">
+                <div class="sec-t">Options <span class="m">3</span></div>
+                <div class="row"><div class="lbl">Skip preview<div class="desc">Apply without asking</div></div><div class="val"><span class="tg"></span></div></div>
+                <div class="btn">Force Full Sync</div>
+                <div class="desc" style="padding-top:4px">Forgets what was synced and rebuilds everything.</div>
+                <div class="sec-t">Steam memory</div>
+                <div class="row"><div class="lbl">Now</div><div class="val ok">1.2 GB</div></div>
+                <div class="row"><div class="lbl">Last run</div><div class="val t">+0.3 GB</div></div>
+                <div class="sec-t">Last runs <span class="m">4</span></div>
+                <div class="row"><div class="lbl">Today 09:41<div class="desc">3 added · 1 updated</div></div><div class="val ok">ok</div></div>
+                <div class="row"><div class="lbl">Yesterday 21:03<div class="desc">paused, memory high</div></div><div class="val warn">paused</div></div>
+                <div class="row"><div class="lbl">Aug 30 18:20<div class="desc">112 added</div></div><div class="val ok">ok</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div></div>
+      <div class="caption"><span>Panel 854 px · content 806 px</span><span>Left column flexible, right column 270 px</span></div>
+      <div class="notes">
+        <div><h3>Notes</h3>
+          <ol>
+            <li><span class="mk">1</span><p><strong>Preview as a table.</strong> Today one row: "Games: 12 new / 3 updated" plus scope text. Wide, what happens is listed per platform. That makes the discrepancy from #886 visible instead of hidden in a total row.</p></li>
+            <li><span class="mk">2</span><p><strong>Import choice side by side.</strong> #1364 wants to offer two ways after the preview and describes them today as two sentences of prose, because two options do not fit next to each other in 300 px. Here they would have their room. It only comes with #1364, the page leaves the gap.</p></li>
+            <li><span class="mk">3</span><p><strong>Options move here from Main.</strong> Skip preview gets persisted in the process; today it is only local state and off again the next time you open the panel. Force Full Sync no longer sits directly under the sync button.</p></li>
+            <li><span class="mk">4</span><p><strong>History.</strong> Today only "last attempt HH:MM (status)" as a second row under Last sync. Three to five runs with their result are cheap here.</p></li>
+            <li><span class="mk">5</span><p><strong>The session budget lives here.</strong> The box with "Restart Steam now" and resuming, today on Main. Main only shows the notice "Last sync paused" with the jump to here.</p></li>
+          </ol>
+        </div>
+        <div><h3>Flow</h3>
+          <ul>
+            <li>"Sync Library" on Main opens this page and computes the preview. Apply happens here.</li>
+            <li>If a valid preview is already waiting, the button on Main opens this page with exactly that one. It is computed again only through "Refresh" next to the preview, and discarded only through Cancel.</li>
+            <li>With "Skip preview" on, the sync runs straight away and Main shows the progress as today. This page shows it too, with fine detail and cancel.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= LIBRARY ================= -->
+    <section class="screen" id="s-library" data-tab="plat">
+      <h2>Library</h2>
+      <p class="sub">Wide. Two tabs via L1/R1: Platforms and Collections. The Platforms tab is list plus detail.</p>
+      <div class="subtabs" role="group" aria-label="Tabs">
+        <button class="chip" data-tab="plat" aria-pressed="true">Platforms tab</button>
+        <button class="chip" data-tab="col" aria-pressed="false">Collections tab</button>
+      </div>
+      <div class="stage"><div class="deck">
+        <div class="bgtile" style="left:80px;top:120px;width:300px;height:240px"></div>
+        <div class="qam wide">
+          <div class="rail"><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="on"></i></div>
+          <div class="content">
+            <div class="dtitle"><span class="ar">‹</span> Tender</div>
+            <div class="phead"><span class="back">‹ Back</span><span class="ptitle">Library</span></div>
+            <div class="tabs"><span class="bump">L1</span><span class="tab lib-plat on">Platforms</span><span class="tab lib-plat">Collections</span><span class="tab lib-col">Platforms</span><span class="tab lib-col on">Collections</span><span class="m lib-plat">1</span><span class="bump r">R1</span></div>
+
+            <!-- Platforms: list + detail -->
+            <div class="cols lib-plat">
+              <div class="list">
+                <div class="btns" style="margin:0 0 6px"><div class="btn sm">Enable all</div><div class="btn sm">Disable all</div></div>
+                <div class="lrow sel"><span class="dot"></span><span class="nm">PlayStation</span><span class="ct">132</span><span class="tg on"></span><span class="m">2</span></div>
+                <div class="lrow"><span class="dot"></span><span class="nm">Sega Saturn</span><span class="ct">48</span><span class="tg on"></span></div>
+                <div class="lrow"><span class="dot" style="visibility:hidden"></span><span class="nm">Nintendo 64</span><span class="ct">96</span><span class="tg on"></span></div>
+                <div class="lrow"><span class="dot w"></span><span class="nm">Dreamcast</span><span class="ct">37</span><span class="tg on"></span></div>
+                <div class="lrow"><span class="dot" style="visibility:hidden"></span><span class="nm">Game Boy</span><span class="ct">210</span><span class="tg"></span></div>
+                <div class="lrow"><span class="dot" style="visibility:hidden"></span><span class="nm">Game Boy Advance</span><span class="ct">143</span><span class="tg on"></span></div>
+                <div class="lrow"><span class="dot" style="visibility:hidden"></span><span class="nm">SNES</span><span class="ct">301</span><span class="tg on"></span></div>
+                <div class="lrow"><span class="dot" style="visibility:hidden"></span><span class="nm">Sega Mega Drive</span><span class="ct">188</span><span class="tg on"></span></div>
+                <div class="lrow"><span class="dot" style="visibility:hidden"></span><span class="nm">PSP</span><span class="ct">22</span><span class="tg"></span></div>
+                <div class="lrow"><span class="dot w"></span><span class="nm">Nintendo DS</span><span class="ct">64</span><span class="tg on"></span></div>
+                <div class="lrow"><span class="dot" style="visibility:hidden"></span><span class="nm">Sega Game Gear</span><span class="ct">41</span><span class="tg on"></span></div>
+                <div class="lrow"><span class="dot" style="visibility:hidden"></span><span class="nm">NES</span><span class="ct">276</span><span class="tg on"></span></div>
+              </div>
+              <div class="pane">
+                <div class="ptitle" style="padding-top:2px">PlayStation</div>
+                <div class="desc">psx · 132 ROMs on RomM · 128 shortcuts in Steam</div>
+                <div class="sec-t">Sync</div>
+                <div class="row"><div class="lbl">Sync this platform<div class="desc">New games appear after the next sync</div></div><div class="val"><span class="tg on"></span></div></div>
+                <div class="sec-t">Emulator core <span class="m">3</span></div>
+                <div class="btn" style="margin-top:4px"><span>Beetle PSX HW<div class="desc">Default: Beetle PSX</div></span><span class="ar">›</span></div>
+                <div class="desc warn" style="padding-top:6px">Switching cores may affect save compatibility.</div>
+                <div class="sec-t">BIOS files <span class="m">4</span><span class="sp">3 / 5 required</span></div>
+                <table class="tbl">
+                  <thead><tr><th>File</th><th>On disk</th><th>Contents</th><th></th></tr></thead>
+                  <tbody>
+                    <tr><td>scph5500.bin <span class="mu">Japan</span></td><td class="ok">✓</td><td>verified</td><td></td></tr>
+                    <tr><td>scph5501.bin <span class="mu">USA</span></td><td class="ok">✓</td><td>verified</td><td></td></tr>
+                    <tr><td>scph5502.bin <span class="mu">Europe</span></td><td class="ok">✓</td><td class="warn">differs</td><td></td></tr>
+                    <tr><td>scph1001.bin <span class="mu">USA, alt</span></td><td class="warn">missing</td><td class="mu">—</td><td class="n"><span class="btn sm">Download</span></td></tr>
+                    <tr><td>psxonpsp660.bin <span class="mu">optional</span></td><td class="warn">missing</td><td class="mu">—</td><td class="n"><span class="btn sm">Download</span></td></tr>
+                  </tbody>
+                </table>
+                <div class="btns"><div class="btn">Download required (2)</div><div class="btn">Download all</div><div class="btn dng">Delete BIOS (3)</div></div>
+                <div class="sec-t">Remove <span class="m">5</span></div>
+                <div class="btns" style="margin-top:4px"><div class="btn dng">Remove 128 shortcuts</div><div class="btn dng">Delete save files</div></div>
+                <div class="desc" style="padding-top:6px">Asks before it does anything.</div>
+              </div>
+            </div>
+
+            <!-- Collections tab -->
+            <div class="scroll lib-col" style="padding-top:8px">
+              <div class="row" style="border:0;padding-top:2px"><div class="lbl">Sync RomM favorites <span class="m">6</span><div class="desc">One favorites collection found</div></div><div class="val"><span class="tg on"></span></div></div>
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0">
+                <div class="chips"><span class="chp on">Standard 12</span><span class="chp">Smart 3</span><span class="chp">Virtual 65</span></div>
+                <div class="chips"><span class="mu" style="font-size:12px;align-self:center">Show</span><span class="chp on">Mine</span><span class="chp">All</span></div>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center"><div class="field" style="flex:1;margin:0">🔍 Search collections</div><div class="btn sm">Enable all</div><div class="btn sm">Disable all</div></div>
+              <table class="tbl" style="margin-top:8px">
+                <thead><tr><th>Collection</th><th>Type</th><th>Owner</th><th class="n">ROMs</th><th class="n">Sync</th></tr></thead>
+                <tbody>
+                  <tr><td>Favorites</td><td>Standard</td><td>me</td><td class="n">37</td><td class="n"><span class="tg on"></span></td></tr>
+                  <tr><td>Couch co-op</td><td>Standard</td><td>me</td><td class="n">24</td><td class="n"><span class="tg on"></span></td></tr>
+                  <tr><td>Kids</td><td>Standard</td><td>me</td><td class="n">18</td><td class="n"><span class="tg"></span></td></tr>
+                  <tr><td>RPG backlog</td><td>Standard</td><td>me</td><td class="n">61</td><td class="n"><span class="tg on"></span></td></tr>
+                  <tr><td>Speedrun practice</td><td>Standard</td><td>me</td><td class="n">9</td><td class="n"><span class="tg"></span></td></tr>
+                  <tr><td>Translation patches</td><td>Standard</td><td>me</td><td class="n">14</td><td class="n"><span class="tg on"></span></td></tr>
+                  <tr><td>Shmups</td><td>Standard</td><td>me</td><td class="n">33</td><td class="n"><span class="tg on"></span></td></tr>
+                  <tr><td>Finished 2026</td><td>Standard</td><td>me</td><td class="n">7</td><td class="n"><span class="tg"></span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div></div>
+      <div class="caption"><span>Panel 854 px · content 806 px</span><span>List 264 px · detail 524 px</span></div>
+
+      <div class="notes">
+        <div><h3>Notes</h3>
+          <ol>
+            <li><span class="mk">1</span><p><strong>Two tabs, at the top, via L1/R1.</strong> With two to four views of equal rank, tabs go to the top. The left column is for lists whose entries have a detail.</p></li>
+            <li><span class="mk">2</span><p><strong>The list on the left.</strong> Focus selects the platform, A toggles Sync. Green dot: BIOS complete. Yellow: BIOS missing. No dot: needs none. Enable all and Disable all at the top as today.</p></li>
+            <li><span class="mk">3</span><p><strong>Emulator core</strong> with the same context menu as today on the System page. The notice about save compatibility stays.</p></li>
+            <li><span class="mk">4</span><p><strong>BIOS files as a table:</strong> File, On disk, Contents. Contents is the third column from #1803. Download per file is #164; today one row encodes two facts in label and description and has no room for an action.</p></li>
+            <li><span class="mk">5</span><p><strong>Remove at the very bottom:</strong> the actions from today's platform modal in Data Management, without Delete BIOS, which already sits one group higher. Red, last, with a confirmation.</p></li>
+            <li><span class="mk">6</span><p><strong>Collections has no detail, so a wide list.</strong> A type filter instead of the hand-built button row, a row with name, type, owner, count, toggle. Favorites and Mine/All at the top. The search stays, and so does the cap of 50 results.</p></li>
+          </ol>
+        </div>
+        <div>
+          <h3>Applies to every wide page</h3>
+          <ul>
+            <li>List and detail scroll separately. The page fills the panel height instead of growing with its content.</li>
+            <li>Groups on the right have titles. Tables for anything with more than two facts per row. Destructive things red and last.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SETTINGS ================= -->
+    <section class="screen" id="s-settings">
+      <h2>Settings</h2>
+      <p class="sub">Wide. Sections on the left, content on the right, like Steam's own settings. Five sections instead of eight.</p>
+      <div class="stage"><div class="deck">
+        <div class="bgtile" style="left:80px;top:120px;width:300px;height:240px"></div>
+        <div class="qam wide">
+          <div class="rail"><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="on"></i></div>
+          <div class="content">
+            <div class="dtitle"><span class="ar">‹</span> Tender</div>
+            <div class="phead"><span class="back">‹ Back</span><span class="ptitle">Settings</span></div>
+            <div class="cols set">
+              <div class="list">
+                <div class="lrow"><span class="nm">Connections</span><span class="dot"></span></div>
+                <div class="lrow sel"><span class="nm">Save Sync</span><span class="m">1</span></div>
+                <div class="lrow"><span class="nm">Controller</span><span class="dot w"></span><span class="m">2</span></div>
+                <div class="lrow"><span class="nm">Library</span></div>
+                <div class="lrow"><span class="nm">Advanced</span></div>
+              </div>
+              <div class="pane">
+                <div class="ptitle" style="padding-top:2px">Save Sync</div>
+                <div class="notice" style="margin-top:10px"><div class="t">Save file sorting changed <span class="m">3</span></div><div class="desc">12 files still use the old layout. From "by platform" to "by content directory".</div>
+                  <div class="btns" style="margin-top:8px"><div class="btn sm">Migrate 12 files</div><div class="btn sm">Dismiss</div></div></div>
+                <div class="sec-t">Sync</div>
+                <div class="row"><div class="lbl">Enable save sync</div><div class="val"><span class="tg on"></span></div></div>
+                <div class="row"><div class="lbl">Device</div><div class="val t">Registered as "deck-living-room"</div></div>
+                <div class="row"><div class="lbl">Sync before launch</div><div class="val"><span class="tg on"></span></div></div>
+                <div class="row"><div class="lbl">Sync after exit</div><div class="val"><span class="tg on"></span></div></div>
+                <div class="row"><div class="lbl">Default save slot</div><div class="val t">default <span class="btn sm">Edit</span></div></div>
+                <div class="row"><div class="lbl">Save history limit</div><div class="val t">10 ▾</div></div>
+                <div class="btn">Sync all saves now</div>
+                <div class="sec-t">Registered devices <span class="m">4</span></div>
+                <table class="tbl">
+                  <thead><tr><th>Device</th><th>Client</th><th>Last seen</th></tr></thead>
+                  <tbody>
+                    <tr><td>deck-living-room <span class="ok">(this device)</span></td><td>tender 1.8.0 · SteamOS</td><td>now</td></tr>
+                    <tr><td>deck-bedroom</td><td>tender 1.7.2 · SteamOS</td><td>3 days ago</td></tr>
+                    <tr><td>desktop-pc</td><td>romm-gavel 0.4 · Linux</td><td>2 weeks ago</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div></div>
+      <div class="caption"><span>Panel 854 px · content 806 px</span><span>Sections 220 px · content 568 px</span></div>
+      <div class="notes">
+        <div><h3>Notes</h3>
+          <ol>
+            <li><span class="mk">1</span><p><strong>Sections on the left.</strong> Five instead of eight: Save Sort Migration becomes a notice, Registered Devices moves into Save Sync, SteamGridDB moves to the other services under Connections. That is where RomM, RetroAchievements (account and sign-in state, the home from #1627) and SteamGridDB sit. Focus on the left changes the content on the right, as in Steam's settings.</p></li>
+            <li><span class="mk">2</span><p><strong>Dots on sections that need action.</strong> Yellow on Controller: the input driver fix is waiting there. Green on Connections: signed in.</p></li>
+            <li><span class="mk">3</span><p><strong>The home of the save sort migration.</strong> Main shows the notice and links here. Migrating and dismissing only here.</p></li>
+            <li><span class="mk">4</span><p><strong>Devices as a table.</strong> Today client, version, platform, "last seen" and the shortened ID stand in one description row separated by dots.</p></li>
+          </ol>
+        </div>
+        <div><h3>What stays</h3>
+          <ul>
+            <li>Modals for text entry stay modals: RomM URL, account, API key, default slot. The on-screen keyboard needs the room.</li>
+            <li>The Library section keeps the two collection settings; they were deliberately moved there.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= DATA MANAGEMENT ================= -->
+    <section class="screen" id="s-data">
+      <h2>Data Management</h2>
+      <p class="sub">Wide. The operation on the left, explanation, result and confirmation on the right. The cleanup dialog turns from a modal into a page.</p>
+      <div class="stage"><div class="deck">
+        <div class="bgtile" style="left:80px;top:120px;width:300px;height:240px"></div>
+        <div class="qam wide">
+          <div class="rail"><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="on"></i></div>
+          <div class="content">
+            <div class="dtitle"><span class="ar">‹</span> Tender</div>
+            <div class="phead"><span class="back">‹ Back</span><span class="ptitle">Data Management</span></div>
+            <div class="cols data">
+              <div class="list">
+                <div class="lrow sel"><span class="nm">Removed RomM games</span><span class="ct">5</span><span class="m">1</span></div>
+                <div class="lrow"><span class="nm">Remove all shortcuts</span></div>
+                <div class="lrow"><span class="nm">Uninstall all ROMs</span><span class="ct">18 GB</span></div>
+                <div class="lrow"><span class="nm">Orphaned grid images</span></div>
+                <div class="lrow"><span class="nm">Non-Steam games</span><span class="ct">7</span></div>
+              </div>
+              <div class="pane">
+                <div class="ptitle" style="padding-top:2px">Removed RomM games</div>
+                <div class="desc">Games that no longer exist on RomM but still have a shortcut or files here.</div>
+                <div class="row" style="margin-top:6px"><div class="lbl">Scanned 09:52<div class="desc">5 candidates · 3.4 GB installed</div></div><div class="val"><span class="btn sm">Scan again</span></div></div>
+                <div class="sec-t">Candidates <span class="m">2</span><span class="sp">toggle on to keep a recovery bundle</span></div>
+                <table class="tbl">
+                  <thead><tr><th>Game</th><th>Platform</th><th class="n">Installed</th><th class="n">Recovery bundle</th></tr></thead>
+                  <tbody>
+                    <tr><td>Example Game A</td><td>PlayStation</td><td class="n">612 MB</td><td class="n"><span class="tg on"></span></td></tr>
+                    <tr><td>Example Game B</td><td>SNES</td><td class="n">2 MB</td><td class="n"><span class="tg"></span></td></tr>
+                    <tr><td>Example Game C</td><td>Dreamcast</td><td class="n">1.1 GB</td><td class="n"><span class="tg on"></span></td></tr>
+                    <tr><td>Example Game D</td><td>Game Boy Advance</td><td class="n mu">not installed</td><td class="n"><span class="tg dis"></span></td></tr>
+                    <tr><td>Example Game E</td><td>PlayStation</td><td class="n">1.7 GB</td><td class="n"><span class="tg"></span></td></tr>
+                  </tbody>
+                </table>
+                <div class="row"><div class="lbl">Recovery bundles need</div><div class="val t">1.7 GB · 41 GB free</div></div>
+                <div class="btns"><div class="btn dng foc">Start cleanup (5) <span class="m">3</span></div><div class="btn">Cancel</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div></div>
+      <div class="caption"><span>Panel 854 px · content 806 px</span><span>Operations 240 px · content 548 px</span></div>
+      <div class="notes">
+        <div><h3>Notes</h3>
+          <ol>
+            <li><span class="mk">1</span><p><strong>The operations on the left.</strong> Five, all of them concern the whole library. The number on the right says what is waiting. The per-platform actions have moved to Library › Platforms.</p></li>
+            <li><span class="mk">2</span><p><strong>The candidate list as a table instead of a modal.</strong> Today an 886-line modal with scope toggles, a paged list, Load More and free space. As a page it has room and a way back.</p></li>
+            <li><span class="mk">3</span><p><strong>Confirming as today.</strong> Two taps or a modal, that stays. The progress of a running cleanup then stands in the same place.</p></li>
+          </ol>
+        </div>
+        <div><h3>The other four</h3>
+          <ul>
+            <li>Remove all shortcuts, Uninstall all ROMs, Orphaned grid images: on the right an explanation of what happens and what does not, then the button, then status. As today, only with room for the explanation.</li>
+            <li>Non-Steam games: on the right the whitelist as a table with search, the button with the RetroDECK warning underneath.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= DOWNLOADS ================= -->
+    <section class="screen" id="s-downloads">
+      <h2>Downloads</h2>
+      <p class="sub">Narrow, unchanged. Reachable through "View All" on Main.</p>
+      <div class="stage"><div class="deck">
+        <div class="bgtile" style="left:80px;top:120px;width:420px;height:240px"></div>
+        <div class="qam">
+          <div class="rail"><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="on"></i></div>
+          <div class="content">
+            <div class="dtitle"><span class="ar">‹</span> Tender</div>
+            <div class="phead"><span class="back">‹ Back</span><span class="ptitle">Downloads</span></div>
+            <div class="scroll">
+              <div class="row" style="display:block"><div style="display:flex;justify-content:space-between"><span>Example Game A (SNES)</span><span class="mu">312 / 690 MB</span></div><div class="prog"><i style="width:45%"></i></div></div>
+              <div class="row" style="display:block"><div style="display:flex;justify-content:space-between"><span>Example Game B (Saturn) — Paused</span><span class="mu">80 / 540 MB</span></div><div class="prog"><i style="width:15%"></i></div></div>
+              <div class="btn">Pause Example Game A</div>
+              <div class="btn">Cancel Example Game A</div>
+              <div class="btn">Resume Example Game B</div>
+              <div class="btn">Cancel Example Game B</div>
+              <div class="sec-t">Finished</div>
+              <div class="row"><div class="lbl">Example Game C<div class="desc">Completed — 480 MB</div></div></div>
+              <div class="row"><div class="lbl">Example Game D<div class="desc">Failed: server unreachable</div></div></div>
+              <div class="btn">Clear Completed</div>
+            </div>
+          </div>
+        </div>
+      </div></div>
+      <div class="caption"><span>Panel 348 px · content 300 px</span></div>
+      <div class="notes">
+        <div><h3>Notes</h3>
+          <ul>
+            <li>Stays narrow. A queue does not need a second axis.</li>
+            <li>The buttons still stand as their own rows under the list. If that is a problem, it is a separate change that needs no width: a tap on the row opens Pause / Resume / Cancel as a menu.</li>
+            <li>Stays reachable only through "View All"; an empty Downloads entry in the menu helps nobody.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var KEY = 'tender-qam-proto';
+    var state = { opt: '1', sync: 'page', screen: 'struktur', tab: 'plat' };
+    try { var saved = JSON.parse(localStorage.getItem(KEY) || '{}'); Object.assign(state, saved); } catch (e) {}
+    state.opt = '1'; state.sync = 'page';
+
+    function persist() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+
+    function fit() {
+      document.querySelectorAll('.screen.on .stage').forEach(function (s) {
+        var w = s.clientWidth; if (!w) return;
+        var sc = Math.min(1, w / 1280);
+        s.querySelector('.deck').style.transform = 'scale(' + sc + ')';
+        s.style.height = Math.round(800 * sc) + 'px';
+      });
+    }
+
+    function screenAvailable(name) {
+      var btn = document.querySelector('.index [data-screen="' + name + '"]');
+      return btn && getComputedStyle(btn).display !== 'none';
+    }
+
+    function apply() {
+      root.setAttribute('data-opt', state.opt);
+      root.setAttribute('data-sync', state.sync);
+      document.querySelectorAll('.chip[data-set]').forEach(function (c) {
+        c.setAttribute('aria-pressed', String(state[c.dataset.set] === c.dataset.val));
+      });
+      if (!screenAvailable(state.screen)) state.screen = 'struktur';
+      document.querySelectorAll('.screen').forEach(function (s) { s.classList.toggle('on', s.id === 's-' + state.screen); });
+      document.querySelectorAll('.index [data-screen]').forEach(function (b) { b.setAttribute('aria-current', String(b.dataset.screen === state.screen)); });
+      var lib = document.getElementById('s-library');
+      lib.setAttribute('data-tab', state.tab);
+      lib.querySelectorAll('.subtabs .chip').forEach(function (c) { c.setAttribute('aria-pressed', String(c.dataset.tab === state.tab)); });
+      persist(); fit();
+    }
+
+    document.querySelectorAll('.chip[data-set]').forEach(function (c) {
+      c.addEventListener('click', function () { state[c.dataset.set] = c.dataset.val; apply(); });
+    });
+    document.querySelectorAll('.index [data-screen]').forEach(function (b) {
+      b.addEventListener('click', function () { state.screen = b.dataset.screen; apply(); window.scrollTo({ top: 0 }); });
+    });
+    document.querySelectorAll('.subtabs .chip').forEach(function (c) {
+      c.addEventListener('click', function () { state.tab = c.dataset.tab; apply(); });
+    });
+
+    if ('ResizeObserver' in window) new ResizeObserver(fit).observe(document.body);
+    window.addEventListener('resize', fit);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+    apply();
+  })();
+</script>
+
+</body>
+</html>

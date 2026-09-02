@@ -27,6 +27,8 @@ is invisible at the citation site), so reach it through the page that owns the t
   wording in code, issues, and PRs, and add a term there the moment it resolves in discussion.
 - Steam shortcuts — appIds, artwork, launch-option writes, removal churn —
   [steam-non-steam-shortcuts.md](docs/architecture/steam-non-steam-shortcuts.md)
+- QAM panel — pages and their widths, the wide-page frame, list-and-detail navigation, notices and their homes —
+  [qam-panel.md](docs/architecture/qam-panel.md)
 - Save-file sync — slots, conflict resolution, negotiate transport, version history —
   [save-file-sync-architecture.md](docs/architecture/save-file-sync-architecture.md)
 - Save-sync coverage matrix — [save-sync-coverage.md](docs/architecture/save-sync-coverage.md)
