@@ -974,6 +974,110 @@ class TestGetFirmwareStatusBiosAggregates:
             assert os.path.realpath(path).startswith(real_bios + os.sep)
 
 
+class TestGetFirmwareStatusDeletableCount:
+    """``get_firmware_status`` ships the count the Delete BIOS button stands on.
+
+    The delete is authorised by the download record, so the button's number has
+    to be a record count. ``local_count`` is the library's progress ratio over a
+    different set and is wrong in both directions: it counts a hand-placed file
+    that shares a server file's name and drops our own download the moment RomM
+    stops listing it — the direction that used to hide the button entirely over
+    files it could still remove.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_delete_count_counts_records_not_library_files(self, plugin, tmp_path):
+        """Both directions in one platform, so the two counts cannot coincide.
+
+        ``IPL.bin`` and ``card.bin`` are in the library and on disk but were put
+        there by hand; ``retired.bin`` we downloaded and RomM no longer offers.
+        The library ratio sees the first two, the delete sees only the third.
+        """
+        bios_dir = tmp_path / "bios"
+        ipl = os.path.join(str(bios_dir), "IPL.bin")
+        card = os.path.join(str(bios_dir), "card.bin")
+        retired = os.path.join(str(bios_dir), "retired.bin")
+        store = FakeFirmwareFileStore({ipl: b"\x00" * 8, card: b"\x00" * 8, retired: b"\x00" * 8})
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+            core_info=_test_core_info(),
+        )
+        _inline_executor(fw)
+        _declare(fw, ("IPL.bin", "GameCube IPL", True))
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="gc",
+                file_name="retired.bin",
+                file_path=retired,
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=None,
+            )
+        )
+        _stub_listing(
+            fw,
+            [
+                {"id": 7, "file_name": "IPL.bin", "file_path": "bios/gc/IPL.bin", "file_size_bytes": 8, "md5_hash": ""},
+                {
+                    "id": 8,
+                    "file_name": "card.bin",
+                    "file_path": "bios/gc/card.bin",
+                    "file_size_bytes": 8,
+                    "md5_hash": "",
+                },
+            ],
+        )
+
+        result = await fw.get_firmware_status()
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "gc")
+
+        assert plat["local_count"] == 2
+        assert plat["deletable_count"] == 1
+        # And the count means the delete: it removes ours, leaves theirs.
+        deleted = await fw.delete_platform_bios("gc")
+        assert deleted["deleted_count"] == 1
+        assert retired not in store.files
+        assert ipl in store.files
+        assert card in store.files
+
+    @pytest.mark.asyncio
+    async def test_a_record_whose_file_is_gone_is_not_offered(self, plugin, tmp_path):
+        """Nothing to unlink, nothing to offer — the button must not promise a deletion."""
+        bios_dir = tmp_path / "bios"
+        held = os.path.join(str(bios_dir), "IPL.bin")
+        store = FakeFirmwareFileStore({held: b"\x00" * 8})
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+            core_info=_test_core_info(),
+        )
+        _inline_executor(fw)
+        _declare(fw, ("IPL.bin", "GameCube IPL", True))
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="gc",
+                file_name="gone.bin",
+                file_path=os.path.join(str(bios_dir), "gone.bin"),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=None,
+            )
+        )
+        _stub_listing(
+            fw,
+            [{"id": 7, "file_name": "IPL.bin", "file_path": "bios/gc/IPL.bin", "file_size_bytes": 8, "md5_hash": ""}],
+        )
+
+        result = await fw.get_firmware_status()
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "gc")
+
+        assert plat["local_count"] == 1
+        assert plat["deletable_count"] == 0
+
+
 class TestCheckPlatformBiosUnknown:
     """``check_platform_bios`` surfaces the 'unknown' state for unanswerable platforms.
 
@@ -1478,11 +1582,14 @@ class TestDeletePlatformBios:
     def _gamecube_service(plugin, tmp_path):
         """A GameCube platform whose BIOS folder holds one of each kind of file.
 
-        ``IPL.bin`` is in the RomM library and was downloaded by the plugin;
-        ``codehandler.bin`` is what RetroDECK ships beside its RetroArch
-        component, wanted by the same core, held by no library and recorded
-        nowhere. Both are declared, so both reach the delete as rows marked
+        ``IPL.bin`` is in the RomM library; ``codehandler.bin`` is what RetroDECK
+        ships beside its RetroArch component, wanted by the same core and held by
+        no library. Both are declared, so both reach the delete as rows marked
         downloaded — which is the whole of what the old guard looked at.
+
+        No download record is written here. Which file the plugin is supposed to
+        have fetched is the axis under test, so each case states its own records
+        (``_record_download``) — including the one that deliberately states none.
         """
         bios_dir = tmp_path / "bios"
         shipped = os.path.join(str(bios_dir), "dolphin-emu", "Sys", "codehandler.bin")
@@ -1612,6 +1719,95 @@ class TestDeletePlatformBios:
         assert plugin._uow.bios_files.get("gc", "IPL.bin") is None
         # The one without a record is still not ours.
         assert shipped in store.files
+
+    @pytest.mark.asyncio
+    async def test_a_moved_placement_does_not_redirect_the_delete(self, plugin, tmp_path):
+        """The delete unlinks where the download wrote, never where the placement now points.
+
+        ``codehandler.bin`` was fetched while nothing declared it, so it landed
+        flat in the BIOS root and the record says so. A later emu-atlas bump
+        gives the file a subdirectory — the very path RetroDECK's own copy
+        occupies. A delete that recomputed the destination would still match our
+        record by name, unlink RetroDECK's file, drop the row, and leave ours on
+        disk with nothing left that could remove it.
+        """
+        fw, store, shipped, _ipl = self._gamecube_service(plugin, tmp_path)
+        flat = os.path.join(str(tmp_path / "bios"), "codehandler.bin")
+        store.files[flat] = b"\x00" * 8
+        self._record_download(plugin, "codehandler.bin", flat)
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=self._gamecube_listing()):
+            status: dict[str, Any] = await fw.check_platform_bios("gc")
+            # Precondition: today's placement puts the row on the shipped copy.
+            row = next(f for f in status["files"] if f["file_name"] == "codehandler.bin")
+            assert row["local_path"] == shipped
+
+            result = await fw.delete_platform_bios("gc")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert flat not in store.files
+        assert shipped in store.files
+        assert plugin._uow.bios_files.get("gc", "codehandler.bin") is None
+
+    @pytest.mark.asyncio
+    async def test_a_record_whose_file_is_gone_is_pruned_without_a_deletion(self, plugin, tmp_path):
+        """A row standing over an absent file is dropped, counted as nothing, reported as no error.
+
+        The user deleted it by hand, or a previous run took it. There is nothing
+        to unlink, and leaving the row would keep offering a file that is not
+        there.
+        """
+        fw, store, shipped, ipl = self._gamecube_service(plugin, tmp_path)
+        self._record_download(plugin, "IPL.bin", ipl)
+        del store.files[ipl]
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=self._gamecube_listing()):
+            result = await fw.delete_platform_bios("gc")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 0
+        assert plugin._uow.bios_files.get("gc", "IPL.bin") is None
+        assert shipped in store.files
+
+    @pytest.mark.asyncio
+    async def test_two_records_for_one_file_are_one_deletion(self, plugin, tmp_path):
+        """A platform holding the same file under two firmware slugs deletes it once.
+
+        ``psx`` reads both ``psx`` and ``ps``. Two rows naming one path is one
+        unlink: the first takes the file, the second finds it gone and prunes
+        over the absence, so neither the count nor the error list doubles.
+        """
+        bios_dir = tmp_path / "bios"
+        path = os.path.join(str(bios_dir), "scph5501.bin")
+        store = FakeFirmwareFileStore({path: b"\x00" * 8})
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+            core_info=_test_core_info(),
+        )
+        fw._loop = asyncio.get_event_loop()
+        for slug in ("psx", "ps"):
+            plugin._uow.bios_files.save(
+                BiosFile.mark_downloaded(
+                    platform_slug=slug,
+                    file_name="scph5501.bin",
+                    file_path=path,
+                    downloaded_at="2026-01-01T00:00:00+00:00",
+                    firmware_id=1,
+                )
+            )
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=[]):
+            result = await fw.delete_platform_bios("psx")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert path not in store.files
+        assert plugin._uow.bios_files.get("psx", "scph5501.bin") is None
+        assert plugin._uow.bios_files.get("ps", "scph5501.bin") is None
 
     @pytest.mark.asyncio
     async def test_delete_platform_bios_no_files(self, fw):
@@ -1924,7 +2120,8 @@ class TestCheckPlatformBiosRequired:
         that position, ``ps3`` (RPCS3) among them, and it is a mapped RomM
         platform: answering the empty scope as a complete reading classified
         every server file ``not_needed``, put ``required_count`` at 0 and
-        reported "All ready" over firmware RPCS3 will not boot without.
+        reported a green "Nothing required" over firmware RPCS3 will not boot
+        without.
         """
         from tests.fakes.fake_core_info_provider import standalone_option
 
@@ -2831,42 +3028,10 @@ class TestDeletePlatformBiosIOLogsWarnings:
         """A per-file OSError surfaces as a logger.warning and an error entry."""
         import logging
 
-        fake_files = FakeFirmwareFileStore()
+        fake_files = FakeFirmwareFileStore({"/fake/bios/scph5501.bin": b"\x00", "/fake/bios/scph5502.bin": b"\x00"})
         fake_files.remove_failures.add("/fake/bios/scph5501.bin")
         fw._firmware_file_store = fake_files
 
-        async def mock_check(slug, active_core_so=None):
-            return {
-                "needs_bios": True,
-                "files": [
-                    asdict(
-                        BiosFileEntry(
-                            file_name="scph5501.bin",
-                            downloaded=True,
-                            local_path="/fake/bios/scph5501.bin",
-                            description="PS1 BIOS",
-                            wanted="needed",
-                            required_by_active=True,
-                            cores={},
-                            used_by_active=True,
-                        )
-                    ),
-                    asdict(
-                        BiosFileEntry(
-                            file_name="scph5502.bin",
-                            downloaded=True,
-                            local_path="/fake/bios/scph5502.bin",
-                            description="PS1 BIOS (EU)",
-                            wanted="needed",
-                            required_by_active=True,
-                            cores={},
-                            used_by_active=True,
-                        )
-                    ),
-                ],
-            }
-
-        fw.check_platform_bios = mock_check
         for name in ("scph5501.bin", "scph5502.bin"):
             plugin._uow.bios_files.save(
                 BiosFile.mark_downloaded(

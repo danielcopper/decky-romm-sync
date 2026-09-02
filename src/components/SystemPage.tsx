@@ -51,6 +51,11 @@ const WANTED_LABELS: Record<FirmwareWanted, string> = {
  * required-files threshold is no longer re-compared here. `requiredCount` still
  * selects the phrasing axis (required vs. plain file counts), and the
  * optional-missing breakdown stays a local computation passed in by the caller.
+ *
+ * With nothing required, the library ratio is inventory and is worded as such —
+ * the same framing the BIOS tab uses. "0 / 20 files … 20 missing" over twenty
+ * files no installed core asks for reads as work outstanding on a system that
+ * needs nothing.
  */
 function getBiosSummary(
   requiredCount: number,
@@ -59,7 +64,6 @@ function getBiosSummary(
   optionalMissing: number,
   done: number,
   total: number,
-  allDone: boolean,
 ) {
   if (requiredCount > 0 && requiredReady) {
     return {
@@ -75,8 +79,8 @@ function getBiosSummary(
     };
   }
   return {
-    summaryLabel: `${done} / ${total} files`,
-    summaryDescription: allDone ? "All downloaded" : `${total - done} missing`,
+    summaryLabel: "Nothing required",
+    summaryDescription: total > 0 ? `${done} / ${total} files held` : "No BIOS files in your library",
   };
 }
 
@@ -220,7 +224,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     showModal(
       <ConfirmModal
         strTitle={`Delete BIOS files for ${platformSlug}?`}
-        strDescription="This deletes every downloaded BIOS file for this system from your RetroDECK bios directory. Games that need these files won't launch until you download them again."
+        strDescription="This deletes only the BIOS files this plugin downloaded for this system. Files your emulator came with, or that you put there yourself, are left where they are. Games that need the deleted files won't launch until you download them again."
         strOKButtonText="Delete BIOS Files"
         strCancelButtonText="Cancel"
         onOK={() => {
@@ -302,6 +306,10 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     const total = platform.server_count ?? platform.files.filter((f) => f.on_server).length;
     const done = platform.local_count ?? platform.files.filter((f) => f.on_server && f.downloaded).length;
     const allDone = done === total;
+    // What Delete BIOS would remove — a record count, not a library one. There
+    // is no local fallback: the rows say nothing about who downloaded a file,
+    // so a payload without the field offers no delete rather than guessing.
+    const deletable = platform.deletable_count ?? 0;
     const isDownloading = downloading === platform.platform_slug;
     const isExpanded = expanded[platform.platform_slug] ?? false;
 
@@ -335,7 +343,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
               ? `${total} file(s) nothing installed could answer for`
               : "Nothing installed could answer for this system",
         }
-      : getBiosSummary(requiredCount, requiredDone, requiredReady, optionalMissing, done, total, allDone);
+      : getBiosSummary(requiredCount, requiredDone, requiredReady, optionalMissing, done, total);
     // The download affordances key off what is missing AND fetchable, never off
     // readiness: a required file the RomM library does not hold leaves the
     // platform not ready and still gives the user nothing to press here.
@@ -488,8 +496,13 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
           </PanelSectionRow>
         )}
         {/* Delete is local-only (no server needed) and shown only when there is
-            at least one downloaded file to delete. Destructive → ConfirmModal. */}
-        {done > 0 && (
+            at least one file it would actually remove. That number is the
+            backend's `deletable_count` — the plugin's own download records that
+            are still on disk, which is exactly what the delete unlinks. The
+            library ratio (`done`) counts a different set and was wrong here in
+            both directions, including hiding the button over downloads RomM had
+            stopped listing. Destructive → ConfirmModal. */}
+        {deletable > 0 && (
           <PanelSectionRow>
             <ButtonItem
               layout="below"
@@ -497,7 +510,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
               onClick={() => confirmDeleteBios(platform.platform_slug)}
               disabled={isDownloading}
             >
-              {`Delete BIOS (${done})`}
+              {`Delete BIOS (${deletable})`}
             </ButtonItem>
           </PanelSectionRow>
         )}

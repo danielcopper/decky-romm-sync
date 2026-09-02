@@ -157,6 +157,11 @@ function makeBiosPlatform(overrides: Partial<FirmwarePlatformExt> = {}): Firmwar
     required_count: requiredCount,
     required_downloaded: requiredDownloaded,
     bios_level: biosLevel,
+    // Not derived from the files, because the backend cannot derive it from them
+    // either: it counts the plugin's own download records, and a row says
+    // nothing about who put the file on disk. Tests that want the Delete BIOS
+    // button state it.
+    deletable_count: 0,
     ...overrides,
   };
 }
@@ -986,7 +991,7 @@ describe("SystemPage", () => {
       expect(container.textContent).toContain("1 required missing");
     });
 
-    it("falls back to 'X / Y files' summary when there are no required files", async () => {
+    it("frames the library ratio as inventory when there are no required files", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
@@ -1011,11 +1016,11 @@ describe("SystemPage", () => {
       });
       const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      expect(container.textContent).toContain("1 / 1 files");
-      expect(container.textContent).toContain("All downloaded");
+      expect(container.textContent).toContain("Nothing required");
+      expect(container.textContent).toContain("1 / 1 files held");
     });
 
-    it("shows 'N missing' suffix when not all files are downloaded and no required files exist", async () => {
+    it("does not report a missing count over files no core requires", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
@@ -1040,8 +1045,11 @@ describe("SystemPage", () => {
       });
       const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      expect(container.textContent).toContain("0 / 1 files");
-      expect(container.textContent).toContain("1 missing");
+      // "0 / 1 files … 1 missing" reads as work outstanding on a system that
+      // needs nothing; the ratio is inventory here and is worded as such.
+      expect(container.textContent).toContain("Nothing required");
+      expect(container.textContent).toContain("0 / 1 files held");
+      expect(container.textContent).not.toContain("1 missing");
     });
 
     it("renders 'BIOS requirement unknown' + a neutral grey dot for an unanswered platform (#1520)", async () => {
@@ -1635,6 +1643,7 @@ describe("SystemPage", () => {
     function biosPlatformWithDownloaded(): FirmwarePlatformExt {
       return makeBiosPlatform({
         platform_slug: "ps1",
+        deletable_count: 1,
         files: [
           {
             id: 1,
@@ -1672,7 +1681,7 @@ describe("SystemPage", () => {
       });
     }
 
-    it("hides the Delete BIOS button when no files are downloaded", async () => {
+    it("hides the Delete BIOS button when there is nothing it would remove", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [biosPlatformNothingDownloaded()],
@@ -1682,7 +1691,52 @@ describe("SystemPage", () => {
       expect(queryByText(/Delete BIOS/)).toBeNull();
     });
 
-    it("shows the Delete BIOS button with the downloaded count when at least one file is downloaded", async () => {
+    it("counts what the delete would remove, not what the library holds (#1807)", async () => {
+      // The two sets differ in both directions. Here the library holds nothing
+      // on disk — the one file it lists was never fetched — while a download of
+      // ours that RomM has since dropped is still sitting there with a record.
+      // Keying the button off `local_count` hid it over exactly that file.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "ps1",
+            deletable_count: 1,
+            files: [
+              {
+                id: 1,
+                file_name: "scph5501.bin",
+                local_path: "scph5501.bin",
+                size: 100,
+                md5: "x",
+                downloaded: false,
+                description: "PS1 BIOS",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: true,
+              },
+            ],
+          }),
+        ],
+      });
+      const { getByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(getByText("Delete BIOS (1)")).toBeTruthy();
+    });
+
+    it("offers no delete for a hand-placed file the library happens to name", async () => {
+      // Downloaded and on the server, so `local_count` is 1 — but nothing here
+      // put it on disk, so there is no record and nothing to delete.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [makeBiosPlatform({ ...biosPlatformWithDownloaded(), deletable_count: 0 })],
+      });
+      const { queryByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(queryByText(/Delete BIOS/)).toBeNull();
+    });
+
+    it("shows the Delete BIOS button with the deletable count when there is one to remove", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [biosPlatformWithDownloaded()],
@@ -1706,6 +1760,23 @@ describe("SystemPage", () => {
       expect(props?.strTitle).toBe("Delete BIOS files for ps1?");
       expect(props?.strOKButtonText).toBe("Delete BIOS Files");
       expect(props?.strCancelButtonText).toBe("Cancel");
+    });
+
+    it("states the actual scope of the delete before the user authorises it", async () => {
+      // The last sentence read before a destructive action, so it has to match
+      // the rule: only the plugin's own downloads go. It promised to remove
+      // "every downloaded BIOS file" long after the guard stopped doing that.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithDownloaded()],
+      });
+      const { getByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Delete BIOS (1)"));
+      const description = lastConfirmModalProps()?.strDescription;
+      expect(description).toContain("only the BIOS files this plugin downloaded");
+      expect(description).toContain("left where they are");
+      expect(description).not.toContain("every downloaded BIOS file");
     });
 
     it("calls deletePlatformBios(slug), surfaces the message, and refreshes on confirm + success", async () => {

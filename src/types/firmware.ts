@@ -103,6 +103,11 @@ export interface FirmwarePlatformExt extends FirmwarePlatform {
   local_count?: number;
   known_count?: number;
   unknown_count?: number;
+  /** How many files Delete BIOS would remove: download records this plugin
+   *  wrote whose file is still on disk. Deliberately not `local_count` — that is
+   *  the library's progress ratio, which counts files nothing here put on disk
+   *  and drops our own downloads once RomM stops listing them. */
+  deletable_count?: number;
 }
 
 export interface FirmwareStatus {
@@ -130,10 +135,10 @@ export interface BiosFileStatus {
 
 /**
  * The backend's readiness decision for a platform's BIOS. `"unknown"` means no
- * installed emulator's answer could be established — either the server holds
- * firmware and not one file of it could be answered for, or the platform holds
- * no file at all and there was no emulator to ask. A neutral state, never a
- * green all-clear.
+ * readiness claim could be established — either the server holds firmware and
+ * not one file of it could be answered for, or the platform holds no file at all
+ * and its reading was not complete, which is already the case when a single core
+ * the system offers went unread. A neutral state, never a green all-clear.
  */
 export type BiosLevel = "ok" | "partial" | "missing" | "unknown";
 
@@ -155,12 +160,18 @@ export interface BiosStatus {
   // so the frontend reads the decision off the payload instead of re-deriving the
   // threshold logic. Present only when needs_bios is true.
   bios_level?: BiosLevel | null;
-  // Set when the check could not determine the requirement: the platform's
-  // emulators could not be asked, or the firmware fetch failed with nothing
-  // cached so which files even exist is unknown. The `needs_bios: false` it
-  // rides on is ignorance, not an answer, so no consumer may clear a shown
-  // requirement on it (#1693) — and the panel renders it as its own state
-  // rather than hiding the BIOS tab, which would say the same thing (#1660).
+  // The compact token for that level (compute_bios_label), derived beside it so
+  // the two can never disagree. Present only when needs_bios is true.
+  bios_label?: string;
+  // Set when the check could not determine the requirement — it found no file
+  // to speak for AND its reading of the platform's emulators was not complete,
+  // which one unread core is already enough for, so it cannot say that nothing
+  // is wanted. A failed firmware fetch alone does not raise it: the listing is
+  // caught and the file list simply comes back empty, which the machine's own
+  // answer can still fill. The `needs_bios: false` it rides on is
+  // ignorance, not an answer, so no consumer may clear a shown requirement on it
+  // (#1693) — and the panel renders it as its own state rather than hiding the
+  // BIOS tab, which would say the same thing (#1660).
   bios_status_unknown?: boolean;
 }
 
