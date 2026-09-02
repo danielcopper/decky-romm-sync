@@ -17,13 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from models.metadata import AchievementSummary
 
-from domain.bios_status import (
-    BIOS_LABEL_UNKNOWN,
-    BIOS_LEVEL_UNKNOWN,
-    compute_bios_label,
-    compute_bios_level,
-    format_bios_status,
-)
+from domain.bios_status import BIOS_LABEL_UNKNOWN, BIOS_LEVEL_UNKNOWN
 from domain.platform_names import decode_platform_names
 from domain.save_status import compute_save_sync_display
 from lib.path_safety import PathTraversalError, safe_join
@@ -379,15 +373,17 @@ class GameDetailService:
         Response always includes ``bios_status`` (dict or ``None``), ``bios_level``
         (``"ok"`` / ``"partial"`` / ``"missing"`` / ``"unknown"`` or ``None``),
         ``bios_label`` (str or ``None``), and ``bios_status_unknown`` (bool). The
-        pre-computed level + label match what the cached ``get_cached_game_detail``
-        ships so the frontend never re-derives them; the flag separates a check
-        that could not answer from the answer "this core needs no BIOS", which is
-        the only one of the two that clears a shown requirement.
+        level and label are the checker's own — derived where the reading state
+        that decides them is known and threaded through untouched, never
+        re-derived here; the flag separates a check that could not answer from
+        the answer "this core needs no BIOS", which is the only one of the two
+        that clears a shown requirement.
 
-        Three of the four outcomes carry a level: a requirement, and the answer
-        ``"unknown"`` from a check that ran without establishing one. The fourth
-        — a check that raised — carries none, and that absence is how the
-        frontend tells a failed read from an answer it should render.
+        Two of the four outcomes carry a level: a requirement, and the answer
+        ``"unknown"`` from a check that ran without establishing one. A check
+        that raised carries none, and that absence is how the frontend tells a
+        failed read from an answer it should render; so does the fourth, the
+        plain "no BIOS needed".
         """
         rom_id = int(rom_id)
 
@@ -410,11 +406,15 @@ class GameDetailService:
         try:
             bios = await self._bios_checker.check_platform_bios(platform_slug, active_core_so=active_core_so)
             if bios.get("needs_bios"):
-                bios_obj = format_bios_status(bios, platform_slug)
+                # The checker's payload IS the wire shape, plus the slug it was
+                # asked about. Re-wrapping it through ``format_bios_status`` here
+                # would ship that dataclass's ``reading_complete`` default beside
+                # the answer — a field no frontend models and whose True is a
+                # claim this call site cannot make.
                 return self._bios_answer(
-                    asdict(bios_obj),
-                    compute_bios_level(bios_obj),
-                    compute_bios_label(bios_obj),
+                    {**bios, "platform_slug": platform_slug},
+                    bios.get("bios_level"),
+                    bios.get("bios_label"),
                 )
         except Exception as e:
             self._logger.warning(f"BIOS status check failed for {platform_slug}: {e}")

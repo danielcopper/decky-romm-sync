@@ -729,7 +729,7 @@ class TestGetBiosStatusFound:
 
     @pytest.mark.asyncio
     async def test_returns_bios_status(self, plugin, game_detail_service):
-        """ROM with needs_bios=True returns the BIOS status dict + pre-computed level/label.
+        """ROM with needs_bios=True returns the BIOS status dict + the checker's level/label.
 
         The BIOS payload carries no core fields after #923 — core info is served via
         the dedicated ``get_platform_core_info`` path.
@@ -743,6 +743,8 @@ class TestGetBiosStatusFound:
                 "all_downloaded": False,
                 "required_count": 2,
                 "required_downloaded": 1,
+                "bios_level": "partial",
+                "bios_label": "1/2 required",
                 "files": [{"file_name": "gba_bios.bin", "downloaded": True}],
             }
         )
@@ -757,20 +759,26 @@ class TestGetBiosStatusFound:
         assert bs["all_downloaded"] is False
         assert bs["required_count"] == 2
         assert bs["required_downloaded"] == 1
-        # bios_level/bios_label are computed against the active core's required
-        # counts (core-aware badge) by the BIOS checker, NOT a platform default.
+        # bios_level/bios_label are the BIOS checker's own — computed against the
+        # active core's required counts (core-aware badge) where the reading
+        # state that decides them is known, and threaded through untouched.
         assert result["bios_level"] == "partial"
         assert result["bios_label"] == "1/2 required"
         assert result["bios_status_unknown"] is False
+        # The dataclass wrapper is gone with the recomputation: its
+        # ``reading_complete`` default would ship a True this call site has no
+        # basis for, and no frontend models the field.
+        assert "reading_complete" not in bs
 
     @pytest.mark.asyncio
     async def test_badge_keys_off_active_core(self, plugin, game_detail_service):
         """The missing-BIOS badge is computed against the ACTIVE CORE's requirements (#923).
 
         Two cores for the same platform produce different ``required_count`` /
-        ``required_downloaded`` from ``check_platform_bios`` (it filters by the
-        active core). ``get_bios_status`` derives bios_level/label straight from
-        those counts — so the badge follows the active core, not a platform default.
+        ``required_downloaded`` from ``check_platform_bios``, which filters by the
+        active core and derives the verdict over its own filtered list.
+        ``get_bios_status`` carries that verdict through unchanged — so the badge
+        follows the active core, not a platform default.
         """
         _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="gba")
 
@@ -782,6 +790,8 @@ class TestGetBiosStatusFound:
             "all_downloaded": False,
             "required_count": 1,
             "required_downloaded": 0,
+            "bios_level": "missing",
+            "bios_label": "Missing",
             "files": [{"file_name": "gba_bios.bin", "downloaded": False}],
         }
         game_detail_service._bios_checker.check_platform_bios = AsyncMock(return_value=gpsp_payload)
@@ -797,6 +807,8 @@ class TestGetBiosStatusFound:
             "all_downloaded": False,
             "required_count": 0,
             "required_downloaded": 0,
+            "bios_level": "ok",
+            "bios_label": "OK",
             "files": [{"file_name": "gba_bios.bin", "downloaded": False}],
         }
         game_detail_service._bios_checker.check_platform_bios = AsyncMock(return_value=mgba_payload)
@@ -868,6 +880,8 @@ class TestGetBiosStatusFound:
                     "all_downloaded": False,
                     "required_count": 1,
                     "required_downloaded": 0,
+                    "bios_level": "missing",
+                    "bios_label": "Missing",
                     "files": [{"file_name": "gba_bios.bin", "downloaded": False}],
                 }
             return {"needs_bios": False}
