@@ -173,11 +173,13 @@ def _declared_location(requirement: Any, root: str) -> str | None:
     ``pcsx2/bios`` collapses onto the root and comes back as ``.``.
 
     ``None`` where there is no location below the root to honour, so the caller
-    falls back to its own flat layout. Two shapes reach it, and the second is
-    what the declaration being relative changes: a resolved destination outside
-    the root (a standalone emulator's own XDG tree), and a declaration that is
-    absolute or climbs out of the root, which names a place the caller cannot
-    express as a segment under a root that is its to own.
+    falls back to its own flat layout. Three shapes reach it. A resolved
+    destination outside the root — a standalone emulator's own XDG tree. A
+    declaration that is absent, absolute, or climbs out of the root, which names
+    a place the caller cannot express as a segment under a root that is its to
+    own. And a declaration that normalises to ``.``, which is the root itself:
+    that is not a location under it, and a caller joining it would place every
+    file of that name at the directory rather than in it.
     """
     relative = os.path.relpath(requirement.path, root)
     if relative == os.pardir or relative.startswith(os.pardir + os.sep):

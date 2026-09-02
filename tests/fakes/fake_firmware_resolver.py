@@ -28,9 +28,11 @@ class FakeFirmwareResolver:
     BIOS directory gets the same answer the real resolver would give for it.
     ``_make_firmware_service`` wires both to the service's own BIOS root and
     file store, because that is the production relationship — one directory,
-    two readers. Without a root a placement is absent unless :meth:`declare`
-    said otherwise, and a test pins a reading the files would not give by
-    passing ``present`` there.
+    two readers. Without a root there is nowhere to take a reading, so a
+    placement's ``present`` stays ``None`` — withheld, not absent, which is the
+    distinction the consumers are built around — unless :meth:`declare` said
+    otherwise, and a test pins a reading the files would not give by passing
+    ``present`` there.
 
     ``calls`` counts invocations so a test can pin that a whole-machine question
     costing hundreds of milliseconds on a real device is asked once per query

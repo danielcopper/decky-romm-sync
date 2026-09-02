@@ -232,6 +232,24 @@ class TestPlacements:
 
         assert adapter().placements[0].relative_path is None
 
+    def test_a_declaration_that_climbs_out_of_the_root_has_no_placement_under_it(self, adapter, monkeypatch):
+        """A relative spelling can escape too, and the resolved path does not show it.
+
+        ``pcsx2/../..`` names the root's grandparent while the resolved
+        destination stays inside — RetroDECK's link makes the two disagree — so
+        the declaration is checked on its own terms rather than trusted for
+        having landed somewhere acceptable.
+        """
+        answer = _answer(
+            _core(
+                core_so="pcsx2_libretro.so",
+                requirements=(_requirement(file_name="bios", declared="pcsx2/../..", path=_ROOT),),
+            )
+        )
+        monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(_Installation(answer)))
+
+        assert adapter().placements[0].relative_path is None
+
 
 class TestDestinationReadings:
     """What the resolver read AT the destination, carried instead of re-derived."""
@@ -284,7 +302,7 @@ class TestDestinationReadings:
         assert placement.supplied_by == "retrodeck"
 
     def test_a_reading_at_a_destination_we_cannot_honour_does_not_travel(self, adapter, monkeypatch):
-        """melonDS keeps its firmware in its own tree, so that file is not the plugin's.
+        """An emulator keeping its firmware in its own tree: that file is not the plugin's.
 
         With no location to honour the caller places the file by its own flat
         default, and what was read in the emulator's XDG tree says nothing
