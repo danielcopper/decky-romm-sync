@@ -105,16 +105,18 @@ describe("extractBiosInfo", () => {
       biosNeeded: false,
       biosStatus: null,
       biosLabel: "",
+      biosRequiredMissing: false,
     });
   });
 
   it("ignores a level and label left over next to an absent requirement (#1690)", () => {
-    // The three fields move together — a cleared requirement never leaves a
+    // The four fields move together — a cleared requirement never leaves a
     // level or label behind for the row to render against nothing.
     expect(extractBiosInfo({ bios_level: "missing", bios_label: "0/3" })).toEqual({
       biosNeeded: false,
       biosStatus: null,
       biosLabel: "",
+      biosRequiredMissing: false,
     });
   });
 
@@ -133,10 +135,56 @@ describe("extractBiosInfo", () => {
     ).toBeNull();
   });
 
+  it("projects an 'unknown' LEVEL as the answer it is, clearing the requirement (#1660)", () => {
+    // A check that RAN and could not establish the requirement. It rides the
+    // same flag as a read that never happened, and the level is what tells them
+    // apart — the split `panelState.biosFieldsFromCache` draws off the same
+    // payload. Keeping the previous requirement standing here would assert
+    // something nothing can establish any more.
+    expect(
+      extractBiosInfo({ bios_status: null, bios_level: "unknown", bios_label: "Unknown", bios_status_unknown: true }),
+    ).toEqual({ biosNeeded: false, biosStatus: "unknown", biosLabel: "Unknown", biosRequiredMissing: false });
+  });
+
   it("treats an explicit bios_status_unknown: false as the answer it is", () => {
     expect(
       extractBiosInfo({ bios_status: null, bios_level: null, bios_label: null, bios_status_unknown: false }),
-    ).toEqual({ biosNeeded: false, biosStatus: null, biosLabel: "" });
+    ).toEqual({ biosNeeded: false, biosStatus: null, biosLabel: "", biosRequiredMissing: false });
+  });
+
+  describe("biosRequiredMissing — the play-row badge's whole rule", () => {
+    // A local check: a file the ACTIVE CORE requires is not on disk. Optional
+    // files, files other cores want, and a level the badge cannot act on are
+    // all beside the point.
+    const withRequired = (required: number, downloaded: number) => ({
+      bios_status: { ...requirement, required_count: required, required_downloaded: downloaded },
+      bios_level: "missing" as const,
+      bios_label: "Missing",
+    });
+
+    it("is set when a required file is absent", () => {
+      expect(extractBiosInfo(withRequired(2, 1))!.biosRequiredMissing).toBe(true);
+    });
+
+    it("is clear when every required file is present", () => {
+      expect(extractBiosInfo(withRequired(2, 2))!.biosRequiredMissing).toBe(false);
+    });
+
+    it("is clear when the active core requires nothing, however much is missing", () => {
+      // Twenty-six optional files no core requires must not raise a warning.
+      const answer = {
+        bios_status: { ...requirement, server_count: 26, local_count: 0, required_count: 0, required_downloaded: 0 },
+        bios_level: "ok" as const,
+        bios_label: "OK",
+      };
+      expect(extractBiosInfo(answer)!.biosRequiredMissing).toBe(false);
+    });
+
+    it("is clear when the payload states no required counts at all", () => {
+      expect(
+        extractBiosInfo({ bios_status: requirement, bios_level: "ok", bios_label: "OK" })!.biosRequiredMissing,
+      ).toBe(false);
+    });
   });
 });
 

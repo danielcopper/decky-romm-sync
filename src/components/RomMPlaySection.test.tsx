@@ -87,8 +87,8 @@ vi.mock("../utils/playSection", () => ({
   // a fixed return folds a BIOS need into every mount that resolves a rom.
   extractBiosInfo: vi.fn((status: unknown) =>
     status
-      ? { biosNeeded: true, biosStatus: "ok", biosLabel: "OK" }
-      : { biosNeeded: false, biosStatus: null, biosLabel: "" },
+      ? { biosNeeded: true, biosStatus: "ok", biosLabel: "OK", biosRequiredMissing: false }
+      : { biosNeeded: false, biosStatus: null, biosLabel: "", biosRequiredMissing: false },
   ),
   extractCoreInfo: vi.fn(
     (c: {
@@ -319,8 +319,8 @@ describe("RomMPlaySection", () => {
     vi.mocked(playSectionUtils.extractBiosInfo).mockImplementation((answer) => {
       if (answer.bios_status_unknown) return null;
       return answer.bios_status
-        ? { biosNeeded: true, biosStatus: "ok", biosLabel: "OK" }
-        : { biosNeeded: false, biosStatus: null, biosLabel: "" };
+        ? { biosNeeded: true, biosStatus: "ok", biosLabel: "OK", biosRequiredMissing: false }
+        : { biosNeeded: false, biosStatus: null, biosLabel: "", biosRequiredMissing: false };
     });
     vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue({
       activeCoreLabel: null,
@@ -2104,6 +2104,7 @@ describe("RomMPlaySection", () => {
         biosNeeded: true,
         biosStatus: "missing",
         biosLabel: "0/3",
+        biosRequiredMissing: true,
       });
 
       await act(async () => {
@@ -2122,9 +2123,10 @@ describe("RomMPlaySection", () => {
 
     it("core_changed: an unanswerable platform does NOT surface a play-section BIOS row (#1520)", async () => {
       // A platform with server firmware no installed emulator could answer for
-      // reports bios_level "unknown". That state is non-actionable on the play section
-      // (it lives in the BIOS tab), so the row must stay suppressed even though
-      // biosNeeded is true — mirroring how "ok" is suppressed here.
+      // reports bios_level "unknown", and nothing there is known to be required.
+      // The badge asks one question — is a file the active core requires absent —
+      // so this state cannot raise it, and it is not suppressed by a special
+      // case for the level either. It lives in the BIOS tab.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 61,
@@ -2144,13 +2146,14 @@ describe("RomMPlaySection", () => {
         bios_level: "unknown",
         bios_label: "Unknown",
       });
-      // biosNeeded is true (server firmware exists) — the suppression is driven
-      // purely by the "unknown" level, not by biosNeeded being false. If the
-      // gate regressed, "Unknown" would render.
+      // biosNeeded is true (server firmware exists) and the level is renderable;
+      // only the required-file question keeps the row away. If the gate
+      // regressed to keying off the verdict, "Unknown" would render.
       vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
         biosNeeded: true,
         biosStatus: "unknown",
         biosLabel: "Unknown",
+        biosRequiredMissing: false,
       });
 
       await act(async () => {
@@ -3212,6 +3215,7 @@ describe("RomMPlaySection", () => {
         biosNeeded: true,
         biosStatus: "ok",
         biosLabel: "OK",
+        biosRequiredMissing: false,
       });
       // Core data is sourced from the dedicated get_platform_core_info path (#923),
       // which feeds extractCoreInfo. The core button gates on availableCores > 1.
@@ -3463,6 +3467,7 @@ describe("RomMPlaySection", () => {
         biosNeeded: true,
         biosStatus: "ok",
         biosLabel: "OK",
+        biosRequiredMissing: false,
       });
       vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
         active_core: "blastem.so",
@@ -3687,6 +3692,7 @@ describe("RomMPlaySection", () => {
         biosNeeded: true,
         biosStatus: "ok",
         biosLabel: "OK",
+        biosRequiredMissing: false,
       });
       vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue(extractCore);
       render(<RomMPlaySection appId={testAppId} />);
@@ -4016,6 +4022,7 @@ describe("RomMPlaySection", () => {
         biosNeeded: true,
         biosStatus: "missing",
         biosLabel: "0/3",
+        biosRequiredMissing: true,
       });
       const { container, getByText } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
@@ -4033,7 +4040,7 @@ describe("RomMPlaySection", () => {
       }
     });
 
-    it("BIOS warning suppressed when biosStatus is 'ok'", async () => {
+    it("BIOS warning suppressed when no file the active core requires is missing", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 42,
@@ -4050,11 +4057,40 @@ describe("RomMPlaySection", () => {
         biosNeeded: true,
         biosStatus: "ok",
         biosLabel: "OK",
+        biosRequiredMissing: false,
       });
       const { container } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       // Render row exists but no BIOS info item.
       expect(container.textContent).not.toContain("BIOS");
+    });
+
+    it("BIOS warning follows the missing-required question, not the readiness verdict", async () => {
+      // The badge's whole rule is local: a file the active core requires is not
+      // on disk. The verdict still owns the COLOUR, and a level the row could
+      // not act on ("unknown") does not suppress a requirement it CAN act on.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 42,
+        bios_status: {
+          platform_slug: "snes",
+          server_count: 1,
+          local_count: 0,
+          all_downloaded: false,
+        },
+        bios_level: "unknown",
+        bios_label: "Unknown",
+      });
+      vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
+        biosNeeded: true,
+        biosStatus: "unknown",
+        biosLabel: "Unknown",
+        biosRequiredMissing: true,
+      });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).toContain("BIOS");
+      expect(container.textContent).toContain("Unknown");
     });
 
     it("core button only renders when availableCores.length > 1", async () => {
@@ -4075,6 +4111,7 @@ describe("RomMPlaySection", () => {
         biosNeeded: true,
         biosStatus: "ok",
         biosLabel: "OK",
+        biosRequiredMissing: false,
       });
       // Single core from the dedicated path → button hidden.
       vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue({

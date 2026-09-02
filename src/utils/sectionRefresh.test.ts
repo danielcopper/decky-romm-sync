@@ -14,6 +14,7 @@ interface BiosState {
   biosNeeded: boolean;
   biosStatus: BiosLevel | null;
   biosLabel: string;
+  biosRequiredMissing: boolean;
   unrelated: string;
 }
 
@@ -80,6 +81,7 @@ describe("refreshBiosInBackground", () => {
       biosNeeded: false,
       biosStatus: null,
       biosLabel: "",
+      biosRequiredMissing: false,
       unrelated: "keep",
     });
     expect(next.biosNeeded).toBe(true);
@@ -148,9 +150,16 @@ describe("refreshBiosInBackground", () => {
       biosNeeded: true,
       biosStatus: "missing",
       biosLabel: "0/3",
+      biosRequiredMissing: true,
       unrelated: "keep",
     });
-    expect(next).toEqual({ biosNeeded: false, biosStatus: null, biosLabel: "", unrelated: "keep" });
+    expect(next).toEqual({
+      biosNeeded: false,
+      biosStatus: null,
+      biosLabel: "",
+      biosRequiredMissing: false,
+      unrelated: "keep",
+    });
   });
 
   it("writes nothing when the read carries no BIOS answer (#1693)", async () => {

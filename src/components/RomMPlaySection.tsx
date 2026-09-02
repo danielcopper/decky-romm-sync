@@ -1005,9 +1005,12 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     );
   }
 
-  // BIOS warning (only when files are actually missing — "ok" and "unknown"
-  // are non-actionable here and live in the BIOS tab, not on the play section)
-  if (detail.biosNeeded && detail.biosStatus && detail.biosStatus !== "ok" && detail.biosStatus !== "unknown") {
+  // BIOS warning. One local fact decides it: a file the active core requires is
+  // not on disk. Everything else the BIOS answer says — a platform whose
+  // emulators could not be asked, optional files nobody launching this game
+  // needs — is non-actionable here and lives in the BIOS tab. The COLOUR is
+  // still the backend's verdict (`biosColorForLevel`), never re-derived.
+  if (detail.biosRequiredMissing) {
     const biosColor = biosColorForLevel(detail.biosStatus);
     infoItems.push(
       // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- pointer-only shortcut into the BIOS tab, which the tab bar's DialogButton already reaches from the focus ring; a role/tabIndex here would add a gamepad focus stop to the play row.

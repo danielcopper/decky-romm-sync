@@ -101,6 +101,7 @@ const DEFAULT_STATE: GameDetailState = {
   biosNeeded: false,
   biosStatus: null,
   biosLabel: "",
+  biosRequiredMissing: false,
   activeCoreLabel: null,
   activeCoreIsDefault: true,
   emulators: [],
