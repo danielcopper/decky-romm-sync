@@ -3245,6 +3245,69 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).toContain("Nothing required (0/20 files held)");
     });
 
+    it("says 'missing' about a file the library lacks only when it is actually absent", async () => {
+      // The GameCube case, measured on a device: Dolphin requires
+      // `codehandler.bin`, RetroDECK ships it, and no RomM library holds it. The
+      // note keyed on `on_server` alone, so a file sitting on disk was announced
+      // as missing beside its own green dot and an "All required ready (1/1)"
+      // headline — the pane contradicting itself on one screen. Both rows here
+      // are absent from the library; only the second is absent from the disk.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        bios_status: {
+          needs_bios: true,
+          platform_slug: "ngc",
+          server_count: 0,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 2,
+          required_downloaded: 1,
+          known_count: 2,
+          unknown_count: 0,
+          files: [
+            {
+              file_name: "codehandler.bin",
+              downloaded: true,
+              local_path: "",
+              description: "Dolphin 'Sys' folder",
+              wanted: "needed",
+              required_by_active: true,
+              cores: { dolphin_libretro: { required: true } },
+              used_by_active: true,
+              on_server: false,
+            },
+            {
+              file_name: "absent.bin",
+              downloaded: false,
+              local_path: "",
+              description: "Absent",
+              wanted: "needed",
+              required_by_active: true,
+              cores: { dolphin_libretro: { required: true } },
+              used_by_active: true,
+              on_server: false,
+            },
+          ],
+        } as never,
+        bios_level: "partial",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        await Promise.resolve();
+      });
+
+      // Present but unfetchable: the library note survives, the "missing" drops.
+      expect(container.textContent).toContain("Dolphin 'Sys' folder — not in your RomM library");
+      expect(container.textContent).not.toContain("Dolphin 'Sys' folder — missing");
+      // Genuinely absent: both halves stay.
+      expect(container.textContent).toContain("Absent — missing, not in your RomM library");
+    });
+
     it("unknown: grey header dot + honest text, and the 'files on server' note survives (#1520)", async () => {
       // No installed emulator's answer could be established for any server file
       // → backend ships bios_level "unknown". The panel must render the neutral

@@ -19,9 +19,10 @@
  * the list for belonging to a core the user is not using.
  *
  * A row can also be a file an emulator wants that the RomM library does not hold
- * (`on_server` false). It is missing in the fullest sense — and unfixable from
- * anywhere in the plugin — so it says so rather than looking like a download
- * nobody has started.
+ * (`on_server` false). No page in the plugin can fetch it, so it says so rather
+ * than looking like a download nobody has started. Not holding it is a separate
+ * question from not having it: RetroDECK ships `dolphin-emu/Sys/codehandler.bin`
+ * into the BIOS directory, so that row is unfetchable and satisfied at once.
  *
  * CSS classes prefixed with `romm-panel-` are injected separately by
  * styleInjector.
@@ -143,9 +144,17 @@ function fileDotColor(file: BiosFileStatus): string {
  * redesign rather than a fix. The one row that needs words is the file no page
  * in the plugin can fetch, because nothing else on screen tells it apart from a
  * download nobody has started yet.
+ *
+ * "Missing" is the file's own state and belongs only to a row that IS missing.
+ * A file the library does not hold can still be sitting on disk — the emulator
+ * shipped it — and saying "missing" over a green dot and an "All required
+ * ready" headline is the page contradicting itself on one screen. The System
+ * page has always appended its note only when the file is absent; this is the
+ * same rule.
  */
 function fileNote(file: BiosFileStatus): string {
-  return file.on_server === false ? " — missing, not in your RomM library" : "";
+  if (file.on_server !== false) return "";
+  return file.downloaded ? " — not in your RomM library" : " — missing, not in your RomM library";
 }
 
 /**

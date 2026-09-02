@@ -84,9 +84,14 @@ in amber so you can spot at a glance which core's requirements the file applies 
 Files no installed emulator asks for are not listed one by one — they are summarised on a single line below the list ("3
 files on server no installed emulator asks for"), as are any files the plugin could not work out an answer for.
 
-A file your emulator needs that is **not in your RomM library** is listed too, marked _missing, not in your RomM
-library_. The plugin cannot fetch it — nothing in it can — so it is shown for what it is rather than left out. Adding
-the file to RomM makes it downloadable like any other.
+A file your emulator needs that is **not in your RomM library** is listed too, marked _not in your RomM library_. The
+plugin cannot fetch it — nothing in it can — so it is shown for what it is rather than left out. Adding the file to RomM
+makes it downloadable like any other.
+
+Not holding a file is a different question from not having it, and the row says both. If it is also absent from your
+BIOS folder it reads _missing, not in your RomM library_; if it is already sitting there it reads only _not in your RomM
+library_, with the green dot every present file gets. Your emulator can be the reason it is there: RetroDECK installs
+Dolphin's `Sys` folder into your BIOS directory, so that file counts as ready even though no RomM library holds it.
 
 <!-- Screenshot: Game detail page showing orange BIOS status with "2/5 required files ready" -->
 
