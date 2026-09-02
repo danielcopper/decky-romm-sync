@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from _vendor import atlas
 
-VENDORED_VERSION = "0.5.1"
+VENDORED_VERSION = "0.6.0"
 
 
 def test_vendored_atlas_is_the_pinned_release() -> None:

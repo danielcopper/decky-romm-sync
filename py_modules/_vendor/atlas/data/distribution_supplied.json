@@ -1,0 +1,135 @@
+{
+  "schema": 1,
+  "version": "1",
+  "reviewed": "2026-09-02",
+  "spec": "Which files at a firmware destination are the DISTRIBUTION's own copy rather than something a user placed. World knowledge under DESIGN.md's boundary rule, and of the narrowest possible kind: the table states only WHICH trees and files one COMPONENT's preparation step copies into the firmware root — for RetroDECK the RetroArch component's, which is where that root's own trees come from — read line by line out of the shipped script, while whether the file at a destination really is that copy is decided on the machine: the shipped file and the placed file are hashed and the statement is made only when they are equal. Other components write into the same root by other means (see ROADMAP section 6), so this list is not a census of everything a distribution puts there. Nothing here is a claim about any particular machine. A distribution is keyed by the arrangement kind atlas already answers under ('retrodeck'), so the word in the contract and the word a handle reports are one word. 'source' is relative to 'source_root', which is spelled the way the DISTRIBUTION spells it — inside its Flatpak sandbox — because that is the path its own script names; the resolver translates it to a host path through the same sandbox map the save and firmware routes translate configured values with. 'kind' says WHAT the copy places: 'tree' (a whole directory, so every file below the destination has a counterpart below the source) or 'file' (one file, matched exactly). It is not read off the cp flag — RetroDECK copies both trees and files with cp -rf and uses cp -f on one line only — and it is not derived from the source's spelling either, because directory names like 'qemu' and 'fbneo' carry no extension to derive from. Destinations and sources may differ — RetroDECK's MSX and Amiga trees are renamed on the way — so the renaming is recorded rather than assumed away. The version pin is provenance, NOT a gate: unlike content_tree_wiring.json, whose promise can only be measured against the version that made it, every statement this table supports rests on a hash equality read from the live machine, so a table that has fallen behind a release under-reports and the equality behind a statement it does make was still measured. The one thing a stale entry can still get wrong is the REPAIR it implies: if a release stops copying a tree while going on shipping it, the bytes still match and 'the component prepare puts this back' no longer holds — which is a reason to re-read the script at a release, not to gate the answer. A destination that no entry covers, and a file whose bytes differ from the shipped one, are both simply not stated.",
+  "distributions": {
+    "retrodeck": {
+      "version": "0.10.9b",
+      "source_root": "/app/retrodeck/components/retroarch/rd_extras",
+      "source_root_citation": "retroarch_extras_path=\"$rd_components/retroarch/rd_extras\" (/app/retrodeck/components/retroarch/component_functions.sh:7) with rd_components=\"/app/retrodeck/components\" (/app/libexec/all_vars.sh:48) — both paths in the sandbox spelling the scripts themselves use, read from the deployed 0.10.9b Flatpak",
+      "destination_root": "the firmware root: RetroArch's system_directory, which the same script sets to $bios_path (components/retroarch/component_prepare.sh:44)",
+      "entries": [
+        {
+          "kind": "tree",
+          "source": "cannonball",
+          "destination": "cannonball",
+          "purpose": "the Cannonball engine's data tree. No core .info names it, so what lands here is unclaimed rather than declared",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:58 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "tree",
+          "source": "dinothawr",
+          "destination": "dinothawr",
+          "purpose": "the Dinothawr game data the core loads (dinothawr.game, its assets and shaders)",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:59 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "tree",
+          "source": "DirkSimple",
+          "destination": "DirkSimple",
+          "purpose": "DirkSimple's data tree — the laserdisc game descriptions it plays from",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:60 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "tree",
+          "source": "dolphin-emu",
+          "destination": "dolphin-emu",
+          "purpose": "Dolphin's Sys tree — codehandler.bin among them, beside GameSettings, Resources, Shaders, the wiitdb title databases and the totaldb.dsy signature database; dolphin_libretro.info declares Sys/codehandler.bin as required firmware, which is the sighting issue #346 opens on",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:61 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "file",
+          "source": "ecwolf.pk3",
+          "destination": "ecwolf.pk3",
+          "purpose": "ECWolf's data pack, required firmware of ecwolf_libretro and an archive identity: its bytes move with the core release",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:62 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "tree",
+          "source": "nxengine",
+          "destination": "nxengine",
+          "purpose": "NXEngine's Cave Story data tree",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:63 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "tree",
+          "source": "PPSSPP",
+          "destination": "PPSSPP",
+          "purpose": "the PPSSPP assets the libretro core loads from the system directory — ppge_atlas.zim is declared firmware of ppsspp_libretro and resolves into this tree",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:64 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "file",
+          "source": "prboom.wad",
+          "destination": "prboom.wad",
+          "purpose": "PrBoom's own wad. prboom_libretro declares no firmware at all — its .info states in notes that the file belongs in the ROM directory — so on the reference machine this copy is an UnclaimedFile rather than a requirement; the entry stands because the copy is the same copy either way",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:65 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "tree",
+          "source": "qemu",
+          "destination": "qemu",
+          "purpose": "the QEMU core's firmware images and device trees",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:66 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "tree",
+          "source": "xrick",
+          "destination": "xrick",
+          "purpose": "xrick's game data (data.zip)",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:67 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "tree",
+          "source": "mame2003",
+          "destination": "mame2003",
+          "purpose": "the MAME 2003 support data — cheat.dat, hiscore.dat and samples — placed whole by one copy",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:70 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "tree",
+          "source": "mame2003-plus",
+          "destination": "mame2003-plus",
+          "purpose": "the MAME 2003-Plus support data. The line before it extracts mame2003-plus.tar.gz into the same destination (components/retroarch/component_prepare.sh:86), and the two overlap: cheat.dat, hiscore.dat and history.dat are in both and byte-identical, so a match there is the shipped bytes either way, while catver.ini, mame2003-plus.xml and artwork/ come from the tarball alone and match nothing",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:87 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "tree",
+          "source": "pcsx2",
+          "destination": "pcsx2",
+          "purpose": "LRPS2's own tree below the firmware root; GameIndex.yaml under resources/ is declared firmware of pcsx2_libretro, and the bios/ directory inside it is linked back to the firmware root by the same section (components/retroarch/component_prepare.sh:96)",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:95 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "tree",
+          "source": "fbneo",
+          "destination": "fbneo",
+          "purpose": "FinalBurn Neo's support data (hiscore.dat), beside the sample and cheat directories the same section creates",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:109 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "tree",
+          "source": "MSX/Databases",
+          "destination": "Databases",
+          "purpose": "blueMSX's machine and cartridge databases (colecodb.xml, msxromdb.xml, …) — renamed on the way: the shipped tree is MSX/Databases and the destination is Databases",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:122 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "tree",
+          "source": "MSX/Machines",
+          "destination": "Machines",
+          "purpose": "blueMSX's per-machine ROM sets, one directory per machine plus Shared Roms — the second of the two renamed MSX trees, and the one bluemsx_libretro's declared MSX.rom resolves into",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:124 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        },
+        {
+          "kind": "file",
+          "source": "Amiga/capsimg.so",
+          "destination": "capsimg.so",
+          "purpose": "the Amiga IPF support library, copied with cp -f out of the Amiga subtree and landing at the firmware root under a shortened name. No installed core's .info declares it, so on the reference machine it is an UnclaimedFile rather than a requirement",
+          "citation": "[V-script] components/retroarch/component_prepare.sh:131 in the Flatpak's components tree at RetroDECK 0.10.9b"
+        }
+      ]
+    }
+  }
+}

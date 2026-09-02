@@ -48,7 +48,7 @@ from __future__ import annotations
 # tests/test_version.py holds it equal to pyproject — CI's package job holds
 # dist-info to pyproject in a clean venv — so drift is a red test, not a
 # silent fork.
-__version__ = "0.5.1"  # x-release-please-version
+__version__ = "0.6.0"  # x-release-please-version
 
 # --- The two entry points, and the aggregate over them -----------------------
 from .detect import detect
@@ -116,6 +116,7 @@ from .firmware import (
     FirmwareIdentity,
     FirmwareRequirement,
     RefusedDeclaration,
+    SuppliedBy,
     UnclaimedFile,
 )
 from .installations import (
@@ -184,6 +185,8 @@ from .placement import (
 from .esde import KIND_LIBRETRO, KIND_STANDALONE
 from .evidence import CAVEAT_ARRANGEMENT_UNVERIFIED, CAVEAT_ARRANGEMENT_VERSION_DRIFTED
 from .firmware import (
+    ARCHIVE_CORE_BUNDLED,
+    ARCHIVE_ROMSET,
     CAVEAT_EMULATOR_CATALOGUE_EXCLUSIVE,
     CAVEAT_EMULATOR_CATALOGUE_SEALED,
     CAVEAT_EMULATOR_CATALOGUE_UNAVAILABLE,
@@ -200,6 +203,7 @@ from .firmware import (
     CAVEAT_FIRMWARE_CONTENT_CONTRADICTORY,
     CAVEAT_FIRMWARE_CONTENT_UNIDENTIFIED,
     CAVEAT_FIRMWARE_CONTENT_UNSTATED,
+    CAVEAT_FIRMWARE_IDENTITY_NOT_COMPARABLE,
     CAVEAT_FIRMWARE_IMAGE_AMBIGUOUS,
     CAVEAT_FIRMWARE_IMAGE_IDENTIFIED,
     CAVEAT_FIRMWARE_DECLARATION_UNKNOWN,
@@ -215,6 +219,7 @@ from .firmware import (
     CAVEAT_FIRMWARE_ROOT_UNUSABLE,
     CAVEAT_FIRMWARE_SCAN_INCOMPLETE,
     CAVEAT_FIRMWARE_SEARCH_UNVERIFIED,
+    CAVEAT_FIRMWARE_SUPPLIED_SOURCE_UNREADABLE,
     CAVEAT_FIRMWARE_UNREADABLE,
     CAVEAT_INFO_PATH_UNRESOLVED,
     CAVEAT_NO_FIRMWARE_DECLARATION,
@@ -225,6 +230,7 @@ from .firmware import (
     CAVEAT_SYSTEM_NOT_IN_CATALOGUE,
     CAVEAT_SYSTEM_UNKNOWN,
     CHECKED_MISMATCH,
+    CHECKED_NOT_COMPARABLE,
     CHECKED_UNCHECKED,
     CHECKED_UNKNOWN,
     CHECKED_VERIFIED,
@@ -233,6 +239,8 @@ from .firmware import (
     DECLARATION_READ,
     DECLARATION_UNREADABLE,
     DECLARATION_UNSUPPORTED,
+    IDENTITY_ARCHIVE,
+    IDENTITY_FILE,
     NEED_OPTIONAL,
     NEED_REQUIRED,
     SOURCE_CARD,
@@ -241,8 +249,10 @@ from .firmware import (
     SOURCE_SLUG,
     SOURCE_SYSTEMNAME,
     SYSTEMS_WITHOUT_CATALOGUE_ID,
+    ArchiveReason,
     CoreDeclarationState,
     FirmwareChecked,
+    FirmwareIdentityKind,
     FirmwareNeed,
     SystemSource,
 )
@@ -251,6 +261,12 @@ from .content_tree_wiring import (
     WiringRow,
     load_content_tree_wiring,
     lookup_content_tree_wiring,
+)
+from .distribution_supplied import (
+    DistributionSupplied,
+    SuppliedEntry,
+    load_distribution_supplied,
+    lookup_distribution_supplied,
 )
 from .installations import (
     HEALTH_ISSUE_CATALOGUE_INVALID,
@@ -476,6 +492,7 @@ __all__ = [
     "FirmwareAlternatives",
     "FirmwareIdentification",
     "FirmwareIdentity",
+    "SuppliedBy",
     "UnclaimedFile",
     "RefusedDeclaration",
     "Caveat",
@@ -514,6 +531,8 @@ __all__ = [
     "PatchFormat",
     "FirmwareNeed",
     "FirmwareChecked",
+    "FirmwareIdentityKind",
+    "ArchiveReason",
     "CoreDeclarationState",
     "SystemSource",
     # Vocabulary values — path kinds and read statuses (answers carry both)
@@ -546,6 +565,11 @@ __all__ = [
     "CHECKED_MISMATCH",
     "CHECKED_UNCHECKED",
     "CHECKED_UNKNOWN",
+    "CHECKED_NOT_COMPARABLE",
+    "IDENTITY_FILE",
+    "IDENTITY_ARCHIVE",
+    "ARCHIVE_ROMSET",
+    "ARCHIVE_CORE_BUNDLED",
     "DECLARATION_READ",
     "DECLARATION_UNREADABLE",
     "DECLARATION_ABSENT",
@@ -616,6 +640,11 @@ __all__ = [
     "WiringRow",
     "load_content_tree_wiring",
     "lookup_content_tree_wiring",
+    # Distribution-supplied firmware (which files RetroDECK places itself)
+    "DistributionSupplied",
+    "SuppliedEntry",
+    "load_distribution_supplied",
+    "lookup_distribution_supplied",
     # Typed outcome codes
     "UNRESOLVED_CORE_NOT_INSTALLED",
     "UNRESOLVED_STANDALONE",
@@ -683,7 +712,9 @@ __all__ = [
     "CAVEAT_FIRMWARE_ROOT_UNUSABLE",
     "CAVEAT_FIRMWARE_SCAN_INCOMPLETE",
     "CAVEAT_FIRMWARE_SEARCH_UNVERIFIED",
+    "CAVEAT_FIRMWARE_SUPPLIED_SOURCE_UNREADABLE",
     "CAVEAT_FIRMWARE_UNREADABLE",
+    "CAVEAT_FIRMWARE_IDENTITY_NOT_COMPARABLE",
     "CAVEAT_FRONTEND_MARKER_MISMATCH",
     "CAVEAT_FRONTEND_SETTINGS_UNREADABLE",
     "CAVEAT_INFO_PATH_UNRESOLVED",
