@@ -90,8 +90,18 @@ makes it downloadable like any other.
 
 Not holding a file is a different question from not having it, and the row says both. If it is also absent from your
 BIOS folder it reads _missing, not in your RomM library_; if it is already sitting there it reads only _not in your RomM
-library_, with the green dot every present file gets. Your emulator can be the reason it is there: RetroDECK installs
-Dolphin's `Sys` folder into your BIOS directory, so that file counts as ready even though no RomM library holds it.
+library_, with the green dot every present file gets.
+
+Some of those rows say something better than that. Where the file sitting at the destination is byte-for-byte the copy
+your emulator distribution ships, the row names the distribution instead — _provided by retrodeck_ — because "not in
+your RomM library" is true of it and useless: no library will ever hold it, and if it ever went missing the repair is a
+RetroDECK component reset rather than a download. `dolphin-emu/Sys/codehandler.bin` is the usual example. The name is
+printed exactly as the plugin's emulator-knowledge library states it, which is why it is lowercase.
+
+A row can also be a **folder** rather than a file — LRPS2 asks for `pcsx2/bios`, which is where your PS2 BIOS files go.
+Such a row reads _BIOS files go in this folder_, because what satisfies it is what is inside it, and the plugin does not
+inspect the contents. A folder that is there is shown as present; that says the folder exists, not that the right files
+are in it.
 
 <!-- Screenshot: Game detail page showing orange BIOS status with "2/5 required files ready" -->
 
@@ -114,14 +124,16 @@ if your RomM server has BIOS files for them.
 5. Tap **Show Files** to see the individual file list for a platform — each row says whether it is _needed_, _optional_,
    _not needed_ or _unknown_ for that platform. A system whose requirement could not be worked out and that has no files
    to list shows **"BIOS requirement unknown"** with no **Show Files** button
-6. Tap **Download All** to download all missing BIOS files for a platform
+6. Tap **Download All** to download all missing BIOS files for a platform. A system nothing installed could answer for
+   has no download buttons at all — see [When the requirement is unknown](#when-the-requirement-is-unknown)
 7. Tap **Delete BIOS** to remove that platform's downloaded BIOS files (see below)
 
 <!-- Screenshot: System page showing per-platform Emulator Core button above BIOS download counts -->
 
 BIOS files are downloaded to your RetroDECK bios directory (e.g. `~/retrodeck/bios/`). Some platforms use subdirectories
 — for example, Dreamcast BIOS goes into `bios/dc/` and PS2 BIOS goes into `bios/pcsx2/bios/`. The plugin handles the
-correct placement automatically.
+correct placement automatically: the location is the one your emulator itself declares, so a file for a subdirectory
+lands in that subdirectory rather than loose in the BIOS root.
 
 ### Deleting BIOS Files
 
@@ -143,8 +155,9 @@ Required**.
 other reason. Everything else in the BIOS folder is left alone, including:
 
 - **Firmware RetroDECK ships itself.** RetroDECK installs some files into the BIOS folder with its own components —
-  `bios/dolphin-emu/Sys/codehandler.bin` is one. Your emulator asks for it, so it is listed on the page, but the plugin
-  did not put it there. That one in particular is in no RomM library either, so nothing here could fetch it back.
+  `bios/dolphin-emu/Sys/codehandler.bin` is one. Your emulator asks for it, so it is listed on the page, marked
+  _provided by retrodeck_, but the plugin did not put it there. That one in particular is in no RomM library either, so
+  nothing here could fetch it back.
 - **Files you placed there by hand**, even where the name matches one your RomM library holds. Without a download record
   the plugin has no claim on it.
 
@@ -172,6 +185,11 @@ silent.
 The plugin asks your **installed RetroArch cores** what they want. Every core ships a small description file next to it
 declaring the firmware it needs and where each file goes, and the plugin reads those live — so the answers follow your
 RetroDECK install, including cores that were added after the plugin was released.
+
+That same reading also answers whether each file is already sitting where the emulator will look for it, and the plugin
+takes its answer rather than checking the path itself. The difference matters on a stock RetroDECK: `bios/pcsx2/bios` is
+a link pointing back at the BIOS folder, so working the location out from where a link ends up loses the folder the
+emulator actually opens. Following the emulator's own spelling gets both the check and the download destination right.
 
 **Standalone emulators are not asked.** RetroDECK also offers emulators that are not RetroArch cores — RPCS3, Vita3K,
 Cemu, xemu and others — and they state their firmware in their own formats rather than in that one description file.
@@ -220,8 +238,21 @@ them is offered for any system. The third only reaches the empty-list shape: a s
 unreadable, whose page happens to have no rows.
 
 This is informational, not an error: your files may be perfectly fine, the plugin simply can't confirm what is needed.
-You can still download them manually through RomM if your emulator needs them. Genuinely BIOS-free systems (such as the
-NES) are unaffected — every core answers, none of them wants anything, and the system reads as ready.
+Genuinely BIOS-free systems (such as the NES) are unaffected — every core answers, none of them wants anything, and the
+system reads as ready.
+
+#### Such a system offers no downloads
+
+A system in that state has no **Download All** or **Download Required** button, and says so in words: _BIOS management
+is not supported for this system yet, so there is nothing to download here. You can still put BIOS files in your BIOS
+folder by hand._ Fetching files the plugin cannot reason about — beside a line admitting it cannot — would be offering
+to act on an answer it does not have. Downloading them from RomM's own web interface and dropping them in your BIOS
+folder works exactly as it always did; nothing about the files changes, only what this page will claim about them.
+
+This is scoped to the **whole system**, never to single files. A system whose reading finished may well hold files no
+installed emulator asks for — a PlayStation page typically lists a good number of regional BIOS dumps that nothing wants
+— and every one of those stays downloadable, because "nothing wants this" is a finished answer. The buttons go only
+where there was no answer at all, and they come back the moment anything installed can speak for the system.
 
 !!! note "Systems that used to read \"Not managed by the plugin\" will have moved"
 
@@ -275,9 +306,10 @@ you at a glance which core the plugin is filtering for.
 4. If a platform offers **only standalone emulators** (no RetroArch core at all), or the live configuration can't be
    read, the plugin has nothing to filter with — so it does not filter, and it does not guess either. Every BIOS file
    the platform has is listed, each marked _unknown_, and the platform's summary reads **BIOS requirement unknown** with
-   a grey dot — including when the platform has no files to list, which is where saying nothing at all would have read
-   as "nothing needed". That is the honest answer for a platform like PS3, whose emulators the plugin cannot yet ask:
-   saying nothing is needed would report it ready over firmware the emulator will not boot without.
+   a grey dot and no download buttons — including when the platform has no files to list, which is where saying nothing
+   at all would have read as "nothing needed". That is the honest answer for a platform like PS3, whose emulators the
+   plugin cannot yet ask: saying nothing is needed would report it ready over firmware the emulator will not boot
+   without.
 
 Whatever this chain resolves to is the **same core the game launches on** — the plugin bakes the resolved core into the
 Steam shortcut, so the core shown for BIOS, saves, and the core badge always matches the core that runs.
