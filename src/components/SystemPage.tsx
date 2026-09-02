@@ -317,18 +317,23 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     // local count comparison only when the level is absent from the payload.
     const requiredReady = platform.bios_level == null ? requiredDone === requiredCount : platform.bios_level === "ok";
 
-    // "unknown": the platform has server files and no installed emulator's
-    // answer could be established for any of them, so the plugin makes no
-    // readiness claim. Render neutral grey + honest text instead of a false
-    // all-clear. requiredCount is always 0 here, so it is never counted as a
-    // "BIOS needed" platform.
+    // "unknown": no installed emulator's answer could be established for this
+    // platform, so the plugin makes no readiness claim. Render neutral grey +
+    // honest text instead of a false all-clear. requiredCount is always 0 here,
+    // so it is never counted as a "BIOS needed" platform. The description splits
+    // on whether there are rows to point at: a platform whose emulators are all
+    // standalone has none at all, and "0 file(s) nothing installed could answer
+    // for" would read as a finished count of nothing rather than as silence.
     const isUnknown = platform.bios_level === "unknown";
 
     const needsAttention = platform.has_games && requiredCount > 0 && !requiredReady;
     const { summaryLabel, summaryDescription } = isUnknown
       ? {
           summaryLabel: "BIOS requirement unknown",
-          summaryDescription: `${total} file(s) nothing installed could answer for`,
+          summaryDescription:
+            total > 0
+              ? `${total} file(s) nothing installed could answer for`
+              : "Nothing installed could answer for this system",
         }
       : getBiosSummary(requiredCount, requiredDone, requiredReady, optionalMissing, done, total, allDone);
     // The download affordances key off what is missing AND fetchable, never off
@@ -387,20 +392,24 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
             bottomSeparator="none"
           />
         </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem
-            layout="below"
-            bottomSeparator="none"
-            onClick={() =>
-              setExpanded((prev) => ({
-                ...prev,
-                [platform.platform_slug]: !prev[platform.platform_slug],
-              }))
-            }
-          >
-            {isExpanded ? "Hide Files" : `Show Files (${platform.files.length})`}
-          </ButtonItem>
-        </PanelSectionRow>
+        {/* A platform with no rows at all is on the page because its requirement
+            is unknown, not because there is a list to open. */}
+        {platform.files.length > 0 && (
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              bottomSeparator="none"
+              onClick={() =>
+                setExpanded((prev) => ({
+                  ...prev,
+                  [platform.platform_slug]: !prev[platform.platform_slug],
+                }))
+              }
+            >
+              {isExpanded ? "Hide Files" : `Show Files (${platform.files.length})`}
+            </ButtonItem>
+          </PanelSectionRow>
+        )}
         {isExpanded && (
           <Focusable>
             {platform.files.map((file) => {

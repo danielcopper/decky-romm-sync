@@ -136,15 +136,22 @@ async def test_cached_game_detail_never_carries_a_bios_answer(harness):
 
 
 async def test_bios_status_unreachable_server_is_unknown(harness):
-    """An unreachable server on a machine that states no emulators answers "unknown"."""
+    """An unreachable server on a machine that states no emulators answers "unknown".
+
+    The verdict rides the LEVEL as well as the flag (#1660). The check ran and
+    could not establish the requirement, which is an answer the game-detail page
+    shows as one — where a check that RAISED carries no level at all and leaves
+    the page as it is. Both keep ``bios_status`` absent and both keep the flag,
+    so the level is the only thing that tells them apart.
+    """
     _seed_versioned_rom(harness, platform_slug="psvita")
     harness.romm.list_firmware_side_effect = RuntimeError("offline")
 
     result = await harness.plugin.get_bios_status(42)
 
     assert result["bios_status"] is None
-    assert result["bios_level"] is None
-    assert result["bios_label"] is None
+    assert result["bios_level"] == "unknown"
+    assert result["bios_label"] == "Unknown"
     assert result["bios_status_unknown"] is True
 
 

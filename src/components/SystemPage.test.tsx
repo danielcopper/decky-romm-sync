@@ -1082,6 +1082,34 @@ describe("SystemPage", () => {
       // Not flagged as needing BIOS (title carries no "BIOS needed" suffix).
       expect(container.textContent).not.toContain("BIOS needed");
     });
+
+    it("says so in words for an unanswerable platform with no files at all (#1660)", async () => {
+      // A platform ES-DE offers no RetroArch core for — PS3 through RPCS3 —
+      // holds no row to count, so the file-count description would read "0
+      // file(s) nothing installed could answer for": a finished count of nothing
+      // where the truth is that nobody was asked. There is also no list to open,
+      // so the expander goes with it.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "ps3",
+            bios_level: "unknown",
+            server_count: 0,
+            local_count: 0,
+            files: [],
+          }),
+        ],
+      });
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(container.textContent).toContain("BIOS requirement unknown");
+      expect(container.textContent).toContain("Nothing installed could answer for this system");
+      expect(container.textContent).not.toContain("file(s) nothing installed could answer for");
+      expect(container.textContent).not.toContain("Show Files");
+      expect(container.innerHTML).toContain("#8f98a0");
+      expect(container.innerHTML).not.toContain("#5ba32b");
+    });
   });
 
   // ------------------------------------------------------------------

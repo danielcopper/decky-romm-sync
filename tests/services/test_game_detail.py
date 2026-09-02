@@ -945,6 +945,35 @@ class TestGetBiosStatusNotFound:
         assert result["bios_status"] is None
         assert result["bios_status_unknown"] is True
 
+    @pytest.mark.asyncio
+    async def test_an_unknown_verdict_carries_the_level_a_failed_read_does_not(self, plugin, game_detail_service):
+        """The two payloads behind ``bios_status_unknown`` are told apart by the level (#1660).
+
+        Both ship an absent ``bios_status`` and both leave a shown requirement
+        standing, so the flag cannot separate them — but only one of them is an
+        ANSWER, and the frontend renders that one as "BIOS requirement unknown"
+        instead of dropping the BIOS tab. A read that raised carries no level, so
+        it stays a non-answer; the pair is asserted together because a change to
+        either side is only a defect against the other.
+        """
+        _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="ps3")
+        game_detail_service._bios_checker.check_platform_bios = AsyncMock(
+            return_value={"needs_bios": False, "bios_status_unknown": True}
+        )
+        answered = await game_detail_service.get_bios_status(42)
+
+        game_detail_service._bios_checker.check_platform_bios = AsyncMock(side_effect=Exception("fail"))
+        raised = await game_detail_service.get_bios_status(42)
+
+        assert answered == {
+            "bios_status": None,
+            "bios_level": "unknown",
+            "bios_label": "Unknown",
+            "bios_status_unknown": True,
+        }
+        assert raised["bios_level"] is None
+        assert raised["bios_label"] is None
+
 
 class TestGetCachedGameDetailSaveStatusConflicts:
     @pytest.mark.asyncio

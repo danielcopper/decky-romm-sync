@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 from domain import firmware_paths
 from domain.bios_file import BiosFile
 from domain.bios_status import (
+    BIOS_LEVEL_UNKNOWN,
     collect_firmware_status,
     compute_bios_level,
     count_required,
@@ -386,7 +387,7 @@ class FirmwareService:
         core_so, _ = self._core_info.get_active_core(system)
         return core_so
 
-    def _bios_aggregates(self, files, platform_slug: str) -> dict[str, Any]:
+    def _bios_aggregates(self, files, platform_slug: str, complete: bool) -> dict[str, Any]:
         """The counts and the level every surface reads off one classified file list.
 
         One derivation for the per-game paths and the System page, so a platform
@@ -424,15 +425,22 @@ class FirmwareService:
         }
         # bios_level state ("unknown" / "ok" / "partial" / "missing") so the
         # frontend reads the verdict straight off this payload instead of
-        # re-deriving the threshold logic. "unknown" (server files present, no
-        # emulator's answer established for any of them) replaces the false "ok"
-        # a bare count would give.
-        result["bios_level"] = compute_bios_level(format_bios_status(result, platform_slug))
+        # re-deriving the threshold logic. "unknown" replaces the false "ok" a
+        # bare count would give, for a platform whose server files went entirely
+        # unanswered and for one holding no file at all under a reading that
+        # never happened.
+        #
+        # The rows travel with the counts here because the second of those two
+        # turns on there being no row; ``result`` itself stays row-free, because
+        # it is the aggregate half of a payload that carries them separately.
+        result["bios_level"] = compute_bios_level(
+            format_bios_status({**result, "files": files}, platform_slug, reading_complete=complete)
+        )
         return result
 
-    def _bios_payload(self, files, platform_slug: str) -> dict[str, Any]:
+    def _bios_payload(self, files, platform_slug: str, complete: bool) -> dict[str, Any]:
         """The aggregates plus the per-file rows — what the per-game surfaces read."""
-        return {**self._bios_aggregates(files, platform_slug), "files": [asdict(f) for f in files]}
+        return {**self._bios_aggregates(files, platform_slug, complete), "files": [asdict(f) for f in files]}
 
     # ── Public API ───────────────────────────────────────────
 
@@ -467,7 +475,8 @@ class FirmwareService:
         A platform whose emulators want firmware the library has never held would
         otherwise be absent from a page that is about exactly that — and with the
         server unreachable, every platform is in that position. Returns the slugs
-        it seeded so the caller can drop the ones that turn out to want nothing.
+        it seeded so the caller can drop the ones that turn out to have nothing
+        to say (:func:`_has_something_to_say`).
 
         A slug is seeded only when none of its firmware-directory spellings is
         already a key: RomM files a platform's firmware under its own directory
@@ -532,6 +541,7 @@ class FirmwareService:
             plat["emulators"] = options_to_payload(options["options"])
             plat["emulator_data_available"] = options["available"]
             scope = self._core_scope(options)
+            complete = catalogue.reading_complete_for(scope)
             plat["files"].extend(
                 _overview_row(item) for item in self._wanted_beyond_server(placements, scope, in_library)
             )
@@ -546,13 +556,13 @@ class FirmwareService:
                     for f in plat["files"]
                 ],
                 placements,
-                catalogue.reading_complete_for(scope),
+                complete,
                 core_so,
             )
             plat["files"] = [{**raw, **_wanted_fields(entry)} for raw, entry in zip(plat["files"], files, strict=True)]
             plat["has_games"] = slug in synced_slugs
             plat["all_downloaded"] = all(f["downloaded"] for f in plat["files"])
-            self._set_platform_bios_aggregates(plat, slug, files)
+            self._set_platform_bios_aggregates(plat, slug, files, complete)
 
     def _resolve_platform_emulator_label(self, platform_slug: str, options: list[Any]) -> str | None:
         """Resolve the System-page active-emulator display label for a platform.
@@ -573,7 +583,7 @@ class FirmwareService:
         default = select_default_option(options)
         return default.label if default is not None else None
 
-    def _set_platform_bios_aggregates(self, plat: dict[str, Any], slug: str, files) -> None:
+    def _set_platform_bios_aggregates(self, plat: dict[str, Any], slug: str, files, complete: bool) -> None:
         """Stamp the per-platform BIOS aggregates onto a ``get_firmware_status`` entry.
 
         Adds ``server_count`` / ``local_count`` / ``required_count`` /
@@ -583,8 +593,12 @@ class FirmwareService:
         instead of re-deriving the threshold logic in the frontend. The whole
         payload comes from the same builder the per-game path uses, so the level
         a platform shows and the level its games show cannot diverge.
+
+        *complete* is the reading state for the platform's own emulators, and it
+        is what stops a platform with no file at all from reading a green "all
+        ready" it could not have established.
         """
-        payload = self._bios_aggregates(files, slug)
+        payload = self._bios_aggregates(files, slug, complete)
         plat["server_count"] = payload["server_count"]
         plat["local_count"] = payload["local_count"]
         plat["required_count"] = payload["required_count"]
@@ -614,7 +628,7 @@ class FirmwareService:
         in_library = {fw.get("file_name", "") for fw in firmware_list}
         self._enrich_platform_map(platforms_map, synced_slugs, catalogue, in_library)
         platforms = sorted(
-            (plat for slug, plat in platforms_map.items() if slug not in seeded or plat["files"]),
+            (plat for slug, plat in platforms_map.items() if slug not in seeded or _has_something_to_say(plat)),
             key=lambda p: p["platform_slug"],
         )
         return {"success": True, "server_offline": server_offline, "platforms": platforms}
@@ -834,20 +848,35 @@ class FirmwareService:
         if not files:
             return {"needs_bios": False} if complete else {"needs_bios": False, "bios_status_unknown": True}
 
-        return self._bios_payload(files, platform_slug)
+        return self._bios_payload(files, platform_slug, complete)
 
     def _delete_platform_bios_io(self, platform_slug, files):
         """Sync worker for delete_platform_bios — file deletions then DB prune.
 
         Runs in an executor. Every filesystem removal happens outside any
-        transaction; only the ``BiosFile`` deletes for the files that were
-        actually removed are wrapped in a single short write UoW (ADR-0006).
+        transaction: the records are read in one short UoW before the loop and
+        the deletes for the files that were actually removed in one after it
+        (ADR-0006).
+
+        A row is removed only when the plugin is the one that put the file
+        there — it is on the server, AND a ``downloaded_bios`` record names it
+        under one of the platform's firmware slugs. ``downloaded`` on its own
+        says no more than "a file is sitting at that path", which is equally
+        true of firmware RetroDECK ships with its own components
+        (``dolphin-emu/Sys/codehandler.bin`` is one, and no RomM library holds
+        it) and of a file the user placed by hand under a name the server
+        happens to share. Neither can be fetched back, so neither is ours to
+        delete. The record is the stricter of the two conditions and the one
+        that carries the second case; ``on_server`` is kept beside it because
+        a row the library does not hold offers no download to undo the removal.
         """
+        recorded = self._recorded_bios_files(platform_slug)
         deleted = 0
         errors = []
-        removed_names: list[str] = []
+        removed: list[tuple[str, str]] = []
         for f in files:
-            if not f["downloaded"]:
+            record_slugs = recorded.get(f["file_name"], [])
+            if not f["downloaded"] or not f["on_server"] or not record_slugs:
                 continue
             try:
                 self._firmware_file_store.remove_file(f["local_path"])
@@ -856,35 +885,44 @@ class FirmwareService:
                 errors.append(f"{f['file_name']}: {e}")
                 continue
             deleted += 1
-            removed_names.append(f["file_name"])
+            removed.extend((slug, f["file_name"]) for slug in record_slugs)
 
-        if removed_names:
-            self._prune_bios_records(platform_slug, removed_names)
+        if removed:
+            self._prune_bios_records(removed)
 
         return deleted, errors
 
-    def _prune_bios_records(self, platform_slug, file_names):
-        """Delete the ``BiosFile`` records for *file_names* on *platform_slug*.
+    def _recorded_bios_files(self, platform_slug) -> dict[str, list[str]]:
+        """The plugin's own download records for *platform_slug*, keyed by file name.
 
         The BIOS rows are keyed by the firmware-directory slug stored at download
         time, which may differ from the platform slug (e.g. ``psx`` → ``ps``), so
-        we resolve the candidate firmware slugs and match each removed filename
-        against the records under them. One short write UoW.
+        every candidate spelling is read and the record's own slug is kept
+        against the name — the prune needs it to address the row again. One
+        short read UoW, closed before any file I/O.
         """
-        fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        wanted = set(file_names)
+        records: dict[str, list[str]] = {}
         with self._uow_factory() as uow:
-            keys = [
-                (record.platform_slug, record.file_name)
-                for slug in fw_slugs
-                for record in uow.bios_files.iter_by_platform(slug)
-                if record.file_name in wanted
-            ]
+            for slug in firmware_paths.resolve_firmware_slugs(platform_slug):
+                for record in uow.bios_files.iter_by_platform(slug):
+                    records.setdefault(record.file_name, []).append(record.platform_slug)
+        return records
+
+    def _prune_bios_records(self, keys) -> None:
+        """Delete the ``BiosFile`` records named by the ``(slug, file_name)`` *keys*.
+
+        One short write UoW, after the removals it records.
+        """
+        with self._uow_factory() as uow:
             for slug, file_name in keys:
                 uow.bios_files.delete(slug, file_name)
 
     async def delete_platform_bios(self, platform_slug) -> dict[str, Any]:
-        """Delete locally downloaded BIOS files for a platform."""
+        """Delete the BIOS files the plugin downloaded for a platform.
+
+        Scoped to the plugin's own downloads, never to everything sitting in the
+        platform's BIOS locations — see ``_delete_platform_bios_io``.
+        """
         bios_status = await self.check_platform_bios(platform_slug)
         if not bios_status.get("needs_bios") or not bios_status.get("files"):
             return {"success": True, "deleted_count": 0, "message": "No BIOS files for this platform"}
@@ -902,6 +940,21 @@ class FirmwareService:
                 "message": f"Deleted {deleted} file(s), {len(errors)} error(s)",
             }
         return {"success": True, "deleted_count": deleted, "message": f"Deleted {deleted} BIOS file(s)"}
+
+
+def _has_something_to_say(plat: dict[str, Any]) -> bool:
+    """Is a seeded platform worth a block on the System page?
+
+    A seeded platform is one the listing never named — it is here because the
+    user syncs games for it, not because anything is known to be wanted. With a
+    file to show, it speaks for itself. With none, it stays only when its answer
+    is ``unknown``: dropping the block is itself a claim, read by anyone looking
+    for the platform as "nothing to manage here", and that is the false negative
+    a platform whose emulators cannot be asked must never give. A platform whose
+    reading finished and found nothing wanted really has nothing to manage, and
+    still drops out.
+    """
+    return bool(plat["files"]) or plat["bios_level"] == BIOS_LEVEL_UNKNOWN
 
 
 def _overview_row(item: dict[str, Any]) -> dict[str, Any]:

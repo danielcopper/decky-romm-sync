@@ -32,7 +32,7 @@ describe("BiosTab", () => {
     const { container } = render(
       <BiosTab biosStatus={biosStatus} biosLevel="missing" coreInfo={coreInfo} isActive={true} />,
     );
-    expect(container.textContent).toContain("0/1 files ready");
+    expect(container.textContent).toContain("Nothing required (0/1 files held)");
     expect(container.textContent).toContain("Snes9x");
   });
 
@@ -46,6 +46,38 @@ describe("BiosTab", () => {
   it("renders nothing when nothing needs BIOS", () => {
     const { container } = render(<BiosTab biosStatus={null} biosLevel={null} coreInfo={coreInfo} isActive={true} />);
     expect(container.textContent).toBe("");
+  });
+
+  it("renders the unknown reading off a status with no counts at all", () => {
+    // What a platform whose emulators cannot be asked hands the tab: the wire
+    // payload for "nothing could establish it", with no file rows and no
+    // aggregates to read. The pane still has to say so rather than fall through
+    // to the no-requirement sentence, whose counts would both be zero.
+    const { container } = render(
+      <BiosTab
+        biosStatus={{ needs_bios: false, bios_status_unknown: true }}
+        biosLevel="unknown"
+        coreInfo={coreInfo}
+        isActive={true}
+      />,
+    );
+    expect(container.textContent).toContain("BIOS requirement unknown");
+    expect(container.textContent).not.toContain("Nothing required");
+    expect(container.innerHTML).toContain("#8f98a0");
+  });
+
+  it("drops the ratio when the library holds none of the platform's files", () => {
+    // "Nothing required (0/0 files held)" counts a set that does not exist.
+    const { container } = render(
+      <BiosTab
+        biosStatus={{ needs_bios: true, server_count: 0, local_count: 0, all_downloaded: false, required_count: 0 }}
+        biosLevel="ok"
+        coreInfo={coreInfo}
+        isActive={true}
+      />,
+    );
+    expect(container.textContent).toContain("Nothing required");
+    expect(container.textContent).not.toContain("files held");
   });
 
   it("falls back to 'Default' when no active core is resolved", () => {

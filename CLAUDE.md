@@ -262,17 +262,19 @@ Format: **invariant** — tier — enforced by.
   is a finished reading of nobody: every server file classifies `not_needed`, `required_count` is 0, and the platform
   reports a green "All ready" over firmware the standalone emulator will not boot without
 - **A firmware row the RomM library does not hold (`on_server: False`) counts towards readiness, and never towards a
-  download affordance or a progress ratio** — test + prompt-only — `tests/services/test_firmware.py` pins the row's
-  shape (`id` absent, `on_server` clear), that it raises `required_count`, and that it stays out of `server_count`;
-  `src/components/SystemPage.test.tsx` pins that the buttons key off the fetchable set. **The three axes live in three
-  places and nothing joins them.** `domain/bios_status.py::count_required` is readiness and counts every required row;
+  download affordance, a progress ratio, or a deletion** — test + prompt-only — `tests/services/test_firmware.py` pins
+  the row's shape (`id` absent, `on_server` clear), that it raises `required_count`, that it stays out of
+  `server_count`, and that it survives a platform delete; `src/components/SystemPage.test.tsx` pins that the buttons key
+  off the fetchable set. **The four axes live in four places and nothing joins them.**
+  `domain/bios_status.py::count_required` is readiness and counts every required row;
   `services/firmware.py::_bios_aggregates` scopes `server_count` / `local_count` to `on_server` rows; the download
-  buttons' condition is a filter inside `SystemPage.tsx` and exists nowhere else. Each fold has its own quiet failure:
-  drop the row from readiness and a platform reads ready while a required file is absent; add it to the ratio and a SNES
-  page reports `0 / 26 files, 26 missing` for twenty-six optional files no core wants; add it to the buttons and the
-  page offers a download that cannot succeed. `on_server` is the one field all three read; the row's `id: None` is an
-  honest absence with no consumer at all, so nothing breaks if it is filled in and nothing is guarded by leaving it
-  empty
+  buttons' condition is a filter inside `SystemPage.tsx` and exists nowhere else; the delete's guard is a condition
+  inside `services/firmware.py::_delete_platform_bios_io`. Each fold has its own quiet failure: drop the row from
+  readiness and a platform reads ready while a required file is absent; add it to the ratio and a SNES page reports
+  `0 / 26 files, 26 missing` for twenty-six optional files no core wants; add it to the buttons and the page offers a
+  download that cannot succeed; add it to the delete and Delete BIOS destroys a file nothing here can fetch back.
+  `on_server` is the one field all four read; the row's `id: None` is an honest absence with no consumer at all, so
+  nothing breaks if it is filled in and nothing is guarded by leaving it empty
 - **No BIOS answer outlives the page that asked for it** — test + prompt-only —
   `tests/services/test_game_detail.py::TestGetCachedGameDetailCarriesNoBiosAnswer` and the two contract cases in
   `tests/contract/test_game_detail_read.py`. `get_cached_game_detail` carries none and says so (`bios_status_unknown`,

@@ -46,8 +46,9 @@ export interface PanelState {
   // backend (`compute_bios_level`); both the cache path and the bios-change refresh
   // path thread `bios_level` straight off their respective payloads, never
   // re-deriving it. Drives the BIOS status-dot color, in `BiosTab`.
-  // "unknown" (server files present, no emulator's answer established for any of
-  // them) renders neutral grey.
+  // "unknown" (no installed emulator's answer could be established) renders
+  // neutral grey, and is the one level that stands beside a `biosStatus` holding
+  // no files.
   // null when no BIOS need.
   biosLevel: BiosLevel | null;
   // Core info comes from the dedicated get_platform_core_info path (#923), not
@@ -248,6 +249,13 @@ function refreshMetadataInBackground(binding: RomBinding): Promise<void> {
     .catch(() => {});
 }
 
+/** The status the BIOS tab stands on when the requirement could not be
+ *  established — the wire payload for that answer, kept whole rather than
+ *  restated: `check_platform_bios` says exactly this, and `BiosTab` renders the
+ *  grey dot and "BIOS requirement unknown" off the level beside it. No file rows,
+ *  because there is nothing the plugin could say about any file. */
+const UNKNOWN_REQUIREMENT_STATUS: BiosStatus = { needs_bios: false, bios_status_unknown: true };
+
 /** The panel's two BIOS fields as a BIOS answer carries them — a cached game
  *  detail or the live `get_bios_status` read below, which ship the identical
  *  shape — or `null` when the payload carries no BIOS answer at all: a detail
@@ -255,16 +263,33 @@ function refreshMetadataInBackground(binding: RomBinding): Promise<void> {
  *  delete makes it. The caller then leaves the shown status standing instead of
  *  hiding the BIOS tab on a non-answer (#1693).
  *
+ *  `bios_status_unknown` rides two payloads and only one of them is a
+ *  non-answer. The level tells them apart: an "unknown" level is a check that
+ *  RAN and could not establish the requirement, which is an answer and is shown
+ *  as one — a platform whose only emulators are standalone has no other outcome,
+ *  and dropping its tab said it needed nothing (#1660). No level is a read that
+ *  never happened, and that one still leaves the page as it is.
+ *
  *  `bios_level` is computed by the backend (`compute_bios_level`) and threaded
  *  straight through, never re-derived; it is null whenever there is no
  *  requirement. */
 export function biosFieldsFromCache(cached: BiosAnswer): Pick<PanelState, "biosStatus" | "biosLevel"> | null {
-  if (cached.bios_status_unknown) return null;
+  if (cached.bios_status_unknown) {
+    if (cached.bios_level !== "unknown") return null;
+    return { biosStatus: UNKNOWN_REQUIREMENT_STATUS, biosLevel: "unknown" };
+  }
   if (!cached.bios_status) return { biosStatus: null, biosLevel: null };
   return {
     biosStatus: { needs_bios: true, ...cached.bios_status },
     biosLevel: cached.bios_level ?? null,
   };
+}
+
+/** The fields a platform-level BIOS answer of "unknown" folds in — the same two
+ *  {@link biosFieldsFromCache} builds, for the one caller that reads the raw
+ *  `check_platform_bios` payload instead of a game-detail one. */
+export function unknownBiosFields(): Pick<PanelState, "biosStatus" | "biosLevel"> {
+  return { biosStatus: UNKNOWN_REQUIREMENT_STATUS, biosLevel: "unknown" };
 }
 
 /** Go back for the BIOS answer the cached detail could not give, and fold it in.

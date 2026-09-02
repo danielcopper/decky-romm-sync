@@ -25,12 +25,17 @@ When you open a game whose platform has BIOS files — on your RomM server, or a
 — the game detail panel shows a BIOS status indicator. Open the panel's **BIOS** tab to see the readiness line. Its dot
 color reflects the same unknown/ok/partial/missing verdict used everywhere in the plugin:
 
-- **Green** — all required files present: "All required ready (2/2)" (or "All ready (3/5)" when nothing on the system is
-  required and the count is simply of every file)
+- **Green** — nothing required is missing: "All required ready (2/2)", or "Nothing required (3/5 files held)" when the
+  core you launch with requires none of the system's files
 - **Orange** — some required files present: "1/2 required files ready"
 - **Red** — no required files present yet
 - **Grey** — "BIOS requirement unknown": the plugin could not work the requirement out at all (see
   [When the requirement is unknown](#when-the-requirement-is-unknown))
+
+The sentence says what the dot says, and both are about the **required** files. Where the system has none, the dot is
+green because nothing required is missing — so the line leads with "Nothing required" and the ratio beside it is
+inventory, counting the files your RomM library holds and how many of them you have. It is not a readiness score, and
+those files are not "optional" either: a core you are not launching with may well require one.
 
 Both numbers on the line count the same thing. Where the system has required files the ratio is of those; where it has
 none, the ratio is of the files your RomM library holds — never one of each. Files your emulator asks for that are not
@@ -40,10 +45,15 @@ cannot.
 The readiness line is computed against the **active core** for that game — so switching to a core that needs no BIOS (or
 that treats a file as optional) clears the warning, while switching to a core that requires a missing file surfaces it.
 
-A BIOS warning only ever disappears on an **answer**. When the plugin cannot work out the requirement — most often right
-after a BIOS download or delete, before the state has been read again — it keeps showing the last status it knew rather
-than reporting "no BIOS needed". So a check that could not be completed never quietly clears a missing-BIOS warning and
-lets the game launch without its files; it leaves the warning where it was.
+A BIOS warning only ever disappears on an **answer**. When a check cannot be run at all — most often right after a BIOS
+download or delete, before the state has been read again — the plugin keeps showing the last status it knew rather than
+reporting "no BIOS needed". So a check that could not be completed never quietly clears a missing-BIOS warning and lets
+the game launch without its files; it leaves the warning where it was.
+
+"The requirement is unknown" is itself an answer, and a different one. A check that ran and could not establish what the
+system needs says so on the page — grey dot, "BIOS requirement unknown" — instead of hiding the BIOS tab. Hiding it
+would say the system needs nothing, which is exactly the claim that could not be made. Every PS3 game is in that
+position, since RPCS3 is not a RetroArch core and cannot be asked.
 
 It does not leave it there indefinitely, though. Whenever the game detail page is shown a BIOS state it could not work
 out — when the page opens, after switching the emulator core, after switching to another version of the game — it asks
@@ -86,7 +96,8 @@ if your RomM server has BIOS files for them.
 4. Below the core, each platform shows how many of your library's BIOS files are downloaded (e.g. "3 / 5 files"), or how
    many required files are ready when the system has any
 5. Tap **Show Files** to see the individual file list for a platform — each row says whether it is _needed_, _optional_,
-   _not needed_ or _unknown_ for that platform
+   _not needed_ or _unknown_ for that platform. A system whose requirement could not be worked out and that has no files
+   to list shows **"BIOS requirement unknown"** with no **Show Files** button
 6. Tap **Download All** to download all missing BIOS files for a platform
 7. Tap **Delete BIOS** to remove that platform's downloaded BIOS files (see below)
 
@@ -107,8 +118,23 @@ deletion is local, the button works even when your RomM server is offline.
 3. Confirm the action in the dialog that appears
 
 This is a destructive action, so a confirmation dialog asks you to confirm before anything is deleted. Once confirmed,
-the plugin removes every downloaded BIOS file for that system from your RetroDECK bios directory and reports the result.
-Games that need those files won't launch until you download them again with **Download All** or **Download Required**.
+the plugin removes the BIOS files **it downloaded** for that system from your RetroDECK bios directory and reports the
+result. Games that need those files won't launch until you download them again with **Download All** or **Download
+Required**.
+
+**It only ever deletes its own downloads.** A file is removed when both of these are true: your RomM library holds it,
+and the plugin has a record of downloading it. Everything else in the BIOS folder is left alone, including:
+
+- **Firmware RetroDECK ships itself.** RetroDECK installs some files into the BIOS folder with its own components —
+  `bios/dolphin-emu/Sys/codehandler.bin` is one. Your emulator asks for it, so it is listed on the page, but it did not
+  come from your library and could not be downloaded again.
+- **Files you placed there by hand**, even where the name matches one your RomM library holds. Without a download record
+  the plugin has no claim on it.
+
+That is deliberately stricter than "is it in my library": the plugin can only offer to re-fetch what it fetched, so
+anything else is not its to remove. If you want one of those files gone, delete it in the file manager. The count on the
+button ("Delete BIOS (3)") counts the downloaded files your library holds, so where one of them was placed by hand the
+plugin will report deleting fewer than the button said.
 
 The same per-platform delete is also available from the **Data Management** page (under per-platform actions) for
 bulk-cleanup workflows.
@@ -147,17 +173,24 @@ A **file** reads unknown when the plugin could not ask every core the system off
 description file, or RetroDECK's configuration could not be read at all.
 
 A whole **system** reads unknown, showing a neutral grey status and the text **"BIOS requirement unknown"** instead of a
-green all-clear, only when all three of these hold: your server holds firmware for that system, not one of those files
-could be answered for, and at least one of them reads unknown. In other words every row on the platform is unknown,
-which is what leaves nothing to base a readiness claim on. A single answered row is enough to keep the normal
+green all-clear, in either of two situations.
+
+The first is a system with files on the page, not one of which could be answered for. Every row on the platform is
+unknown, which is what leaves nothing to base a readiness claim on. A single answered row is enough to keep the normal
 green/amber/red status: if the system offers two cores and only one is unreadable, the other core's answers still stand
 and only the unanswered rows read unknown. A system whose every file was answered with _not needed_ is not this case at
 all — that is a finished answer, and it reads green.
 
-Two situations reach it. The common one is a system whose emulators are all standalone — PS3 through RPCS3, for instance
-— where there is no core to ask in the first place. The other is a system all of whose cores are unreadable; on a stock
-RetroDECK that is rare, since only a handful of bundled cores ship without a description file and just one of them is
-offered for any system.
+The second is a system with **no files on the page at all**, where the plugin also could not ask anything. An empty list
+means "nothing here wants anything" only when every core was asked; when none could be, it means nothing, and reporting
+it as ready would be an all-clear over firmware nobody checked. This is the shape a PS3 page has when your RomM library
+holds no PS3 firmware: no rows, no cores to ask, and a grey "BIOS requirement unknown". The system keeps its block on
+the **System** page for the same reason — dropping it would say there is nothing to manage.
+
+Two causes reach either shape. The common one is a system whose emulators are all standalone — PS3 through RPCS3, for
+instance — where there is no core to ask in the first place. The other is a system all of whose cores are unreadable; on
+a stock RetroDECK that is rare, since only a handful of bundled cores ship without a description file and just one of
+them is offered for any system.
 
 This is informational, not an error: your files may be perfectly fine, the plugin simply can't confirm what is needed.
 You can still download them manually through RomM if your emulator needs them. Genuinely BIOS-free systems (such as the
@@ -215,8 +248,9 @@ you at a glance which core the plugin is filtering for.
 4. If a platform offers **only standalone emulators** (no RetroArch core at all), or the live configuration can't be
    read, the plugin has nothing to filter with — so it does not filter, and it does not guess either. Every BIOS file
    the platform has is listed, each marked _unknown_, and the platform's summary reads **BIOS requirement unknown** with
-   a grey dot. That is the honest answer for a platform like PS3, whose emulators the plugin cannot yet ask: saying
-   nothing is needed would report it ready over firmware the emulator will not boot without.
+   a grey dot — including when the platform has no files to list, which is where saying nothing at all would have read
+   as "nothing needed". That is the honest answer for a platform like PS3, whose emulators the plugin cannot yet ask:
+   saying nothing is needed would report it ready over firmware the emulator will not boot without.
 
 Whatever this chain resolves to is the **same core the game launches on** — the plugin bakes the resolved core into the
 Steam shortcut, so the core shown for BIOS, saves, and the core badge always matches the core that runs.

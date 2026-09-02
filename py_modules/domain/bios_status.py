@@ -32,6 +32,11 @@ BIOS_LEVEL_OK = "ok"
 BIOS_LEVEL_PARTIAL = "partial"
 BIOS_LEVEL_MISSING = "missing"
 
+# The compact token :func:`compute_bios_label` answers for the unknown level. A
+# constant because a caller that ships the level without going through the
+# function still has to name the label that goes with it.
+BIOS_LABEL_UNKNOWN = "Unknown"
+
 
 @dataclass(frozen=True)
 class AvailableCore:
@@ -88,10 +93,22 @@ class BiosStatus:
     # platform's firmware could be established at all.
     known_count: int | None = None
     unknown_count: int = 0
+    # Whether an absence from this platform's file list may be read as "nothing
+    # wants it" — ``FirmwareCatalogue.reading_complete_for`` scoped to the
+    # emulators the platform offers. Defaults to ``True`` so a caller that does
+    # not supply it keeps the level it always got; the one decision it moves is
+    # a platform with no files at all.
+    reading_complete: bool = True
     cached_at: float = 0.0
 
 
-def format_bios_status(bios: dict[str, Any], platform_slug: str, *, cached_at: float = 0.0) -> BiosStatus:
+def format_bios_status(
+    bios: dict[str, Any],
+    platform_slug: str,
+    *,
+    reading_complete: bool = True,
+    cached_at: float = 0.0,
+) -> BiosStatus:
     """Build a frontend-ready BiosStatus dataclass from raw firmware check result."""
     raw_files = bios.get("files", [])
     if raw_files and isinstance(raw_files[0], dict):
@@ -135,6 +152,7 @@ def format_bios_status(bios: dict[str, Any], platform_slug: str, *, cached_at: f
         available_cores=available_cores,
         known_count=bios.get("known_count"),
         unknown_count=bios.get("unknown_count", 0),
+        reading_complete=reading_complete,
         cached_at=cached_at,
     )
 
@@ -219,25 +237,37 @@ def count_required(files: tuple[BiosFileEntry, ...]) -> tuple[int, int]:
 
 
 def _nothing_established(status: BiosStatus) -> bool:
-    """The server holds firmware and the machine answered for none of it."""
-    return (
-        status.known_count is not None
-        and status.server_count > 0
-        and status.known_count == 0
-        and status.unknown_count > 0
-    )
+    """Nothing about this platform's firmware could be established.
+
+    Two shapes, and the second is why ``reading_complete`` exists. The server
+    holds firmware and the machine answered for none of it — every row unknown,
+    so there is nothing to base a claim on. Or the platform has no file at all
+    AND its reading never happened: an empty list under a *complete* reading is
+    the finished answer "no emulator here wants anything", while under an
+    incomplete one it is silence. Silence read as an answer is the green "All
+    ready" a platform whose only emulator is standalone used to show over
+    firmware that emulator will not boot without.
+
+    ``known_count is None`` is a caller that did not supply the counts, and the
+    decision is then left to the required-count logic as it always was.
+    """
+    if status.known_count is None:
+        return False
+    if not status.reading_complete and not status.files:
+        return True
+    return status.server_count > 0 and status.known_count == 0 and status.unknown_count > 0
 
 
 def compute_bios_level(status: BiosStatus) -> str:
     """Compute BIOS status level: 'unknown', 'ok', 'partial', or 'missing'.
 
-    ``'unknown'`` means no emulator's answer could be established for a single
-    one of this platform's server files, so no readiness claim can be made. It is
-    checked first, before the required-count logic, and only fires when the
-    caller supplied ``known_count`` (else the decision is deferred to the
-    existing ok/partial/missing logic). Because it requires ``known_count == 0``
-    it implies ``required_count == 0``, so it can only ever displace a false
-    ``'ok'`` — never mask a real ``'missing'``.
+    ``'unknown'`` means no readiness claim can be made — see
+    :func:`_nothing_established` for the two shapes that reach it. It is checked
+    first, before the required-count logic, and only fires when the caller
+    supplied ``known_count`` (else the decision is deferred to the existing
+    ok/partial/missing logic). Both shapes imply ``required_count == 0`` — one
+    answers for no file, the other holds none — so it can only ever displace a
+    false ``'ok'``, never mask a real ``'missing'``.
 
     A platform whose files are all *answered for* and wanted by nothing is a
     different case entirely and reaches ``'ok'``: "no emulator here needs these"
@@ -263,7 +293,7 @@ def compute_bios_level(status: BiosStatus) -> str:
 def compute_bios_label(status: BiosStatus) -> str:
     """Compute the compact BIOS status token (verbose phrasing stays per-surface)."""
     if _nothing_established(status):
-        return "Unknown"
+        return BIOS_LABEL_UNKNOWN
     req_count = status.required_count
     req_done = status.required_downloaded
     if req_count is not None and req_done is not None:

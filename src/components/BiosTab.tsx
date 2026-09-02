@@ -34,7 +34,9 @@ import { infoRow, section } from "./panelSection";
 
 interface BiosTabProps {
   /** The platform's BIOS requirement, or null when its core needs none — in
-   *  which case there is no tab to render. */
+   *  which case there is no tab to render. A platform whose requirement could
+   *  not be established passes a status with no files rather than null: not
+   *  knowing is something to say, and no tab would have said the opposite. */
   biosStatus: BiosStatus | null;
   /** Backend-computed readiness verdict driving the status-dot color;
    *  null whenever there is no requirement. */
@@ -81,6 +83,13 @@ function buildBiosCoreLines(
  * every file, because that is then the only axis there is. Printing a
  * required-file sentence next to an all-files ratio described two different sets
  * as one line.
+ *
+ * The sentence also has to say what the DOT says, and the dot is the backend's
+ * required-file verdict: with nothing required it is green whatever the ratio
+ * reads, so "0/20 files ready" beside it claimed a readiness it did not mean
+ * (#1660). What is true there is that nothing is required; the ratio is then
+ * inventory, and says so. "Optional" would be the wrong word for it — those
+ * files may be required by a core the user is not launching with.
  */
 function buildBiosHeader(bios: BiosStatus, biosLevel: BiosTabProps["biosLevel"]): ReactElement[] {
   const localCount = bios.local_count ?? 0;
@@ -103,9 +112,7 @@ function buildBiosHeader(bios: BiosStatus, biosLevel: BiosTabProps["biosLevel"])
         ? `All required ready (${reqDone}/${reqCount})`
         : `${reqDone}/${reqCount} required files ready`;
   } else {
-    biosLabel = bios.all_downloaded
-      ? `All ready (${localCount}/${serverCount})`
-      : `${localCount}/${serverCount} files ready`;
+    biosLabel = serverCount > 0 ? `Nothing required (${localCount}/${serverCount} files held)` : "Nothing required";
   }
 
   return [

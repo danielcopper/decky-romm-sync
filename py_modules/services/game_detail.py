@@ -17,7 +17,13 @@ from typing import TYPE_CHECKING, Any, cast
 
 from models.metadata import AchievementSummary
 
-from domain.bios_status import compute_bios_label, compute_bios_level, format_bios_status
+from domain.bios_status import (
+    BIOS_LABEL_UNKNOWN,
+    BIOS_LEVEL_UNKNOWN,
+    compute_bios_label,
+    compute_bios_level,
+    format_bios_status,
+)
 from domain.platform_names import decode_platform_names
 from domain.save_status import compute_save_sync_display
 from lib.path_safety import PathTraversalError, safe_join
@@ -122,6 +128,12 @@ class GameDetailService:
         as opposed to the answer "the active core needs no BIOS". The two ship
         the same absent ``bios_status``, and only the latter may take a shown
         requirement off the frontend, so the flag is what separates them.
+
+        Those two reasons for the flag are themselves different answers, and the
+        LEVEL is what separates them: a check that ran and could not establish
+        the requirement ships ``bios_level`` ``"unknown"``, a read that never
+        happened ships none. Both leave a shown requirement alone; only the first
+        is something to show in its own right.
         """
         return {
             "bios_status": bios_status,
@@ -365,12 +377,17 @@ class GameDetailService:
         """Return BIOS status for a ROM by looking up platform/rom_file from SQLite.
 
         Response always includes ``bios_status`` (dict or ``None``), ``bios_level``
-        (``"ok"`` / ``"partial"`` / ``"missing"`` or ``None``), ``bios_label``
-        (str or ``None``), and ``bios_status_unknown`` (bool). The pre-computed
-        level + label match what the cached ``get_cached_game_detail`` ships so
-        the frontend never re-derives them; the flag separates a check that could
-        not answer from the answer "this core needs no BIOS", which is the only
-        one of the two that clears a shown requirement.
+        (``"ok"`` / ``"partial"`` / ``"missing"`` / ``"unknown"`` or ``None``),
+        ``bios_label`` (str or ``None``), and ``bios_status_unknown`` (bool). The
+        pre-computed level + label match what the cached ``get_cached_game_detail``
+        ships so the frontend never re-derives them; the flag separates a check
+        that could not answer from the answer "this core needs no BIOS", which is
+        the only one of the two that clears a shown requirement.
+
+        Three of the four outcomes carry a level: a requirement, and the answer
+        ``"unknown"`` from a check that ran without establishing one. The fourth
+        — a check that raised — carries none, and that absence is how the
+        frontend tells a failed read from an answer it should render.
         """
         rom_id = int(rom_id)
 
@@ -404,5 +421,11 @@ class GameDetailService:
             return self._bios_answer(unknown=True)
 
         # No requirement — but a check that itself degraded to a source blind to
-        # the requirement reports that, and its verdict travels on unchanged.
-        return self._bios_answer(unknown=bool(bios.get("bios_status_unknown")))
+        # the requirement reports that, and its verdict travels on unchanged. It
+        # travels as a LEVEL as well as a flag: the flag alone is also what a
+        # failed read ships (the ``except`` above), and the frontend has to tell
+        # the two apart — an answer of "unknown" is shown as one, while a read
+        # that never happened leaves whatever is on the page standing (#1693).
+        if bios.get("bios_status_unknown"):
+            return self._bios_answer(bios_level=BIOS_LEVEL_UNKNOWN, bios_label=BIOS_LABEL_UNKNOWN, unknown=True)
+        return self._bios_answer()

@@ -129,9 +129,11 @@ export interface BiosFileStatus {
 }
 
 /**
- * The backend's readiness decision for a platform's BIOS. `"unknown"` means the
- * server holds firmware and no installed emulator's answer could be established
- * for any of it — a neutral state, never a green all-clear.
+ * The backend's readiness decision for a platform's BIOS. `"unknown"` means no
+ * installed emulator's answer could be established — either the server holds
+ * firmware and not one file of it could be answered for, or the platform holds
+ * no file at all and there was no emulator to ask. A neutral state, never a
+ * green all-clear.
  */
 export type BiosLevel = "ok" | "partial" | "missing" | "unknown";
 
@@ -153,10 +155,12 @@ export interface BiosStatus {
   // so the frontend reads the decision off the payload instead of re-deriving the
   // threshold logic. Present only when needs_bios is true.
   bios_level?: BiosLevel | null;
-  // Set when the check could not determine the requirement: the firmware fetch
-  // failed and nothing was cached, so which files even exist is unknown. The
-  // `needs_bios: false` it rides on is ignorance, not an answer, so no consumer
-  // may clear a shown requirement on it (#1693).
+  // Set when the check could not determine the requirement: the platform's
+  // emulators could not be asked, or the firmware fetch failed with nothing
+  // cached so which files even exist is unknown. The `needs_bios: false` it
+  // rides on is ignorance, not an answer, so no consumer may clear a shown
+  // requirement on it (#1693) — and the panel renders it as its own state
+  // rather than hiding the BIOS tab, which would say the same thing (#1660).
   bios_status_unknown?: boolean;
 }
 

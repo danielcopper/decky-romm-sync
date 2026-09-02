@@ -880,12 +880,17 @@ class TestGetFirmwareStatusBiosAggregates:
 
     @pytest.mark.asyncio
     async def test_a_synced_platform_nothing_wants_stays_off_the_page(self, plugin, tmp_path):
-        """Seeding every synced platform would fill the page with 0/0 rows."""
+        """Seeding every synced platform would fill the page with 0/0 rows.
+
+        The core the page can ask is offered AND read, so the empty list is a
+        finished answer — the one shape that may be dropped.
+        """
         _seed_rom(plugin._uow, rom_id=44, platform_slug="nes", app_id=1)
         fw = _make_firmware_service(
             romm_api=plugin._romm_api,
             uow_factory=FakeUnitOfWorkFactory(plugin._uow),
             firmware_resolver=FakeFirmwareResolver(),
+            core_info=_test_core_info(),
         )
         fw._loop = asyncio.get_event_loop()
 
@@ -893,6 +898,34 @@ class TestGetFirmwareStatusBiosAggregates:
             result = await fw.get_firmware_status()
 
         assert result["platforms"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_synced_platform_nothing_could_answer_for_stays_on_the_page(self, plugin, tmp_path):
+        """A platform ES-DE offers no libretro core for keeps its block, reading unknown.
+
+        The counterpart to the drop above, and the reason the drop is conditional
+        (#1660). ``ps3``'s only ES-DE entry is RPCS3, so there is no core to ask
+        and the empty file list is silence rather than an answer. Dropping the
+        block would say the system needs nothing — the exact claim the four-value
+        vocabulary exists to refuse — over firmware RPCS3 will not boot without.
+        """
+        _seed_rom(plugin._uow, rom_id=45, platform_slug="ps3", app_id=1)
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=FakeFirmwareResolver(),
+            core_info=FakeCoreInfoProvider(options=[]),
+        )
+        fw._loop = asyncio.get_event_loop()
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await fw.get_firmware_status()
+
+        ps3 = next(p for p in result["platforms"] if p["platform_slug"] == "ps3")
+        assert ps3["files"] == []
+        assert ps3["bios_level"] == "unknown"
+        assert ps3["required_count"] == 0
+        assert ps3["server_count"] == 0
 
     @pytest.mark.asyncio
     async def test_no_exists_read_escapes_the_bios_directory(self, plugin, fw, tmp_path):
@@ -1440,6 +1473,115 @@ class TestDeletePlatformBios:
         assert str(bios_dir / "scph5501.bin") not in store.files
         # ...and its BiosFile record is pruned (matched under firmware slug "ps").
         assert plugin._uow.bios_files.get("ps", "scph5501.bin") is None
+
+    @staticmethod
+    def _gamecube_service(plugin, tmp_path):
+        """A GameCube platform whose BIOS folder holds one of each kind of file.
+
+        ``IPL.bin`` is in the RomM library and was downloaded by the plugin;
+        ``codehandler.bin`` is what RetroDECK ships beside its RetroArch
+        component, wanted by the same core, held by no library and recorded
+        nowhere. Both are declared, so both reach the delete as rows marked
+        downloaded — which is the whole of what the old guard looked at.
+        """
+        bios_dir = tmp_path / "bios"
+        shipped = os.path.join(str(bios_dir), "dolphin-emu", "Sys", "codehandler.bin")
+        ipl = os.path.join(str(bios_dir), "IPL.bin")
+        store = FakeFirmwareFileStore({shipped: b"\x00" * 8, ipl: b"\x00" * 8})
+
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+            core_info=_test_core_info(),
+        )
+        fw._loop = asyncio.get_event_loop()
+        _resolver(fw).declare("IPL.bin", required_by=[_TEST_CORE], description="GameCube IPL")
+        _resolver(fw).declare(
+            "codehandler.bin",
+            optional_for=[_TEST_CORE],
+            relative_path="dolphin-emu/Sys/codehandler.bin",
+            description="Dolphin code handler",
+        )
+        return fw, store, shipped, ipl
+
+    @staticmethod
+    def _gamecube_listing() -> list[dict[str, Any]]:
+        return [
+            {
+                "id": 7,
+                "file_name": "IPL.bin",
+                "file_path": "bios/gc/IPL.bin",
+                "file_size_bytes": 8,
+                "md5_hash": "",
+            },
+        ]
+
+    @staticmethod
+    def _record_download(plugin, file_name: str, file_path: str) -> None:
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="gc",
+                file_name=file_name,
+                file_path=file_path,
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=7,
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_file_the_library_does_not_hold_survives_the_delete(self, plugin, tmp_path):
+        """Deleting a platform's BIOS never touches a file the plugin did not fetch.
+
+        The reported data loss: pressing Delete BIOS on GameCube removed
+        ``dolphin-emu/Sys/codehandler.bin``, which RetroDECK ships with its own
+        RetroArch component. It is on the list because an installed core asks for
+        it, and its ``downloaded`` flag is nothing but ``os.path.exists`` — so the
+        old guard, which read that flag alone, deleted a file no RomM library
+        holds and nothing here could ever fetch back.
+        """
+        fw, store, shipped, ipl = self._gamecube_service(plugin, tmp_path)
+        self._record_download(plugin, "IPL.bin", ipl)
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=self._gamecube_listing()):
+            status: dict[str, Any] = await fw.check_platform_bios("gc")
+            # Precondition: the shipped file reaches the delete looking deletable.
+            row = next(f for f in status["files"] if f["file_name"] == "codehandler.bin")
+            assert row["downloaded"] is True
+            assert row["on_server"] is False
+
+            result = await fw.delete_platform_bios("gc")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert shipped in store.files
+        # The plugin's own download still goes, record and all.
+        assert ipl not in store.files
+        assert plugin._uow.bios_files.get("gc", "IPL.bin") is None
+
+    @pytest.mark.asyncio
+    async def test_a_server_file_with_no_download_record_survives_the_delete(self, plugin, tmp_path):
+        """A hand-placed file is not the plugin's to delete, even under a server name.
+
+        The stricter half of the rule, and the reason ``on_server`` alone is not
+        it: this file IS in the RomM library, so it looks like every other
+        downloadable row. Nothing here put it on disk, so nothing here removes it.
+        """
+        fw, store, shipped, ipl = self._gamecube_service(plugin, tmp_path)
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=self._gamecube_listing()):
+            status: dict[str, Any] = await fw.check_platform_bios("gc")
+            row = next(f for f in status["files"] if f["file_name"] == "IPL.bin")
+            assert row["downloaded"] is True
+            assert row["on_server"] is True
+
+            result = await fw.delete_platform_bios("gc")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 0
+        assert ipl in store.files
+        assert shipped in store.files
 
     @pytest.mark.asyncio
     async def test_delete_platform_bios_no_files(self, fw):
