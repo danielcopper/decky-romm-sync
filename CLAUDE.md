@@ -262,19 +262,17 @@ Format: **invariant** — tier — enforced by.
   is a finished reading of nobody: every server file classifies `not_needed`, `required_count` is 0, and the platform
   reports a green "All ready" over firmware the standalone emulator will not boot without
 - **A firmware row the RomM library does not hold (`on_server: False`) counts towards readiness, and never towards a
-  download affordance, a progress ratio, or a deletion** — test + prompt-only — `tests/services/test_firmware.py` pins
-  the row's shape (`id` absent, `on_server` clear), that it raises `required_count`, that it stays out of
-  `server_count`, and that it survives a platform delete; `src/components/SystemPage.test.tsx` pins that the buttons key
-  off the fetchable set. **The four axes live in four places and nothing joins them.**
-  `domain/bios_status.py::count_required` is readiness and counts every required row;
+  download affordance or a progress ratio** — test + prompt-only — `tests/services/test_firmware.py` pins the row's
+  shape (`id` absent, `on_server` clear), that it raises `required_count`, and that it stays out of `server_count`;
+  `src/components/SystemPage.test.tsx` pins that the buttons key off the fetchable set. **The three axes live in three
+  places and nothing joins them.** `domain/bios_status.py::count_required` is readiness and counts every required row;
   `services/firmware.py::_bios_aggregates` scopes `server_count` / `local_count` to `on_server` rows; the download
-  buttons' condition is a filter inside `SystemPage.tsx` and exists nowhere else; the delete's guard is a condition
-  inside `services/firmware.py::_delete_platform_bios_io`. Each fold has its own quiet failure: drop the row from
-  readiness and a platform reads ready while a required file is absent; add it to the ratio and a SNES page reports
-  `0 / 26 files, 26 missing` for twenty-six optional files no core wants; add it to the buttons and the page offers a
-  download that cannot succeed; add it to the delete and Delete BIOS destroys a file nothing here can fetch back.
-  `on_server` is the one field all four read; the row's `id: None` is an honest absence with no consumer at all, so
-  nothing breaks if it is filled in and nothing is guarded by leaving it empty
+  buttons' condition is a filter inside `SystemPage.tsx` and exists nowhere else. Each fold has its own quiet failure:
+  drop the row from readiness and a platform reads ready while a required file is absent; add it to the ratio and a SNES
+  page reports `0 / 26 files, 26 missing` for twenty-six optional files no core wants; add it to the buttons and the
+  page offers a download that cannot succeed. `on_server` is the one field all three read; the row's `id: None` is an
+  honest absence with no consumer at all, so nothing breaks if it is filled in and nothing is guarded by leaving it
+  empty
 - **No BIOS answer outlives the page that asked for it** — test + prompt-only —
   `tests/services/test_game_detail.py::TestGetCachedGameDetailCarriesNoBiosAnswer` and the two contract cases in
   `tests/contract/test_game_detail_read.py`. `get_cached_game_detail` carries none and says so (`bios_status_unknown`,
@@ -369,6 +367,20 @@ Format: **invariant** — tier — enforced by.
   quarantining a ROM (gigabytes, no sensible retention, re-fetchable from RomM) inverts for a save, and a savestate is
   synced nowhere at all. It is the first caller to hand that funnel a directory outside the saves root: it takes the
   directory it is given, so a savestate's backup lands in `<states>/.romm-backup/`
+- **A BIOS file is deleted only where a `downloaded_bios` record names it under one of the platform's firmware slugs** —
+  test + prompt-only — `tests/services/test_firmware.py::TestDeletePlatformBios` pins all three directions end-to-end
+  through the real `check_platform_bios`: an emulator-shipped file survives, a hand-placed file under a server file's
+  name survives, and our own download is still removed once RomM no longer holds it. What makes the rule concrete for
+  BIOS files is the entry above — authority to delete comes from having placed the file, and the record is the only
+  evidence of that, because `BiosFile.mark_downloaded` is written in the download path and nowhere else. The two
+  authorisations a reader reaches for instead are both wrong, in opposite directions. `downloaded` is `os.path.exists`
+  and nothing more: authorise on it and Delete BIOS destroys firmware RetroDECK ships with its own components, which no
+  RomM library holds and nothing here can fetch back — it did exactly that to `<bios>/dolphin-emu/Sys/codehandler.bin`
+  on a real device. `on_server` describes what the library holds _now_, not who wrote the file: authorise on it and a
+  file dropped from RomM after we downloaded it is stranded on disk with nothing in the UI able to remove it. **Nothing
+  mechanical stands behind any of this.** The guard is one condition inside `_delete_platform_bios_io`, and a second
+  delete path looping the same file list on `downloaded` alone would go green — which is exactly the shape this one had
+  when it destroyed that file
 - **Every read-mutate-write of a `RomSaveSyncState` runs under `SyncEngine.rom_lock(rom_id)`** — prompt-only — sync
   paths, `get_save_status`, and the four slot mutations hold the lock; mechanize via a `rom_save_sync_states.save`
   call-site audit

@@ -1531,15 +1531,15 @@ class TestDeletePlatformBios:
         )
 
     @pytest.mark.asyncio
-    async def test_a_file_the_library_does_not_hold_survives_the_delete(self, plugin, tmp_path):
+    async def test_an_emulator_shipped_file_survives_the_delete(self, plugin, tmp_path):
         """Deleting a platform's BIOS never touches a file the plugin did not fetch.
 
         The reported data loss: pressing Delete BIOS on GameCube removed
         ``dolphin-emu/Sys/codehandler.bin``, which RetroDECK ships with its own
         RetroArch component. It is on the list because an installed core asks for
         it, and its ``downloaded`` flag is nothing but ``os.path.exists`` — so the
-        old guard, which read that flag alone, deleted a file no RomM library
-        holds and nothing here could ever fetch back.
+        old guard, which read that flag alone, deleted a file nothing here could
+        ever fetch back.
         """
         fw, store, shipped, ipl = self._gamecube_service(plugin, tmp_path)
         self._record_download(plugin, "IPL.bin", ipl)
@@ -1549,7 +1549,6 @@ class TestDeletePlatformBios:
             # Precondition: the shipped file reaches the delete looking deletable.
             row = next(f for f in status["files"] if f["file_name"] == "codehandler.bin")
             assert row["downloaded"] is True
-            assert row["on_server"] is False
 
             result = await fw.delete_platform_bios("gc")
 
@@ -1561,12 +1560,12 @@ class TestDeletePlatformBios:
         assert plugin._uow.bios_files.get("gc", "IPL.bin") is None
 
     @pytest.mark.asyncio
-    async def test_a_server_file_with_no_download_record_survives_the_delete(self, plugin, tmp_path):
+    async def test_a_file_with_no_download_record_survives_the_delete(self, plugin, tmp_path):
         """A hand-placed file is not the plugin's to delete, even under a server name.
 
-        The stricter half of the rule, and the reason ``on_server`` alone is not
-        it: this file IS in the RomM library, so it looks like every other
-        downloadable row. Nothing here put it on disk, so nothing here removes it.
+        This file IS in the RomM library, so it looks like every other
+        downloadable row and a guard reading the library would remove it.
+        Nothing here put it on disk, so nothing here removes it.
         """
         fw, store, shipped, ipl = self._gamecube_service(plugin, tmp_path)
 
@@ -1581,6 +1580,37 @@ class TestDeletePlatformBios:
         assert result["success"] is True
         assert result["deleted_count"] == 0
         assert ipl in store.files
+        assert shipped in store.files
+
+    @pytest.mark.asyncio
+    async def test_our_own_download_still_goes_after_it_leaves_the_library(self, plugin, tmp_path):
+        """A file we downloaded stays deletable once RomM no longer holds it.
+
+        The library is not the authority here — the record is. Dropping a
+        firmware file from RomM flips its row to ``on_server: False``, and a
+        guard that also demanded ``on_server`` would strand our own download on
+        disk with nothing in the UI able to remove it. The row is otherwise
+        indistinguishable from the emulator-shipped one beside it; only the
+        record tells them apart, and only the record decides.
+        """
+        fw, store, shipped, ipl = self._gamecube_service(plugin, tmp_path)
+        self._record_download(plugin, "IPL.bin", ipl)
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=[]):
+            status: dict[str, Any] = await fw.check_platform_bios("gc")
+            # Both rows now come off the machine's demand, not the listing.
+            assert {f["file_name"]: f["on_server"] for f in status["files"]} == {
+                "IPL.bin": False,
+                "codehandler.bin": False,
+            }
+
+            result = await fw.delete_platform_bios("gc")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert ipl not in store.files
+        assert plugin._uow.bios_files.get("gc", "IPL.bin") is None
+        # The one without a record is still not ours.
         assert shipped in store.files
 
     @pytest.mark.asyncio

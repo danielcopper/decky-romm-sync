@@ -122,19 +122,20 @@ the plugin removes the BIOS files **it downloaded** for that system from your Re
 result. Games that need those files won't launch until you download them again with **Download All** or **Download
 Required**.
 
-**It only ever deletes its own downloads.** A file is removed when both of these are true: your RomM library holds it,
-and the plugin has a record of downloading it. Everything else in the BIOS folder is left alone, including:
+**It only ever deletes its own downloads.** A file is removed when the plugin has a record of downloading it, and for no
+other reason. Everything else in the BIOS folder is left alone, including:
 
 - **Firmware RetroDECK ships itself.** RetroDECK installs some files into the BIOS folder with its own components —
-  `bios/dolphin-emu/Sys/codehandler.bin` is one. Your emulator asks for it, so it is listed on the page, but it did not
-  come from your library and could not be downloaded again.
+  `bios/dolphin-emu/Sys/codehandler.bin` is one. Your emulator asks for it, so it is listed on the page, but the plugin
+  did not put it there and could not fetch it back.
 - **Files you placed there by hand**, even where the name matches one your RomM library holds. Without a download record
   the plugin has no claim on it.
 
-That is deliberately stricter than "is it in my library": the plugin can only offer to re-fetch what it fetched, so
-anything else is not its to remove. If you want one of those files gone, delete it in the file manager. The count on the
-button ("Delete BIOS (3)") counts the downloaded files your library holds, so where one of them was placed by hand the
-plugin will report deleting fewer than the button said.
+Being in your RomM library is neither necessary nor sufficient. A file you have since removed from RomM is still deleted
+if the plugin downloaded it — otherwise its own downloads would be stranded on disk with no way to clean them up — and a
+file that is in your library but arrived some other way is left where it is. If you want one of those gone, delete it in
+the file manager. The count on the button ("Delete BIOS (3)") counts every downloaded file your library holds, so where
+one of them was placed by hand the plugin will report deleting fewer than the button said.
 
 The same per-platform delete is also available from the **Data Management** page (under per-platform actions) for
 bulk-cleanup workflows.

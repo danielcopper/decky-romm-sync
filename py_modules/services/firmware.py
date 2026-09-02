@@ -858,17 +858,21 @@ class FirmwareService:
         the deletes for the files that were actually removed in one after it
         (ADR-0006).
 
-        A row is removed only when the plugin is the one that put the file
-        there — it is on the server, AND a ``downloaded_bios`` record names it
-        under one of the platform's firmware slugs. ``downloaded`` on its own
-        says no more than "a file is sitting at that path", which is equally
-        true of firmware RetroDECK ships with its own components
-        (``dolphin-emu/Sys/codehandler.bin`` is one, and no RomM library holds
-        it) and of a file the user placed by hand under a name the server
-        happens to share. Neither can be fetched back, so neither is ours to
-        delete. The record is the stricter of the two conditions and the one
-        that carries the second case; ``on_server`` is kept beside it because
-        a row the library does not hold offers no download to undo the removal.
+        A row is removed only where a ``downloaded_bios`` record names the file
+        under one of the platform's firmware slugs. That record is written in
+        the download path and nowhere else, so it is the only evidence the
+        plugin put the file there — and having put it there is what authorises
+        removing it. ``downloaded`` proves nothing of the sort: it is
+        ``os.path.exists``, equally true of firmware RetroDECK ships with its
+        own components (``dolphin-emu/Sys/codehandler.bin`` is one) and of a
+        file the user placed by hand under a name the server happens to share.
+        Neither can be fetched back, so neither is ours to delete.
+
+        ``on_server`` is deliberately NOT part of the test. It describes what
+        the library holds *now*, not who wrote the file: a firmware file
+        removed from RomM after we downloaded it flips to ``on_server: False``,
+        and refusing that row would strand our own download with nothing in the
+        UI able to clean it up.
         """
         recorded = self._recorded_bios_files(platform_slug)
         deleted = 0
@@ -876,7 +880,7 @@ class FirmwareService:
         removed: list[tuple[str, str]] = []
         for f in files:
             record_slugs = recorded.get(f["file_name"], [])
-            if not f["downloaded"] or not f["on_server"] or not record_slugs:
+            if not f["downloaded"] or not record_slugs:
                 continue
             try:
                 self._firmware_file_store.remove_file(f["local_path"])
