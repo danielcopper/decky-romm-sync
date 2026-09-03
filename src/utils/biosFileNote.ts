@@ -104,27 +104,44 @@ const PATH_INACCESSIBLE = "firmware-path-inaccessible";
  * follows from a destination the emulator cannot open either.
  */
 function verdictNote(row: BiosNoteRow): BiosFileWords {
-  const caveats = row.caveats ?? [];
-  const has = (code: string) => caveats.includes(code);
-  const said = (note: string): BiosFileWords => ({ note, lines: [] });
-  if (row.declared_kind !== "directory") {
-    if (has(PATH_OBSTRUCTED)) return said("a folder is here, where the emulator opens a file");
-    return said(has(PATH_INACCESSIBLE) ? "its location could not be read" : "");
-  }
-  if (row.satisfied === true) {
-    // The images ARE the sentence here. "holds" above a list of three would be
-    // a heading for a list that needs none, and folding them into the row's own
-    // name is what pushed the dot onto a line of its own.
-    const images = row.images ?? [];
-    return images.length > 0 ? { note: "", lines: [...images] } : said("holds a BIOS image");
-  }
-  if (row.satisfied === false) {
-    if (has(PATH_NOT_A_DIRECTORY)) return said("a file is here, where the emulator opens a folder");
-    return said(HOLDS_NO_IMAGE.some(has) ? "holds no BIOS image" : "");
-  }
+  const has = (code: string) => (row.caveats ?? []).includes(code);
+  if (row.declared_kind !== "directory") return fileAtItsDestination(has);
+  if (row.satisfied === true) return folderHolding(row.images ?? []);
+  if (row.satisfied === false) return folderUnmet(has);
+  return folderWithheld(row.satisfied, has);
+}
+
+/** One line and nothing under it — every group but a satisfied folder's. */
+const said = (note: string): BiosFileWords => ({ note, lines: [] });
+
+/** A declared FILE: what the reading found at the place the emulator opens. */
+function fileAtItsDestination(has: (code: string) => boolean): BiosFileWords {
+  if (has(PATH_OBSTRUCTED)) return said("a folder is here, where the emulator opens a file");
+  return said(has(PATH_INACCESSIBLE) ? "its location could not be read" : "");
+}
+
+/**
+ * A folder whose read found an image — the one group whose content is a list.
+ *
+ * The images ARE the sentence here. "holds" above a list of three would be a
+ * heading for a list that needs none, and folding them into the row's own name
+ * is what pushed the status dot onto a line of its own.
+ */
+function folderHolding(images: string[]): BiosFileWords {
+  return images.length > 0 ? { note: "", lines: [...images] } : said("holds a BIOS image");
+}
+
+/** A folder shown to hold nothing the core would boot, or none at all. */
+function folderUnmet(has: (code: string) => boolean): BiosFileWords {
+  if (has(PATH_NOT_A_DIRECTORY)) return said("a file is here, where the emulator opens a folder");
+  return said(HOLDS_NO_IMAGE.some(has) ? "holds no BIOS image" : "");
+}
+
+/** A folder the read established nothing about, worded off why it could not. */
+function folderWithheld(satisfied: boolean | null | undefined, has: (code: string) => boolean): BiosFileWords {
   if (has(IMAGE_CONTRADICTED)) return said("holds an image that could not be confirmed");
   if (READ_INCOMPLETE.some(has)) return said("its contents could not be read in full");
-  return said(row.satisfied === null ? "its contents could not be checked" : "");
+  return said(satisfied === null ? "its contents could not be checked" : "");
 }
 
 /**

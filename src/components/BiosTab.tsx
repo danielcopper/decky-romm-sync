@@ -218,12 +218,13 @@ function buildBiosFileList(bios: BiosStatus, coreInfo: CoreInfo | null): ReactEl
   const fileElements = wantedFiles.map((f) => {
     const coreLines = f.cores ? buildBiosCoreLines(f.cores, coreLabelMap, coreInfo?.active_core) : [];
     const { note, lines } = biosFileNote(f);
+    const suffix = note ? ` — ${note}` : "";
 
     return (
       <div key={f.file_name} className="romm-panel-file-row">
         <span key="dot" className="romm-status-dot" style={{ backgroundColor: fileDotColor(f) }} />
         <span key="name" className="romm-panel-file-name">
-          {`${f.description || f.file_name}${note ? ` — ${note}` : ""}`}
+          {`${f.description || f.file_name}${suffix}`}
         </span>
         {fileLines(lines, coreLines)}
       </div>

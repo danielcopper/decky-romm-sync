@@ -206,13 +206,20 @@ def _folder_verdict(requirement: Any, caveats: tuple[Any, ...]) -> FolderVerdict
     here = [caveat for caveat in caveats if _names_destination(caveat.data, requirement.path)]
     return FolderVerdict(
         satisfied=requirement.satisfied,
-        images=tuple(
-            description
-            for caveat in here
-            if caveat.code in _IDENTIFIED_IMAGE_CODES and (description := caveat.data.get("description"))
-        ),
+        images=_image_descriptions(here),
         caveats=tuple(dict.fromkeys(caveat.code for caveat in here)),
     )
+
+
+def _image_descriptions(caveats: list[Any]) -> tuple[str, ...]:
+    """What the read called each image it identified, in the resolver's own words.
+
+    A caveat of another family describes no image, and one of this family with
+    nothing to call it has nothing to show — both drop out rather than reaching
+    a row as an empty line.
+    """
+    named = (caveat.data.get("description") for caveat in caveats if caveat.code in _IDENTIFIED_IMAGE_CODES)
+    return tuple(description for description in named if description)
 
 
 def _names_destination(data: Mapping[str, Any], destination: str) -> bool:
@@ -323,52 +330,73 @@ def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
     under it. That is also what keeps one file from reading differently on two
     surfaces: there is one row per name in the whole answer.
 
-    Everything about the destination — where it is, whether anything is there,
-    what kind of thing, whose copy — is taken from the first requirement under
-    the name, because those are statements about one place and reading them off
-    different requirements would describe two places as one row.
-
-    And they stand or fall together with the location. Where there is none to
-    honour, the caller places the file by its own flat default instead, which is
-    a different place from the one that was read — a standalone emulator's own
-    XDG tree holding the file says nothing about the BIOS root. So the reading
-    is dropped with the location rather than travelling on to describe somewhere
-    the caller will never write.
+    What each row then says about its own destination is
+    :func:`_placement_for`'s, and the answer's caveats are indexed once here
+    rather than per row because one index serves every name in it.
     """
-    root = answer.root
     at_path, in_folder = _caveats_by_destination(answer)
     by_name: dict[str, list[Any]] = {}
     for core in answer.cores:
         for requirement in _requirement_entries(core):
             by_name.setdefault(requirement.file_name, []).append((core, requirement))
 
-    placements: list[FirmwarePlacement] = []
-    for file_name, pairs in by_name.items():
-        first = pairs[0][1]
-        location = _declared_location(first, root)
-        supplied = first.supplied_by if location is not None else None
-        directory = first.declared_kind == DECLARED_DIRECTORY
-        folder = _settled_folder(first) if directory and location is not None else None
-        placements.append(
-            FirmwarePlacement(
-                file_name=file_name,
-                relative_path=location,
-                description=first.description,
-                wants=tuple(
-                    FirmwareWant(
-                        core_so=_plugin_core_so(core.core_so),
-                        required=requirement.need == "required",
-                    )
-                    for core, requirement in pairs
-                ),
-                present=first.present if location is not None else None,
-                declared_kind=DECLARED_DIRECTORY if directory else DECLARED_FILE,
-                caveats=_row_caveats(first, at_path, in_folder, settled=folder) if location is not None else (),
-                folder=folder,
-                supplied_by=supplied.label if supplied is not None else None,
-            )
-        )
+    placements = [
+        _placement_for(file_name, pairs, answer.root, at_path, in_folder) for file_name, pairs in by_name.items()
+    ]
     return tuple(sorted(placements, key=lambda placement: placement.file_name))
+
+
+def _placement_for(
+    file_name: str,
+    pairs: list[Any],
+    root: str,
+    at_path: dict[str, tuple[str, ...]],
+    in_folder: dict[str, tuple[str, ...]],
+) -> FirmwarePlacement:
+    """One name's row: who wants it, and what was read where it goes.
+
+    The two halves answer to different things. ``wants`` is every core under the
+    name, because that is what the name is keyed on. Everything about the
+    DESTINATION comes from the first requirement alone — those are statements
+    about one place, and reading them off different requirements would describe
+    two places as one row.
+
+    With no location to honour the destination half goes silent together, which
+    is the early return: a standalone emulator's own XDG tree holding the file
+    says nothing about the BIOS root the caller will write to, so the reading is
+    dropped rather than travelling on to describe somewhere else. What survives
+    is the declaration — its kind is what the emulator OPENS, not what is there.
+    """
+    first = pairs[0][1]
+    directory = first.declared_kind == DECLARED_DIRECTORY
+    declared_kind = DECLARED_DIRECTORY if directory else DECLARED_FILE
+    wants = tuple(
+        FirmwareWant(core_so=_plugin_core_so(core.core_so), required=requirement.need == "required")
+        for core, requirement in pairs
+    )
+    location = _declared_location(first, root)
+    if location is None:
+        return FirmwarePlacement(
+            file_name=file_name,
+            relative_path=None,
+            description=first.description,
+            wants=wants,
+            declared_kind=declared_kind,
+        )
+
+    folder = _settled_folder(first) if directory else None
+    supplied = first.supplied_by
+    return FirmwarePlacement(
+        file_name=file_name,
+        relative_path=location,
+        description=first.description,
+        wants=wants,
+        present=first.present,
+        declared_kind=declared_kind,
+        caveats=_row_caveats(first, at_path, in_folder, settled=folder),
+        folder=folder,
+        supplied_by=supplied.label if supplied is not None else None,
+    )
 
 
 def _settled_folder(requirement: Any) -> FolderVerdict | None:
