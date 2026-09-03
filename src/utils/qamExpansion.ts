@@ -34,10 +34,11 @@ const TAB_PANEL_SELECTOR = quickAccessMenuClasses?.TabGroupPanel
   : PANEL_ID_SELECTOR;
 
 // Steam caps every tab's content panel at 300 px and lifts it only for its own
-// Friends panel (ADR-0029). Covering the panel and its children is the shape
-// the spike proved on the device; which of the two carries the cap was never
-// isolated, so both stay. `:has()` scopes the lift to a panel holding a wide
-// page of ours.
+// Friends panel, through the compound selector `.TabGroupPanel.tab_Friends`
+// (ADR-0029) — one element carrying both classes, which is evidence the cap
+// sits on the panel element itself. The `> *` line is cheap insurance against
+// it sitting one level in, kept until a device check settles which it is.
+// `:has()` scopes the lift to a panel holding a wide page of ours.
 const WIDE_PANEL_CSS = `
 ${TAB_PANEL_SELECTOR}:has(.${WIDE_ROOT_CLASS}) { max-width: none; }
 ${TAB_PANEL_SELECTOR}:has(.${WIDE_ROOT_CLASS}) > * { max-width: none; }
@@ -45,8 +46,14 @@ ${TAB_PANEL_SELECTOR}:has(.${WIDE_ROOT_CLASS}) > * { max-width: none; }
 
 // The stylesheet a wide page has up, held by reference rather than looked up by
 // id: it lives in the page's own document, and plugin code runs in a different
-// one, so the ambient `document` cannot reach it. One reference is enough — the
-// panel's router mounts one page at a time.
+// one, so the ambient `document` cannot reach it.
+//
+// One reference for the module, which holds only while at most one wide page is
+// mounted — the panel's router replaces the mounted page, it never stacks two.
+// Break that and the reference stops belonging to anyone: the second page's
+// mount is a no-op on an expansion it did not take, and its unmount collapses
+// the panel under the first — stylesheet dropped, hide message posted, and the
+// page still on screen has no path back to wide short of a QAM tab switch.
 let injectedStyle: HTMLStyleElement | null = null;
 
 /**
