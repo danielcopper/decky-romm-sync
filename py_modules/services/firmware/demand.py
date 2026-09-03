@@ -66,7 +66,7 @@ class FirmwareDemand:
 
     def placement_index(self) -> Mapping[str, FirmwarePlacement]:
         """The machine's demand indexed by file name, for the paths that need only that."""
-        return self._firmware_resolver().by_file_name()
+        return self.catalogue().by_file_name()
 
     def folder_answers(
         self,
