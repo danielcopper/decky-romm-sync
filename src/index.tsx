@@ -59,6 +59,7 @@ import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError, setServerRetryProgress } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
 import { findOutermostScrollParent } from "./utils/scrollHelpers";
+import { collapseQamOnDismount } from "./utils/qamExpansion";
 import { detach } from "./utils/detach";
 import type {
   SyncProgress,
@@ -1008,6 +1009,10 @@ export default definePlugin(() => {
     content: <QAMPanel />,
     alwaysRender: true,
     onDismount() {
+      // Ahead of every step below that can throw: the panel width is a global
+      // Steam flag with no React cleanup left to clear it here, so a teardown
+      // that dies halfway must not be what leaves Steam's own QAM expanded.
+      collapseQamOnDismount();
       syncContinuationController.abort();
       destroySessionManager();
       unregisterLaunchInterceptor();

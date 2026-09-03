@@ -61,8 +61,11 @@ change, no unmount), when the QAM closes (`useQuickAccessVisible`), and from the
   itself is 855 px wide in both states and proves nothing.
 - **The flag is Steam's and global.** A page that leaks it leaves Steam's own QAM expanded until the Friends tab toggles
   it back. The four clearing paths above are the whole discipline.
-- **`window.origin`, never a literal origin.** `postMessage` throws on a target-origin mismatch, and one of the callers
-  is `onDismount`, where a throw abandons the rest of the plugin's teardown. The spike found this with 72 failing tests.
+- **`window.origin`, never a literal origin.** It addresses the message to the one window meant to receive it and always
+  matches it. A well-formed target origin that does not match is checked at delivery and the message is discarded in
+  silence, so a literal is a failure with no symptom but a panel that never widens; `"*"` is always delivered, but to
+  any document in the window. The spike shipped a literal first and found it through 72 failing tests — which is the
+  test environment's stricter behaviour (happy-dom throws where a browser discards), not the device's.
 - **A wide page needs a definite height.** Steam's tabbed page fills its parent instead of growing, and nothing in the
   QAM chain provides a height; a `min-height` clips. The wide frame measures the remaining viewport and lets its regions
   scroll inside it.

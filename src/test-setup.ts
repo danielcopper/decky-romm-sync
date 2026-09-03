@@ -176,16 +176,19 @@ vi.mock("@decky/ui", () => {
     // Focusable forwards onButtonDown as a real DOM "decky-button-down"
     // listener so tests can drive gamepad input via
     // fireEvent(el, new CustomEvent("decky-button-down", { detail: { button } })).
-    // Other FooterLegend-only props (flow-children, actionDescriptionMap, …)
-    // are dropped — they have no DOM effect under happy-dom.
+    // onFocus is forwarded because a Focusable is how the list-and-detail layout
+    // learns that focus moved to a row — dropping it would make focus-selects
+    // vacuously untestable. Other FooterLegend-only props (flow-children,
+    // actionDescriptionMap, …) are dropped — they have no DOM effect under happy-dom.
     Focusable: ({
       children,
       style,
       onButtonDown,
+      onFocus,
       role,
       tabIndex,
       "aria-label": ariaLabel,
-    }: AnyProps & { style?: unknown; onButtonDown?: (evt: unknown) => void }) =>
+    }: AnyProps & { style?: unknown; onButtonDown?: (evt: unknown) => void; onFocus?: (evt: unknown) => void }) =>
       createElement(
         "div",
         {
@@ -193,6 +196,7 @@ vi.mock("@decky/ui", () => {
           style,
           role,
           tabIndex,
+          onFocus,
           "aria-label": ariaLabel,
           ref: (el: HTMLDivElement | null) => {
             if (!el) return;
@@ -270,5 +274,13 @@ vi.mock("@decky/ui", () => {
     basicAppDetailsSectionStylerClasses: undefined,
     appDetailsClasses: undefined,
     playSectionClasses: undefined,
+    // The wide-QAM probes. Undefined is the honest default here: happy-dom has
+    // no Steam webpack modules, so a test that wants the class names or the
+    // tabbed page mocks `src/utils/deckyUiInternals` with its own values.
+    quickAccessMenuClasses: undefined,
+    Tabs: undefined,
+    // The QAM is open for any test that renders a wide page; the hook's
+    // clear-on-close path is exercised in src/utils/qamExpansion.test.tsx.
+    useQuickAccessVisible: () => true,
   };
 });
