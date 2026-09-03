@@ -27,6 +27,8 @@ without restating it. The width mechanism's decision record is
 | `src/components/DownloadQueue.tsx`                            | Downloads                                                                                                            |
 | `src/components/SystemPage.tsx`                               | System — retires into Library › Platforms                                                                            |
 | `src/utils/deckyUiInternals.ts`                               | Honest typing for `@decky/ui` values that come from a webpack probe; the wide frame's class names and `Tabs` go here |
+| `src/utils/qamExpansion.ts`                                   | The panel's width: the expand and hide messages, the injected `max-width` rule, and the four paths that clear both   |
+| `src/components/qam/`                                         | The wide-page frame: `WidePage` (Back row, title, tabs, measured height) and `ListDetail`                            |
 | `src/utils/` module stores                                    | State that must outlive a page: sync progress, pending preview, downloads, prune, notices                            |
 
 ## Two widths
@@ -41,8 +43,9 @@ How a page gets wide, measured on the device (Big Picture, CEF Chrome 126) rathe
   `transform: translateX(506px)`, so 348 px stay visible. Steam's `Expanded` class sets `translateX(0)`. The class
   follows one MobX observable on the FriendsUI store, which listens for `message` events on the SharedJSContext window —
   the window plugin code runs in. A wide page posts `{ message: "QamFriendsExpanded" }` to `window` on mount and
-  `{ message: "QamFriendsHidden" }` when it lets go. The target origin is always `window.origin`: `postMessage` throws
-  on a mismatch, and one caller is `onDismount`, where a throw abandons the rest of the plugin's teardown.
+  `{ message: "QamFriendsHidden" }` when it lets go. The target origin is always `window.origin`, which addresses the
+  message to that window and always matches it. A well-formed target origin that does not match is checked at delivery
+  and the message is discarded in silence, so a literal one would leave the panel simply never widening.
 - Every tab's content panel carries `max-width: 300px`; only Steam's Friends panel lifts it. A wide page injects one
   stylesheet whose `:has()` rule lifts the cap for a marker class on the plugin's own subtree. Class names come from
   `quickAccessMenuClasses`, which can be `undefined`; `[id^="quickaccess_content_"]` is the fallback selector. Decky
@@ -263,12 +266,13 @@ The pages land in this order under #1808, each with the open work that already s
 1. **The wide frame** ([#1813](https://github.com/danielcopper/romm-tender/issues/1813)) — the two levers and their
    clearing paths, the Back row, tabs, list and detail, the measured height. No page uses it yet; it is the one piece
    that rests on Steam internals and is reviewed on its own.
-2. **Sync** ([#1814](https://github.com/danielcopper/romm-tender/issues/1814)) — the new page, Main's four-state button
+2. **Library** ([#1815](https://github.com/danielcopper/romm-tender/issues/1815)) — Platforms and Collections; System
+   and the Data Management platform modal retire. Carries #164, #1803's frontend half, #1016's frontend half, #1020's
+   collections fix. May land as two PRs, Platforms then Collections. Second on purpose: the emu-atlas work under #1735
+   renders its BIOS and core changes into the new Platforms detail instead of the retiring System page.
+3. **Sync** ([#1814](https://github.com/danielcopper/romm-tender/issues/1814)) — the new page, Main's four-state button
    and the Last sync row, Skip preview persisted, the run-list read, the per-platform preview breakdown. Carries #886's
    presentation half.
-3. **Library** ([#1815](https://github.com/danielcopper/romm-tender/issues/1815)) — Platforms and Collections; System
-   and the Data Management platform modal retire. Carries #164, #1803's frontend half, #1016's frontend half, #1020's
-   collections fix. May land as two PRs, Platforms then Collections.
 4. **Settings** ([#1816](https://github.com/danielcopper/romm-tender/issues/1816)) — the sections, Steam Library, the
    homes for the `input_driver` fix and the save-sort migration with their notices on Main. Carries #1020's URL and
    double-press fixes.

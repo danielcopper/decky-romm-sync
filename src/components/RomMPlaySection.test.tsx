@@ -169,6 +169,8 @@ vi.mock("@decky/ui", async () => {
     appActionButtonClasses: undefined,
     appDetailsClasses: undefined,
     playSectionClasses: undefined,
+    quickAccessMenuClasses: undefined,
+    Tabs: undefined,
     findSP: vi.fn(() => undefined),
     ConfirmModal: (p: AnyProps) => ce("div", { "data-testid": "confirm-modal" }, p.children as never),
     DialogButton: ({
