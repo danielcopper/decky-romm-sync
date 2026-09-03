@@ -348,6 +348,18 @@ Format: **invariant** — tier — enforced by.
   `scripts/check_romm_min_version.py` (ADRs excluded: frozen history)
 - **Server-supplied path components pass `safe_join` (`lib/path_safety.py`)** — test + prompt-only — traversal tests per
   path builder; new call sites are prompt-only
+- **A firmware row's presence comes from the resolver wherever the resolver declared it; the plugin's own filesystem
+  probe covers only three leftovers** — prompt-only — `FirmwareService._is_downloaded` is the single crossing point and
+  states the boundary: the probe answers for a library file no core declares, for a placement whose location the plugin
+  cannot honour, and for the already-there skip in the download batch. Everything else reads the resolver's `present`,
+  which follows symlinks the plugin would have to re-implement — the PS2 folder is one directory reached through two
+  spellings. `present is None` reads as absent, the safe direction, because the row then shows work outstanding rather
+  than a readiness nobody established. **Nothing enforces the crossing point.** A fourth status builder calling
+  `_firmware_file_store.exists(dest)` directly would go green, and its rows would silently answer from the weaker source
+  — `os.path.exists` on a path the plugin assembled, which is what this cut removed after it rendered a satisfied
+  requirement as missing. Related and separate: a verdict the resolver WITHHELD is not an absence (CONTEXT.md → Withheld
+  verdict), and the causes of a withheld `satisfied` are read off `found` / `checked` / the caveats, never off
+  `satisfied` itself — only some are inherent, and a content question merely not asked is not one of them
 - **No sentinel objects on the wire — explicit JSON-representable tagged values only** — prompt-only — no sentinel
   survives on the wire today (`NO_MIGRATION` retired with #1004, legacy `slot:null` confirmation with #1276), so the
   rule now guards reintroduction; nothing mechanical detects a new one

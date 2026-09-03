@@ -286,9 +286,12 @@ carries one the **BIOS level** declines to `unknown` rather than claiming either
 answers — only the one-line verdict declines. The foil to **not on server**, which is a settled absence and does count
 towards readiness.
 
-Withholding is the resolver's word and a wider one: it withholds `satisfied` for every file whose bytes were not
-verified, which is every file the plugin asks about. That is content verification and a separate question, so only the
-directory case travels here.
+`satisfied` is the resolver's verdict alone, and it is withheld for several unrelated causes — the cause is read off the
+fields beside it, never off `satisfied` itself. Only some of them are inherent. A file whose content was simply not
+asked about is withheld too, and that is a question declined rather than one nobody can answer: five required files the
+user holds are in that state, and counting them against readiness would report a platform unready over files that are
+there. So the directory is the only cause that travels here today — and it stops being inherent once the resolver can
+answer what is inside a folder, at which point an unverified folder joins the merely-unasked.
 
 ### Safely-bakeable
 
