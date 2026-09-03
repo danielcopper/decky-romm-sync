@@ -37,7 +37,6 @@ async function loadScrollRegion(panel: FC<StubPanelProps> | undefined): Promise<
 /** The bounds every region carries, whichever element ends up carrying them. */
 function expectBounds(el: HTMLElement): void {
   expect(el.style.height).toBe("100%");
-  expect(el.style.overflow).toBe("auto");
   // Without the floor reset a flex child's min-height is its content, so the
   // region would grow past its parent instead of scrolling inside it. happy-dom
   // keeps the "0" verbatim where a browser would normalise it to "0px".
@@ -62,6 +61,22 @@ describe("ScrollRegion", () => {
     expectBounds(panel);
   });
 
+  it("leaves the panel's overflow to Steam, which clips it sideways", async () => {
+    const ScrollRegion = await loadScrollRegion(StubScrollPanelGroup);
+
+    render(
+      <ScrollRegion>
+        <div>region content</div>
+      </ScrollRegion>,
+    );
+
+    // Steam's ScrollY class is `overflow-y: auto` with `overflow-x: hidden`, and
+    // an inline shorthand beats both. The horizontal room it would restore is
+    // what the panel's gamepad-direction handler consumes left and right for,
+    // and left↔right is how focus crosses from a list to its detail.
+    expect(screen.getByTestId("scroll-panel").style.overflow).toBe("");
+  });
+
   it("keeps the region, its bounds and its place in the focus tree when the probe missed", async () => {
     const ScrollRegion = await loadScrollRegion(undefined);
 
@@ -77,6 +92,8 @@ describe("ScrollRegion", () => {
     const region = screen.getByTestId("focusable");
     expect(region).toContainElement(screen.getByText("region content"));
     expectBounds(region);
+    // Nothing here carries a Steam class, so this branch owns its own overflow.
+    expect(region.style.overflow).toBe("auto");
   });
 
   it("lets the caller place the region without losing its bounds", async () => {
