@@ -36,8 +36,16 @@ export const ListDetail: FC<ListDetailProps> = ({ items, selectedId, onSelect, r
     <Focusable flow-children="vertical" style={{ ...regionStyle, flex: `0 0 ${LIST_WIDTH}`, width: LIST_WIDTH }}>
       {items.map((item) => (
         // React delivers onFocus through focusin, so this fires for focus
-        // landing on whatever control the row itself renders.
-        <Focusable key={item.id} onFocus={() => onSelect(item.id)}>
+        // landing on whatever control the row itself renders — and again for
+        // every move between controls inside the same row, or on the way back
+        // from the detail pane. Only a real change is reported, so a page may
+        // treat onSelect as an event and do work on it.
+        <Focusable
+          key={item.id}
+          onFocus={() => {
+            if (item.id !== selectedId) onSelect(item.id);
+          }}
+        >
           {item.render(item.id === selectedId)}
         </Focusable>
       ))}

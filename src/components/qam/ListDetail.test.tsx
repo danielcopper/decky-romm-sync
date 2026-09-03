@@ -70,6 +70,24 @@ describe("ListDetail", () => {
     expect(screen.getByRole("button", { name: "Nintendo 64" })).toBeInTheDocument();
   });
 
+  it("reports a selection only when it changes", () => {
+    const onSelect = vi.fn();
+    render(<ControlledHost onSelect={onSelect} />);
+
+    // focusin fires again for every move between controls inside one row, and on
+    // the way back from the detail pane. A page may do real work on onSelect, so
+    // the same id must not arrive twice.
+    fireEvent.focusIn(screen.getByRole("button", { name: /Nintendo 64/ }));
+    fireEvent.focusIn(screen.getByRole("button", { name: /Nintendo 64/ }));
+
+    expect(onSelect).not.toHaveBeenCalled();
+
+    fireEvent.focusIn(screen.getByRole("button", { name: /PlayStation/ }));
+    fireEvent.focusIn(screen.getByRole("button", { name: /PlayStation/ }));
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves A to the row's own control", () => {
     const onSelect = vi.fn();
     const onToggle = vi.fn();
