@@ -50,10 +50,11 @@ class FirmwareFolderVerdictFn(Protocol):
     The question :class:`FirmwareResolver` deliberately does not answer. A core
     that lists a folder is satisfied by a file *inside* it, so the only reading
     that settles such a row opens the candidates and reads them the way the core
-    does — and doing that across a whole machine would hash every file under the
-    BIOS root on every game-page open. So the scope is one core, and a caller
-    asks only for the cores whose folder row the whole-machine reading left
-    unanswered (``domain.firmware_wants.unanswered_folder_cores``).
+    does — and doing that across a whole machine would sweep every unclaimed file
+    under the BIOS root on every game-page open, plus each declared file the
+    packaged identity table covers at a matching size. So the scope is one core,
+    and a caller asks only for the cores whose folder row the whole-machine
+    reading left unanswered (``domain.firmware_wants.unanswered_folder_cores``).
 
     *core_so* is the plugin's identifier space: the bare ``.so`` basename
     without its extension. Implementations never raise and never guess — a

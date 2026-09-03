@@ -316,13 +316,15 @@ Format: **invariant** — tier — enforced by.
   whose implementation _grows_ a file read later. Matching only attribute calls is deliberate: the pure
   `domain.disc_selection.enumerate_discs` shares a name with the seam and does no I/O — it is safe because its call site
   imports it bare, not because of the name. The call-shaped blind spot is shared with the deadlock rule and only this
-  family closes it: its four `__call__`-only seams have no method name a consumer would write, so the list carries the
-  attribute each is bound to (`_resolve_system`, `_system_extensions`, `_system_known`, `_firmware_folder_verdicts`) —
-  by convention rather than by construction, and only while such a name means one thing, which is exactly what keeps
-  `_list_files` out. The deadlock rule's own call-shaped seams stay open. `SystemResolver` is the odd one out for a
-  second reason: the adapter memoises its map for the life of the process, so exactly one call ever opens the file, and
-  the entry earns its place because that one call can land inside a UoW. One `# pragma: no uow-check` covers both
-  families — it suppresses the line, and no seam is in both lists, so where a line does name two seams it silences both
+  family closes it: for its four `__call__`-only seams the list carries the attribute each is bound to
+  (`_resolve_system`, `_system_extensions`, `_system_known`, `_firmware_folder_verdicts`) — by convention rather than by
+  construction, and only while such a name means one thing, which is exactly what keeps `_list_files` out. Three of the
+  four have no method name a consumer could write instead; `SystemResolver` does, its implementation being
+  `RommHttpAdapter.resolve_system`, which is why `resolve_system` is listed beside its attribute. The deadlock rule's
+  own call-shaped seams stay open. `SystemResolver` is the odd one out for a second reason: the adapter memoises its map
+  for the life of the process, so exactly one call ever opens the file, and the entry earns its place because that one
+  call can land inside a UoW. One `# pragma: no uow-check` covers both families — it suppresses the line, and no seam is
+  in both lists, so where a line does name two seams it silences both
 - **Services never call clocks / sleep / uuid / random directly (inject the Protocol)** — check —
   `scripts/check_cosmic_call_bans.sh`
 - **No module in `services/`, `bootstrap/`, `adapters/`, `domain/`, `lib/` or `models/` crosses the ~1000-LOC

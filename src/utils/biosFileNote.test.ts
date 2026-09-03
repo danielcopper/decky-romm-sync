@@ -70,8 +70,9 @@ describe("biosFileNote", () => {
     );
     expect(biosFileNote(folder(null, ["firmware-scan-incomplete"]))).toBe("its contents could not be read in full");
     expect(biosFileNote(folder(null, ["firmware-unreadable"]))).toBe("its contents could not be read in full");
-    // No code at all is the shape a failed verified read leaves: the question
-    // was asked and did not come back, which is not the same as unasked.
+    // No code at all is what a read that failed and a question nobody asked
+    // both leave behind — the payload cannot tell them apart, and the fallback
+    // is written not to try.
     expect(biosFileNote(folder(null))).toBe("its contents could not be checked");
   });
 

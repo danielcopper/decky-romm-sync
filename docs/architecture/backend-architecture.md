@@ -1771,15 +1771,16 @@ destination is withheld (the resolver's `firmware-path-obstructed`, carried on t
 
 **The folder listing is a second, narrower question, because it costs a content read.** `firmware_inventory()` stays
 unverified: verification there hashes every declared file the packaged identity table covers at a matching size _and_
-every unclaimed file under the BIOS root, and the plugin resolves the whole machine on every game-page open — the
-unclaimed sweep alone is what makes it unaffordable. The verified answer comes from `FirmwareFolderVerdictFn` —
-`installation.firmware_for_core(core_so, verify=True)`, one core per call, 0.26 s against the inventory's 0.24 s on the
-reference machine — and it is asked only for the cores in the platform's scope whose folder row the inventory left open
-(`unanswered_folder_cores`). Which rows those are is the resolver's own three-valued answer and not a list of shapes
-held here: today an absent folder, a plain file sitting where the folder belongs, and a folder holding no file of a size
-the core would open are all settled by a stat, and only a folder with candidates in it is a question about bytes.
-`_folder_answers` memoises per query, so a System page rendering ten platforms asks each core once. The seam itself
-reads the disk, so `_firmware_folder_verdicts` — the attribute every consumer binds it to — is registered in
+every unclaimed file under the BIOS root, and the plugin resolves the whole machine on every game-page open. Upstream
+measures that verified whole tree at 0.8 s against 0.03 s for a single core on _its_ reference machine; nothing here has
+measured it at all, or which half of the sweep the difference sits in. The verified answer comes from
+`FirmwareFolderVerdictFn` — `installation.firmware_for_core(core_so, verify=True)`, one core per call, measured here at
+0.26 s against the inventory's 0.24 s — and it is asked only for the cores in the platform's scope whose folder row the
+inventory left open (`unanswered_folder_cores`). Which rows those are is the resolver's own three-valued answer and not
+a list of shapes held here: today an absent folder, a plain file sitting where the folder belongs, and a folder holding
+no file of a size the core would open are all settled by a stat, and only a folder with candidates in it is a question
+about bytes. `_folder_answers` memoises per query, so a System page rendering ten platforms asks each core once. The
+seam itself reads the disk, so `_firmware_folder_verdicts` — the attribute every consumer binds it to — is registered in
 `scripts/check_uow_seam_nesting.py`'s `IO_SEAM_METHODS` and must never be called with a Unit of Work open.
 
 **A settled folder's words come from the inventory; an open one's come from the verified read.** The two are exclusive

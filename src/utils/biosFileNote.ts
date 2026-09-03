@@ -63,9 +63,12 @@ const READ_INCOMPLETE = ["firmware-scan-incomplete", "firmware-unreadable"];
  * question with verification on, so the resolver never emits it there; and the
  * unverified machine-wide reading emits it only for a row it leaves open, which
  * is exactly the row whose codes that reading does not carry. So it reaches no
- * row at all — and a folder whose contents genuinely went unread, because the
- * read failed or the platform's scope never covered its core, arrives with no
- * code and takes the fallback below, which claims nothing either way.
+ * row at all. A folder whose contents genuinely went unread lands on the
+ * fallback below instead, and there are three ways to get there: the verified
+ * read failed, the platform's scope never covered the core so nothing asked, or
+ * the folder could not be looked at — the last arriving with
+ * `firmware-path-inaccessible`, which no branch here recognises. The fallback
+ * claims nothing either way, which is the honest answer to all three.
  */
 function verdictNote(row: BiosNoteRow): string {
   const caveats = row.caveats ?? [];

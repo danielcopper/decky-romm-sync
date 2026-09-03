@@ -398,6 +398,14 @@ def _row_caveats(
     there to answer, its caveats folded in by ``merge_folder_verdicts``;
     carrying the unverified statement on as well would leave the row saying its
     contents were not checked beside the verdict of the check.
+
+    Both indexes are keyed by **place**, so requirements resolving to one place
+    share its statements — which is right for two cores declaring one file, and
+    is the residual for two folder declarations landing on one directory: they
+    would each carry the other's codes. Discriminating on the caveat's own
+    ``core_so`` would close that and is not done, because three of the four
+    folder codes carry one and ``firmware-scan-incomplete`` does not — the rule
+    would drop exactly the code a broken listing needs.
     """
     codes = at_path.get(requirement.path, ())
     if settled is None:
@@ -410,9 +418,16 @@ def _caveats_by_destination(answer: Any) -> tuple[dict[str, tuple[str, ...]], di
 
     Two indexes, because the resolver names a destination two ways and they are
     different statements. ``path`` is the thing the caveat is ABOUT, so the row
-    is the requirement resolving there. ``dir`` is a folder that was listed, and
-    the caveat is about what the listing found IN it — only a folder declaration
-    is ever listed, which is what :func:`_row_caveats` keys on.
+    is the requirement resolving there. ``dir`` is a directory that was listed,
+    and the caveat is about what the listing found IN it, which is what
+    :func:`_row_caveats` keys on.
+
+    In the two questions this module asks, every ``dir`` is a folder
+    declaration's own: both resolve through the resolver's libretro core walk,
+    where the folder route is the only lister. The resolver states ``dir`` more
+    widely than that — a standalone emulator's search directory carries one too
+    — so a third question put to it (``firmware_for_system``) would need this
+    keying revisited before a search finding could land on a folder row.
 
     Deduplicated on the code within one destination, because the same statement
     arrives more than once: RetroDECK's ES-DE catalogue lists

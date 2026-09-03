@@ -268,8 +268,9 @@ class FirmwareService:
         shows work outstanding rather than a readiness nobody established.
 
         What this never asks is whether the requirement is MET — that is
-        ``BiosFileEntry.satisfied``, and for a folder declaration the two are
-        unrelated: the folder is there, and what satisfies the core is inside it.
+        ``BiosFileEntry.satisfied``, and for a folder declaration the two come
+        apart: what satisfies the core is a file inside the folder, and the
+        folder itself is there on every stock RetroDECK.
         """
         if placement is None or placement.relative_path is None:
             return self._firmware_file_store.exists(dest)

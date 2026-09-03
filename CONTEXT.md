@@ -286,8 +286,10 @@ install. Every statement below is scoped to a **required by active core** row fi
 require moves no count whatever its verdict — and the library's own held/offered ratio is a third axis again, counting
 what the RomM library holds rather than what is met.
 
-- **met** — raises `required_downloaded`. For a declared file, the resolver read it at the destination; for a declared
-  folder, the resolver listed the folder and an image inside it passes the core's own content check.
+- **met** — raises `required_downloaded`. For a declared folder, the resolver listed it and an image inside passes the
+  core's own content check. For a declared file it is presence at the destination, answered by the resolver wherever it
+  placed the file under the BIOS root and by the plugin's own probe for the rest — a library file no core declares, and
+  a file an emulator keeps in its own tree.
 - **unmet** — counted as a file shown to be absent, so it reads red and raises the play row's **BIOS badge**. A folder
   the resolver listed and found no image in is exactly this, and so is one that is not there at all.
 - **withheld** — the reading established neither. It raises neither count, and while a required row carries one the
@@ -300,11 +302,12 @@ a destination the emulator opens as a file — because the verdict is deliberate
 it. What the verdict does decide is which family of codes can apply, and what a surface says when none of them is
 recognised.
 
-Not every unestablished thing is withheld here. A declared file whose _bytes_ were never verified is not, and the reason
-is that nothing READS a file's content verdict rather than that nothing asked for one: the verified per-core question
-answers for everything that core declares, and the adapter keeps only the folder answers. Reading an unasked content
-question as a withheld verdict would decline readiness for every row on every platform. The foil to **not on server**,
-which is a settled absence and does count towards readiness.
+Not every unestablished thing is withheld here. A declared file whose _bytes_ were never verified is not — and for
+almost every such file the reason is simply that nobody asked: the verified question is put to one core at a time and
+only where a folder row is open, so on a platform whose cores declare no folder nothing is verified at all. Where it
+_is_ asked, it answers for every file that core declares as well, and those answers are dropped unread. Either way,
+reading an unasked content question as a withheld verdict would decline readiness for every row on every platform. The
+foil to **not on server**, which is a settled absence and does count towards readiness.
 
 ### Safely-bakeable
 
