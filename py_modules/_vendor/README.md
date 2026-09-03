@@ -1,10 +1,14 @@
-# Vendored third-party packages
+# Vendored copies
 
-Decky Loader has no plugin-level package manager, so third-party runtime dependencies are vendored here and imported as
-`from _vendor import <package>`. Only adapters import from `_vendor.*`. The release zip redistributes this directory, so
-each package keeps its upstream licence — inside the package directory, or beside it as `<package>.LICENSE` where the
-copy is pinned against upstream's own file manifest — and the provenance below makes updating a vendored dep a
-deliberate diff rather than "diff and pray". See the `_vendor/` rules in [`CLAUDE.md`](../../CLAUDE.md).
+What this directory holds is **verbatim upstream code we do not own** — pinned by the provenance below, excluded from
+our own linters and gates, and redistributed in the release zip, so each copy keeps its upstream licence (inside the
+package directory, or beside it as `<package>.LICENSE` where the copy is pinned against upstream's own file manifest).
+That, and not any one import mechanism, is what puts something here; keeping the copies under one root is what lets a
+single set of exclusions cover them all. See the `_vendor/` rules in [`CLAUDE.md`](../../CLAUDE.md).
+
+Everything here today is a third-party runtime dependency, vendored because Decky Loader has no plugin-level package
+manager and imported as `from _vendor import <package>` — and only adapters import `_vendor.*`. The provenance entries
+below make updating any of them a deliberate diff rather than "diff and pray".
 
 ## atlas
 
@@ -12,8 +16,8 @@ The [emu-atlas](https://github.com/danielcopper/emu-atlas) resolver — the conf
 extracted from this plugin.
 
 - **Upstream:** <https://github.com/danielcopper/emu-atlas>
-- **Version:** 0.5.0 — tag `v0.5.0`, from the release's `emu_atlas-0.5.0-py3-none-any.whl`
-  (`sha256:9c8b4a9a35ab7bd565669652ae93ecf65dfcb4b643ed59d8874de590e604be04`)
+- **Version:** 0.6.0 — tag `v0.6.0`, from the release's `emu_atlas-0.6.0-py3-none-any.whl`
+  (`sha256:92efa012241ad63d2e84d8b8180cbff06cf0a7cc73c5dff4aa487aec6e0bdb8f`)
 - **License:** MIT — see [`atlas.LICENSE`](atlas.LICENSE)
 - **Local patches:** none. Upstream made the package relocatable in
   [emu-atlas#327](https://github.com/danielcopper/emu-atlas/issues/327) — no absolute self-imports, no `files("atlas")`
@@ -26,8 +30,9 @@ verbatim as `atlas.SHA256SUMS`. That keeps `atlas/` exactly equal to the manifes
 exceptions. The equality half is not optional: `sha256sum -c --ignore-missing` exits 0 after a vendored file is deleted,
 so a plain checksum sweep would pass a half-copied tree.
 
-`_vendor.atlas` has no consumer yet; `tests/test_vendored_atlas.py` imports it and asserts the pinned version, so the
-copy is proven to resolve and not merely to hash correctly.
+`_vendor.atlas` is consumed by `adapters/atlas_firmware.py` alone — the firmware seam behind
+`services.protocols.FirmwareResolver`. `tests/test_vendored_atlas.py` additionally imports it and asserts the pinned
+version, so the copy is proven to resolve and not merely to hash correctly even if that adapter ever stops importing it.
 
 ### How to update
 
@@ -80,3 +85,9 @@ apply to a path handed over explicitly. That is how a formatter reaches a verbat
   markdown under `_vendor/`, and the hook reformats staged `.md` too. The emu-atlas wheel ships no markdown, so there is
   nothing to exclude today — but the next vendored package may, and reformatted prose breaks byte-identity exactly like
   reformatted code.
+
+**The trap is not limited to vendored trees.** Any directory a _different_ formatter owns is exposed the same way, and
+there it costs a whole tree rather than one file: the markdown formatter is configured for `**/*.md`, but handed `src/`
+as an explicit path it reformats the TypeScript that prettier owns — 186 files in one command, every one a real diff,
+and `pnpm format:check` is the only thing that notices. Hand a formatter the paths it owns, never a directory that
+merely contains them.

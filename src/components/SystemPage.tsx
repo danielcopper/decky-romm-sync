@@ -17,9 +17,10 @@ import {
   setSystemCore,
   debugLog,
 } from "../api/backend";
-import type { FirmwarePlatformExt } from "../types";
+import type { FirmwarePlatformExt, FirmwareWanted } from "../types";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { biosColorForLevel } from "../utils/biosColor";
+import { biosFileNote } from "../utils/biosFileNote";
 import { detach } from "../utils/detach";
 import { getEventTarget } from "../utils/events";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
@@ -32,12 +33,30 @@ import {
 import { batchConfirmLaunchOptions } from "../utils/launchOptionsReconcile";
 
 /**
+ * How each of the four `wanted` values reads on a file row. `not_needed` is
+ * spelled out rather than shortened: "not needed" is a statement about every
+ * installed emulator, and the row beside it saying "unknown" is the absence of
+ * one, so the two must not look like near-synonyms.
+ */
+const WANTED_LABELS: Record<FirmwareWanted, string> = {
+  needed: "needed",
+  optional: "optional",
+  not_needed: "not needed",
+  unknown: "unknown",
+};
+
+/**
  * Build the per-platform summary label/description from the backend BIOS
  * aggregates. The ok/partial/missing DECISION is the backend's `bios_level`
  * (`compute_bios_level`) — `requiredReady` is `bios_level === "ok"`, so the
  * required-files threshold is no longer re-compared here. `requiredCount` still
  * selects the phrasing axis (required vs. plain file counts), and the
  * optional-missing breakdown stays a local computation passed in by the caller.
+ *
+ * With nothing required, the library ratio is inventory and is worded as such —
+ * the same framing the BIOS tab uses. "0 / 20 files … 20 missing" over twenty
+ * files no installed core asks for reads as work outstanding on a system that
+ * needs nothing.
  */
 function getBiosSummary(
   requiredCount: number,
@@ -46,7 +65,6 @@ function getBiosSummary(
   optionalMissing: number,
   done: number,
   total: number,
-  allDone: boolean,
 ) {
   if (requiredCount > 0 && requiredReady) {
     return {
@@ -62,8 +80,39 @@ function getBiosSummary(
     };
   }
   return {
-    summaryLabel: `${done} / ${total} files`,
-    summaryDescription: allDone ? "All downloaded" : `${total - done} missing`,
+    summaryLabel: "Nothing required",
+    summaryDescription: total > 0 ? `${done} / ${total} files held` : "No BIOS files in your library",
+  };
+}
+
+/**
+ * The summary for a platform making no readiness claim. Two shapes reach it and
+ * they are different sentences.
+ *
+ * `requiredWithheld` above zero is a platform whose emulators DID answer and one
+ * of whose required rows nothing could judge — a folder, whose contents the
+ * reading does not inspect. Zero is the older shape: no installed emulator's
+ * answer could be established for the platform at all, which splits again on
+ * whether there are rows to point at, because a platform whose emulators are all
+ * standalone has none and "0 file(s) nothing installed could answer for" would
+ * read as a finished count of nothing rather than as silence.
+ */
+function getUnknownSummary(requiredWithheld: number, total: number) {
+  if (requiredWithheld > 0) {
+    return {
+      summaryLabel: "BIOS readiness unknown",
+      summaryDescription:
+        requiredWithheld === 1
+          ? "A required folder is here and its contents cannot be checked"
+          : `${requiredWithheld} required folders are here and their contents cannot be checked`,
+    };
+  }
+  return {
+    summaryLabel: "BIOS requirement unknown",
+    summaryDescription:
+      total > 0
+        ? `${total} file(s) nothing installed could answer for`
+        : "Nothing installed could answer for this system",
   };
 }
 
@@ -82,12 +131,6 @@ function announceBiosChange(platformSlug: string) {
   globalThis.dispatchEvent(
     new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: platformSlug } }),
   );
-}
-
-function hashIndicator(hv: boolean | null): string {
-  if (hv === true) return " ✓";
-  if (hv === false) return " ⚠";
-  return " —";
 }
 
 /**
@@ -213,7 +256,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     showModal(
       <ConfirmModal
         strTitle={`Delete BIOS files for ${platformSlug}?`}
-        strDescription="This deletes every downloaded BIOS file for this system from your RetroDECK bios directory. Games that need these files won't launch until you download them again."
+        strDescription="This deletes only the BIOS files this plugin downloaded for this system. Files your emulator came with, or that you put there yourself, are left where they are. Games that need the deleted files won't launch until you download them again."
         strOKButtonText="Delete BIOS Files"
         strCancelButtonText="Cancel"
         onOK={() => {
@@ -284,42 +327,78 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
 
   const renderBiosPlatform = (platform: FirmwarePlatformExt, index: number) => {
     const isLastPlatform = index === syncedPlatforms.length - 1;
-    const unknownFiles = platform.files.filter((f) => f.classification === "unknown");
+    const unansweredFiles = platform.files.filter((f) => f.wanted === "unknown");
     // Display counts come from the backend aggregates (computed from the same
     // core-aware files); fall back to local derivation only if a payload omits
-    // them. The optional-missing breakdown stays a local file-level axis — the
-    // 3-state bios_level doesn't model it.
-    const total = platform.server_count ?? platform.files.length;
-    const done = platform.local_count ?? platform.files.filter((f) => f.downloaded).length;
+    // them. `total` is the LIBRARY's file count, not the row count — the rows
+    // include files no library holds, and a progress ratio over those would
+    // report work the user cannot do. The expander below names the row count
+    // instead, because that is the list it opens. The optional-missing
+    // breakdown stays a local file-level axis — the level doesn't model it.
+    const total = platform.server_count ?? platform.files.filter((f) => f.on_server).length;
+    const done = platform.local_count ?? platform.files.filter((f) => f.on_server && f.downloaded).length;
     const allDone = done === total;
+    // What Delete BIOS would remove — a record count, not a library one. There
+    // is no local fallback: the rows say nothing about who downloaded a file,
+    // so a payload without the field offers no delete rather than guessing.
+    const deletable = platform.deletable_count ?? 0;
     const isDownloading = downloading === platform.platform_slug;
     const isExpanded = expanded[platform.platform_slug] ?? false;
 
-    const requiredFiles = platform.files.filter((f) => f.classification === "required");
+    const requiredFiles = platform.files.filter((f) => f.required_by_active);
     const requiredCount = platform.required_count ?? requiredFiles.length;
     const requiredDone = platform.required_downloaded ?? requiredFiles.filter((f) => f.downloaded).length;
-    const optionalMissing = platform.files.filter((f) => f.classification === "optional" && !f.downloaded).length;
+    const optionalMissing = platform.files.filter(
+      (f) => f.wanted === "optional" && !f.required_by_active && !f.downloaded,
+    ).length;
 
     // The ok/partial/missing DECISION is the backend's bios_level — "ready"
     // means all required files present (bios_level === "ok"). Fall back to the
     // local count comparison only when the level is absent from the payload.
     const requiredReady = platform.bios_level == null ? requiredDone === requiredCount : platform.bios_level === "ok";
 
-    // "unmanaged": the platform has server files but none map to a registry
-    // entry, so the plugin makes no readiness claim. Render neutral grey + honest
-    // text instead of a false all-clear. requiredCount is always 0 here (no
-    // registry-known files), so it is never counted as a "BIOS needed" platform.
-    const isUnmanaged = platform.bios_level === "unmanaged";
+    // "unknown": the plugin makes no readiness claim. Render neutral grey +
+    // honest text instead of a false all-clear — and never a "BIOS needed" flag
+    // either, since that is a claim in the other direction.
+    //
+    // Two shapes reach it and they are different sentences. `requiredWithheld`
+    // above zero is a platform whose emulators DID answer and one of whose
+    // required rows nothing could judge — a folder, whose contents the reading
+    // does not inspect. Everything else here was answered, so the rows below
+    // stand and so do the downloads. Zero is the older shape: no installed
+    // emulator's answer could be established for this platform at all. Its
+    // description splits again on whether there are rows to point at, because a
+    // platform whose emulators are all standalone has none, and "0 file(s)
+    // nothing installed could answer for" would read as a finished count of
+    // nothing rather than as silence.
+    const isUnknown = platform.bios_level === "unknown";
+    const requiredWithheld = platform.required_withheld ?? 0;
+    const nothingEstablished = isUnknown && requiredWithheld === 0;
 
-    const needsAttention = platform.has_games && requiredCount > 0 && !requiredReady;
-    const { summaryLabel, summaryDescription } = isUnmanaged
-      ? {
-          summaryLabel: "Not managed by the plugin",
-          summaryDescription: `${total} file(s) on server the plugin doesn't recognise`,
-        }
-      : getBiosSummary(requiredCount, requiredDone, requiredReady, optionalMissing, done, total, allDone);
-    const hasRequiredMissing = requiredCount > 0 && !requiredReady;
-    const hasOptionalMissing = optionalMissing > 0;
+    const needsAttention = platform.has_games && !isUnknown && requiredCount > 0 && !requiredReady;
+    const { summaryLabel, summaryDescription } = isUnknown
+      ? getUnknownSummary(requiredWithheld, total)
+      : getBiosSummary(requiredCount, requiredDone, requiredReady, optionalMissing, done, total);
+    // The download affordances key off what is missing AND fetchable, never off
+    // readiness: a required file the RomM library does not hold leaves the
+    // platform not ready and still gives the user nothing to press here.
+    //
+    // `nothingEstablished` withdraws them entirely, and that is a PLATFORM
+    // condition, never a per-file one: a platform whose reading finished may
+    // hold plenty of files no installed emulator asks for — a PlayStation page
+    // typically does — and every one of them stays fetchable, because "nothing
+    // wants this" is an answer.
+    // Where nothing could be established there is no answer to download
+    // against, so the page says so instead of offering to fetch files it cannot
+    // reason about. A declined READINESS verdict is not that state and keeps its
+    // buttons: its rows were answered, and downloading the files the library
+    // holds is the one thing that can still move the platform along. Nothing
+    // here is keyed to a platform name — the condition is the backend's verdict,
+    // so a system starts offering downloads again the moment anything can speak
+    // for it.
+    const fetchableMissing = nothingEstablished ? [] : platform.files.filter((f) => f.on_server && !f.downloaded);
+    const hasRequiredMissing = fetchableMissing.some((f) => f.required_by_active);
+    const hasOptionalMissing = fetchableMissing.some((f) => !f.required_by_active);
 
     const hasMultipleCores = !!platform.emulators && platform.emulators.length > 1;
 
@@ -348,7 +427,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
         <PanelSectionRow>
           <Field
             label={
-              isUnmanaged ? (
+              isUnknown ? (
                 <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                   <span
                     style={{
@@ -370,35 +449,60 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
             bottomSeparator="none"
           />
         </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem
-            layout="below"
-            bottomSeparator="none"
-            onClick={() =>
-              setExpanded((prev) => ({
-                ...prev,
-                [platform.platform_slug]: !prev[platform.platform_slug],
-              }))
-            }
-          >
-            {isExpanded ? "Hide Files" : `Show Files (${total})`}
-          </ButtonItem>
-        </PanelSectionRow>
+        {/* Withdrawing the download buttons without a word would read as "there
+            is nothing to fetch", which is the finished answer this platform
+            precisely does not have. It says which of the two it is, and what the
+            user can still do — the files are theirs to place, the plugin just
+            cannot say which ones are wanted. */}
+        {nothingEstablished && (
+          <PanelSectionRow>
+            <div style={{ fontSize: "11px", color: "#8f98a0", padding: "0 16px 4px" }}>
+              BIOS management is not supported for this system yet, so there is nothing to download here. You can still
+              put BIOS files in your BIOS folder by hand.
+            </div>
+          </PanelSectionRow>
+        )}
+        {/* A platform with no rows at all is on the page because its requirement
+            is unknown, not because there is a list to open. */}
+        {platform.files.length > 0 && (
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              bottomSeparator="none"
+              onClick={() =>
+                setExpanded((prev) => ({
+                  ...prev,
+                  [platform.platform_slug]: !prev[platform.platform_slug],
+                }))
+              }
+            >
+              {isExpanded ? "Hide Files" : `Show Files (${platform.files.length})`}
+            </ButtonItem>
+          </PanelSectionRow>
+        )}
         {isExpanded && (
           <Focusable>
             {platform.files.map((file) => {
               let dotColor: string;
-              if (file.classification === "unknown") {
+              // A folder is amber for the same reason an unanswerable row is:
+              // `downloaded` is true for one — something is at the destination —
+              // and green would claim an all-clear over contents nothing looked
+              // inside.
+              if (file.wanted === "unknown" || file.is_directory) {
                 dotColor = "#d4a72c";
               } else if (file.downloaded) {
                 dotColor = "#5ba32b";
-              } else if (file.classification === "required") {
+              } else if (file.required_by_active) {
                 dotColor = "#d94126";
               } else {
                 dotColor = "#8f98a0";
               }
+              // The provenance/kind note is shared with the BIOS tab so one row
+              // cannot read two ways; plain absence is this page's own word,
+              // because the tab leaves that to its dot.
+              const note = biosFileNote(file) || (file.downloaded ? "" : "Missing");
               return (
-                <PanelSectionRow key={file.id}>
+                <PanelSectionRow key={file.file_name}>
                   <Field
                     label={
                       <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -412,23 +516,19 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
                             flexShrink: 0,
                           }}
                         />
-                        {`${file.description || file.file_name} (${file.classification})`}
+                        {`${file.description || file.file_name} (${WANTED_LABELS[file.wanted]})`}
                       </span>
                     }
-                    description={
-                      file.downloaded
-                        ? `${file.file_name}${hashIndicator(file.hash_valid)}`
-                        : `${file.file_name} — Missing`
-                    }
+                    description={note ? `${file.file_name} — ${note}` : file.file_name}
                     bottomSeparator="none"
                   />
                 </PanelSectionRow>
               );
             })}
-            {unknownFiles.length > 0 && (
+            {unansweredFiles.length > 0 && (
               <PanelSectionRow>
                 <Field
-                  label={`${unknownFiles.length} file(s) not recognized`}
+                  label={`${unansweredFiles.length} file(s) nothing installed could answer for`}
                   description="Report at github.com/danielcopper/romm-tender/issues if needed."
                   bottomSeparator="none"
                 />
@@ -465,8 +565,13 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
           </PanelSectionRow>
         )}
         {/* Delete is local-only (no server needed) and shown only when there is
-            at least one downloaded file to delete. Destructive → ConfirmModal. */}
-        {done > 0 && (
+            at least one file it would actually remove. That number is the
+            backend's `deletable_count` — the plugin's own download records that
+            are still on disk, which is exactly what the delete unlinks. The
+            library ratio (`done`) counts a different set and was wrong here in
+            both directions, including hiding the button over downloads RomM had
+            stopped listing. Destructive → ConfirmModal. */}
+        {deletable > 0 && (
           <PanelSectionRow>
             <ButtonItem
               layout="below"
@@ -474,7 +579,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
               onClick={() => confirmDeleteBios(platform.platform_slug)}
               disabled={isDownloading}
             >
-              {`Delete BIOS (${done})`}
+              {`Delete BIOS (${deletable})`}
             </ButtonItem>
           </PanelSectionRow>
         )}

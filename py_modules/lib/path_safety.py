@@ -109,7 +109,7 @@ def coerce_safe_component(name: str, fallback: str) -> tuple[str, bool]:
     return (component, component != name)
 
 
-def safe_join(base: str, *parts: str) -> str:
+def safe_join(base: str, *parts: str, allow_base: bool = False) -> str:
     """Join *parts* onto *base* and return the realpath, or raise on escape.
 
     Realpath-containment guard for server-supplied path components: the
@@ -122,9 +122,23 @@ def safe_join(base: str, *parts: str) -> str:
     are allowed as long as the resolved path stays under ``base``. Raises
     :class:`PathTraversalError` otherwise; returns the resolved absolute
     path on success.
+
+    ``allow_base`` widens containment from *strictly below* to *at or
+    below*, and nothing else — an escape is still refused. It exists for
+    one shape: an emulator's own declared firmware location that the
+    distribution has symlinked back onto the firmware root itself
+    (RetroDECK points ``<bios>/pcsx2/bios`` at ``<bios>``, which is why
+    LRPS2's declaration and the root are one directory). The default
+    rejects that as an escape, which drops a real requirement rather than
+    guarding anything, so a caller joining a location an emulator declared
+    opts in. A caller joining a *server-supplied* name never does: there
+    the base is not a destination, and ``""`` resolving onto it would be a
+    write at the directory itself.
     """
     real_base = os.path.realpath(base)
     real_joined = os.path.realpath(os.path.join(base, *parts))
+    if allow_base and real_joined == real_base:
+        return real_joined
     if not real_joined.startswith(real_base + os.sep):
         raise PathTraversalError(f"path escapes base directory: {os.path.join(base, *parts)!r} not under {base!r}")
     return real_joined

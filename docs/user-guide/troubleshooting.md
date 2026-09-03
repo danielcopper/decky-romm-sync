@@ -360,8 +360,10 @@ games affected. This only removes local save files — saves already uploaded to
 
 ### Delete BIOS Files
 
-Deletes downloaded BIOS files for a specific platform. Shows each platform that has BIOS files present locally. You can
-re-download them later from the **System** page.
+Deletes the BIOS files **the plugin downloaded** for a specific platform — files your emulator came with, or that you
+put in the BIOS folder yourself, are left alone even when they share a name with a file on your server. Same rule and
+same wording as [Deleting BIOS files](bios-management.md#deleting-bios-files) on the System page, where the count of
+what would be removed is also shown. You can re-download them later from the **System** page.
 
 <!-- Screenshot: Danger Zone page showing removal options and whitelist -->
 

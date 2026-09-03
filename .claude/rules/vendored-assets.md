@@ -22,11 +22,11 @@ SHA-256 (CI re-verifies it; the release smoke test asserts the artifact ships in
 `ctypes` with no Python fallback; provenance and the update procedure live in
 [`native/README.md`](../../py_modules/native/README.md).
 
-**Vendored data** (no source in this repo) follows the same discipline: `defaults/bios_registry.json` is copied verbatim
-from an [emu-atlas](https://github.com/danielcopper/emu-atlas) release with a pinned SHA-256
-(`defaults/bios_registry.json.sha256`, CI-verified via `mise run gate`; the release smoke test asserts it ships in the
-zip) — never hand-edit it, regeneration happens upstream; provenance and the update procedure live in
-[`defaults/README.md`](../../defaults/README.md).
+**Vendored data** used to be a third category — `defaults/bios_registry.json`, a firmware snapshot copied from an
+emu-atlas release under its own checksum. It is gone with the swap to the live resolver, and nothing in `defaults/` is
+vendored today; `config.json` is maintained in this repo. `defaults/README.md` records what left and why, so the next
+person to reach for a snapshot there finds the reason it was not the answer.
 
-The shared rule across all three: **the artifact is a verbatim copy pinned by checksum.** Editing one in place to fix a
-problem is always wrong — the fix belongs upstream, followed by a deliberate re-copy and a checksum bump.
+The shared rule across the categories that remain: **the artifact is a verbatim copy pinned by checksum.** Editing one
+in place to fix a problem is always wrong — the fix belongs upstream, followed by a deliberate re-copy and a checksum
+bump.

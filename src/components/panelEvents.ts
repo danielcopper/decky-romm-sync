@@ -35,6 +35,7 @@ import {
   refreshSlotState,
   saveStatusFromCache,
   takeReadTicket,
+  unknownBiosFields,
   type PanelReadSeqs,
   type PanelState,
   type RomBinding,
@@ -148,12 +149,20 @@ async function handleBiosChange(
   // and to skip the wasted checkPlatformBios fetch (#1082). Read via ref
   // to avoid a stale closure.
   if (!detail.platform_slug || detail.platform_slug !== ctx.platformSlugRef.current) return;
-  // A rejected check and one that could not determine the requirement are
-  // both "we don't know" — writing either would drop the whole BIOS tab
-  // while the play row above keeps its level (#1693). Only an ANSWER moves
-  // the tab, in either direction.
+  // Only an ANSWER moves the tab, in either direction. A rejected check is not
+  // one — writing it would drop the whole BIOS tab while the play row above
+  // keeps its level (#1693) — and on this path a rejection is the ONLY way a
+  // read fails, because `check_platform_bios` reports its own degradation
+  // instead of raising it.
   const updated = await checkPlatformBios(detail.platform_slug).catch((): BiosStatus | null => null);
-  if (ctx.cancelled() || !updated || updated.bios_status_unknown) return;
+  if (ctx.cancelled() || !updated) return;
+  // That degradation IS the answer for a platform whose emulators the plugin
+  // cannot ask, and there is no second reading to wait for: shown as unknown,
+  // never hidden as "needs nothing" (#1660).
+  if (updated.bios_status_unknown) {
+    ctx.setState((prev) => ({ ...prev, ...unknownBiosFields() }));
+    return;
+  }
   const biosLevel = updated.needs_bios ? (updated.bios_level ?? null) : null;
   ctx.setState((prev) => ({ ...prev, biosStatus: updated.needs_bios ? updated : null, biosLevel }));
 }

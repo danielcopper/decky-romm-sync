@@ -20,7 +20,7 @@ import type { ReactElement } from "react";
 import { SystemPage } from "./SystemPage";
 import * as backend from "../api/backend";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
-import type { FirmwarePlatformExt } from "../types";
+import type { BiosLevel, FirmwarePlatformExt } from "../types";
 
 // scrollToTop is a no-op in happy-dom; mock for cleanliness.
 vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
@@ -143,11 +143,21 @@ function makeBiosPlatform(overrides: Partial<FirmwarePlatformExt> = {}): Firmwar
   // them from the files unless a test overrides them explicitly.
   const serverCount = files.length;
   const localCount = files.filter((f) => f.downloaded).length;
-  const requiredFiles = files.filter((f) => f.classification === "required");
+  const requiredFiles = files.filter((f) => f.required_by_active);
   const requiredCount = requiredFiles.length;
-  const requiredDownloaded = requiredFiles.filter((f) => f.downloaded).length;
-  const biosLevel: "ok" | "partial" | "missing" =
-    requiredDownloaded >= requiredCount ? "ok" : requiredDownloaded > 0 ? "partial" : "missing";
+  // A folder is where the reading stops: something is at the destination and
+  // nothing about the requirement was established, so it raises neither the
+  // done count nor the level's confidence.
+  const requiredWithheld = requiredFiles.filter((f) => f.is_directory).length;
+  const requiredDownloaded = requiredFiles.filter((f) => f.downloaded && !f.is_directory).length;
+  const biosLevel: BiosLevel =
+    requiredWithheld > 0
+      ? "unknown"
+      : requiredDownloaded >= requiredCount
+        ? "ok"
+        : requiredDownloaded > 0
+          ? "partial"
+          : "missing";
   return {
     platform_slug: "snes",
     files: [],
@@ -156,7 +166,13 @@ function makeBiosPlatform(overrides: Partial<FirmwarePlatformExt> = {}): Firmwar
     local_count: localCount,
     required_count: requiredCount,
     required_downloaded: requiredDownloaded,
+    required_withheld: requiredWithheld,
     bios_level: biosLevel,
+    // Not derived from the files, because the backend cannot derive it from them
+    // either: it counts the plugin's own download records, and a row says
+    // nothing about who put the file on disk. Tests that want the Delete BIOS
+    // button state it.
+    deletable_count: 0,
     ...overrides,
   };
 }
@@ -217,13 +233,14 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "snes.rom",
+                local_path: "snes.rom",
                 size: 100,
                 md5: "x",
                 downloaded: true,
-                required: true,
                 description: "BIOS",
-                hash_valid: true,
-                classification: "required",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: true,
               },
             ],
           }),
@@ -328,13 +345,14 @@ describe("SystemPage", () => {
           {
             id: 1,
             file_name: "boot.rom",
+            local_path: "boot.rom",
             size: 100,
             md5: "x",
             downloaded: false,
-            required: false,
             description: "Optional",
-            hash_valid: null,
-            classification: "optional",
+            wanted: "optional",
+            required_by_active: false,
+            on_server: true,
           },
         ],
       });
@@ -526,17 +544,67 @@ describe("SystemPage", () => {
           {
             id: 1,
             file_name: "bios.rom",
+            local_path: "bios.rom",
             size: 100,
             md5: "x",
             downloaded: false,
-            required: true,
             description: "Required BIOS",
-            hash_valid: null,
-            classification: "required",
+            wanted: "needed",
+            required_by_active: true,
+            on_server: true,
           },
         ],
       });
     }
+
+    it("offers no download for a required file the RomM library does not hold", async () => {
+      // The third row kind: an emulator asks for it, the library has never had
+      // it, and nothing in the plugin can fetch it. It still makes the platform
+      // not ready — the title says so — but a button here would do nothing.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "snes",
+            required_count: 1,
+            required_downloaded: 0,
+            bios_level: "missing",
+            files: [
+              {
+                id: null,
+                file_name: "lynxboot.img",
+                local_path: "lynxboot.img",
+                size: 0,
+                md5: "",
+                downloaded: false,
+                description: "Boot ROM",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: false,
+              },
+            ],
+          }),
+        ],
+      });
+      const { queryByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(queryByText("Download Required")).toBeNull();
+      expect(queryByText("Download All")).toBeNull();
+      // The platform is still flagged: not fetchable is not the same as not needed.
+      expect(container.textContent).toContain("BIOS needed");
+    });
+
+    it("shows a missing required file the library does hold as downloadable", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithMissingRequired()],
+      });
+      const { queryByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(queryByText("Download Required")).not.toBeNull();
+    });
 
     it("calls downloadRequiredFirmware(slug) and refreshes on success", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
@@ -704,13 +772,14 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "ok.bin",
+                local_path: "ok.bin",
                 size: 100,
                 md5: "x",
                 downloaded: true,
-                required: false,
                 description: "OK File",
-                hash_valid: true,
-                classification: "optional",
+                wanted: "optional",
+                required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -733,99 +802,6 @@ describe("SystemPage", () => {
       expect(container.textContent).not.toContain("OK File");
     });
 
-    it("renders hashIndicator ' ✓' for downloaded files with hash_valid=true", async () => {
-      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
-        success: true,
-        platforms: [
-          makeBiosPlatform({
-            platform_slug: "snes",
-            files: [
-              {
-                id: 1,
-                file_name: "good.rom",
-                size: 100,
-                md5: "x",
-                downloaded: true,
-                required: false,
-                description: "Good",
-                hash_valid: true,
-                classification: "optional",
-              },
-            ],
-          }),
-        ],
-      });
-      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
-      await flushAsync();
-      await act(async () => {
-        fireEvent.click(getByText("Show Files (1)"));
-        await Promise.resolve();
-      });
-      expect(container.textContent).toContain("good.rom ✓");
-    });
-
-    it("renders hashIndicator ' ⚠' for downloaded files with hash_valid=false", async () => {
-      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
-        success: true,
-        platforms: [
-          makeBiosPlatform({
-            platform_slug: "snes",
-            files: [
-              {
-                id: 1,
-                file_name: "bad.rom",
-                size: 100,
-                md5: "x",
-                downloaded: true,
-                required: false,
-                description: "Bad",
-                hash_valid: false,
-                classification: "optional",
-              },
-            ],
-          }),
-        ],
-      });
-      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
-      await flushAsync();
-      await act(async () => {
-        fireEvent.click(getByText("Show Files (1)"));
-        await Promise.resolve();
-      });
-      expect(container.textContent).toContain("bad.rom ⚠");
-    });
-
-    it("renders hashIndicator ' —' for downloaded files with hash_valid=null", async () => {
-      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
-        success: true,
-        platforms: [
-          makeBiosPlatform({
-            platform_slug: "snes",
-            files: [
-              {
-                id: 1,
-                file_name: "unk.rom",
-                size: 100,
-                md5: "x",
-                downloaded: true,
-                required: false,
-                description: "Unk",
-                hash_valid: null,
-                classification: "optional",
-              },
-            ],
-          }),
-        ],
-      });
-      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
-      await flushAsync();
-      await act(async () => {
-        fireEvent.click(getByText("Show Files (1)"));
-        await Promise.resolve();
-      });
-      expect(container.textContent).toContain("unk.rom —");
-    });
-
     it("renders a missing required file (red dot branch) when expanded", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
@@ -836,13 +812,14 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "missing-req.rom",
+                local_path: "missing-req.rom",
                 size: 100,
                 md5: "x",
                 downloaded: false,
-                required: true,
                 description: "ReqMissing",
-                hash_valid: null,
-                classification: "required",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: true,
               },
             ],
           }),
@@ -868,13 +845,14 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "missing-opt.rom",
+                local_path: "missing-opt.rom",
                 size: 100,
                 md5: "x",
                 downloaded: false,
-                required: false,
                 description: "OptMissing",
-                hash_valid: null,
-                classification: "optional",
+                wanted: "optional",
+                required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -890,7 +868,7 @@ describe("SystemPage", () => {
       expect(container.textContent).toContain("missing-opt.rom — Missing");
     });
 
-    it("renders the unrecognized-file footer when unknown files are present", async () => {
+    it("renders the unanswered-file footer when unknown files are present", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
@@ -900,13 +878,14 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "mystery.rom",
+                local_path: "mystery.rom",
                 size: 100,
                 md5: "x",
                 downloaded: true,
-                required: false,
                 description: "?",
-                hash_valid: null,
-                classification: "unknown",
+                wanted: "unknown",
+                required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -918,7 +897,7 @@ describe("SystemPage", () => {
         fireEvent.click(getByText("Show Files (1)"));
         await Promise.resolve();
       });
-      expect(container.textContent).toContain("1 file(s) not recognized");
+      expect(container.textContent).toContain("1 file(s) nothing installed could answer for");
     });
   });
 
@@ -936,13 +915,14 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "req.rom",
+                local_path: "req.rom",
                 size: 100,
                 md5: "x",
                 downloaded: true,
-                required: true,
                 description: "Req",
-                hash_valid: true,
-                classification: "required",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: true,
               },
             ],
           }),
@@ -964,24 +944,26 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "req.rom",
+                local_path: "req.rom",
                 size: 100,
                 md5: "x",
                 downloaded: true,
-                required: true,
                 description: "Req",
-                hash_valid: true,
-                classification: "required",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: true,
               },
               {
                 id: 2,
                 file_name: "opt.rom",
+                local_path: "opt.rom",
                 size: 100,
                 md5: "x",
                 downloaded: false,
-                required: false,
                 description: "Opt",
-                hash_valid: null,
-                classification: "optional",
+                wanted: "optional",
+                required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -1002,13 +984,14 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "req.rom",
+                local_path: "req.rom",
                 size: 100,
                 md5: "x",
                 downloaded: false,
-                required: true,
                 description: "Req",
-                hash_valid: null,
-                classification: "required",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: true,
               },
             ],
           }),
@@ -1019,7 +1002,7 @@ describe("SystemPage", () => {
       expect(container.textContent).toContain("1 required missing");
     });
 
-    it("falls back to 'X / Y files' summary when there are no required files", async () => {
+    it("frames the library ratio as inventory when there are no required files", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
@@ -1029,13 +1012,14 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "opt.rom",
+                local_path: "opt.rom",
                 size: 100,
                 md5: "x",
                 downloaded: true,
-                required: false,
                 description: "Opt",
-                hash_valid: true,
-                classification: "optional",
+                wanted: "optional",
+                required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -1043,11 +1027,11 @@ describe("SystemPage", () => {
       });
       const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      expect(container.textContent).toContain("1 / 1 files");
-      expect(container.textContent).toContain("All downloaded");
+      expect(container.textContent).toContain("Nothing required");
+      expect(container.textContent).toContain("1 / 1 files held");
     });
 
-    it("shows 'N missing' suffix when not all files are downloaded and no required files exist", async () => {
+    it("does not report a missing count over files no core requires", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
@@ -1057,13 +1041,14 @@ describe("SystemPage", () => {
               {
                 id: 1,
                 file_name: "opt.rom",
+                local_path: "opt.rom",
                 size: 100,
                 md5: "x",
                 downloaded: false,
-                required: false,
                 description: "Opt",
-                hash_valid: null,
-                classification: "optional",
+                wanted: "optional",
+                required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -1071,31 +1056,36 @@ describe("SystemPage", () => {
       });
       const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      expect(container.textContent).toContain("0 / 1 files");
-      expect(container.textContent).toContain("1 missing");
+      // "0 / 1 files … 1 missing" reads as work outstanding on a system that
+      // needs nothing; the ratio is inventory here and is worded as such.
+      expect(container.textContent).toContain("Nothing required");
+      expect(container.textContent).toContain("0 / 1 files held");
+      expect(container.textContent).not.toContain("1 missing");
     });
 
-    it("renders 'Not managed by the plugin' + a neutral grey dot for an unmanaged platform (#1520)", async () => {
-      // Server files present but none registry-known → backend ships bios_level
-      // "unmanaged". The System page must render honest neutral text (not a false
-      // all-clear) with the shared grey status dot, and never flag it "BIOS needed".
+    it("renders 'BIOS requirement unknown' + a neutral grey dot for an unanswered platform (#1520)", async () => {
+      // Server files present and no installed emulator's answer established for
+      // any of them → backend ships bios_level "unknown". The System page must
+      // render honest neutral text (not a false all-clear) with the shared grey
+      // status dot, and never flag it "BIOS needed".
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
           makeBiosPlatform({
             platform_slug: "psvita",
-            bios_level: "unmanaged",
+            bios_level: "unknown",
             files: [
               {
                 id: 1,
                 file_name: "unknown.bin",
+                local_path: "unknown.bin",
                 size: 100,
                 md5: "x",
                 downloaded: false,
-                required: false,
                 description: "?",
-                hash_valid: null,
-                classification: "unknown",
+                wanted: "unknown",
+                required_by_active: false,
+                on_server: true,
               },
             ],
           }),
@@ -1103,13 +1093,274 @@ describe("SystemPage", () => {
       });
       const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      expect(container.textContent).toContain("Not managed by the plugin");
-      expect(container.textContent).toContain("1 file(s) on server the plugin doesn't recognise");
+      expect(container.textContent).toContain("BIOS requirement unknown");
+      expect(container.textContent).toContain("1 file(s) nothing installed could answer for");
       // Neutral grey dot via the shared helper — never green.
       expect(container.innerHTML).toContain("#8f98a0");
       expect(container.innerHTML).not.toContain("#5ba32b");
       // Not flagged as needing BIOS (title carries no "BIOS needed" suffix).
       expect(container.textContent).not.toContain("BIOS needed");
+    });
+
+    it("says so in words for an unanswerable platform with no files at all (#1660)", async () => {
+      // A platform ES-DE offers no RetroArch core for — PS3 through RPCS3 —
+      // holds no row to count, so the file-count description would read "0
+      // file(s) nothing installed could answer for": a finished count of nothing
+      // where the truth is that nobody was asked. There is also no list to open,
+      // so the expander goes with it.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "ps3",
+            bios_level: "unknown",
+            server_count: 0,
+            local_count: 0,
+            files: [],
+          }),
+        ],
+      });
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(container.textContent).toContain("BIOS requirement unknown");
+      expect(container.textContent).toContain("Nothing installed could answer for this system");
+      expect(container.textContent).not.toContain("file(s) nothing installed could answer for");
+      expect(container.textContent).not.toContain("Show Files");
+      expect(container.innerHTML).toContain("#8f98a0");
+      expect(container.innerHTML).not.toContain("#5ba32b");
+    });
+
+    it("offers no download for a platform nothing could answer for, and says why (#1660)", async () => {
+      // The files are on the server and fetchable, so the buttons would appear
+      // on the count alone — offering to fetch files the plugin cannot reason
+      // about, beside a grey line saying it cannot. Withdrawing them silently
+      // would read as "there is nothing to fetch", which is the finished answer
+      // this platform does not have, so the page says which of the two it is.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "switch",
+            bios_level: "unknown",
+            files: [
+              {
+                id: 1,
+                file_name: "prod.keys",
+                local_path: "prod.keys",
+                size: 100,
+                md5: "x",
+                downloaded: false,
+                description: "?",
+                wanted: "unknown",
+                required_by_active: false,
+                on_server: true,
+              },
+            ],
+          }),
+        ],
+      });
+      const { queryByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(queryByText("Download All")).toBeNull();
+      expect(queryByText("Download Required")).toBeNull();
+      expect(container.textContent).toContain("BIOS management is not supported for this system yet");
+      expect(container.textContent).toContain("by hand");
+    });
+
+    it("keeps every download on an answered platform whose files nothing wants", async () => {
+      // The foil, and the reason the condition is per platform rather than per
+      // file: a psx page typically lists a good number of regional BIOS dumps no
+      // installed core asks for. "Nothing wants this" is an answer, so each of
+      // them stays fetchable.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "psx",
+            bios_level: "ok",
+            files: [
+              {
+                id: 1,
+                file_name: "scph7003.bin",
+                local_path: "scph7003.bin",
+                size: 100,
+                md5: "x",
+                downloaded: false,
+                description: "PS1 BIOS",
+                wanted: "not_needed",
+                required_by_active: false,
+                on_server: true,
+              },
+            ],
+          }),
+        ],
+      });
+      const { queryByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(queryByText("Download All")).not.toBeNull();
+      expect(container.textContent).not.toContain("is not supported for this system yet");
+    });
+
+    it("declines the readiness claim over a required folder it cannot look inside", async () => {
+      // LRPS2 requires the `pcsx2/bios` FOLDER, which RetroDECK links onto the
+      // BIOS root — so it is always there, and counting it as satisfied read
+      // "All required ready" over a PS2 install with no BIOS file in it.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "ps2",
+            files: [
+              {
+                id: null,
+                file_name: "bios",
+                local_path: "bios",
+                size: 0,
+                md5: "",
+                downloaded: true,
+                description: "'pcsx2/bios' folder",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: false,
+                is_directory: true,
+              },
+              {
+                id: null,
+                file_name: "GameIndex.yaml",
+                local_path: "pcsx2/resources/GameIndex.yaml",
+                size: 0,
+                md5: "",
+                downloaded: true,
+                description: "GameIndex.yaml (Game Database)",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: false,
+              },
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("BIOS readiness unknown");
+      expect(container.textContent).toContain("A required folder is here and its contents cannot be checked");
+      expect(container.textContent).not.toContain("All required ready");
+      expect(container.textContent).not.toContain("required missing");
+      // Not a "nothing could be established" platform: its rows were answered,
+      // so it keeps the words and the buttons that state belongs to.
+      expect(container.textContent).not.toContain("is not supported for this system yet");
+      expect(container.textContent).not.toContain("BIOS needed");
+    });
+
+    it("keeps a fetchable file downloadable while the readiness verdict declines", async () => {
+      // The declined verdict is about one unjudgeable row, not about the
+      // platform: the library's own PS2 dumps were answered for, and fetching
+      // them is the one thing that still moves the system along.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "ps2",
+            files: [
+              {
+                id: null,
+                file_name: "bios",
+                local_path: "bios",
+                size: 0,
+                md5: "",
+                downloaded: true,
+                description: "'pcsx2/bios' folder",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: false,
+                is_directory: true,
+              },
+              {
+                id: 7,
+                file_name: "scph39001.bin",
+                local_path: "scph39001.bin",
+                size: 100,
+                md5: "x",
+                downloaded: false,
+                description: "PS2 BIOS",
+                wanted: "not_needed",
+                required_by_active: false,
+                on_server: true,
+              },
+            ],
+          }),
+        ],
+      });
+      const { queryByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(queryByText("Download All")).not.toBeNull();
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // M2. What a file row says about itself
+  // ------------------------------------------------------------------
+  describe("file row notes", () => {
+    async function expandedRow(file: Partial<FirmwarePlatformExt["files"][number]>) {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "ngc",
+            files: [
+              {
+                id: null,
+                file_name: "codehandler.bin",
+                local_path: "codehandler.bin",
+                size: 0,
+                md5: "",
+                downloaded: true,
+                description: "Dolphin 'Sys' folder",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: false,
+                ...file,
+              },
+            ],
+          }),
+        ],
+      });
+      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Show Files (1)"));
+      return container;
+    }
+
+    async function expandedRowText(file: Partial<FirmwarePlatformExt["files"][number]>) {
+      return (await expandedRow(file)).textContent;
+    }
+
+    it("names the distribution that supplied the file instead of the library it is not in", async () => {
+      const text = await expandedRowText({ supplied_by: "retrodeck" });
+
+      expect(text).toContain("codehandler.bin — provided by retrodeck");
+      expect(text).not.toContain("not in your RomM library");
+    });
+
+    it("says a folder's contents were never checked", async () => {
+      const container = await expandedRow({ file_name: "bios", is_directory: true });
+
+      expect(container.textContent).toContain("bios — a folder is here — its contents cannot be checked");
+      expect(container.textContent).not.toContain("Missing");
+      // Amber, never the green a present file gets: `downloaded` is true for a
+      // folder, and green would claim an all-clear over contents nobody read.
+      expect(container.innerHTML).toContain("#d4a72c");
+      expect(container.innerHTML).not.toContain("#5ba32b");
+    });
+
+    it("still says a library file is missing in the page's own words", async () => {
+      const text = await expandedRowText({ downloaded: false, on_server: true });
+
+      expect(text).toContain("codehandler.bin — Missing");
     });
   });
 
@@ -1636,17 +1887,19 @@ describe("SystemPage", () => {
     function biosPlatformWithDownloaded(): FirmwarePlatformExt {
       return makeBiosPlatform({
         platform_slug: "ps1",
+        deletable_count: 1,
         files: [
           {
             id: 1,
             file_name: "scph5501.bin",
+            local_path: "scph5501.bin",
             size: 100,
             md5: "x",
             downloaded: true,
-            required: true,
             description: "PS1 BIOS",
-            hash_valid: true,
-            classification: "required",
+            wanted: "needed",
+            required_by_active: true,
+            on_server: true,
           },
         ],
       });
@@ -1659,19 +1912,20 @@ describe("SystemPage", () => {
           {
             id: 1,
             file_name: "scph5501.bin",
+            local_path: "scph5501.bin",
             size: 100,
             md5: "x",
             downloaded: false,
-            required: true,
             description: "PS1 BIOS",
-            hash_valid: null,
-            classification: "required",
+            wanted: "needed",
+            required_by_active: true,
+            on_server: true,
           },
         ],
       });
     }
 
-    it("hides the Delete BIOS button when no files are downloaded", async () => {
+    it("hides the Delete BIOS button when there is nothing it would remove", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [biosPlatformNothingDownloaded()],
@@ -1681,7 +1935,52 @@ describe("SystemPage", () => {
       expect(queryByText(/Delete BIOS/)).toBeNull();
     });
 
-    it("shows the Delete BIOS button with the downloaded count when at least one file is downloaded", async () => {
+    it("counts what the delete would remove, not what the library holds (#1807)", async () => {
+      // The two sets differ in both directions. Here the library holds nothing
+      // on disk — the one file it lists was never fetched — while a download of
+      // ours that RomM has since dropped is still sitting there with a record.
+      // Keying the button off `local_count` hid it over exactly that file.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "ps1",
+            deletable_count: 1,
+            files: [
+              {
+                id: 1,
+                file_name: "scph5501.bin",
+                local_path: "scph5501.bin",
+                size: 100,
+                md5: "x",
+                downloaded: false,
+                description: "PS1 BIOS",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: true,
+              },
+            ],
+          }),
+        ],
+      });
+      const { getByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(getByText("Delete BIOS (1)")).toBeTruthy();
+    });
+
+    it("offers no delete for a hand-placed file the library happens to name", async () => {
+      // Downloaded and on the server, so `local_count` is 1 — but nothing here
+      // put it on disk, so there is no record and nothing to delete.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [makeBiosPlatform({ ...biosPlatformWithDownloaded(), deletable_count: 0 })],
+      });
+      const { queryByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(queryByText(/Delete BIOS/)).toBeNull();
+    });
+
+    it("shows the Delete BIOS button with the deletable count when there is one to remove", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [biosPlatformWithDownloaded()],
@@ -1705,6 +2004,23 @@ describe("SystemPage", () => {
       expect(props?.strTitle).toBe("Delete BIOS files for ps1?");
       expect(props?.strOKButtonText).toBe("Delete BIOS Files");
       expect(props?.strCancelButtonText).toBe("Cancel");
+    });
+
+    it("states the actual scope of the delete before the user authorises it", async () => {
+      // The last sentence read before a destructive action, so it has to match
+      // the rule: only the plugin's own downloads go. It promised to remove
+      // "every downloaded BIOS file" long after the guard stopped doing that.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithDownloaded()],
+      });
+      const { getByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Delete BIOS (1)"));
+      const description = lastConfirmModalProps()?.strDescription;
+      expect(description).toContain("only the BIOS files this plugin downloaded");
+      expect(description).toContain("left where they are");
+      expect(description).not.toContain("every downloaded BIOS file");
     });
 
     it("calls deletePlatformBios(slug), surfaces the message, and refreshes on confirm + success", async () => {

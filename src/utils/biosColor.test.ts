@@ -14,8 +14,8 @@ describe("biosColorForLevel", () => {
     expect(biosColorForLevel("missing")).toBe("#d94126");
   });
 
-  it("maps 'unmanaged' (no registry coverage) to neutral grey", () => {
-    expect(biosColorForLevel("unmanaged")).toBe("#8f98a0");
+  it("maps 'unknown' (no emulator's answer established) to neutral grey", () => {
+    expect(biosColorForLevel("unknown")).toBe("#8f98a0");
   });
 
   it("maps null (no level data) to neutral grey", () => {

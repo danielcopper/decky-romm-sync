@@ -10,6 +10,7 @@ from _factories import _make_retry, _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_disc_resolver import FakeDiscResolver
+from fakes.fake_firmware_resolver import FakeFirmwareResolver
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_path_exists_reader import FakePathExistsReader
@@ -154,9 +155,9 @@ def plugin(tmp_path):
             romm_api=MagicMock(),
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
-            plugin_dir=decky.DECKY_PLUGIN_DIR,
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             firmware_file_store=FirmwareFileAdapter(),
+            firmware_resolver=FakeFirmwareResolver(),
             retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),
             resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
@@ -164,7 +165,6 @@ def plugin(tmp_path):
             uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
-    p._firmware_service.load_bios_registry()
 
     # Store fake_api on plugin for test access
     p._fake_api = fake_api
@@ -665,33 +665,30 @@ class TestGetCachedGameDetailConflictFiltering:
 # ============================================================================
 
 
-class TestGetCachedGameDetailBiosFromCache:
-    """Test that get_cached_game_detail returns bios_status from firmware cache."""
+class TestGetCachedGameDetailCarriesNoBiosAnswer:
+    """The cached payload never carries a BIOS answer, and says it does not know.
+
+    What an emulator wants is read off the machine, and an answer read for a
+    previous page open may not stand in for this one — so every open starts
+    not-knowing and the live ``get_bios_status`` fills it in a moment later. The
+    frontend clears a shown requirement on an absent ``bios_status``, so the flag
+    is what keeps "not known yet" apart from "this core needs none" (#1693).
+    """
 
     @pytest.mark.asyncio
     async def test_cold_cache_flags_bios_status_unknown(self, plugin, game_detail_service):
-        """A cold firmware cache carries NO BIOS answer, and says so (#1693).
-
-        ``check_platform_bios_cached`` answers ``None`` whenever the in-memory
-        firmware cache has never been filled — and every firmware download and
-        every platform BIOS delete invalidates it. The frontend clears a shown
-        requirement on an absent ``bios_status``, so the payload has to separate
-        "not known here" from "this core needs none".
-        """
         _seed_rom(plugin, 42, app_id=50000, name="Pokemon", platform_slug="gba")
-        # firmware cache is empty by default (None)
         result = game_detail_service.get_cached_game_detail(50000)
         assert result["found"] is True
         assert result["bios_status"] is None
         assert result["bios_status_unknown"] is True
 
     @pytest.mark.asyncio
-    async def test_bios_status_from_populated_cache(self, plugin, game_detail_service, tmp_path):
-        """Firmware cache populated → bios_status returned with cached_at."""
+    async def test_a_populated_firmware_cache_changes_nothing(self, plugin, game_detail_service, tmp_path):
+        """Even with the server listing warm, no answer rides this payload."""
         from unittest.mock import patch
 
         _seed_rom(plugin, 42, app_id=50000, name="Pokemon", platform_slug="gba")
-        # Populate firmware cache
         plugin._firmware_service._firmware_cache = [
             {
                 "file_path": "bios/gba/gba_bios.bin",
@@ -703,51 +700,28 @@ class TestGetCachedGameDetailBiosFromCache:
         ]
         plugin._firmware_service._firmware_cache_epoch = 99.0
 
-        plugin._firmware_service._core_info.active_core = ("mgba_libretro", "mGBA")
-        plugin._firmware_service._core_info.available_cores = []
         with patch.object(plugin._firmware_service, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path))):
             result = game_detail_service.get_cached_game_detail(50000)
 
-        assert result["found"] is True
-        bs = result["bios_status"]
-        assert bs is not None
-        assert bs["platform_slug"] == "gba"
-        assert bs["cached_at"] == pytest.approx(99.0)
-        assert bs["server_count"] == 1
-        assert bs["local_count"] == 0
-        assert result["bios_status_unknown"] is False
+        assert result["bios_status"] is None
+        assert result["bios_level"] is None
+        assert result["bios_label"] is None
+        assert result["bios_status_unknown"] is True
 
     @pytest.mark.asyncio
-    async def test_bios_status_none_when_no_platform_slug(self, plugin, game_detail_service):
-        """No platform_slug on the ROM → bios_status is None (skipped)."""
-        _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="")
+    async def test_bios_is_always_stale_so_the_page_always_asks(self, plugin, game_detail_service):
+        """With nothing stored there is nothing to age — the refresh is unconditional."""
+        _seed_rom(plugin, 42, app_id=50000, name="Pokemon", platform_slug="gba")
         result = game_detail_service.get_cached_game_detail(50000)
-        assert result["bios_status"] is None
-        # Nothing to check against, which is an answer rather than a gap.
-        assert result["bios_status_unknown"] is False
+        assert "bios" in result["stale_fields"]
 
     @pytest.mark.asyncio
-    async def test_bios_status_none_when_needs_bios_false(self, plugin, game_detail_service):
-        """Cache populated but no firmware for platform → bios_status is None.
-
-        A warm cache that finds no files for the platform is the real negative,
-        so it is NOT flagged unknown — this is the answer that still clears a
-        shown requirement (#1690).
-        """
-        _seed_rom(plugin, 42, app_id=50000, name="Tetris", platform_slug="gb")
-        plugin._firmware_service._firmware_cache = []
-        plugin._firmware_service._firmware_cache_epoch = 50.0
-
-        plugin._firmware_service._core_info.active_core = (None, None)
-        result = game_detail_service.get_cached_game_detail(50000)
-
-        assert result["bios_status"] is None
+    async def test_a_rom_without_a_platform_asks_nothing(self, plugin, game_detail_service):
+        """No platform, no BIOS question — the flag would promise an answer that never comes."""
+        _seed_rom(plugin, 43, app_id=50001, name="Homebrew", platform_slug="")
+        result = game_detail_service.get_cached_game_detail(50001)
         assert result["bios_status_unknown"] is False
-
-
-# ============================================================================
-# get_bios_status tests
-# ============================================================================
+        assert "bios" not in result["stale_fields"]
 
 
 class TestGetBiosStatusFound:
@@ -755,7 +729,7 @@ class TestGetBiosStatusFound:
 
     @pytest.mark.asyncio
     async def test_returns_bios_status(self, plugin, game_detail_service):
-        """ROM with needs_bios=True returns the BIOS status dict + pre-computed level/label.
+        """ROM with needs_bios=True returns the BIOS status dict + the checker's level/label.
 
         The BIOS payload carries no core fields after #923 — core info is served via
         the dedicated ``get_platform_core_info`` path.
@@ -769,6 +743,8 @@ class TestGetBiosStatusFound:
                 "all_downloaded": False,
                 "required_count": 2,
                 "required_downloaded": 1,
+                "bios_level": "partial",
+                "bios_label": "1/2 required",
                 "files": [{"file_name": "gba_bios.bin", "downloaded": True}],
             }
         )
@@ -783,20 +759,26 @@ class TestGetBiosStatusFound:
         assert bs["all_downloaded"] is False
         assert bs["required_count"] == 2
         assert bs["required_downloaded"] == 1
-        # bios_level/bios_label are computed against the active core's required
-        # counts (core-aware badge) by the BIOS checker, NOT a platform default.
+        # bios_level/bios_label are the BIOS checker's own — computed against the
+        # active core's required counts (core-aware badge) where the reading
+        # state that decides them is known, and threaded through untouched.
         assert result["bios_level"] == "partial"
         assert result["bios_label"] == "1/2 required"
         assert result["bios_status_unknown"] is False
+        # The dataclass wrapper is gone with the recomputation: its
+        # ``reading_complete`` default would ship a True this call site has no
+        # basis for, and no frontend models the field.
+        assert "reading_complete" not in bs
 
     @pytest.mark.asyncio
     async def test_badge_keys_off_active_core(self, plugin, game_detail_service):
         """The missing-BIOS badge is computed against the ACTIVE CORE's requirements (#923).
 
         Two cores for the same platform produce different ``required_count`` /
-        ``required_downloaded`` from ``check_platform_bios`` (it filters by the
-        active core). ``get_bios_status`` derives bios_level/label straight from
-        those counts — so the badge follows the active core, not a platform default.
+        ``required_downloaded`` from ``check_platform_bios``, which filters by the
+        active core and derives the verdict over its own filtered list.
+        ``get_bios_status`` carries that verdict through unchanged — so the badge
+        follows the active core, not a platform default.
         """
         _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="gba")
 
@@ -808,6 +790,8 @@ class TestGetBiosStatusFound:
             "all_downloaded": False,
             "required_count": 1,
             "required_downloaded": 0,
+            "bios_level": "missing",
+            "bios_label": "Missing",
             "files": [{"file_name": "gba_bios.bin", "downloaded": False}],
         }
         game_detail_service._bios_checker.check_platform_bios = AsyncMock(return_value=gpsp_payload)
@@ -823,6 +807,8 @@ class TestGetBiosStatusFound:
             "all_downloaded": False,
             "required_count": 0,
             "required_downloaded": 0,
+            "bios_level": "ok",
+            "bios_label": "OK",
             "files": [{"file_name": "gba_bios.bin", "downloaded": False}],
         }
         game_detail_service._bios_checker.check_platform_bios = AsyncMock(return_value=mgba_payload)
@@ -894,6 +880,8 @@ class TestGetBiosStatusFound:
                     "all_downloaded": False,
                     "required_count": 1,
                     "required_downloaded": 0,
+                    "bios_level": "missing",
+                    "bios_label": "Missing",
                     "files": [{"file_name": "gba_bios.bin", "downloaded": False}],
                 }
             return {"needs_bios": False}
@@ -971,6 +959,35 @@ class TestGetBiosStatusNotFound:
         assert result["bios_status"] is None
         assert result["bios_status_unknown"] is True
 
+    @pytest.mark.asyncio
+    async def test_an_unknown_verdict_carries_the_level_a_failed_read_does_not(self, plugin, game_detail_service):
+        """The two payloads behind ``bios_status_unknown`` are told apart by the level (#1660).
+
+        Both ship an absent ``bios_status`` and both leave a shown requirement
+        standing, so the flag cannot separate them — but only one of them is an
+        ANSWER, and the frontend renders that one as "BIOS requirement unknown"
+        instead of dropping the BIOS tab. A read that raised carries no level, so
+        it stays a non-answer; the pair is asserted together because a change to
+        either side is only a defect against the other.
+        """
+        _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="ps3")
+        game_detail_service._bios_checker.check_platform_bios = AsyncMock(
+            return_value={"needs_bios": False, "bios_status_unknown": True}
+        )
+        answered = await game_detail_service.get_bios_status(42)
+
+        game_detail_service._bios_checker.check_platform_bios = AsyncMock(side_effect=Exception("fail"))
+        raised = await game_detail_service.get_bios_status(42)
+
+        assert answered == {
+            "bios_status": None,
+            "bios_level": "unknown",
+            "bios_label": "Unknown",
+            "bios_status_unknown": True,
+        }
+        assert raised["bios_level"] is None
+        assert raised["bios_label"] is None
+
 
 class TestGetCachedGameDetailSaveStatusConflicts:
     @pytest.mark.asyncio
@@ -1004,80 +1021,12 @@ class TestComputedFields:
     """Test bios_level, bios_label, save_sync_display in response."""
 
     @pytest.mark.asyncio
-    async def test_bios_level_and_label_when_bios_present(self, plugin, game_detail_service, tmp_path):
-        """When BIOS data is cached, bios_level and bios_label should be set."""
-        from unittest.mock import patch
-
+    async def test_bios_level_and_label_are_never_computed_here(self, plugin, game_detail_service):
+        """The cached payload carries no level: there is no answer to derive one from."""
         _seed_rom(plugin, 42, app_id=99999, name="Test", platform_slug="gba")
-        # Populate firmware cache with a GBA BIOS file (not locally present)
-        plugin._firmware_service._firmware_cache = [
-            {
-                "file_path": "bios/gba/gba_bios.bin",
-                "file_name": "gba_bios.bin",
-                "file_size_bytes": 16384,
-                "md5_hash": "abc123",
-                "id": 1,
-            },
-            {
-                "file_path": "bios/gba/gba_bios2.bin",
-                "file_name": "gba_bios2.bin",
-                "file_size_bytes": 16384,
-                "md5_hash": "def456",
-                "id": 2,
-            },
-        ]
-        plugin._firmware_service._firmware_cache_epoch = 100.0
-
-        plugin._firmware_service._core_info.active_core = ("mgba_libretro", "mGBA")
-        plugin._firmware_service._core_info.available_cores = []
-        with patch.object(
-            plugin._firmware_service, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "nonexistent"))
-        ):
-            result = game_detail_service.get_cached_game_detail(99999)
-
-        assert result["bios_level"] is not None
-        assert result["bios_label"] is not None
-        # Files not downloaded → missing or partial
-        assert result["bios_level"] in ("missing", "partial", "ok")
-        assert isinstance(result["bios_label"], str)
-
-    @pytest.mark.asyncio
-    async def test_bios_level_none_when_no_bios(self, plugin, game_detail_service):
-        """When no BIOS data (cache empty), bios_level and bios_label should be None."""
-        _seed_rom(plugin, 42, app_id=99999, name="Test", platform_slug="gba")
-        # _firmware_cache is None by default
         result = game_detail_service.get_cached_game_detail(99999)
         assert result["bios_level"] is None
         assert result["bios_label"] is None
-
-    @pytest.mark.asyncio
-    async def test_bios_level_ok_when_all_downloaded(self, plugin, game_detail_service, tmp_path):
-        """When all required BIOS files are present, bios_level should be 'ok'."""
-        from unittest.mock import patch
-
-        _seed_rom(plugin, 42, app_id=99999, name="Test", platform_slug="gba")
-        bios_dir = tmp_path / "bios"
-        bios_dir.mkdir(parents=True, exist_ok=True)
-        bios_file = bios_dir / "gba_bios.bin"
-        bios_file.write_bytes(b"\x00" * 16384)
-
-        plugin._firmware_service._firmware_cache = [
-            {
-                "file_path": "bios/gba/gba_bios.bin",
-                "file_name": "gba_bios.bin",
-                "file_size_bytes": 16384,
-                "md5_hash": "abc123",
-                "id": 1,
-            },
-        ]
-        plugin._firmware_service._firmware_cache_epoch = 100.0
-
-        plugin._firmware_service._core_info.active_core = ("mgba_libretro", "mGBA")
-        plugin._firmware_service._core_info.available_cores = []
-        with patch.object(plugin._firmware_service, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
-            result = game_detail_service.get_cached_game_detail(99999)
-
-        assert result["bios_level"] == "ok"
 
     @pytest.mark.asyncio
     async def test_save_sync_display_with_saves(self, plugin, game_detail_service):

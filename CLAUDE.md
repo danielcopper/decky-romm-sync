@@ -64,8 +64,9 @@ new code in it.
   `romm_origin=False` if it does not talk to RomM (not checked).
 - `bootstrap-wiring.md` — the `main.py` / `bootstrap/` split, and which half of `bootstrap/` new wiring belongs in.
 - `callables.md` — the `{success, reason, message}` failure shape and its two carve-outs. Checked.
-- `vendored-assets.md` — `_vendor/`, `native/`, `defaults/` are checksum-pinned verbatim copies. The checksums are
-  checked; the reflex to fix the upstream artifact instead of the copy is not.
+- `vendored-assets.md` — `_vendor/` and `native/` are checksum-pinned verbatim copies. The checksums are checked; the
+  reflex to fix the upstream artifact instead of the copy is not. `defaults/` holds no vendored artifact since the BIOS
+  registry left.
 - `testing-backend.md` — test tiers, gate tests, vendored conformance vectors.
 - `testing-frontend.md` — the `@decky/api` event harness, non-vacuous catch assertions.
 - `comments.md` — an inline comment is the exception: only an outside-world fact, a road not taken, or a constraint the
@@ -243,6 +244,42 @@ Format: **invariant** — tier — enforced by.
   stage, so a stopping frame with a non-terminal stage would collapse the in-progress rows while ending nothing. The
   panel cannot defend against it: a bare `running: false` is exactly what its own retraction of an optimistic start
   looks like
+- **A firmware answer nothing could establish is `unknown`, never `not_needed` — and the distinction survives every
+  layer it crosses** — test + prompt-only — `tests/adapters/test_atlas_firmware.py` pins the adapter's degradation (a
+  raising resolver, a missing installation, an answer with no root all come back with `resolved` clear, never as an
+  empty catalogue reading "nothing needed"), `tests/domain/test_firmware_wants.py` pins the classification, and
+  `tests/services/test_firmware.py::TestCheckPlatformBiosUnknown` pins the same listing answering `not_needed` under a
+  whole reading and `unknown` under a partial one. The rule spans four modules and no diff-scoped review sees it whole:
+  the adapter decides whether the reading happened, `domain/firmware_wants.py` holds the two values apart,
+  `services/firmware.py` scopes the doubt to the emulators ES-DE offers for the platform, and both frontend surfaces
+  render them as different sentences. **Nothing mechanical stands behind the scoping half.** A future caller that folds
+  the two values back together — a truthiness test on a placement, a `wanted != "needed"` bucket, a default of
+  `not_needed` where the catalogue is silent — goes green: the collapse is the upstream defect this swap removed, and it
+  is one careless `or` away from returning. The scope is the second half, and there the two ends now agree rather than
+  one trusting the other: `_core_scope` answers `None` both when `es_systems.xml` is unreadable **and** when it offers
+  the platform no libretro core (35 of ES-DE's 172 systems, `ps3` among them — a mapped RomM platform whose only entry
+  is RPCS3), and `reading_complete_for` refuses an empty scope as well as a `None` one. An empty scope read as complete
+  is a finished reading of nobody: every server file classifies `not_needed`, `required_count` is 0, and the platform
+  reports a green "Nothing required" over firmware the standalone emulator will not boot without
+- **A firmware row the RomM library does not hold (`on_server: False`) counts towards readiness, and never towards a
+  download affordance or a progress ratio** — test + prompt-only — `tests/services/test_firmware.py` pins the row's
+  shape (`id` absent, `on_server` clear), that it raises `required_count`, and that it stays out of `server_count`;
+  `src/components/SystemPage.test.tsx` pins that the buttons key off the fetchable set. **The three axes live in three
+  places and nothing joins them.** `domain/bios_status.py::count_required` is readiness and counts every required row;
+  `services/firmware.py::_bios_aggregates` scopes `server_count` / `local_count` to `on_server` rows; the download
+  buttons' condition is a filter inside `SystemPage.tsx` and exists nowhere else. Each fold has its own quiet failure:
+  drop the row from readiness and a platform reads ready while a required file is absent; add it to the ratio and a SNES
+  page reports `0 / 26 files, 26 missing` for twenty-six optional files no core wants; add it to the buttons and the
+  page offers a download that cannot succeed. `on_server` is the one field all three read; the row's `id: None` is an
+  honest absence with no consumer at all, so nothing breaks if it is filled in and nothing is guarded by leaving it
+  empty
+- **No BIOS answer outlives the page that asked for it** — test + prompt-only —
+  `tests/services/test_game_detail.py::TestGetCachedGameDetailCarriesNoBiosAnswer` and the two contract cases in
+  `tests/contract/test_game_detail_read.py`. `get_cached_game_detail` carries none and says so (`bios_status_unknown`,
+  plus an unconditional `bios` stale field); the live `get_bios_status` fills it in. What holds the rule is an absence —
+  `BiosChecker` has one method, so there is no cheap cached twin to reach for — and an absence is exactly what a future
+  change restores without noticing. Re-adding a stored answer would look like a performance win and would put a previous
+  page open's requirement on this page
 - **Aggregate state mutated only via verb-named methods (no field assignment)** — check —
   `scripts/check_aggregate_field_assignment.py`
 - **No UoW-opening seam (ActiveCoreResolver, RelaunchOptionsResolver, uow_factory) is called while a UoW is open on the
@@ -311,6 +348,18 @@ Format: **invariant** — tier — enforced by.
   `scripts/check_romm_min_version.py` (ADRs excluded: frozen history)
 - **Server-supplied path components pass `safe_join` (`lib/path_safety.py`)** — test + prompt-only — traversal tests per
   path builder; new call sites are prompt-only
+- **A firmware row's presence comes from the resolver wherever the resolver declared it; the plugin's own filesystem
+  probe covers only three leftovers** — prompt-only — `FirmwareService._is_downloaded` is the single crossing point and
+  states the boundary: the probe answers for a library file no core declares, for a placement whose location the plugin
+  cannot honour, and for the already-there skip in the download batch. Everything else reads the resolver's `present`,
+  which follows symlinks the plugin would have to re-implement — the PS2 folder is one directory reached through two
+  spellings. `present is None` reads as absent, the safe direction, because the row then shows work outstanding rather
+  than a readiness nobody established. **Nothing enforces the crossing point.** A fourth status builder calling
+  `_firmware_file_store.exists(dest)` directly would go green, and its rows would silently answer from the weaker source
+  — `os.path.exists` on a path the plugin assembled, which is what this cut removed after it rendered a satisfied
+  requirement as missing. Related and separate: a verdict the resolver WITHHELD is not an absence (CONTEXT.md → Withheld
+  verdict), and the causes of a withheld `satisfied` are read off `found` / `checked` / the caveats, never off
+  `satisfied` itself — only some are inherent, and a content question merely not asked is not one of them
 - **No sentinel objects on the wire — explicit JSON-representable tagged values only** — prompt-only — no sentinel
   survives on the wire today (`NO_MIGRATION` retired with #1004, legacy `slot:null` confirmation with #1276), so the
   rule now guards reintroduction; nothing mechanical detects a new one
@@ -330,6 +379,28 @@ Format: **invariant** — tier — enforced by.
   quarantining a ROM (gigabytes, no sensible retention, re-fetchable from RomM) inverts for a save, and a savestate is
   synced nowhere at all. It is the first caller to hand that funnel a directory outside the saves root: it takes the
   directory it is given, so a savestate's backup lands in `<states>/.romm-backup/`
+- **A BIOS file is deleted only where a `downloaded_bios` record names it under one of the platform's firmware slugs,
+  and only at the path that record holds** — test + prompt-only —
+  `tests/services/test_firmware.py::TestDeletePlatformBios` pins every direction end-to-end: an emulator-shipped file
+  survives, a hand-placed file under a server file's name survives, our own download is still removed once RomM no
+  longer holds it, and a download whose placement has since moved is unlinked where it was written rather than where the
+  placement now points. What makes the destructive-op rule (the `backup-or-confirm` entry) concrete for BIOS files is
+  that authority to delete comes from having placed the file, and the record is the only evidence of that, because
+  `BiosFile.mark_downloaded` is written in the download path and nowhere else. So the records are the delete's whole
+  input: it iterates them, not a status listing, which is also what keeps a download RomM has since dropped deletable
+  instead of gated behind a file list that no longer names it. The authorisations a reader reaches for instead are wrong
+  in opposite directions. `downloaded` is `os.path.exists` and nothing more: authorise on it and Delete BIOS destroys
+  firmware RetroDECK ships with its own components, which no RomM library holds and nothing here can fetch back — it did
+  exactly that to `<bios>/dolphin-emu/Sys/codehandler.bin` on a real device. `on_server` describes what the library
+  holds _now_, not who wrote the file: authorise on it and a file dropped from RomM after we downloaded it is stranded
+  on disk with nothing in the UI able to remove it. The PATH has its own version of the same trap: a status row's
+  `local_path` is recomputed from today's placement, so for a file fetched before an emu-atlas bump moved it the name
+  still matches our record while the path names whatever now occupies the new destination — RetroDECK's own
+  `codehandler.bin`, in the case that motivated this. The count the UI offers is bound to the same set:
+  `deletable_count` on the `get_firmware_status` payload is records-still-on-disk, because `local_count` is the
+  library's progress ratio and is wrong in both directions — it hid the button entirely for a platform whose downloads
+  had all left the library. **Nothing mechanical stands behind any of this.** A second delete path looping a status list
+  on `downloaded` alone would go green — which is exactly the shape this one had when it destroyed that file
 - **Every read-mutate-write of a `RomSaveSyncState` runs under `SyncEngine.rom_lock(rom_id)`** — prompt-only — sync
   paths, `get_save_status`, and the four slot mutations hold the lock; mechanize via a `rom_save_sync_states.save`
   call-site audit

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from adapters.adoption_move import AdoptionMoveAdapter
 from adapters.asyncio_sleeper import AsyncioSleeper
+from adapters.atlas_firmware import AtlasFirmwareAdapter
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter
@@ -75,6 +76,7 @@ if TYPE_CHECKING:
         DownloadFileStore,
         EventEmitter,
         FirmwareFileStore,
+        FirmwareResolver,
         GameProcessControl,
         HostnameReader,
         MachineIdReader,
@@ -123,6 +125,7 @@ class AdapterBundle:
     download_file_store: DownloadFileStore
     adoption_move: AdoptionMoveStore
     firmware_file_store: FirmwareFileStore
+    firmware_resolver: FirmwareResolver
     migration_file_store: MigrationFileStore
     rom_file_store: RomFileStore
     save_file_store: SaveFileStore
@@ -362,6 +365,10 @@ def bootstrap(
     hostname_provider = HostnameAdapter()
     machine_id_provider = MachineIdAdapter()
     debug_logger = SettingsAwareDebugLogger(settings=settings, logger=logger)
+    # Built after the debug logger because the resolver never logs on its own:
+    # its caveats are the whole degradation channel and reach the log through
+    # this seam or not at all.
+    firmware_resolver = AtlasFirmwareAdapter(user_home=user_home, log_debug=debug_logger)
 
     adapters = AdapterBundle(
         http_adapter=http_adapter,
@@ -373,6 +380,7 @@ def bootstrap(
         download_file_store=download_file_store,
         adoption_move=adoption_move,
         firmware_file_store=firmware_file_store,
+        firmware_resolver=firmware_resolver,
         migration_file_store=migration_file_store,
         rom_file_store=rom_file_store,
         save_file_store=save_file_store,

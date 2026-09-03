@@ -28,21 +28,26 @@ declared order is the answer until then (task list).
 
 Pure text in, entries out. No I/O.
 
-Parsing uses stdlib ``xml.etree`` deliberately: the input is local config from
-the user's own machine (not attacker-controlled in this threat model), modern
-expat (Python ≥ 3.11) rejects entity-expansion attacks — surfacing as
-``ParseError``, i.e. an honestly skipped layer — and ``dependencies = []`` is a
-design contract (DESIGN.md, consumption), so ``defusedxml`` is not an option.
+Parsing uses the stdlib deliberately: the input is local config from the user's
+own machine (not attacker-controlled in this threat model), modern expat
+(Python ≥ 3.11) rejects entity-expansion attacks — surfacing as ``ParseError``,
+i.e. an honestly skipped layer — and ``dependencies = []`` is a design contract
+(DESIGN.md, consumption), so ``defusedxml`` is not an option. What the reads go
+through is :mod:`atlas._xml`, that same expat with ElementTree's shape around
+it: the wrapper package ``xml.etree`` is an assumption a frozen consumer runtime
+breaks (issue #339), while the parser underneath is the one ElementTree itself
+has always parsed with.
 """
 
 from __future__ import annotations
 
 import os
 import re
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
+
+from . import _xml as ET
 
 # The core ``.so`` inside a launch command. The name run is bounded by
 # NAME_MAX (255): an unbounded quantifier in front of the ``_libretro`` suffix
@@ -245,7 +250,7 @@ def parse_es_systems(text: str, *, provenance: str) -> CatalogueLayer:
     ``es-app/src/SystemData.cpp:884,898``, v3.4.1), and pugixml does not
     enforce XML's single-root rule. The documented ``<loadExclusive/>``
     placement (INSTALL.md v3.4.1:1722-1737) is therefore a *second
-    document-level element* beside ``<systemList>`` — a file ``xml.etree``
+    document-level element* beside ``<systemList>`` — a file an XML parser
     refuses outright. Wrapping in a synthetic root (the ``parse_es_settings``
     / ``parse_gamelist`` pattern) reads it the way the frontend does; the
     XML declaration is stripped first because inside a wrapper it would sit
@@ -361,7 +366,7 @@ def parse_es_settings(text: str) -> dict[str, str] | None:
     **The file is not well-formed XML**, and that is not a defect to route
     around: ES-DE writes a bare sequence of sibling elements with no root, and
     reads it back with pugixml, which does not enforce the single-root rule.
-    Handing the text straight to ``xml.etree`` fails at the second element
+    Handing the text straight to an XML parser fails at the second element
     ("junk after document element") — so a reader that did the obvious thing
     would call every real machine's settings unreadable and then report the ROM
     directory unresolvable everywhere. The document is wrapped in a synthetic

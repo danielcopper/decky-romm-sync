@@ -1023,7 +1023,7 @@ describe("RomMGameInfoPanel", () => {
         globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
       });
       await flushAsync();
-      expect(container.textContent).toContain("1/2 files ready");
+      expect(container.textContent).toContain("Nothing required (1/2 files held)");
 
       await act(async () => {
         globalThis.dispatchEvent(
@@ -1035,7 +1035,7 @@ describe("RomMGameInfoPanel", () => {
       });
 
       expect(container.textContent).not.toContain("SAVES");
-      expect(container.textContent).toContain("1/2 files ready");
+      expect(container.textContent).toContain("Nothing required (1/2 files held)");
     });
 
     it("save_sync_settings enabled=true with getSaveStatus rejection → falls back to null updatedStatus (non-vacuous .catch)", async () => {
@@ -1374,10 +1374,13 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).toContain("BIOS");
     });
 
-    it("bios: a check that could not determine the requirement keeps the tab (#1693)", async () => {
+    it("bios: a check that could not determine the requirement reads unknown, not gone (#1693, #1660)", async () => {
       // The check answered without raising — an uncovered platform whose
       // firmware fetch failed — and says so with the flag. Same absent
       // requirement on the wire as the clear below; only the flag separates them.
+      // On THIS path the flag needs no level beside it: a check that failed
+      // rejects the promise, so a resolved payload carrying the flag is always
+      // the answer "nothing could establish it", and that is shown as one.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(biosNeedingDetail());
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
@@ -1392,7 +1395,10 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(container.textContent).toContain("BIOS");
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+      });
+      expect(container.textContent).toContain("BIOS requirement unknown");
     });
 
     it("bios: a real 'needs none' answer still clears the tab", async () => {
@@ -1446,7 +1452,8 @@ describe("RomMGameInfoPanel", () => {
           {
             file_name: "PSX_BLEED_MARKER.bin",
             description: "PSX BIOS",
-            classification: "required",
+            wanted: "needed",
+            required_by_active: true,
             downloaded: true,
           },
         ],
@@ -2802,7 +2809,8 @@ describe("RomMGameInfoPanel", () => {
               file_name: "bios.smc",
               description: "BIOS file",
               downloaded: false,
-              classification: "required",
+              wanted: "needed",
+              required_by_active: true,
               cores: { snes9x_libretro: { required: true } },
               used_by_active: true,
             },
@@ -2810,7 +2818,8 @@ describe("RomMGameInfoPanel", () => {
               file_name: "unknown.bin",
               description: "",
               downloaded: false,
-              classification: "unknown",
+              wanted: "unknown",
+              required_by_active: false,
             },
           ],
         } as never,
@@ -2843,9 +2852,10 @@ describe("RomMGameInfoPanel", () => {
       });
       expect(container.textContent).toContain("Emulator");
       expect(container.textContent).toContain("Snes9x");
-      // unknown file is filtered out of the visible list; the "+1 other"
-      // note appears instead.
-      expect(container.textContent).toContain("other file");
+      // A file no emulator asks for keeps its own note rather than a row: the
+      // rows are the files with an owning emulator, and the note says which of
+      // the two remaining answers this one is.
+      expect(container.textContent).toContain("1 file on server nothing installed could answer for");
     });
 
     it("highlights the active core's per-BIOS line and leaves non-active cores grey (#955)", async () => {
@@ -2866,7 +2876,8 @@ describe("RomMGameInfoPanel", () => {
               file_name: "scph5501.bin",
               description: "PSX BIOS",
               downloaded: false,
-              classification: "required",
+              wanted: "needed",
+              required_by_active: true,
               cores: {
                 beetle_psx_hw_libretro: { required: true },
                 swanstation_libretro: { required: false },
@@ -2938,7 +2949,8 @@ describe("RomMGameInfoPanel", () => {
               file_name: "scph5501.bin",
               description: "PSX BIOS",
               downloaded: false,
-              classification: "required",
+              wanted: "needed",
+              required_by_active: true,
               cores: {
                 beetle_psx_hw_libretro: { required: true },
                 swanstation_libretro: { required: false },
@@ -3008,7 +3020,8 @@ describe("RomMGameInfoPanel", () => {
               file_name: "scph5501.bin",
               description: "PSX BIOS",
               downloaded: false,
-              classification: "required",
+              wanted: "needed",
+              required_by_active: true,
               cores: {
                 some_obscure_libretro: { required: true },
               },
@@ -3174,15 +3187,234 @@ describe("RomMGameInfoPanel", () => {
       {
         const { container } = await renderWithBios(null, null, 1, true);
         expect(container.innerHTML).toContain("#5ba32b");
-        expect(container.textContent).toContain("All ready");
+        expect(container.textContent).toContain("Nothing required (1/1 files held)");
       }
     });
 
-    it("unmanaged: grey header dot + honest text, and the 'files on server' note survives all-unknown (#1520)", async () => {
-      // Every server file is unknown (no registry coverage) → backend ships
-      // bios_level "unmanaged". The panel must render the neutral grey dot + honest
-      // header text (never a false "All ready"), and the "files on server" note —
-      // previously swallowed when knownFiles is empty — must still render.
+    it("never prints a readiness verdict over an all-files ratio (#1762, #1660)", async () => {
+      // The reported shape, from the live tab: PlayStation, active core
+      // SwanStation, twenty server files, none downloaded. SwanStation requires
+      // none of them, so required_count is 0 and the old header paired "All
+      // required ready" with "(0/20)" — a green all-clear over twenty missing
+      // files, because the sentence and the ratio counted different sets.
+      //
+      // Scoping the ratio to the same set left "0/20 files ready" beside a green
+      // dot: one set now, but the sentence still claimed a readiness the dot did
+      // not mean, since the dot answers for the required files and there are
+      // none. What is true is that nothing is required, and the ratio is
+      // inventory.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        bios_status: {
+          needs_bios: true,
+          platform_slug: "psx",
+          server_count: 20,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 0,
+          required_downloaded: 0,
+          known_count: 5,
+          unknown_count: 0,
+          files: [
+            {
+              file_name: "scph5501.bin",
+              downloaded: false,
+              local_path: "",
+              description: "PS1 US BIOS",
+              wanted: "optional",
+              required_by_active: false,
+              cores: { swanstation_libretro: { required: false } },
+              used_by_active: true,
+              on_server: true,
+            },
+          ],
+        } as never,
+        bios_level: "ok",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).not.toContain("All required ready");
+      expect(container.textContent).toContain("Nothing required (0/20 files held)");
+    });
+
+    it("says 'missing' about a file the library lacks only when it is actually absent", async () => {
+      // The GameCube case, measured on a device: Dolphin requires
+      // `codehandler.bin`, RetroDECK ships it, and no RomM library holds it. The
+      // note keyed on `on_server` alone, so a file sitting on disk was announced
+      // as missing beside its own green dot and an "All required ready (1/1)"
+      // headline — the pane contradicting itself on one screen. Both rows here
+      // are absent from the library; only the second is absent from the disk.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        bios_status: {
+          needs_bios: true,
+          platform_slug: "ngc",
+          server_count: 0,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 2,
+          required_downloaded: 1,
+          known_count: 2,
+          unknown_count: 0,
+          files: [
+            {
+              file_name: "codehandler.bin",
+              downloaded: true,
+              local_path: "",
+              description: "Dolphin 'Sys' folder",
+              wanted: "needed",
+              required_by_active: true,
+              cores: { dolphin_libretro: { required: true } },
+              used_by_active: true,
+              on_server: false,
+            },
+            {
+              file_name: "absent.bin",
+              downloaded: false,
+              local_path: "",
+              description: "Absent",
+              wanted: "needed",
+              required_by_active: true,
+              cores: { dolphin_libretro: { required: true } },
+              used_by_active: true,
+              on_server: false,
+            },
+          ],
+        } as never,
+        bios_level: "partial",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        await Promise.resolve();
+      });
+
+      // Present but unfetchable: the library note survives, the "missing" drops.
+      expect(container.textContent).toContain("Dolphin 'Sys' folder — not in your RomM library");
+      expect(container.textContent).not.toContain("Dolphin 'Sys' folder — missing");
+      // Genuinely absent: both halves stay.
+      expect(container.textContent).toContain("Absent — missing, not in your RomM library");
+    });
+
+    it("says the distribution provides a file rather than that RomM lacks it", async () => {
+      // The same GameCube row, once the reading establishes whose file it is.
+      // "not in your RomM library" was true of it and useless: no library will
+      // ever hold it, and the repair is a component reset, not a download.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        bios_status: {
+          needs_bios: true,
+          platform_slug: "ngc",
+          server_count: 0,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: 1,
+          known_count: 1,
+          unknown_count: 0,
+          files: [
+            {
+              file_name: "codehandler.bin",
+              downloaded: true,
+              local_path: "",
+              description: "Dolphin 'Sys' folder",
+              wanted: "needed",
+              required_by_active: true,
+              cores: { dolphin_libretro: { required: true } },
+              used_by_active: true,
+              on_server: false,
+              supplied_by: "retrodeck",
+            },
+          ],
+        } as never,
+        bios_level: "ok",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).toContain("Dolphin 'Sys' folder — provided by retrodeck");
+      expect(container.textContent).not.toContain("not in your RomM library");
+    });
+
+    it("declines the readiness claim over a folder it cannot look inside", async () => {
+      // LRPS2 requires `pcsx2/bios`, a FOLDER that RetroDECK links onto the BIOS
+      // root — so it is always there. Read as a satisfied requirement it said
+      // "All required ready (1/1)" over a PS2 install with no BIOS file in it;
+      // read as a missing one it said the folder was the thing to fetch. The
+      // header declines, and the row says which of its files is which.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        bios_status: {
+          needs_bios: true,
+          platform_slug: "ps2",
+          server_count: 0,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: 0,
+          required_withheld: 1,
+          known_count: 0,
+          unknown_count: 0,
+          files: [
+            {
+              file_name: "bios",
+              downloaded: true,
+              local_path: "",
+              description: "'pcsx2/bios' folder",
+              wanted: "needed",
+              required_by_active: true,
+              cores: { pcsx2_libretro: { required: true } },
+              used_by_active: true,
+              on_server: false,
+              is_directory: true,
+            },
+          ],
+        } as never,
+        bios_level: "unknown",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).toContain("BIOS readiness unknown");
+      expect(container.textContent).not.toContain("BIOS requirement unknown");
+      expect(container.textContent).toContain(
+        "'pcsx2/bios' folder — a folder is here — its contents cannot be checked",
+      );
+      expect(container.textContent).not.toContain("missing");
+    });
+
+    it("unknown: grey header dot + honest text, and the 'files on server' note survives (#1520)", async () => {
+      // No installed emulator's answer could be established for any server file
+      // → backend ships bios_level "unknown". The panel must render the neutral
+      // grey dot + honest header text (never a false "Nothing required"), and the
+      // "files on server" note — previously swallowed when the row list is
+      // empty — must still render.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
@@ -3201,9 +3433,9 @@ describe("RomMGameInfoPanel", () => {
               file_name: "a.bin",
               downloaded: false,
               local_path: "",
-              required: false,
               description: "",
-              classification: "unknown",
+              wanted: "unknown",
+              required_by_active: false,
               cores: {},
               used_by_active: true,
             },
@@ -3211,15 +3443,15 @@ describe("RomMGameInfoPanel", () => {
               file_name: "b.bin",
               downloaded: false,
               local_path: "",
-              required: false,
               description: "",
-              classification: "unknown",
+              wanted: "unknown",
+              required_by_active: false,
               cores: {},
               used_by_active: true,
             },
           ],
         } as never,
-        bios_level: "unmanaged",
+        bios_level: "unknown",
         metadata: makeMetadata(),
         stale_fields: [],
       });
@@ -3232,11 +3464,14 @@ describe("RomMGameInfoPanel", () => {
       // Neutral grey dot via the shared helper — never the green "all ready" dot.
       expect(container.innerHTML).toContain("#8f98a0");
       expect(container.innerHTML).not.toContain("#5ba32b");
-      // Honest header text, not "All ready".
-      expect(container.textContent).toContain("Not managed by the plugin");
-      expect(container.textContent).not.toContain("All ready");
-      // Swallowed-note fix: the note renders even though every file is unknown.
-      expect(container.textContent).toContain("2 files on server the plugin doesn't recognise");
+      // Honest header text, never the no-requirement sentence: "nothing is
+      // required" is the ACTIVE CORE's answer (`required_by_active`, falling
+      // back to every declaring core only when no active core resolves), and the
+      // point here is that it could not be asked.
+      expect(container.textContent).toContain("BIOS requirement unknown");
+      expect(container.textContent).toContain("2 files on server nothing installed could answer for");
+      expect(container.textContent).not.toContain("Nothing required");
+      // Swallowed-note fix: the note renders even though no file has a row.
     });
   });
 
@@ -3336,7 +3571,7 @@ describe("RomMGameInfoPanel", () => {
       expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledWith(60);
       expect(container.textContent).toContain("BIOS");
       await openBiosTab();
-      expect(container.textContent).toContain("1/3 files ready");
+      expect(container.textContent).toContain("Nothing required (1/3 files held)");
     });
 
     it("adopts a live answer that has moved on from the stale cached one", async () => {
@@ -3348,8 +3583,8 @@ describe("RomMGameInfoPanel", () => {
       await flushAsync();
       await openBiosTab();
 
-      expect(container.textContent).toContain("All ready (3/3)");
-      expect(container.textContent).not.toContain("1/3 files ready");
+      expect(container.textContent).toContain("Nothing required (3/3 files held)");
+      expect(container.textContent).not.toContain("Nothing required (1/3 files held)");
     });
 
     it("does not re-read when the cached answer is not marked stale", async () => {
@@ -3359,17 +3594,61 @@ describe("RomMGameInfoPanel", () => {
       await openBiosTab();
 
       expect(vi.mocked(backend.getBiosStatus)).not.toHaveBeenCalled();
-      expect(container.textContent).toContain("1/3 files ready");
+      expect(container.textContent).toContain("Nothing required (1/3 files held)");
     });
 
     it("leaves the shown status standing when the re-read cannot answer either (#1693)", async () => {
+      // The shape a check that RAISED ships: the flag, and no level. It is the
+      // one payload with nothing to show, so the page keeps what it has.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(staleDetail(biosAnswer(1)));
       vi.mocked(backend.getBiosStatus).mockResolvedValue({ bios_status_unknown: true });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       await openBiosTab();
 
-      expect(container.textContent).toContain("1/3 files ready");
+      expect(container.textContent).toContain("Nothing required (1/3 files held)");
+    });
+
+    it("shows the tab reading unknown when the live answer is that nothing could establish it (#1660)", async () => {
+      // The other payload behind the same flag, and the whole of what a platform
+      // like PS3 can ever answer: the check RAN, and the emulators it would have
+      // asked are all standalone. Its level says so. Dropping the tab on it —
+      // which is what the flag alone used to do — told the user the system needs
+      // nothing over firmware its emulator will not boot without.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(staleDetail({ bios_status_unknown: true }));
+      vi.mocked(backend.getBiosStatus).mockResolvedValue({
+        bios_status: null,
+        bios_level: "unknown",
+        bios_label: "Unknown",
+        bios_status_unknown: true,
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await openBiosTab();
+
+      expect(container.textContent).toContain("BIOS requirement unknown");
+      // Neutral grey, never the green all-clear the missing tab used to imply.
+      expect(container.innerHTML).toContain("#8f98a0");
+      expect(container.innerHTML).not.toContain("#5ba32b");
+    });
+
+    it("replaces a shown requirement with the unknown reading (#1660)", async () => {
+      // An ANSWER of "unknown" moves the page even when a requirement is already
+      // on it: keeping the requirement would assert something no longer
+      // establishable. The other half of the pair — a read that never happened,
+      // which leaves the requirement alone — is the test below.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(staleDetail(biosAnswer(1)));
+      vi.mocked(backend.getBiosStatus).mockResolvedValue({
+        bios_status: null,
+        bios_level: "unknown",
+        bios_status_unknown: true,
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await openBiosTab();
+
+      expect(container.textContent).toContain("BIOS requirement unknown");
+      expect(container.textContent).not.toContain("Nothing required (1/3 files held)");
     });
 
     it("leaves the shown status standing when the re-read fails, and says so in the log", async () => {
@@ -3379,7 +3658,7 @@ describe("RomMGameInfoPanel", () => {
       await flushAsync();
       await openBiosTab();
 
-      expect(container.textContent).toContain("1/3 files ready");
+      expect(container.textContent).toContain("Nothing required (1/3 files held)");
       expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("BIOS status refresh error"));
     });
 
@@ -3401,7 +3680,7 @@ describe("RomMGameInfoPanel", () => {
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       await openBiosTab();
-      expect(container.textContent).toContain("1/3 files ready");
+      expect(container.textContent).toContain("Nothing required (1/3 files held)");
 
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(staleDetail({ bios_status_unknown: true }));
       vi.mocked(backend.getBiosStatus).mockResolvedValue(biosAnswer(3));
@@ -3413,7 +3692,7 @@ describe("RomMGameInfoPanel", () => {
       await flushAsync();
 
       expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledWith(60);
-      expect(container.textContent).toContain("All ready (3/3)");
+      expect(container.textContent).toContain("Nothing required (3/3 files held)");
     });
 
     it("re-reads after a version switch whose detail could not answer", async () => {
@@ -3423,7 +3702,7 @@ describe("RomMGameInfoPanel", () => {
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       await openBiosTab();
-      expect(container.textContent).toContain("1/3 files ready");
+      expect(container.textContent).toContain("Nothing required (1/3 files held)");
 
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(
         staleDetail({ rom_id: 61, bios_status_unknown: true }),
@@ -3439,7 +3718,7 @@ describe("RomMGameInfoPanel", () => {
       await flushAsync();
 
       expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledWith(61);
-      expect(container.textContent).toContain("All ready (3/3)");
+      expect(container.textContent).toContain("Nothing required (3/3 files held)");
     });
 
     it("joins the play row's open read rather than opening a second round trip", async () => {
@@ -3463,7 +3742,7 @@ describe("RomMGameInfoPanel", () => {
       expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledExactlyOnceWith(60);
       // Non-vacuous in the other direction: the JOINED answer is the one folded,
       // so this is sharing rather than the panel having skipped the read.
-      expect(container.textContent).toContain("All ready (3/3)");
+      expect(container.textContent).toContain("Nothing required (3/3 files held)");
     });
 
     it("reads the switched-to version directly rather than joining an open read for it", async () => {
@@ -3476,7 +3755,7 @@ describe("RomMGameInfoPanel", () => {
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       await openBiosTab();
-      expect(container.textContent).toContain("1/3 files ready");
+      expect(container.textContent).toContain("Nothing required (1/3 files held)");
 
       // Left open across the switch: a join lands on this and never answers.
       const openForNewVersion = heldRead<backend.BiosAnswer>();
@@ -3496,7 +3775,7 @@ describe("RomMGameInfoPanel", () => {
       });
       await flushAsync();
 
-      expect(container.textContent).toContain("All ready (3/3)");
+      expect(container.textContent).toContain("Nothing required (3/3 files held)");
 
       // Settle the seeded request rather than carrying it out of the test.
       await act(async () => {
@@ -3515,7 +3794,7 @@ describe("RomMGameInfoPanel", () => {
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       await openBiosTab();
-      expect(container.textContent).toContain("1/3 files ready");
+      expect(container.textContent).toContain("Nothing required (1/3 files held)");
 
       // The core change's cache read stays open...
       const coreChangeDetail = heldRead<CachedGameDetail>();
@@ -3554,7 +3833,7 @@ describe("RomMGameInfoPanel", () => {
       });
       await flushAsync();
 
-      expect(container.textContent).toContain("All ready (3/3)");
+      expect(container.textContent).toContain("Nothing required (3/3 files held)");
       // The re-keyed core change reads nothing for the version the panel left.
       expect(vi.mocked(backend.getBiosStatus)).not.toHaveBeenCalledWith(60);
     });
@@ -4308,7 +4587,7 @@ describe("RomMGameInfoPanel", () => {
         const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
         await flushAsync();
         await openBiosTab();
-        expect(container.textContent).toContain("1/3 files ready");
+        expect(container.textContent).toContain("Nothing required (1/3 files held)");
 
         // The switch lands inside the window a BIOS download or delete opens:
         // the firmware cache is cold, so the detail carries no BIOS answer — the
@@ -4323,7 +4602,7 @@ describe("RomMGameInfoPanel", () => {
         });
         await switchVersion();
 
-        expect(container.textContent).toContain("1/3 files ready");
+        expect(container.textContent).toContain("Nothing required (1/3 files held)");
       });
 
       it("leaves the BIOS tab for the info tab when the requirement is cleared under it", async () => {
@@ -4358,7 +4637,7 @@ describe("RomMGameInfoPanel", () => {
         const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
         await flushAsync();
         await openBiosTab();
-        expect(container.textContent).toContain("1/3 files ready");
+        expect(container.textContent).toContain("Nothing required (1/3 files held)");
         expect(container.textContent).toContain("Snes9x");
 
         vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue(detailNeedingBios(2, 3));
@@ -4367,7 +4646,7 @@ describe("RomMGameInfoPanel", () => {
         await switchVersion();
 
         expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith(2);
-        expect(container.textContent).toContain("All ready (3/3)");
+        expect(container.textContent).toContain("Nothing required (3/3 files held)");
         expect(container.textContent).toContain("bsnes");
         expect(container.textContent).not.toContain("Snes9x");
       });
@@ -4379,13 +4658,13 @@ describe("RomMGameInfoPanel", () => {
         const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
         await flushAsync();
         await openBiosTab();
-        expect(container.textContent).toContain("1/3 files ready");
+        expect(container.textContent).toContain("Nothing required (1/3 files held)");
 
         vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("offline"));
         vi.mocked(backend.debugLog).mockClear();
         await switchVersion();
 
-        expect(container.textContent).toContain("1/3 files ready");
+        expect(container.textContent).toContain("Nothing required (1/3 files held)");
         expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("onDataChanged error"));
       });
 
@@ -4603,7 +4882,7 @@ describe("RomMGameInfoPanel", () => {
 
         await switchToRom2({ ...biosNeed, stale_fields: ["bios"] });
         await openBiosTab();
-        expect(container.textContent).toContain("All ready (3/3)");
+        expect(container.textContent).toContain("Nothing required (3/3 files held)");
 
         await act(async () => {
           bios.release({
@@ -4613,7 +4892,7 @@ describe("RomMGameInfoPanel", () => {
         });
         await flushAsync();
 
-        expect(container.textContent).toContain("All ready (3/3)");
+        expect(container.textContent).toContain("Nothing required (3/3 files held)");
         expect(container.textContent).not.toContain("0/3");
       });
 
@@ -5037,15 +5316,15 @@ describe("RomMGameInfoPanel", () => {
       await dispatchDataChanged({ type: "core_changed", platform_slug: "snes" });
       await flushAsync();
       await openBiosTab();
-      expect(container.textContent).toContain("All ready (3/3)");
+      expect(container.textContent).toContain("Nothing required (3/3 files held)");
 
       await act(async () => {
         firstRead.release(biosStatusFor(1));
       });
       await flushAsync();
 
-      expect(container.textContent).toContain("All ready (3/3)");
-      expect(container.textContent).not.toContain("1/3 files ready");
+      expect(container.textContent).toContain("Nothing required (3/3 files held)");
+      expect(container.textContent).not.toContain("Nothing required (1/3 files held)");
     });
 
     it("does not let a BIOS read issued before a core change land on the core change's own answer", async () => {
@@ -5067,7 +5346,7 @@ describe("RomMGameInfoPanel", () => {
       await dispatchDataChanged({ type: "core_changed", platform_slug: "snes" });
       await flushAsync();
       await openBiosTab();
-      expect(container.textContent).toContain("All ready (3/3)");
+      expect(container.textContent).toContain("Nothing required (3/3 files held)");
       // The fold answered from the cache — no second read was issued.
       expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledTimes(1);
 
@@ -5076,8 +5355,8 @@ describe("RomMGameInfoPanel", () => {
       });
       await flushAsync();
 
-      expect(container.textContent).toContain("All ready (3/3)");
-      expect(container.textContent).not.toContain("1/3 files ready");
+      expect(container.textContent).toContain("Nothing required (3/3 files held)");
+      expect(container.textContent).not.toContain("Nothing required (1/3 files held)");
     });
 
     it("keeps the newest save-status answer when an earlier read lands last", async () => {

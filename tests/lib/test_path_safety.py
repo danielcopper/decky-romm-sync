@@ -152,6 +152,22 @@ class TestSafeJoin:
         with pytest.raises(PathTraversalError):
             safe_join(str(base), "link/secret.bin")
 
+    def test_allow_base_accepts_a_link_that_lands_on_the_base(self, tmp_path):
+        # RetroDECK's ``<bios>/pcsx2/bios`` -> ``<bios>``: a real firmware
+        # destination that resolves onto the base, which the default rejects.
+        base = tmp_path / "bios"
+        (base / "pcsx2").mkdir(parents=True)
+        (base / "pcsx2" / "bios").symlink_to(base)
+
+        assert safe_join(str(base), "pcsx2/bios", allow_base=True) == os.path.realpath(str(base))
+
+    def test_allow_base_still_rejects_an_escape(self, tmp_path):
+        # It widens containment to *at or below*, and nothing else.
+        base = str(tmp_path / "bios")
+        os.makedirs(base)
+        with pytest.raises(PathTraversalError):
+            safe_join(base, "../evil.desktop", allow_base=True)
+
 
 class TestIsSafeRomPath:
     def test_path_inside_roms_dir_is_safe(self, tmp_path):

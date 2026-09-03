@@ -9,6 +9,7 @@ import pytest
 from _factories import _make_retry, _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_disc_resolver import FakeDiscResolver
+from fakes.fake_firmware_resolver import FakeFirmwareResolver
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
@@ -539,7 +540,7 @@ class TestPostExitSync:
                 logger=logging.getLogger("test"),
                 settings_persister=MagicMock(),
                 emit=MagicMock(),
-                get_bios_files_index=dict,
+                firmware_resolver=FakeFirmwareResolver(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 get_save_layout=lambda: InSaveDir(sort_by_content=False, sort_by_core=False),
                 active_core=FakeActiveCoreResolver(default=(None, None)),

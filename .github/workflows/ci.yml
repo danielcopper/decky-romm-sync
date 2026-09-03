@@ -187,12 +187,6 @@ jobs:
       # update when pulling a newer romm-gavel release).
       - name: Check vendored gavel native core checksum
         run: cd py_modules/native && sha256sum -c libgavel-x86_64-linux.so.sha256
-      # The BIOS registry ships in the plugin zip and is vendored verbatim from an
-      # emu-atlas release — there is no in-tree generator. A hand-edited snapshot
-      # must fail CI. Verify the vendored data against its checksum (bumped only by
-      # a deliberate defaults/README.md update when pulling a newer emu-atlas release).
-      - name: Check vendored BIOS registry checksum
-        run: cd defaults && sha256sum -c bios_registry.json.sha256
       # The emu-atlas resolver is vendored as a verbatim copy of a tagged wheel.
       # No form of `sha256sum -c` can guard it: upstream's manifest lists nine
       # entries we never vendor, so the plain form fails on a perfect copy, and

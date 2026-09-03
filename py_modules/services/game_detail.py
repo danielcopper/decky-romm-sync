@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from models.metadata import AchievementSummary
 
-from domain.bios import compute_bios_label, compute_bios_level, format_bios_status
+from domain.bios_status import BIOS_LABEL_UNKNOWN, BIOS_LEVEL_UNKNOWN
 from domain.platform_names import decode_platform_names
 from domain.save_status import compute_save_sync_display
 from lib.path_safety import PathTraversalError, safe_join
@@ -49,7 +49,6 @@ if TYPE_CHECKING:
 _PLATFORM_NAMES_KEY = "platform_names"
 
 METADATA_TTL_SEC = 7 * 24 * 3600  # 7 days
-BIOS_TTL_SEC = 3600  # 1 hour
 ACHIEVEMENT_TTL_SEC = 3600  # 1 hour
 
 
@@ -123,6 +122,12 @@ class GameDetailService:
         as opposed to the answer "the active core needs no BIOS". The two ship
         the same absent ``bios_status``, and only the latter may take a shown
         requirement off the frontend, so the flag is what separates them.
+
+        Those two reasons for the flag are themselves different answers, and the
+        LEVEL is what separates them: a check that ran and could not establish
+        the requirement ships ``bios_level`` ``"unknown"``, a read that never
+        happened ships none. Both leave a shown requirement alone; only the first
+        is something to show in its own right.
         """
         return {
             "bios_status": bios_status,
@@ -200,22 +205,23 @@ class GameDetailService:
         *,
         now: float,
         metadata: MetadataCacheEntry | None,
-        bios_status: dict[str, Any] | None,
         platform_slug: str,
         ra_id: int | None,
         achievement_summary: dict[str, Any] | None,
     ) -> list[str]:
-        """Return list of cache keys that are stale and need background refresh."""
+        """Return list of cache keys that are stale and need background refresh.
+
+        ``bios`` is stale for every platform, unconditionally: this payload never
+        carries a BIOS answer, so there is always one to fetch. It has no TTL for
+        the same reason — a staleness marker needs something stored to age.
+        """
         stale: list[str] = []
 
         meta_cached_at = metadata.get("cached_at", 0) if metadata else 0
         if not metadata or (now - meta_cached_at) > METADATA_TTL_SEC:
             stale.append("metadata")
 
-        if bios_status is not None:
-            if (now - bios_status.get("cached_at", 0)) > BIOS_TTL_SEC:
-                stale.append("bios")
-        elif platform_slug:
+        if platform_slug:
             stale.append("bios")
 
         if ra_id:
@@ -283,23 +289,14 @@ class GameDetailService:
         # Platform display name from the offline cache, degrading to the slug.
         platform_name = platform_names.get(platform_slug, platform_slug) if platform_slug else ""
 
-        # BIOS status from firmware cache (no HTTP — cache-only read)
+        # No BIOS answer rides this payload. What an emulator wants is read off
+        # the machine, and an answer read for a previous page open may not stand
+        # in for this one — so the page opens not-knowing and fills the answer in
+        # from the live ``get_bios_status`` a moment later.
         bios_status = None
         bios_level = None
         bios_label = None
-        # A cold firmware cache answers None — this payload then carries no BIOS
-        # answer at all, which is not the same as "the active core needs none".
-        bios_status_unknown = False
-        if platform_slug:
-            active_core_so, _ = self._active_core.active_core_for_rom(rom_id)
-            cached_bios = self._bios_checker.check_platform_bios_cached(platform_slug, active_core_so=active_core_so)
-            if cached_bios is None:
-                bios_status_unknown = True
-            elif cached_bios.get("needs_bios"):
-                bios_obj = format_bios_status(cached_bios, platform_slug, cached_at=cached_bios.get("cached_at", 0.0))
-                bios_status = asdict(bios_obj)
-                bios_level = compute_bios_level(bios_obj)
-                bios_label = compute_bios_label(bios_obj)
+        bios_status_unknown = bool(platform_slug)
 
         # Achievement summary (for badge rendering)
         achievement_summary = self._build_achievement_summary(rom_id_str, ra_id)
@@ -307,7 +304,6 @@ class GameDetailService:
         stale_fields = self._compute_stale_fields(
             now=self._clock.time(),
             metadata=metadata,
-            bios_status=bios_status,
             platform_slug=platform_slug,
             ra_id=ra_id,
             achievement_summary=achievement_summary,
@@ -375,12 +371,19 @@ class GameDetailService:
         """Return BIOS status for a ROM by looking up platform/rom_file from SQLite.
 
         Response always includes ``bios_status`` (dict or ``None``), ``bios_level``
-        (``"ok"`` / ``"partial"`` / ``"missing"`` or ``None``), ``bios_label``
-        (str or ``None``), and ``bios_status_unknown`` (bool). The pre-computed
-        level + label match what the cached ``get_cached_game_detail`` ships so
-        the frontend never re-derives them; the flag separates a check that could
-        not answer from the answer "this core needs no BIOS", which is the only
-        one of the two that clears a shown requirement.
+        (``"ok"`` / ``"partial"`` / ``"missing"`` / ``"unknown"`` or ``None``),
+        ``bios_label`` (str or ``None``), and ``bios_status_unknown`` (bool). The
+        level and label are the checker's own — derived where the reading state
+        that decides them is known and threaded through untouched, never
+        re-derived here; the flag separates a check that could not answer from
+        the answer "this core needs no BIOS", which is the only one of the two
+        that clears a shown requirement.
+
+        Two of the four outcomes carry a level: a requirement, and the answer
+        ``"unknown"`` from a check that ran without establishing one. A check
+        that raised carries none, and that absence is how the frontend tells a
+        failed read from an answer it should render; so does the fourth, the
+        plain "no BIOS needed".
         """
         rom_id = int(rom_id)
 
@@ -403,16 +406,26 @@ class GameDetailService:
         try:
             bios = await self._bios_checker.check_platform_bios(platform_slug, active_core_so=active_core_so)
             if bios.get("needs_bios"):
-                bios_obj = format_bios_status(bios, platform_slug)
+                # The checker's payload IS the wire shape, plus the slug it was
+                # asked about. Re-wrapping it through ``format_bios_status`` here
+                # would ship that dataclass's ``reading_complete`` default beside
+                # the answer — a field no frontend models and whose True is a
+                # claim this call site cannot make.
                 return self._bios_answer(
-                    asdict(bios_obj),
-                    compute_bios_level(bios_obj),
-                    compute_bios_label(bios_obj),
+                    {**bios, "platform_slug": platform_slug},
+                    bios.get("bios_level"),
+                    bios.get("bios_label"),
                 )
         except Exception as e:
             self._logger.warning(f"BIOS status check failed for {platform_slug}: {e}")
             return self._bios_answer(unknown=True)
 
         # No requirement — but a check that itself degraded to a source blind to
-        # the requirement reports that, and its verdict travels on unchanged.
-        return self._bios_answer(unknown=bool(bios.get("bios_status_unknown")))
+        # the requirement reports that, and its verdict travels on unchanged. It
+        # travels as a LEVEL as well as a flag: the flag alone is also what a
+        # failed read ships (the ``except`` above), and the frontend has to tell
+        # the two apart — an answer of "unknown" is shown as one, while a read
+        # that never happened leaves whatever is on the page standing (#1693).
+        if bios.get("bios_status_unknown"):
+            return self._bios_answer(bios_level=BIOS_LEVEL_UNKNOWN, bios_label=BIOS_LABEL_UNKNOWN, unknown=True)
+        return self._bios_answer()

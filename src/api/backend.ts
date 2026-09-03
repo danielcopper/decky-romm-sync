@@ -14,6 +14,7 @@ import type {
   RegistryPlatform,
   FirmwareStatus,
   FirmwareDownloadResult,
+  BiosLevel,
   BiosStatus,
   BiosFileStatus,
   CoreInfo,
@@ -128,10 +129,17 @@ export function isRenameCollisions(value: object): value is RenameCollisionsResu
  *
  * An absent `bios_status` means the active core needs no BIOS and clears a shown
  * requirement (#1690). `bios_status_unknown` marks the payload that carries no
- * answer at all — the check raised, or the firmware cache it would have been
- * read from is cold — and it ships the identical absent `bios_status`, so the
+ * answer at all — a cached game detail, which never carries one whatever the
+ * caches hold; a live check that raised; or one that ran and could not ask the
+ * platform's emulators — and it ships the identical absent `bios_status`, so the
  * flag is the only thing keeping a failed check from taking a missing-BIOS
  * warning off the page (#1693).
+ *
+ * The last of those three IS an answer, and `bios_level` is what says so: a
+ * check that ran and could not establish the requirement ships `"unknown"`,
+ * where one that raised ships none. A consumer that renders the unknown state
+ * needs the pair; one that only defends a shown requirement needs the flag
+ * alone (#1660).
  */
 export interface BiosAnswer {
   bios_status?: {
@@ -142,10 +150,11 @@ export interface BiosAnswer {
     all_downloaded: boolean;
     required_count?: number;
     required_downloaded?: number;
+    required_withheld?: number;
     cached_at?: number;
     files?: BiosFileStatus[];
   } | null;
-  bios_level?: "ok" | "partial" | "missing" | "unmanaged" | null;
+  bios_level?: BiosLevel | null;
   bios_label?: string | null;
   bios_status_unknown?: boolean;
 }

@@ -17,8 +17,20 @@ import { formatTimeAgo } from "./formatters";
  *  `get_platform_core_info` path — it no longer rides the BIOS payload (#923). */
 export interface BiosInfoFields {
   biosNeeded: boolean;
-  biosStatus: "ok" | "partial" | "missing" | "unmanaged" | null;
   biosLabel: string;
+  /** Whether a file the ACTIVE CORE requires is not on disk — the whole of the
+   *  play-row badge's rule, and the reason it is derived here rather than at the
+   *  row: it is a local fact (`required_downloaded` counts what the reading
+   *  found at each destination), and reassembling it from the numbers at the
+   *  call site is how it drifted into keying off the readiness verdict instead.
+   *  A required row whose verdict was withheld is out of both sides of the
+   *  comparison — it is not on disk and not shown to be missing either.
+   *
+   *  The four-valued `bios_level` is deliberately NOT projected. The badge has
+   *  one appearance, so it needs no colour input, and the BIOS tab reads the
+   *  level off its own payload — carrying it here as well would be a second
+   *  copy of the verdict for nobody to render. */
+  biosRequiredMissing: boolean;
 }
 
 /** Core-selection fields for the play-section row, derived from the dedicated
@@ -63,29 +75,48 @@ export function applySaveSyncDisplay(
   return { status: "none", label: "No saves" };
 }
 
-/** Project a whole BIOS answer — the backend's `bios_status` plus the level and
- *  label it pre-computed for it — into the BIOS-only fields the play-section row
- *  needs, or `null` when the payload carries no answer at all. The level and
- *  label are never re-derived here.
+/** Project a whole BIOS answer — the backend's `bios_status` plus the label it
+ *  pre-computed for it — into the BIOS-only fields the play-section row needs,
+ *  or `null` when the payload carries no answer at all. The label is never
+ *  re-derived here.
  *
- *  Three payloads, three outcomes. `bios_status` present: the requirement, with
- *  its level and label. `bios_status` absent: the backend answering "this core
- *  needs no BIOS", which clears all three fields so a requirement can be taken
- *  back off the page (#1690). `bios_status_unknown` set: the check could not
- *  answer — the same absent `bios_status` as the clear, and folding it would
- *  take a real requirement off the page, so the caller writes nothing and the
- *  shown level stands (#1693). The flag decides before the requirement is even
- *  looked at, so an unknown payload is never partially adopted.
+ *  Four payloads. `bios_status` present: the requirement, and whether the active
+ *  core is missing one of its files. `bios_status` absent: the backend answering
+ *  "this core needs no BIOS", which clears the fields so a requirement can be
+ *  taken back off the page (#1690). `bios_status_unknown` with an `"unknown"`
+ *  level: a check that RAN and could not establish the requirement — an answer,
+ *  and it clears too, because leaving a stale warning standing would assert what
+ *  nothing can establish any more. `bios_status_unknown` with no level: a read
+ *  that never happened, the one payload that must change nothing, so it projects
+ *  to `null` and the caller writes nothing (#1693).
+ *
+ *  `bios_level` is read only to tell those last two apart, never projected —
+ *  that is the same split `panelState.biosFieldsFromCache` draws off the same
+ *  payload, and a divergence would leave the badge and the BIOS tab disagreeing
+ *  about whether a question was answered.
  *
  *  Core data is sourced separately via `extractCoreInfo` (the BIOS payload no
  *  longer carries it, #923). */
 export function extractBiosInfo(answer: BiosAnswer): BiosInfoFields | null {
-  if (answer.bios_status_unknown) return null;
-  if (!answer.bios_status) return { biosNeeded: false, biosStatus: null, biosLabel: "" };
+  if (answer.bios_status_unknown) {
+    if (answer.bios_level !== "unknown") return null;
+    return { biosNeeded: false, biosLabel: "", biosRequiredMissing: false };
+  }
+  if (!answer.bios_status) {
+    return { biosNeeded: false, biosLabel: "", biosRequiredMissing: false };
+  }
+  const requiredCount = answer.bios_status.required_count ?? 0;
+  const requiredDownloaded = answer.bios_status.required_downloaded ?? 0;
+  // A required row nothing could judge is neither present nor absent, so it is
+  // taken out of the count before the comparison: the badge says a required file
+  // is NOT THERE, and a folder the reading did not look inside has not shown
+  // that. Leaving it in raised the badge on every PS2 game, whose core requires
+  // a folder RetroDECK links onto the BIOS root.
+  const requiredJudged = requiredCount - (answer.bios_status.required_withheld ?? 0);
   return {
     biosNeeded: true,
-    biosStatus: answer.bios_level ?? null,
     biosLabel: answer.bios_label ?? "",
+    biosRequiredMissing: requiredJudged > 0 && requiredDownloaded < requiredJudged,
   };
 }
 

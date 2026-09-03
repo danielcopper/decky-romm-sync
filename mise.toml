@@ -68,7 +68,6 @@ run = [
     "python scripts/check_markdown_links.py",
     "python scripts/check_romm_min_version.py",
     "cd py_modules/native && sha256sum -c libgavel-x86_64-linux.so.sha256",
-    "cd defaults && sha256sum -c bios_registry.json.sha256",
     "python scripts/check_vendored_atlas.py",
 ]
 
@@ -113,10 +112,10 @@ mkdir -p "$DEST/dist" "$DEST/bin" "$DEST/defaults" "$DEST/py_modules"
 rsync -a --delete dist/ "$DEST/dist/"
 rsync -a --delete bin/ "$DEST/bin/"
 rsync -a --delete defaults/ "$DEST/defaults/"
-# A prior release install places the defaults/ snapshots (config.json,
-# bios_registry.json) at the plugin ROOT, where the loaders look FIRST (root,
-# then defaults/). A dev deploy only refreshes defaults/, so a stale root copy
-# from an earlier release would shadow the freshly-deployed snapshot.
+# A prior release install places the defaults/ files (config.json) at the plugin
+# ROOT, where the loaders look FIRST (root, then defaults/). A dev deploy only
+# refreshes defaults/, so a stale root copy from an earlier release would shadow
+# the freshly-deployed one.
 # Drop any root-level namesake so a dev deploy always reads the just-deployed defaults/.
 for f in defaults/*; do rm -f "$DEST/$(basename "$f")"; done
 rsync -a --delete py_modules/ "$DEST/py_modules/"

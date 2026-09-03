@@ -21,22 +21,52 @@ Not all systems need BIOS files. Cartridge-based systems like Game Boy, SNES, an
 
 ## BIOS Status on the Game Detail Page
 
-When you open a game that belongs to a platform with BIOS files on your RomM server, the game detail panel shows a BIOS
-status indicator. Open the panel's **BIOS** tab to see the readiness line. Its dot color reflects the same
-ok/partial/missing classification used everywhere in the plugin:
+When you open a game whose platform has BIOS files — on your RomM server, or asked for by the emulator that will run it
+— the game detail panel's **BIOS** tab shows the readiness line. Its dot color reflects the same
+unknown/ok/partial/missing verdict used everywhere in the plugin:
 
-- **Green** — all required files present: "All required ready (3/5)" (or "All ready (3/5)" when the system has no
-  required-vs-optional split)
-- **Orange** — some required files present: "2/5 required files ready" (or "3/5 files ready" without a required split)
+- **Green** — nothing required is missing: "All required ready (2/2)", or "Nothing required (3/5 files held)" when the
+  core you launch with requires none of the system's files
+- **Orange** — some required files present: "1/2 required files ready"
 - **Red** — no required files present yet
+- **Grey** — no readiness claim, in one of two wordings: "BIOS requirement unknown", where the plugin could not work the
+  requirement out at all (see [When the requirement is unknown](#when-the-requirement-is-unknown)), or "BIOS readiness
+  unknown", where it knows the requirement and cannot settle whether you have it (see
+  [When readiness cannot be stated](#when-readiness-cannot-be-stated))
 
-The classification is computed against the **active core** for that game — so switching to a core that needs no BIOS (or
+The sentence says what the dot says, and both are about the **required** files. Where the system has none, the dot is
+green because nothing required is missing — so the line leads with "Nothing required" and the ratio beside it is
+inventory, counting the files your RomM library holds and how many of them you have. It is not a readiness score, and
+those files are not "optional" either: a core you are not launching with may well require one.
+
+Both numbers on the line count the same thing. Where the system has required files the ratio is of those; where it has
+none, the ratio is of the files your RomM library holds — never one of each. Files your emulator asks for that are not
+in your library are listed, but they are not part of that ratio: it tracks what you can still download, and those you
+cannot.
+
+The readiness line is computed against the **active core** for that game — so switching to a core that needs no BIOS (or
 that treats a file as optional) clears the warning, while switching to a core that requires a missing file surfaces it.
 
-A BIOS warning only ever disappears on an **answer**. When the plugin cannot work out the requirement — most often right
-after a BIOS download or delete, before the state has been read again — it keeps showing the last status it knew rather
-than reporting "no BIOS needed". So a check that could not be completed never quietly clears a missing-BIOS warning and
-lets the game launch without its files; it leaves the warning where it was.
+Beside the Play button there is also a short **BIOS** badge, which is a shortcut into this tab. It appears on one
+condition and no other: a file the active core **requires** is shown to be absent from your BIOS folder. If that core
+requires nothing, or requires only files you already have, there is no badge — however many optional files are missing,
+and whether or not the requirement could be worked out at all. A required **folder** raises no badge either: the plugin
+does not look inside one, so it has not shown anything to be absent. Those cases are worth reading, but not worth a
+warning next to Play, so they live in the tab.
+
+The badge is always **red**. It is a warning, not a status: the four-colour dot above belongs to the tab's readiness
+line, and every state that raises the badge is one the game will not launch in. Having one of three required files is
+not a milder version of the problem, so it does not get a milder colour.
+
+A BIOS warning only ever disappears on an **answer**. When a check cannot be run at all — most often right after a BIOS
+download or delete, before the state has been read again — the plugin keeps showing the last status it knew rather than
+reporting "no BIOS needed". So a check that could not be completed never quietly clears a missing-BIOS warning and lets
+the game launch without its files; it leaves the warning where it was.
+
+"The requirement is unknown" is itself an answer, and a different one. A check that ran and could not establish what the
+system needs says so on the page — grey dot, "BIOS requirement unknown" — instead of hiding the BIOS tab. Hiding it
+would say the system needs nothing, which is exactly the claim that could not be made. Every PS3 game is in that
+position, since RPCS3 is not a RetroArch core and cannot be asked.
 
 It does not leave it there indefinitely, though. Whenever the game detail page is shown a BIOS state it could not work
 out — when the page opens, after switching the emulator core, after switching to another version of the game — it asks
@@ -44,15 +74,46 @@ again in the background and fills the answer in a moment later. So a game opened
 gets its BIOS tab a beat after the rest of the page, and a core or version switch settles on the new core's or new
 version's readiness rather than the one before it.
 
-An unreachable RomM server usually does **not** put the plugin in that position: it falls back to its built-in registry
-of known BIOS files and still tells you what the platform needs. Only a platform that registry does not cover depends
-entirely on the server — see
-[Platforms Without Plugin Coverage](#platforms-without-plugin-coverage-not-managed-by-the-plugin) — and that is where an
-unreachable server leaves the requirement unknown.
+An unreachable RomM server usually does **not** put the plugin in that position. Everything the readiness line needs is
+local: which emulator is active comes from your RetroDECK configuration, what that emulator needs comes from the
+emulator itself, and what you already have comes from your BIOS folder. Your server contributes the **download** — so
+while it is unreachable you still see what is needed and what is missing, you just cannot fetch anything, and files that
+exist only in your RomM library are not listed.
 
-Tap the BIOS status indicator to see a detailed list of individual files and which ones are present or missing. Each
-file lists the cores that use it (e.g. _Beetle PSX HW (required)_, _SwanStation (optional)_); the **active core**'s line
-is highlighted in amber so you can spot at a glance which core's requirements the file applies to.
+Below the readiness line the tab lists the individual files and which ones are present or missing. Each file lists the
+cores that use it (e.g. _Beetle PSX HW (required)_, _SwanStation (optional)_); the **active core**'s line is highlighted
+in amber so you can spot at a glance which core's requirements the file applies to.
+
+Files no installed emulator asks for are not listed one by one — they are summarised on a single line below the list ("3
+files on server no installed emulator asks for"), as are any files the plugin could not work out an answer for.
+
+A file your emulator needs that is **not in your RomM library** is listed too, marked _not in your RomM library_. The
+plugin cannot fetch it — nothing in it can — so it is shown for what it is rather than left out. Adding the file to RomM
+makes it downloadable like any other.
+
+Not holding a file is a different question from not having it, and the row says both. If it is also absent from your
+BIOS folder it reads _missing, not in your RomM library_; if it is already sitting there it reads only _not in your RomM
+library_, with the green dot every present file gets.
+
+Some rows say something better than that. Where the file sitting at the destination is byte-for-byte the copy your
+emulator distribution ships, the row names the distribution instead — _provided by retrodeck_ — because it is the
+distribution's file, and if it ever went missing the repair is a RetroDECK component reset rather than a download.
+`dolphin-emu/Sys/codehandler.bin` is the usual example, and that one no library holds; others are perfectly ordinary
+files you may well have in RomM too, and the row still names the distribution, because whose copy is at the destination
+is the more useful fact. The name is printed exactly as the plugin's emulator-knowledge library states it, which is why
+it is lowercase.
+
+A row can also be a **folder** rather than a file — LRPS2 asks for `pcsx2/bios`, which is where your PS2 BIOS files go.
+The plugin does not look inside a folder, so it can say only that one is there: the row reads _a folder is here — its
+contents cannot be checked_ and gets an amber dot, which is neither the green of a file that is present nor the red of
+one that is missing. Nothing is being claimed about what is in it.
+
+That is the honest answer, and it costs the system its readiness line — see
+[When readiness cannot be stated](#when-readiness-cannot-be-stated) below.
+
+This only applies to a folder that **exists**. Where the folder is absent there is nothing to have found, so the row
+falls back to the ordinary wording and reads _missing_ like any other. On a stock RetroDECK that will not happen for
+`pcsx2/bios`, which RetroDECK links onto the BIOS folder itself.
 
 <!-- Screenshot: Game detail page showing orange BIOS status with "2/5 required files ready" -->
 
@@ -69,57 +130,198 @@ if your RomM server has BIOS files for them.
 2. Platforms with synced games that still need required BIOS files are marked with "BIOS needed"
 3. For platforms with more than one emulator, an **Emulator Core** button is shown at the top of the platform's section
    — this is the primary per-system control; it opens a menu of the platform's emulators
-4. Below the core, each platform shows how many BIOS files are downloaded vs. available (e.g. "3 / 5 files")
-5. Tap **Show Files** to see the individual file list for a platform
-6. Tap **Download All** to download all missing BIOS files for a platform
+4. Below the core, each platform shows how many required files are ready (e.g. "1 / 2 required") when the system has
+   any, and otherwise reads "Nothing required" with the inventory of your library's files beside it (e.g. "3 / 5 files
+   held"). A system with a required **folder** on its list reads "BIOS readiness unknown" instead — see
+   [When readiness cannot be stated](#when-readiness-cannot-be-stated)
+5. Tap **Show Files** to see the individual file list for a platform — each row says whether it is _needed_, _optional_,
+   _not needed_ or _unknown_ for that platform. A system whose requirement could not be worked out and that has no files
+   to list shows **"BIOS requirement unknown"** with no **Show Files** button
+6. Tap **Download All** to download all missing BIOS files for a platform. A system nothing installed could answer for
+   has no download buttons at all — see [When the requirement is unknown](#when-the-requirement-is-unknown)
 7. Tap **Delete BIOS** to remove that platform's downloaded BIOS files (see below)
 
 <!-- Screenshot: System page showing per-platform Emulator Core button above BIOS download counts -->
 
-BIOS files are downloaded to your RetroDECK bios directory (e.g. `~/retrodeck/bios/`). Some platforms use subdirectories
-— for example, Dreamcast BIOS goes into `bios/dc/` and PS2 BIOS goes into `bios/pcsx2/bios/`. The plugin handles the
-correct placement automatically.
+BIOS files are downloaded to your RetroDECK bios directory (e.g. `~/retrodeck/bios/`). Some platforms use
+subdirectories: Dreamcast BIOS goes into `bios/dc/`, because that is the location the Dreamcast core declares. The
+plugin handles the correct placement automatically — the location is the one your emulator itself declares, so a file
+for a subdirectory lands in that subdirectory rather than loose in the BIOS root.
+
+PS2 looks like a subdirectory and is not one. Nothing declares a location for an individual PS2 BIOS dump, so the plugin
+puts it in the BIOS root — and RetroDECK links `bios/pcsx2/bios` back to that same folder, which is why the file appears
+in both places at once. There is one copy, not two.
 
 ### Deleting BIOS Files
 
 You can remove a platform's downloaded BIOS files directly from the **System** page. The **Delete BIOS** button appears
-only when the platform has at least one downloaded file — its label shows the count (e.g. "Delete BIOS (3)"). Because
-deletion is local, the button works even when your RomM server is offline.
+only when there is at least one file it would actually remove — a file the plugin downloaded that is still on disk — and
+its label shows how many (e.g. "Delete BIOS (3)"). Because deletion is local, the button works even when your RomM
+server is offline.
 
 1. On the **System** page, find the platform whose BIOS files you want to remove
 2. Tap **Delete BIOS**
 3. Confirm the action in the dialog that appears
 
 This is a destructive action, so a confirmation dialog asks you to confirm before anything is deleted. Once confirmed,
-the plugin removes every downloaded BIOS file for that system from your RetroDECK bios directory and reports the result.
-Games that need those files won't launch until you download them again with **Download All** or **Download Required**.
+the plugin removes the BIOS files **it downloaded** for that system from your RetroDECK bios directory and reports the
+result. Games that need those files won't launch until you download them again with **Download All** or **Download
+Required**.
+
+**It only ever deletes its own downloads.** A file is removed when the plugin has a record of downloading it, and for no
+other reason. Everything else in the BIOS folder is left alone, including:
+
+- **Firmware RetroDECK ships itself.** RetroDECK installs some files into the BIOS folder with its own components —
+  `bios/dolphin-emu/Sys/codehandler.bin` is one. Your emulator asks for it, so it is listed on the page, marked
+  _provided by retrodeck_, but the plugin did not put it there. That one in particular is in no RomM library either, so
+  nothing here could fetch it back.
+- **Files you placed there by hand**, even where the name matches one your RomM library holds. Without a download record
+  the plugin has no claim on it.
+
+Being in your RomM library is neither necessary nor sufficient. A file you have since removed from RomM is still deleted
+if the plugin downloaded it — otherwise its own downloads would be stranded on disk with no way to clean them up — and a
+file that is in your library but arrived some other way is left where it is. If you want one of those gone, delete it in
+the file manager.
+
+The count on the button is the same set: it counts the plugin's own downloads that are still on disk, so it matches what
+the delete reports. A file it downloaded that you have since removed by hand does not appear in it, and the leftover
+bookkeeping entry is cleared the next time you run the delete.
 
 The same per-platform delete is also available from the **Data Management** page (under per-platform actions) for
 bulk-cleanup workflows.
 
 ## Which Systems Need BIOS?
 
-This depends on what's uploaded to your RomM server. Common systems that require BIOS files include PlayStation, PS2,
-Saturn, Dreamcast, and some arcade systems. The plugin only shows BIOS status for platforms that have firmware files in
-your RomM library.
+This depends on your emulators, not on your library. Common systems that require BIOS files include PlayStation, PS2,
+Saturn, Dreamcast, and some arcade systems. A platform appears with a BIOS status when your RomM library holds firmware
+for it **or** one of its emulators asks for a file — so a missing BIOS you have never uploaded is visible rather than
+silent.
 
-### Platforms Without Plugin Coverage ("Not managed by the plugin")
+### Where the plugin gets its answers
 
-The plugin recognises BIOS files through a built-in registry, which covers the common systems above but not every
-platform. When a platform has firmware on your RomM server but none of those files match a registry entry, the plugin
-has no way to tell which files are required — so it makes no readiness claim. Instead of a green all-clear, that
-platform shows a neutral grey status and the text **"Not managed by the plugin"**, along with a note listing how many
-files are on the server that the plugin doesn't recognise.
+The plugin asks your **installed RetroArch cores** what they want. Every core ships a small description file next to it
+declaring the firmware it needs and where each file goes, and the plugin reads those live — so the answers follow your
+RetroDECK install, including cores that were added after the plugin was released.
 
-This is informational, not an error: your files may be perfectly fine, the plugin simply can't verify them. You can
-still download them manually through RomM if your emulator needs them. Genuinely BIOS-free systems (such as the NES) are
-unaffected — they keep showing a normal all-ready status.
+That same reading also answers whether a **declared** file is already sitting where the emulator will look for it, and
+for those the plugin takes its answer rather than checking the path itself. The difference matters on a stock RetroDECK:
+`bios/pcsx2/bios` is a link pointing back at the BIOS folder, so working the location out from where a link ends up
+loses the folder the emulator actually opens. Following the emulator's own spelling gets the check right. The rest the
+plugin looks up itself, because there is no reading to take: files in your library that nothing asks for, and files an
+emulator keeps somewhere outside your BIOS folder entirely.
 
-## Per-Platform BIOS Filtering
+**Standalone emulators are not asked.** RetroDECK also offers emulators that are not RetroArch cores — RPCS3, Vita3K,
+Cemu, xemu and others — and they state their firmware in their own formats rather than in that one description file.
+Reading them accurately is a separate piece of work, so rather than guess, the plugin says it does not know: a system
+whose only emulators are standalone reads **unknown** (below), never "not needed".
 
-The plugin only shows BIOS files that belong to the platform you're looking at. For example, a GBA game page shows
-`gba_bios.bin` only — not Game Boy or Game Boy Color BIOS files, even though the emulator core (mGBA) supports all three
-systems. This filtering is built into the BIOS registry and works automatically.
+Each file on your server therefore gets one of four answers:
+
+- **Needed** — an installed core will not run without it
+- **Optional** — an installed core can use it but does not require it
+- **Not needed** — every RetroArch core this system offers was asked, and none of them wants this file
+- **Unknown** — the plugin could not work out an answer (see below)
+
+### When the requirement is unknown
+
+"Not needed" and "unknown" are deliberately kept apart. The first is an answer; the second is the absence of one, and
+the plugin will not present it as an all-clear.
+
+A **file** reads unknown when the plugin could not ask every core the system offers — one of them ships without its
+description file, or RetroDECK's configuration could not be read at all.
+
+A whole **system** reads unknown, showing a neutral grey status and the text **"BIOS requirement unknown"** instead of a
+green all-clear, in either of two situations.
+
+The first is a system with files on the page, not one of which could be answered for. Every row on the platform is
+unknown, which is what leaves nothing to base a readiness claim on. A single answered row is enough to keep the normal
+green/amber/red status: if the system offers two cores and only one is unreadable, the other core's answers still stand
+and only the unanswered rows read unknown. A system whose every file was answered with _not needed_ is not this case at
+all — that is a finished answer, and it reads green.
+
+The second is a system with **no files on the page at all**, where the plugin also could not ask every core the system
+offers. An empty list means "nothing here wants anything" only when every core was asked; with even one of them unread
+it means nothing, and reporting it as ready would be an all-clear over firmware nobody checked. This is the shape a PS3
+page has when your RomM library holds no PS3 firmware: no rows, no cores to ask, and a grey "BIOS requirement unknown".
+The system keeps its block on the **System** page for the same reason — dropping it would say there is nothing to
+manage.
+
+Note that the two shapes weigh an unread core differently, and deliberately: with files on the page one unreadable core
+costs only its own rows, while with no files at all there is nothing left for the readable cores to have answered, so
+the same gap takes the whole system to unknown.
+
+Three causes reach these shapes. The common one is a system whose emulators are all standalone — PS3 through RPCS3, for
+instance — where there is no core to ask in the first place. The second is a system all of whose cores are unreadable;
+on a stock RetroDECK that is rare, since only a handful of bundled cores ship without a description file and just one of
+them is offered for any system. The third only reaches the empty-list shape: a system with several cores, one of them
+unreadable, whose page happens to have no rows.
+
+This is informational, not an error: your files may be perfectly fine, the plugin simply can't confirm what is needed.
+Genuinely BIOS-free systems (such as the NES) are unaffected — every core answers, none of them wants anything, and the
+system reads as ready.
+
+#### Such a system offers no downloads
+
+A system in that state has no **Download All** or **Download Required** button, and says so in words: _BIOS management
+is not supported for this system yet, so there is nothing to download here. You can still put BIOS files in your BIOS
+folder by hand._ Fetching files the plugin cannot reason about — beside a line admitting it cannot — would be offering
+to act on an answer it does not have. Downloading them from RomM's own web interface and dropping them in your BIOS
+folder works exactly as it always did; nothing about the files changes, only what this page will claim about them.
+
+This is scoped to the **whole system**, never to single files. A system whose reading finished may well hold files no
+installed emulator asks for — a PlayStation page typically lists a good number of regional BIOS dumps that nothing wants
+— and every one of those stays downloadable, because "nothing wants this" is a finished answer. The buttons go only
+where there was no answer at all, and they come back the moment anything installed can speak for the system.
+
+!!! note "Systems that used to read \"Not managed by the plugin\" will have moved"
+
+    That state meant only \"no entry in the built-in table\", and the table is gone. Those systems now get whatever the
+    installed cores say, which can go three ways: **green**, because no installed core wants any of those files, **red
+    or amber**, because one does and the table simply never knew, or **grey**, because the system offers no RetroArch
+    core to ask. All three are new, and all three are honest.
+
+### When readiness cannot be stated
+
+There is a second grey state, and it is a different sentence: **"BIOS readiness unknown"**. Here the plugin knows
+perfectly well what the system needs — it is whether you **have** it that cannot be settled, because one of the required
+things is a folder and the plugin does not look inside folders.
+
+PS2 is the case you will actually meet. LRPS2 requires the `pcsx2/bios` folder, and RetroDECK creates that folder on
+every install by linking it onto your BIOS folder. So it is always there, and "the folder exists" would be a green light
+earned by RetroDECK's own plumbing rather than by any BIOS file of yours. Counting it as missing would be just as wrong
+— it is plainly there. The plugin declines instead, and says which of the two it is doing.
+
+What that state does **not** do is flatten the rest of the page:
+
+- The **file rows keep their own answers.** A file that is present is still green, one that is missing is still red, and
+  only the folder row reads _its contents cannot be checked_.
+- **Downloads stay.** Every file your library holds is still fetchable, and fetching them is the thing that actually
+  gets a PS2 system running. This is the opposite of the state above, where nothing could be answered at all and there
+  was nothing to download against.
+- The system is **not** flagged "BIOS needed", because that would be a claim too.
+- The red **BIOS** badge beside Play still appears for a file that is genuinely missing — the folder is simply not one
+  of them.
+
+Checking what is inside such a folder is planned work, not a limitation of the idea. Until it lands, this is the honest
+answer.
+
+## Which Files a Platform Lists
+
+A platform's list has two halves. The first is what your **server** files under that platform — a GBA page lists the
+firmware your server holds under GBA, not what it holds under Game Boy. The second is every file an **emulator RetroDECK
+offers for that platform** asks for, wherever your server keeps that file and even when your server does not hold it at
+all; rows in that half are marked as not being in your RomM library.
+
+The second half follows what you can **launch** the platform with, not how a file is usually catalogued, and the two do
+not always line up. RetroDECK offers NooDS under Game Boy Advance, and NooDS does run GBA games. Its description file
+names five firmware files — `bios7.bin`, `bios9.bin`, `firmware.bin`, `nds_sd_card.bin` and `gba_bios.bin` — and a core
+states its firmware once, for the whole core, with no way to say which of those a GBA game in particular needs. So a GBA
+page lists all five: they are exactly the files an emulator you can start a GBA game with declares. Filtering rows out
+by the system a file is usually filed under would, wherever such a file is genuinely required, leave you with a game
+that refuses to launch and nothing on the page explaining why.
+
+Being listed is not the same as being needed. All five of NooDS's files are optional, so none of them turns a GBA page
+red by itself — and what each row means for the core you actually launch with is the next section's question.
 
 ## Active Core Detection
 
@@ -145,8 +347,13 @@ you at a glance which core the plugin is filtering for.
 3. The plugin reads RetroDECK's ES-DE configuration (`es_systems.xml`) from the flatpak installation to find the default
    emulator for each platform — for BIOS filtering it uses the platform's first RetroArch core. This live file is the
    only source; there is no bundled fallback snapshot.
-4. If a platform's default is a **standalone emulator** (no RetroArch core) or the live configuration can't be read, all
-   BIOS files for the platform are shown — the safe default
+4. If a platform offers **only standalone emulators** (no RetroArch core at all), or the live configuration can't be
+   read, the plugin has nothing to filter with — so it does not filter, and it does not guess either. Every BIOS file
+   the platform has is listed, each marked _unknown_, and the platform's summary reads **BIOS requirement unknown** with
+   a grey dot and no download buttons — including when the platform has no files to list, which is where saying nothing
+   at all would have read as "nothing needed". That is the honest answer for a platform like PS3, whose emulators the
+   plugin cannot yet ask: saying nothing is needed would report it ready over firmware the emulator will not boot
+   without.
 
 Whatever this chain resolves to is the **same core the game launches on** — the plugin bakes the resolved core into the
 Steam shortcut, so the core shown for BIOS, saves, and the core badge always matches the core that runs.

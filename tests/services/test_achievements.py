@@ -109,7 +109,6 @@ def plugin(clock):
         ),
     )
     bios_checker = MagicMock()
-    bios_checker.check_platform_bios_cached.return_value = None
     bios_checker.check_platform_bios = AsyncMock(return_value={"needs_bios": False})
     p._game_detail_service = GameDetailService(
         config=GameDetailServiceConfig(

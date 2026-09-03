@@ -64,7 +64,7 @@ appears with three choices:
 The migration covers three categories of files:
 
 - **ROMs** — All ROMs tracked in the plugin's state (previously downloaded through the plugin)
-- **BIOS files** — Both files the plugin downloaded and untracked files that match known entries in the BIOS registry
+- **BIOS files** — Both files the plugin downloaded and untracked files that one of your installed emulators asks for
   (e.g. files you placed manually that the plugin recognizes)
 - **Save files** — Recursively scanned from the save directories, excluding hidden directories (like `.git` or `.tmp`)
 

@@ -179,23 +179,38 @@ def platform_identities(platform: str) -> PlatformIdentities | None:
     return _crosswalk().get(platform)
 
 
+# Only the type is refused: the empty string is a question with an answer
+# ("no platform corresponds"), so a platform value is not an _expect_str one.
+def _expect_platform_value(value: Any, vocabulary: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(
+            f"platform value for {vocabulary!r}: expected a string, got {value!r} "
+            f"(a numeric id is asked for as its decimal string)"
+        )
+    return value
+
+
 def platforms_for(vocabulary: str, value: str) -> tuple[str, ...]:
     """The ES-DE platforms whose identities carry *value* in *vocabulary*, sorted.
 
-    ``igdb`` matches the numeric id (as digits) or the slug, case-insensitively —
+    *value* is a string in every vocabulary: a numeric id passes as its decimal
+    string, so a consumer holding IGDB's numeric ``igdb_id`` asks with
+    ``str(igdb_id)``. ``igdb`` matches that id or the slug, case-insensitively —
     the id is the stable key, the slug a drifting convenience. ``libretro``
     matches the database name exactly as libretro spells it ("Nintendo - Game
     Boy Advance"). ``screenscraper`` and ``thegamesdb`` match their numeric
     ids as digits. An unknown *vocabulary* raises — the set is this module's
-    own and closed (:data:`KNOWN_PLATFORM_VOCABULARIES`); an unmatched *value*
-    answers the empty tuple, because "no platform corresponds" is an answer.
+    own and closed (:data:`KNOWN_PLATFORM_VOCABULARIES`) — and so does a
+    non-string *value*, stated rather than quietly coerced; an unmatched
+    *value* answers the empty tuple, because "no platform corresponds" is an
+    answer.
     """
     if vocabulary not in KNOWN_PLATFORM_VOCABULARIES:
         raise ValueError(
             f"unknown platform vocabulary {vocabulary!r} "
             f"(one of {', '.join(KNOWN_PLATFORM_VOCABULARIES)})"
         )
-    wanted = value.strip()
+    wanted = _expect_platform_value(value, vocabulary).strip()
     matches = [
         platform
         for platform, identities in _crosswalk().items()

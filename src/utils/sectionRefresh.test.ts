@@ -12,8 +12,8 @@ import type { EmulatorOption } from "../types";
 
 interface BiosState {
   biosNeeded: boolean;
-  biosStatus: "ok" | "partial" | "missing" | "unmanaged" | null;
   biosLabel: string;
+  biosRequiredMissing: boolean;
   unrelated: string;
 }
 
@@ -78,8 +78,8 @@ describe("refreshBiosInBackground", () => {
     expect(setter).toHaveBeenCalledOnce();
     const next = setter.mock.calls[0]![0]({
       biosNeeded: false,
-      biosStatus: null,
       biosLabel: "",
+      biosRequiredMissing: false,
       unrelated: "keep",
     });
     expect(next.biosNeeded).toBe(true);
@@ -146,11 +146,16 @@ describe("refreshBiosInBackground", () => {
     expect(setter).toHaveBeenCalledOnce();
     const next = setter.mock.calls[0]![0]({
       biosNeeded: true,
-      biosStatus: "missing",
       biosLabel: "0/3",
+      biosRequiredMissing: true,
       unrelated: "keep",
     });
-    expect(next).toEqual({ biosNeeded: false, biosStatus: null, biosLabel: "", unrelated: "keep" });
+    expect(next).toEqual({
+      biosNeeded: false,
+      biosLabel: "",
+      biosRequiredMissing: false,
+      unrelated: "keep",
+    });
   });
 
   it("writes nothing when the read carries no BIOS answer (#1693)", async () => {

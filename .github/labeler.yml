@@ -42,8 +42,10 @@ area:firmware:
       - any-glob-to-any-file:
           - 'py_modules/services/firmware.py'
           - 'py_modules/adapters/firmware_file.py'
+          - 'py_modules/adapters/atlas_firmware.py'
           - 'py_modules/domain/firmware_paths.py'
-          - 'py_modules/domain/bios.py'
+          - 'py_modules/domain/firmware_wants.py'
+          - 'py_modules/domain/bios_status.py'
 
 area:artwork:
   - changed-files:

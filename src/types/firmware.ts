@@ -3,16 +3,36 @@
  * file status, and the available-cores selection presented in the UI.
  */
 
+/**
+ * What the machine answers about one firmware file, in the four values the
+ * resolver's per-file answer and the reading's completeness together produce.
+ * `not_needed` is a finished answer — every emulator the platform offers was
+ * read and none asks for the file — while `unknown` is the absence of one. They
+ * are never folded together: the collapse is what made a file the plugin could
+ * not ask about look like a file nothing wanted.
+ */
+export type FirmwareWanted = "needed" | "optional" | "not_needed" | "unknown";
+
 interface FirmwareFile {
-  id: number;
+  /** `null` for a file an installed emulator asks for that the RomM library does
+   *  not hold — there is no server record to name. Nothing reads it: what the
+   *  page filters the download buttons and its progress totals on is
+   *  `on_server`. */
+  id: number | null;
   file_name: string;
   size: number;
   md5: string;
+  local_path: string;
   downloaded: boolean;
-  required: boolean;
   description: string;
-  hash_valid: boolean | null;
-  classification: "required" | "optional" | "unknown";
+  wanted: FirmwareWanted;
+  /** Whether the platform's launching core is the one that requires it — the
+   *  axis the "BIOS needed" badge and the required counts key off, distinct
+   *  from `wanted`, which is about every installed emulator. */
+  required_by_active: boolean;
+  on_server: boolean;
+  supplied_by?: string | null;
+  is_directory?: boolean;
 }
 
 interface FirmwarePlatform {
@@ -61,6 +81,10 @@ export interface CoreInfo {
  * page can render the combined core+BIOS overview for every platform from one
  * call. This is the system-wide overview path — distinct from the per-game
  * `check_platform_bios` payload, which no longer carries any core fields (#923).
+ *
+ * `files` is the union of what the RomM library offers for the platform and what
+ * the platform's emulators ask for, so a row can be present with `on_server`
+ * false — wanted, possibly missing, and not downloadable from here.
  */
 export interface FirmwarePlatformExt extends FirmwarePlatform {
   has_games?: boolean;
@@ -70,15 +94,27 @@ export interface FirmwarePlatformExt extends FirmwarePlatform {
   emulators?: EmulatorOption[];
   emulator_data_available?: boolean;
   // Per-platform BIOS aggregates computed by the backend from the same
-  // core-aware enriched files (`compute_bios_level`), so the System page reads
-  // the ok/partial/missing decision and display counts off the payload instead
-  // of re-deriving the threshold logic. The optional-missing breakdown stays a
-  // local file-level computation (a richer axis the 3-state level doesn't model).
-  bios_level?: "ok" | "partial" | "missing" | "unmanaged" | null;
+  // core-aware classified files (`compute_bios_level`), so the System page reads
+  // the unknown/ok/partial/missing decision and display counts off the payload
+  // instead of re-deriving the threshold logic. The optional-missing breakdown
+  // stays a local file-level computation (a richer axis the level doesn't model).
+  bios_level?: BiosLevel | null;
   required_count?: number;
   required_downloaded?: number;
+  /** How many of `required_count` nothing could judge — see `BiosStatus`. Above
+   *  zero it is why `bios_level` is `"unknown"`, and it is what separates that
+   *  from a platform nothing could speak for: here the rows have answers and
+   *  only the one-line verdict declines, so the downloads stay. */
+  required_withheld?: number;
   server_count?: number;
   local_count?: number;
+  known_count?: number;
+  unknown_count?: number;
+  /** How many files Delete BIOS would remove: download records this plugin
+   *  wrote whose file is still on disk. Deliberately not `local_count` — that is
+   *  the library's progress ratio, which counts files nothing here put on disk
+   *  and drops our own downloads once RomM stops listing them. */
+  deletable_count?: number;
 }
 
 export interface FirmwareStatus {
@@ -92,12 +128,41 @@ export interface BiosFileStatus {
   file_name: string;
   downloaded: boolean;
   local_path: string;
-  required: boolean;
   description: string;
-  classification: "required" | "optional" | "unknown";
+  wanted: FirmwareWanted;
+  /** Whether the core THIS game launches with requires the file. `wanted` is the
+   *  machine's answer about the file; this one is the launch's. */
+  required_by_active: boolean;
   cores?: Record<string, { required: boolean }>;
   used_by_active?: boolean;
+  /** False for a file an emulator asks for that the RomM library does not hold.
+   *  It still counts as missing — it just cannot be fetched from the plugin. */
+  on_server?: boolean;
+  /** The distribution whose own copy is sitting at the destination, as the
+   *  resolver names it (`"retrodeck"`) — printed verbatim, never mapped to a
+   *  display form of ours. Absent claims nothing: the resolver states it only
+   *  where it established the provenance. */
+  supplied_by?: string | null;
+  /** A directory was FOUND at the destination — not a property of what the
+   *  emulator declared, which the reading cannot tell apart: a core asking for a
+   *  folder and a folder sitting where a core's file belongs arrive the same
+   *  way. Either way what would satisfy the requirement is inside it, the
+   *  reading does not look, and the row's verdict is withheld rather than
+   *  present or missing. Nothing can say it while the folder is absent. */
+  is_directory?: boolean;
 }
+
+/**
+ * The backend's readiness decision for a platform's BIOS. `"unknown"` means no
+ * readiness claim could be established, in one of three shapes: the server holds
+ * firmware and not one file of it could be answered for; the platform holds no
+ * file at all and its reading was not complete, which is already the case when a
+ * single core the system offers went unread; or the launching core requires a
+ * file nothing could judge (`required_withheld`). A neutral state, never a green
+ * all-clear — and in the third shape not a red one either, which is why the
+ * count comes with it.
+ */
+export type BiosLevel = "ok" | "partial" | "missing" | "unknown";
 
 export interface BiosStatus {
   needs_bios: boolean;
@@ -106,18 +171,37 @@ export interface BiosStatus {
   all_downloaded?: boolean;
   required_count?: number;
   required_downloaded?: number;
+  /** How many of `required_count` nothing could judge: rows the reading found a
+   *  folder at, whose contents it does not inspect. Something is at the
+   *  destination and nothing about the requirement was established, so such a
+   *  row raises neither `required_downloaded` nor the count of files known to be
+   *  absent — subtract it from `required_count` for that. Above zero, the
+   *  readiness verdict declines (`bios_level` `"unknown"`) while the file rows
+   *  keep their own answers. */
+  required_withheld?: number;
+  // Server files an installed emulator asks for, and files nothing could answer
+  // about. A `not_needed` file is in neither — it is answered for, and wanted by
+  // nothing — which is what keeps "nothing here is needed" apart from "nothing
+  // could be established".
+  known_count?: number;
   unknown_count?: number;
   files?: BiosFileStatus[];
-  // unmanaged/ok/partial/missing state computed by the backend (compute_bios_level)
-  // so the frontend reads the classification off the payload instead of
-  // re-deriving the threshold logic. "unmanaged" means the platform has server
-  // files but none map to a registry entry (no coverage). Present only when
-  // needs_bios is true.
-  bios_level?: "ok" | "partial" | "missing" | "unmanaged" | null;
-  // Set when the check could not determine the requirement: the firmware fetch
-  // failed and the platform has no registry coverage to fall back on. The
-  // `needs_bios: false` it rides on is ignorance, not an answer, so no consumer
-  // may clear a shown requirement on it (#1693).
+  // unknown/ok/partial/missing state computed by the backend (compute_bios_level)
+  // so the frontend reads the decision off the payload instead of re-deriving the
+  // threshold logic. Present only when needs_bios is true.
+  bios_level?: BiosLevel | null;
+  // The compact token for that level (compute_bios_label), derived beside it so
+  // the two can never disagree. Present only when needs_bios is true.
+  bios_label?: string;
+  // Set when the check could not determine the requirement — it found no file
+  // to speak for AND its reading of the platform's emulators was not complete,
+  // which one unread core is already enough for, so it cannot say that nothing
+  // is wanted. A failed firmware fetch alone does not raise it: the listing is
+  // caught and the file list simply comes back empty, which the machine's own
+  // answer can still fill. The `needs_bios: false` it rides on is
+  // ignorance, not an answer, so no consumer may clear a shown requirement on it
+  // (#1693) — and the panel renders it as its own state rather than hiding the
+  // BIOS tab, which would say the same thing (#1660).
   bios_status_unknown?: boolean;
 }
 
