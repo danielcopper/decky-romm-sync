@@ -15,12 +15,16 @@
  * here, typed honestly.
  */
 
+import type { FC } from "react";
 import {
   appActionButtonClasses as _appActionButtonClasses,
   basicAppDetailsSectionStylerClasses as _basicAppDetailsSectionStylerClasses,
   appDetailsClasses as _appDetailsClasses,
   playSectionClasses as _playSectionClasses,
+  quickAccessMenuClasses as _quickAccessMenuClasses,
+  Tabs as _Tabs,
   findSP as _findSP,
+  type TabsProps,
 } from "@decky/ui";
 
 export const appActionButtonClasses: typeof _appActionButtonClasses | undefined = _appActionButtonClasses;
@@ -28,5 +32,14 @@ export const basicAppDetailsSectionStylerClasses: typeof _basicAppDetailsSection
   _basicAppDetailsSectionStylerClasses;
 export const appDetailsClasses: typeof _appDetailsClasses | undefined = _appDetailsClasses;
 export const playSectionClasses: typeof _playSectionClasses | undefined = _playSectionClasses;
+export const quickAccessMenuClasses: typeof _quickAccessMenuClasses | undefined = _quickAccessMenuClasses;
+
+/**
+ * Steam's L1/R1 tabbed page, found through a `findModuleByExport` probe on the
+ * shape of its render function — so it is `undefined` whenever that probe misses.
+ * Upstream types it `any`, which hides both the absence and the props; a
+ * component type states what the frame actually passes it.
+ */
+export const Tabs: FC<TabsProps> | undefined = _Tabs;
 
 export const findSP = (): Window | undefined => _findSP();
