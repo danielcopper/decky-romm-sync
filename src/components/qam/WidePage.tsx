@@ -4,7 +4,8 @@
  * optional L1/R1 tab bar, and a body of a definite, measured height.
  *
  * The page's own content is `children`, or — when the page has tabs — the
- * `content` of each tab, which Steam's `Tabs` renders itself.
+ * `content` of each tab, which Steam's `Tabs` renders itself. A tabbed page
+ * also opens with focus in that content rather than on the Back row.
  *
  * Structure and vocabulary: `docs/architecture/qam-panel.md`.
  */
@@ -34,6 +35,15 @@ export type WidePageProps = {
   title: string;
   onBack: () => void;
 } & TabProps;
+
+/**
+ * Marks a page that places its own entry focus, which the panel's router reads
+ * to keep its first-button focus away. A tabbed page sets it, because the
+ * `autoFocusContents` it hands Steam's tabbed page is what puts focus in the
+ * content; a page that cannot place focus itself never sets it, so the router
+ * still covers it.
+ */
+export const OWNS_ENTRY_FOCUS_ATTR = "data-romm-owns-entry-focus";
 
 // Floor under the measured body, so a viewport read taken before Steam has laid
 // the panel out cannot collapse the page to nothing.
@@ -80,15 +90,24 @@ export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, on
   // which renders the tab's content exactly as Steam's own page would have.
   let body: ReactNode = <ScrollRegion>{children}</ScrollRegion>;
   if (tabs) {
+    // `autoFocusContents` lands entry focus in the active tab's content — the
+    // list of a list-and-detail page — which is also what makes Steam draw the
+    // L1/R1 glyphs: its tab row shows them only while gamepad focus is within
+    // the tabbed page, and the Back row above the tabs is outside it
+    // (`chunk~2dcc5aaf7.js`, the tab row's `showGlyphs`).
     body = Tabs ? (
-      <Tabs tabs={tabs} activeTab={activeTab} onShowTab={onShowTab} />
+      <Tabs tabs={tabs} activeTab={activeTab} onShowTab={onShowTab} autoFocusContents />
     ) : (
       tabs.find((tab) => tab.id === activeTab)?.content
     );
   }
 
+  // Claimed only where the claim is true: without Steam's tabbed page nothing
+  // here places focus, so the router's own must still run.
+  const ownsEntryFocus = Boolean(tabs && Tabs);
+
   return (
-    <div className={WIDE_ROOT_CLASS} ref={rootRef}>
+    <div className={WIDE_ROOT_CLASS} ref={rootRef} {...(ownsEntryFocus ? { [OWNS_ENTRY_FOCUS_ATTR]: "" } : {})}>
       <PanelSection>
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={onBack}>

@@ -14,17 +14,22 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { FC, ReactNode } from "react";
 import { WIDE_ROOT_CLASS } from "../../utils/qamExpansion";
-import type { WidePageProps, WidePageTab } from "./WidePage";
+import { OWNS_ENTRY_FOCUS_ATTR, type WidePageProps, type WidePageTab } from "./WidePage";
 
 interface StubTabsProps {
   tabs: WidePageTab[];
   activeTab: string;
   onShowTab: (tabId: string) => void;
+  autoFocusContents?: boolean;
 }
 
-/** Stand-in for Steam's tabbed page: a bar of titles plus the active content. */
-const StubTabs: FC<StubTabsProps> = ({ tabs, activeTab, onShowTab }) => (
-  <div data-testid="steam-tabs">
+/**
+ * Stand-in for Steam's tabbed page: a bar of titles plus the active content.
+ * `autoFocusContents` is surfaced as an attribute — the real page consumes it to
+ * place focus, which happy-dom's gamepad-free DOM cannot show happening.
+ */
+const StubTabs: FC<StubTabsProps> = ({ tabs, activeTab, onShowTab, autoFocusContents }) => (
+  <div data-testid="steam-tabs" data-auto-focus-contents={String(Boolean(autoFocusContents))}>
     {tabs.map((tab) => (
       <button key={tab.id} onClick={() => onShowTab(tab.id)}>
         {tab.title}
@@ -193,6 +198,45 @@ describe("WidePage", () => {
     // around it would nest two scrollers on the same content.
     expect(screen.queryByTestId("scroll-panel")).not.toBeInTheDocument();
     expect(screen.getByTestId("steam-tabs")).toBeInTheDocument();
+  });
+
+  it("has Steam's tabbed page place entry focus, and says so on its root", async () => {
+    const WidePage = await loadWidePage(StubTabs);
+
+    const { container } = render(
+      <WidePage title="Library" onBack={vi.fn()} tabs={TAB_SET} activeTab="platforms" onShowTab={vi.fn()} />,
+    );
+
+    // Focus in the content is also what draws the L1/R1 glyphs: Steam's tab row
+    // shows them only while focus is within the tabbed page, and the Back row
+    // is above the tabs. The marker is what keeps the router's own focus —
+    // which would land on that Back row — away from the page.
+    expect(screen.getByTestId("steam-tabs")).toHaveAttribute("data-auto-focus-contents", "true");
+    expect(container.firstElementChild).toHaveAttribute(OWNS_ENTRY_FOCUS_ATTR);
+  });
+
+  it("claims no entry focus without tabs, where nothing here places any", async () => {
+    const WidePage = await loadWidePage(StubTabs);
+
+    const { container } = render(
+      <WidePage title="Settings" onBack={vi.fn()}>
+        <div>page body</div>
+      </WidePage>,
+    );
+
+    expect(container.firstElementChild).not.toHaveAttribute(OWNS_ENTRY_FOCUS_ATTR);
+  });
+
+  it("claims no entry focus when the Tabs probe missed, so the router still covers the page", async () => {
+    const WidePage = await loadWidePage(undefined);
+
+    const { container } = render(
+      <WidePage title="Library" onBack={vi.fn()} tabs={TAB_SET} activeTab="platforms" onShowTab={vi.fn()} />,
+    );
+
+    // The fallback renders the tab's content raw, with nothing to autofocus. A
+    // marker here would opt the page out of the only focus it would get.
+    expect(container.firstElementChild).not.toHaveAttribute(OWNS_ENTRY_FOCUS_ATTR);
   });
 
   it("takes no children beside tabs, whose body is the active tab's content", async () => {

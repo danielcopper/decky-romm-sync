@@ -12,7 +12,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { act, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
 import { toaster } from "@decky/api";
 import { emitDeckyEvent, deckyEventListenerCount } from "./test-utils/decky-api-mock";
 import {
@@ -111,14 +112,29 @@ vi.mock("./api/backend", async () => {
   };
 });
 
+// Main stands in for whichever page the router has mounted. `ownsEntryFocus`
+// makes it carry the marker a page sets when it places entry focus itself,
+// which is the one thing the router's focus effect branches on.
+let mainPageOwnsEntryFocus = false;
+vi.mock("./components/MainPage", () => ({
+  MainPage: () =>
+    // React drops an attribute whose value is undefined, so this renders the
+    // marker only in the owns-focus case.
+    createElement(
+      "div",
+      { "data-romm-owns-entry-focus": mainPageOwnsEntryFocus ? "" : undefined },
+      createElement("button", null, "first button"),
+    ),
+}));
+
 import { applyAllPlaytime, registerMetadataPatches, applyAllMetadata } from "./patches/metadataPatches";
 import { registerRomMAppId, unregisterRomMAppId } from "./patches/gameDetailPatch";
 import definePluginResult from "./index";
 
 // `definePlugin` is stubbed in test-setup to return its factory unchanged, so
 // the default export IS the factory. Calling it registers the listeners and
-// returns the plugin descriptor (with onDismount).
-const pluginFactory = definePluginResult as unknown as () => { onDismount: () => void };
+// returns the plugin descriptor (with onDismount and the panel itself).
+const pluginFactory = definePluginResult as unknown as () => { onDismount: () => void; content: ReactNode };
 
 function flush(): Promise<void> {
   return new Promise((r) => setTimeout(r, 0));
@@ -2047,5 +2063,55 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
     expect(weightedCoarseFraction(1, 0.5, 2)).toBeCloseTo(70 / 80, 10);
     resetEta();
     plugin.onDismount();
+  });
+});
+
+describe("index.tsx — where entry focus lands on a page swap", () => {
+  beforeEach(() => {
+    mainPageOwnsEntryFocus = false;
+  });
+
+  it("focuses the mounted page's first button", async () => {
+    vi.useFakeTimers();
+    try {
+      const plugin = pluginFactory();
+      render(plugin.content);
+
+      // Steam's gamepad nav keeps a focus pointer across page swaps and would
+      // otherwise resolve it onto whatever sits at the old page's position.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      const btn = screen.getByRole("button", { name: "first button" });
+
+      expect(btn).toHaveFocus();
+      expect(btn).toHaveClass("gpfocus");
+      plugin.onDismount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves focus alone for a page that places its own", async () => {
+    vi.useFakeTimers();
+    try {
+      mainPageOwnsEntryFocus = true;
+      const plugin = pluginFactory();
+      render(plugin.content);
+
+      // A wide page's first button is its Back row, which sits above the tabs
+      // and so outside Steam's tabbed page — landing there would hide the L1/R1
+      // glyphs the page needs to be switchable at all.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      const btn = screen.getByRole("button", { name: "first button" });
+
+      expect(btn).not.toHaveFocus();
+      expect(btn).not.toHaveClass("gpfocus");
+      plugin.onDismount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

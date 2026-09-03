@@ -115,6 +115,11 @@ QAM remount, so reopening the QAM lands on the page that was open, and a wide pa
 Steam's tabbed page, switched with L1/R1, for two to four peer views of one page. Wide pages only: at 300 px the bumper
 glyphs overlap the labels, which is why the Library page's tab bar is hand-rolled today. Only Library has tabs.
 
+Entry focus lands in the content — the active tab's, so the list of a list-and-detail page — and the bumper glyphs
+follow, because Steam draws them only while gamepad focus is within the tabbed page. Back stays reachable by moving up
+and with B. A tabbed page therefore marks itself as placing its own entry focus, and the panel's router leaves it alone
+instead of focusing the page's first button, which is the Back row above the tabs.
+
 ### List and detail
 
 The list takes about a third of the width (264 px in the prototype), the detail the rest. Focus selects: moving through
