@@ -268,6 +268,34 @@ def fw(plugin):
     return plugin._firmware_service
 
 
+# What the façade holds. Everything else the service needs lives on a sub-service.
+_FACADE_ATTRIBUTES = frozenset({"_config", "_listing", "_demand", "_status", "_downloads", "_deletion"})
+
+
+@pytest.fixture(autouse=True)
+def _no_dead_rebind_on_the_facade(fw):
+    """Fail a test that assigned firmware state to the façade instead of a sub-service.
+
+    Python answers an assignment to an unknown name by creating it, so
+    ``fw._loop = loop`` — a line meaning to swap the loop the offloaded hops run
+    on — lands on the façade, does nothing, and leaves the test green against
+    whichever loop the fixture built the service under. Nothing else notices: the
+    call it was meant to redirect still works, just against the old object. This
+    makes the assignment itself the failure.
+
+    Replacing a name the façade already answers to is a different thing and stays
+    allowed — stubbing ``fw.check_platform_bios`` shadows a real method rather
+    than inventing one.
+    """
+    yield
+    stray = sorted(name for name in vars(fw) if name not in _FACADE_ATTRIBUTES and not hasattr(type(fw), name))
+    assert not stray, (
+        f"assigned {stray} to the façade, which holds no such name — the assignment did nothing. "
+        f"Firmware state lives on a sub-service: reach fw._listing / fw._demand / fw._status / "
+        f"fw._downloads / fw._deletion, or _set_loop(fw, loop) for the event loop."
+    )
+
+
 def _declare(fw: FirmwareService, *specs: tuple[str, str, bool]) -> None:
     """State the machine's demand as ``(file_name, description, required)`` triples.
 
@@ -284,6 +312,35 @@ def _declare(fw: FirmwareService, *specs: tuple[str, str, bool]) -> None:
             optional_for=[] if required else [_TEST_CORE],
             description=description,
         )
+
+
+class TestTheFacadeOnlyDelegates:
+    """The façade wires the sub-services and delegates. It implements nothing itself.
+
+    Stated as the whole surface rather than as a list of banned names, so it fails
+    in both directions: a helper the split relocated cannot come back here, and a
+    new method cannot arrive without someone deciding it belongs on the façade
+    rather than in the module that owns its job. A second implementation here is
+    what the split cost — presence, the destination it is read at, and the RomM
+    listing each have one owner now, and a convenience wrapper on the façade would
+    answer from whatever it happened to hold.
+    """
+
+    def test_the_facade_defines_exactly_its_delegations(self):
+        own = {name for name, value in vars(FirmwareService).items() if callable(value) and not name.startswith("__")}
+        assert own == {
+            "invalidate_firmware_cache",
+            "get_firmware_status",
+            "check_platform_bios",
+            "download_firmware",
+            "download_all_firmware",
+            "download_required_firmware",
+            "delete_platform_bios",
+        }
+
+    def test_the_facade_holds_only_its_sub_services(self, fw):
+        """Construction leaves the config and the five sub-services, and nothing else."""
+        assert set(vars(fw)) == _FACADE_ATTRIBUTES
 
 
 class TestFirmwareDestPath:
