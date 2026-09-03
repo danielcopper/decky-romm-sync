@@ -34,11 +34,13 @@
 # Window placement — KWin scripting over DBus (works on X11 and Wayland, no
 # extra packages): a short-lived KWin script sweeps the existing windows for
 # a caption containing "Big Picture" and watches windowAdded/captionChanged
-# for the window when it appears, moves the first match to the target output
-# (Plasma 6 API: workspace.windowList / workspace.sendClientToScreen /
-# workspace.screens[].name), then goes inert. The script is unloaded again
-# after ~120 s so re-runs never accumulate. If DBus/KWin scripting is
-# unavailable, the placement degrades to a warning and BPM still opens.
+# for the window when it appears, and moves it to the target output (Plasma 6
+# API: workspace.windowList / workspace.sendClientToScreen /
+# workspace.screens[].name). It stays live for the newest such window rather
+# than for the first one only, because Steam replaces the window it opens (see
+# track()). The script is unloaded again after ~120 s so re-runs never
+# accumulate. If DBus/KWin scripting is unavailable, the placement degrades to
+# a warning and BPM still opens.
 set -euo pipefail
 
 SCRIPT_NAME="decky-romm-sync-bpm-place"
@@ -122,8 +124,17 @@ arm_kwin_placement() {
   js_file=$(mktemp --suffix=.js) || return 1
   cat > "$js_file" <<'EOF' || { rm -f "$js_file"; return 1; }
 var TARGET_OUTPUT = "@TARGET@";
-// The Big Picture window we manage, and a bounded re-assert budget. Both are
-// set once; see track() for why the budget exists.
+// The Big Picture window we currently manage, and a bounded re-assert budget.
+// Both are per window, not per run: Steam does not always keep the BPM window
+// it maps first. Every observed run that still had a BPM window open when
+// `mise run dev` restarted plugin_loader mapped a second window carrying the
+// BPM caption 8-12 s later — a further "added win caption=[Big-Picture-Modus]"
+// line in `journalctl --user | grep decky-bpm` — and a workspace.windowList()
+// probe then found a single steam-class window alive, so it is a replacement
+// and not a second concurrent window. A cold start whose window appeared only
+// after that restart showed none, and so did a run of this script by itself.
+// The restart is the correlate, not a proven cause. See track() for what a
+// replacement costs and why the budget exists.
 var tracked = null;
 var reasserts = 0;
 var MAX_REASSERTS = 8;
@@ -200,13 +211,24 @@ function place(win) {
 }
 
 function track(win) {
-  if (tracked) {
+  if (win === tracked) {
     return;
   }
+  // The newest BPM window wins. Latching onto the first one for the whole run
+  // placed the window nobody ends up looking at: the visible symptom was BPM
+  // showing up on the target for a beat and then "jumping back" — the
+  // replacement, which the latch skipped, mapping wherever Steam put it.
   tracked = win;
-  log("BPM opened [" + win.caption + "] on " + outputName(win) +
+  reasserts = 0;
+  log("tracking BPM window [" + win.caption + "] on " + outputName(win) +
     " -> placing on " + TARGET_OUTPUT);
   place(win);
+  // A fullscreen BPM leaves place() with sendClientToScreen alone (the geometry
+  // fallback below it is skipped), so log where the window actually ended up: a
+  // move that does nothing is otherwise indistinguishable in the journal from
+  // one that worked.
+  log("after place: [" + win.caption + "] on " + outputName(win) +
+    " (fullScreen=" + win.fullScreen + ")");
   // A cold-started Steam repositions Big Picture onto its remembered monitor a
   // beat AFTER the window first appears, overriding the initial move. React to
   // the real event instead of guessing a delay: outputChanged fires whenever
@@ -216,18 +238,21 @@ function track(win) {
   // another display is left alone.
   if (win.outputChanged) {
     win.outputChanged.connect(function () {
-      if (!tracked || onTarget(tracked)) {
+      // Bound to the window this handler was connected for, not to whatever is
+      // tracked now: a replaced window keeps its connection and would otherwise
+      // spend the current window's budget on moves nobody sees.
+      if (win !== tracked || onTarget(win)) {
         return;
       }
       if (reasserts >= MAX_REASSERTS) {
         log("stopped re-asserting after " + reasserts +
-          "; window left on " + outputName(tracked));
+          "; window left on " + outputName(win));
         return;
       }
       reasserts++;
-      log("Steam moved BPM to " + outputName(tracked) +
+      log("Steam moved BPM to " + outputName(win) +
         "; re-assert #" + reasserts + " -> " + TARGET_OUTPUT);
-      place(tracked);
+      place(win);
     });
   }
 }
