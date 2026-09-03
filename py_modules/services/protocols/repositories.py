@@ -70,7 +70,10 @@ class RomRepository(Protocol):
         ...
 
     def iter_by_platform(self, platform_slug: str) -> Iterator[Rom]:
-        """Iterate ROMs on *platform_slug*. (firmware.py platform filter)"""
+        """Iterate ROMs on *platform_slug*.
+
+        (cores.py, shortcut_removal.py, library/fetcher.py, library/local_library_reader.py)
+        """
         ...
 
     def iter_by_group_key(self, group_key: str) -> Iterator[Rom]:
@@ -261,19 +264,19 @@ class BiosFileRepository(Protocol):
         ...
 
     def save(self, bios_file: BiosFile) -> None:
-        """Upsert *bios_file*. (firmware.py)"""
+        """Upsert *bios_file*. (firmware/downloads.py, the only writer of a download record)"""
         ...
 
     def delete(self, platform_slug: str, file_name: str) -> None:
-        """Remove the BIOS record for the composite key. Idempotent. (firmware.py)"""
+        """Remove the BIOS record for the composite key. Idempotent. (firmware/deletion.py prune)"""
         ...
 
     def iter_all(self) -> Iterator[BiosFile]:
-        """Iterate every downloaded BIOS record. (migration.py migration sweep)"""
+        """Iterate every downloaded BIOS record. (migration.py sweep, firmware/status.py delete count)"""
         ...
 
     def iter_by_platform(self, platform_slug: str) -> Iterator[BiosFile]:
-        """Iterate BIOS records on *platform_slug*. (firmware.py delete platform BIOS)"""
+        """Iterate BIOS records on *platform_slug*. (firmware/deletion.py delete platform BIOS)"""
         ...
 
 
@@ -289,19 +292,19 @@ class FirmwareCacheRepository(Protocol):
         ...
 
     def iter_all(self) -> Iterator[FirmwareCacheEntry]:
-        """Iterate every cached firmware entry. (firmware.py display)"""
+        """Iterate every cached firmware entry. (firmware/listing.py cache restore)"""
         ...
 
     def replace_all(self, entries: list[FirmwareCacheEntry]) -> None:
-        """Replace the entire cache with *entries*. (firmware.py wholesale TTL refresh)"""
+        """Replace the entire cache with *entries*. (firmware/listing.py wholesale TTL refresh)"""
         ...
 
     def clear(self) -> None:
-        """Drop every cached firmware entry. (firmware.py invalidate)"""
+        """Drop every cached firmware entry. (firmware/listing.py invalidate)"""
         ...
 
     def get_cache_epoch(self) -> float | None:
-        """Return the cache's last-refresh timestamp, or ``None`` when empty. (firmware.py TTL check)"""
+        """Return the cache's last-refresh timestamp, or ``None`` when empty. (firmware/listing.py TTL check)"""
         ...
 
 
