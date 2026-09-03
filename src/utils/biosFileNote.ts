@@ -49,6 +49,10 @@ const IMAGE_CONTRADICTED = "firmware-image-contradicted";
 /** The folder could not be listed in full, or a candidate's bytes would not come
  *  back — a read failure, never a finding about what is in there. */
 const READ_INCOMPLETE = ["firmware-scan-incomplete", "firmware-unreadable"];
+/** The destination could not be looked at at all — permissions, or failing
+ *  storage. Emitted for either declaration kind, and worded only for a file:
+ *  a folder's own unreadable-destination row is withheld and says so. */
+const PATH_INACCESSIBLE = "firmware-path-inaccessible";
 
 /**
  * What the reading established about *row*, or `""` where it has nothing to add.
@@ -67,14 +71,24 @@ const READ_INCOMPLETE = ["firmware-scan-incomplete", "firmware-unreadable"];
  * fallback below instead, and there are three ways to get there: the verified
  * read failed, the platform's scope never covered the core so nothing asked, or
  * the folder could not be looked at — the last arriving with
- * `firmware-path-inaccessible`, which no branch here recognises. The fallback
- * claims nothing either way, which is the honest answer to all three.
+ * `firmware-path-inaccessible`, which is worded only on the file half. The
+ * fallback claims nothing either way, which is the honest answer to all three.
+ *
+ * That asymmetry follows the verdicts rather than breaking from them. An
+ * unreadable destination leaves a folder row withheld, where "its contents
+ * could not be checked" already says the read is what failed; it leaves a file
+ * row UNMET, where the surfaces would otherwise print their own word for
+ * absence over a file nobody established the absence of. Both notes are
+ * statements about the read, and neither claims the file is or is not there —
+ * the verdict beside them says the requirement is not met, which is what
+ * follows from a destination the emulator cannot open either.
  */
 function verdictNote(row: BiosNoteRow): string {
   const caveats = row.caveats ?? [];
   const has = (code: string) => caveats.includes(code);
   if (row.declared_kind !== "directory") {
-    return has(PATH_OBSTRUCTED) ? "a folder is here, where the emulator opens a file" : "";
+    if (has(PATH_OBSTRUCTED)) return "a folder is here, where the emulator opens a file";
+    return has(PATH_INACCESSIBLE) ? "its location could not be read" : "";
   }
   if (row.satisfied === true) {
     const images = row.images ?? [];

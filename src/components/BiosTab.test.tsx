@@ -86,6 +86,45 @@ describe("BiosTab", () => {
     expect(container.textContent).not.toContain("files held");
   });
 
+  it("names an unreadable destination on a file row, which otherwise says nothing at all", () => {
+    // This pane leaves plain absence to its dot and appends no word of its own,
+    // so without the note an unreadable destination is indistinguishable from a
+    // file that is simply not there.
+    const { container } = render(
+      <BiosTab
+        biosStatus={{
+          needs_bios: true,
+          server_count: 1,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: 0,
+          required_withheld: 0,
+          files: [
+            {
+              file_name: "dc_boot.bin",
+              downloaded: false,
+              local_path: "",
+              description: "Dreamcast boot ROM",
+              wanted: "needed",
+              required_by_active: true,
+              cores: {},
+              on_server: true,
+              declared_kind: "file",
+              satisfied: false,
+              caveats: ["firmware-path-inaccessible"],
+            },
+          ],
+        }}
+        biosLevel="missing"
+        coreInfo={coreInfo}
+        isActive={true}
+      />,
+    );
+
+    expect(container.textContent).toContain("Dreamcast boot ROM — its location could not be read");
+  });
+
   it("draws a folder row whose contents could not be read amber, never green", () => {
     // The colours are the pane's own, so they are pinned here rather than
     // through the panel: `downloaded` is true for a folder — something is at the

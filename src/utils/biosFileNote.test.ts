@@ -91,6 +91,27 @@ describe("biosFileNote", () => {
     ).toBe("a folder is here, where the emulator opens a file");
   });
 
+  it("says a file's destination could not be read, rather than leaving it to read as absent", () => {
+    // The row is red and counted unmet either way — what the plugin cannot read
+    // the emulator cannot open — so the note says the READ failed and claims
+    // nothing about whether the file is there.
+    expect(
+      biosFileNote({
+        downloaded: false,
+        on_server: true,
+        declared_kind: "file",
+        satisfied: false,
+        caveats: ["firmware-path-inaccessible"],
+      }),
+    ).toBe("its location could not be read");
+  });
+
+  it("leaves an unreadable folder to the withheld wording it already has", () => {
+    // The same code on a folder row, whose verdict is withheld rather than
+    // unmet — the two halves say the read failed in their own words.
+    expect(biosFileNote(folder(null, ["firmware-path-inaccessible"]))).toBe("its contents could not be checked");
+  });
+
   it("keeps the library note for a row nothing else was established for", () => {
     expect(biosFileNote({ downloaded: true, on_server: false, satisfied: true })).toBe("not in your RomM library");
     expect(biosFileNote({ downloaded: false, on_server: false, satisfied: false })).toBe(

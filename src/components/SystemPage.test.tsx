@@ -1430,6 +1430,21 @@ describe("SystemPage", () => {
       expect(container.innerHTML).not.toContain("#5ba32b");
     });
 
+    it("says a destination could not be read instead of calling the file missing", async () => {
+      // This page prints its own "Missing" for a row with no note, which over an
+      // unreadable destination sends the user looking for a file that may be
+      // sitting right there.
+      const text = await expandedRowText({
+        downloaded: false,
+        on_server: true,
+        satisfied: false,
+        caveats: ["firmware-path-inaccessible"],
+      });
+
+      expect(text).toContain("codehandler.bin — its location could not be read");
+      expect(text).not.toContain("Missing");
+    });
+
     it("still says a library file is missing in the page's own words", async () => {
       const text = await expandedRowText({ downloaded: false, on_server: true });
 

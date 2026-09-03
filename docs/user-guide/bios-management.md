@@ -97,6 +97,11 @@ Not holding a file is a different question from not having it, and the row says 
 BIOS folder it reads _missing, not in your RomM library_; if it is already sitting there it reads only _not in your RomM
 library_, with the green dot every present file gets.
 
+A red row has a second cause worth knowing about. Where the plugin could not look at the place a file goes at all —
+broken permissions, or storage going bad — the row says _its location could not be read_ rather than calling the file
+missing, so you know to check the folder instead of hunting for a download. It still counts as not ready, because an
+emulator will not get in there either.
+
 Some rows say something better than that. Where the file sitting at the destination is byte-for-byte the copy your
 emulator distribution ships, the row names the distribution instead — _provided by RetroDECK_ — because it is the
 distribution's file, and if it ever went missing the repair is a RetroDECK component reset rather than a download.
