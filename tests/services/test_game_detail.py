@@ -690,7 +690,7 @@ class TestGetCachedGameDetailCarriesNoBiosAnswer:
         from unittest.mock import patch
 
         _seed_rom(plugin, 42, app_id=50000, name="Pokemon", platform_slug="gba")
-        plugin._firmware_service._firmware_cache = [
+        plugin._firmware_service._listing._firmware_cache = [
             {
                 "file_path": "bios/gba/gba_bios.bin",
                 "file_name": "gba_bios.bin",
@@ -699,9 +699,9 @@ class TestGetCachedGameDetailCarriesNoBiosAnswer:
                 "id": 1,
             },
         ]
-        plugin._firmware_service._firmware_cache_epoch = 99.0
+        plugin._firmware_service._listing._firmware_cache_epoch = 99.0
 
-        with patch.object(plugin._firmware_service, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path))):
+        with patch.object(plugin._firmware_service._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path))):
             result = game_detail_service.get_cached_game_detail(50000)
 
         assert result["bios_status"] is None
