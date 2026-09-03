@@ -21,11 +21,11 @@ without restating it. The width mechanism's decision record is
 | `src/index.tsx` (`QAMPanel`)                                  | The router: one `Page` value, one mounted page, a module-level `currentPage` that survives a QAM remount            |
 | `src/types/navigation.ts`                                     | The `Page` union — every page the router can land on                                                                |
 | `src/components/MainPage.tsx`                                 | Main                                                                                                                |
-| `src/components/LibraryPage.tsx`                              | Library — Platforms and Collections                                                                                 |
+| `src/components/LibraryPage.tsx`                              | Library — the frame, the two tabs and their state                                                                   |
 | `src/components/SettingsPage.tsx`, `src/components/settings/` | Settings and its sections                                                                                           |
 | `src/components/DangerZone.tsx`, `RemovedGamesCleanup.tsx`    | Data Management                                                                                                     |
 | `src/components/DownloadQueue.tsx`                            | Downloads                                                                                                           |
-| `src/components/SystemPage.tsx`                               | System — retires into Library › Platforms                                                                           |
+| `src/components/library/`                                     | The Library page's tabs: `usePlatformsPage` (its reads and actions), `PlatformsTab`, `PlatformDetail`               |
 | `src/utils/deckyUiInternals.ts`                               | Honest typing for `@decky/ui` values that come from a webpack probe: the frame's class names, `Tabs`, `ScrollPanel` |
 | `src/utils/qamExpansion.ts`                                   | The panel's width: the expand and hide messages, the injected `max-width` rule, and the four paths that clear both  |
 | `src/components/qam/`                                         | The wide-page frame: `WidePage` (Back row, title, tabs, measured height), `ListDetail` and `ScrollRegion`           |
@@ -103,17 +103,18 @@ tabbed body gets none from the frame: see "Building blocks → Tabs" for whose j
 
 ## Pages
 
-| Page            | Width | Holds                                                                                                         | Today                                                                                                                     |
-| --------------- | ----- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Main            | 348   | notices, status, the Sync button, the download summary, the menu                                              | also holds the preview card, Skip preview, Force Full Sync, the session-budget card, and a System menu entry              |
-| Sync            | 854   | preview as a table, the import choice, Skip preview, Force Full Sync, Steam memory, session budget, last runs | does not exist; its controls sit on Main, and the run list and the per-platform breakdown exist nowhere yet               |
-| Library         | 854   | Platforms as list and detail (sync, core, BIOS files, removal); Collections as filter and list                | narrow; platform rows carry only the sync toggle, core and BIOS are on System, per-platform removal is on Data Management |
-| Settings        | 854   | five sections, list and detail                                                                                | narrow; eight sections stacked                                                                                            |
-| Data Management | 854   | five library-wide operations, list and detail                                                                 | narrow; also holds per-platform actions and opens the cleanup in a modal                                                  |
-| Downloads       | 348   | the queue with its controls                                                                                   | unchanged                                                                                                                 |
-| System          | —     | retires: its core picker and BIOS files move into Library › Platforms                                         | a narrow page with one titled section per synced platform                                                                 |
+| Page            | Width | Holds                                                                                                         | Today                                                                                                       |
+| --------------- | ----- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Main            | 348   | notices, status, the Sync button, the download summary, the menu                                              | also holds the preview card, Skip preview, Force Full Sync and the session-budget card                      |
+| Sync            | 854   | preview as a table, the import choice, Skip preview, Force Full Sync, Steam memory, session budget, last runs | does not exist; its controls sit on Main, and the run list and the per-platform breakdown exist nowhere yet |
+| Library         | 854   | Platforms as list and detail (sync, core, BIOS files, removal); Collections as filter and list                | Platforms is built; Collections still carries the narrow page's controls and list                           |
+| Settings        | 854   | five sections, list and detail                                                                                | narrow; eight sections stacked                                                                              |
+| Data Management | 854   | five library-wide operations, list and detail                                                                 | narrow; opens the cleanup in a modal                                                                        |
+| Downloads       | 348   | the queue with its controls                                                                                   | unchanged                                                                                                   |
 
-`Page` becomes `"main" | "sync" | "library" | "settings" | "data" | "downloads"`.
+`Page` is `"main" | "library" | "settings" | "data" | "downloads"`, and becomes
+`"main" | "sync" | "library" | "settings" | "data" | "downloads"` once the Sync page lands. **System is gone** — its
+core picker and BIOS files are in Library › Platforms, and the value, the router branch and the menu entry left with it.
 
 Main's menu opens Library, Settings and Data Management. The Sync page opens from the Sync button and from the **Last
 sync** status row; Downloads opens from **View All** in the download summary, which is shown only while the queue is not
@@ -153,8 +154,8 @@ so toggling a row does not move it out from under the focus. The next mount show
 
 Anything with more than two facts per row is a table with a header row: BIOS files (Wanted, On disk, Contents), the
 preview (a row per platform; New, Updated, Removed), registered devices, cleanup candidates, collections. Today those
-facts are folded into a field's label and description, which is why #1803's third axis has no slot on the System page's
-rows.
+facts were folded into a field's label and description, which is why #1803's third axis had no slot on the rows the
+System page drew; the platform detail's BIOS table is where that column now sits.
 
 ### Destructive actions
 
@@ -224,32 +225,42 @@ Main shows today, moved.
 Wide, two tabs.
 
 **Platforms** is list and detail. The list holds every platform RomM reports with at least one ROM — what
-`get_platforms` returns today; a platform with nothing to sync is not listed — in two groups, **Synced** (the toggle is
-on) above **Available**, each alphabetical, with the sync toggle in the row and a dot for the BIOS state. The dot uses
-the shared mapping every platform-level BIOS dot renders through (`src/utils/biosColor.ts`: green complete, amber
-partial, red missing, grey for a missing level; the per-file rows on the System page and the game page hard-code the
-same four colours today). Showing no dot for a platform without a BIOS entry is the list's own rule on top of the
-helper, which would answer grey. Enable all and Disable all sit above the groups. The order freezes while the page is
-open. The detail shows, for the focused platform:
+`get_platforms` returns; a platform with nothing to sync is not listed — in two groups, **Synced** (the toggle is on)
+above **Available**, each alphabetical, with the sync toggle in the row, the BIOS requirement as a **number** (`3 / 5`,
+an em dash where nothing is required) and a dot beside it. The number is what the row states; the dot only reinforces
+it, through the shared mapping every platform-level BIOS dot renders through (`src/utils/biosColor.ts`: green complete,
+amber partial, red missing, grey for a missing level; the per-file rows on the platform detail and the game page
+hard-code the same four colours). Showing no dot for a platform the firmware read has nothing to say about is the list's
+own rule on top of the helper, which would answer grey. Enable all and Disable all sit above the groups, in the list
+column and outside every row, so reaching them reports no selection. The order freezes while the page is open.
 
-- **Sync** — the toggle, ROMs on RomM, shortcuts in Steam. Always.
-- **Emulator core** — the current core with the same context menu the System page opens today, and the save-
-  compatibility caveat. Only when the platform has synced games (`has_games` in the firmware status); otherwise one
-  sentence says to sync the platform first. The frontend half of #1016 lands here: today a failed switch is silent —
-  `handleSystemCoreChange` does nothing on `success: false` and the label keeps the old core — and the detail shows it
-  instead.
-- **BIOS files** — the summary (required, or files), then a table: Wanted, On disk, Contents (#1803's columns; the third
-  is the new one), and a **Download** button on every missing row (#164). Below it Download required, Download all,
-  Delete BIOS. Same condition as the core.
-- **Remove** — Remove _N_ shortcuts and Delete save files, the actions the Data Management platform modal offers today,
-  without Delete BIOS (it is one group up). Only when the platform has shortcuts or save files. Red, last, confirmed.
+The row is the page's only sync control — focus is already there and A works the toggle — so the detail opens with one
+header line instead of a Sync section: the platform's name, `N on RomM · M in Steam · <core label>`, and its BIOS number
+on the right. Under it, for the focused platform:
 
-Three list-shaped platform reads exist today: `get_platforms` (RomM's platforms with ROMs, for the toggles),
-`get_firmware_status` (core and BIOS files for the platforms that have firmware on the server, each tagged `has_games`;
-the synced filter is the System page's own) and `get_registry_platforms` (shortcut counts, for the removal actions). The
-Library page needs them joined per platform, and a platform with games but no firmware entry gets no core label from the
-firmware read, so its core needs a read of its own; whether the join is a new read or done in the frontend is the
-Library issue's call.
+- **Emulator core** — a Change core button opening the same context menu the game page uses (`buildEmulatorMenu`), with
+  the save-compatibility caveat under it. Only when the platform has games in Steam; otherwise one sentence says to sync
+  it first. Where the platform offers one emulator, or RetroDECK was not found, a sentence says that instead of a picker
+  that could not answer. The frontend half of #1016 lands here: a switch the backend refuses is reported under the
+  button, and the header keeps naming the core that is actually active.
+- **BIOS files** — the summary (required, or files, and the two unknown states), then a table: Wanted, On disk,
+  Contents, and a **Download** button on every row that is missing and in the RomM library (#164). Below it Download
+  required, Download all, Delete BIOS behind a `ConfirmModal`. Contents is #1803's column and reads an em dash on every
+  row until that issue's backend half exists. The section appears whenever the firmware read speaks for the platform,
+  synced or not — there is nothing to say about one it does not cover.
+- **Remove** — Remove _N_ shortcuts and Delete save files, the actions the Data Management platform modal used to offer,
+  without Delete BIOS (it is one group up). Only when the platform has shortcuts in Steam; that count is the only "has
+  anything" signal the panel can read, so a platform holding save files and no shortcut shows no group. Red, last, each
+  behind a confirmation.
+
+Four reads feed the tab. Three are list-shaped and run once per page mount: `get_platforms` (RomM's platforms with ROMs,
+the list itself), `get_firmware_status` (BIOS state for the platforms it can speak for) and `get_registry_platforms`
+(ROMs bound to a Steam shortcut per platform — the shortcut counts, and what "has synced games" means here). Only the
+first gates the list; the other two fill in beside it. The fourth is `get_system_core_info`, a **per-platform-slug read
+issued once per selection** and cached for the life of the page. It exists because neither of the others can answer for
+the focused platform: `get_platform_core_info` is keyed by ROM and layers that ROM's own pin on top, and the firmware
+overview carries no entry at all for a platform it has nothing to say about. It costs one ES-DE options read and a
+`settings.json` lookup, and opens no database transaction.
 
 **Collections** has no per-entry detail, so it is one wide list: the favorites toggle and the Mine / All owner scope on
 top, the kind filter (Standard, Smart, Virtual — with the Franchise / IGDB Collection split inside Virtual), the fuzzy
@@ -263,13 +274,13 @@ Wide, list and detail: the sections on the left, the focused section on the righ
 eight — the save-sort migration becomes a notice with its actions inside Save Sync, Registered Devices moves into Save
 Sync, and SteamGridDB joins the other external services under Connections.
 
-| Section       | Holds                                                                                                                                                                                                                                                                                                                             |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Connections   | the services the plugin talks to: RomM (URL, account, Sign out, Allow insecure SSL), RetroAchievements (account and sign-in state; #1627 leaves the badge's home open between the game page, the System page and global settings — it lands here, and the System page retires), SteamGridDB (the API key). Home of every sign-in. |
-| Save Sync     | the toggle, device, before-launch and after-exit, default slot, history limit, Sync all now; the registered devices as a table; home of the save-sort migration                                                                                                                                                                   |
-| Controller    | Steam Input mode, Apply to all shortcuts, the `input_driver` fix. Home of the fix.                                                                                                                                                                                                                                                |
-| Steam Library | preferred region, collection games in platform groups, collection types in Steam names — today's **Library** section, renamed because a Library page now exists: the page is the RomM side (what is synced), the section is the Steam side (which version, in which groups, under which name)                                     |
-| Advanced      | log level                                                                                                                                                                                                                                                                                                                         |
+| Section       | Holds                                                                                                                                                                                                                                                                                                      |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Connections   | the services the plugin talks to: RomM (URL, account, Sign out, Allow insecure SSL), RetroAchievements (account and sign-in state; #1627 left the badge's home open between the game page, the retired System page and global settings — it lands here), SteamGridDB (the API key). Home of every sign-in. |
+| Save Sync     | the toggle, device, before-launch and after-exit, default slot, history limit, Sync all now; the registered devices as a table; home of the save-sort migration                                                                                                                                            |
+| Controller    | Steam Input mode, Apply to all shortcuts, the `input_driver` fix. Home of the fix.                                                                                                                                                                                                                         |
+| Steam Library | preferred region, collection games in platform groups, collection types in Steam names — today's **Library** section, renamed because a Library page now exists: the page is the RomM side (what is synced), the section is the Steam side (which version, in which groups, under which name)              |
+| Advanced      | log level                                                                                                                                                                                                                                                                                                  |
 
 Text input stays in modals — RomM URL, account, API key, default slot — because the on-screen keyboard needs the room.
 The sticky pending URL and the unguarded Apply-to-all double press (#1020) are fixed in the rewrite.
@@ -279,7 +290,7 @@ The sticky pending URL and the unguarded Apply-to-all double press (#1020) are f
 Wide, list and detail: the operations on the left with a count where one waits, the focused operation on the right with
 its explanation, its confirmation, and its progress or result. Five operations, all library-wide: Removed RomM games,
 Remove all shortcuts, Uninstall all ROMs, Orphaned grid images, Non-Steam games with the whitelist. The per-platform
-actions leave for Library › Platforms, and with them the platform modal.
+actions have left for Library › Platforms, and the platform modal with them.
 
 The removed-games cleanup stops being a modal: the candidate table (game, platform, installed size, recovery-bundle
 toggle), the free-space line and Start cleanup are the operation's detail pane. Its rules do not change; they live in
@@ -293,22 +304,22 @@ menu entry.
 
 ## One home per action
 
-| Action                             | Today                          | Target                                       |
-| ---------------------------------- | ------------------------------ | -------------------------------------------- |
-| Start a sync                       | Main                           | Main; the button opens the Sync page         |
-| Review and apply a preview         | Main, one line                 | Sync, as a table                             |
-| Force Full Sync, Skip preview      | Main                           | Sync                                         |
-| Restart Steam now (session budget) | Main                           | Sync; Main shows the notice                  |
-| Sync a platform on or off          | Library                        | Library › Platforms                          |
-| Choose the emulator core           | System                         | Library › Platforms                          |
-| Download BIOS files                | System                         | Library › Platforms                          |
-| Delete BIOS files                  | System **and** Data Management | Library › Platforms                          |
-| Remove one platform's shortcuts    | Data Management, modal         | Library › Platforms                          |
-| Delete one platform's save files   | Data Management, modal         | Library › Platforms                          |
-| Fix the RetroArch `input_driver`   | Main **and** Settings          | Settings › Controller; Main shows the notice |
-| Migrate the save-file sorting      | Settings; Main links           | Settings › Save Sync; Main shows the notice  |
-| Pause or cancel a download         | Downloads                      | Downloads                                    |
-| Clean up removed RomM games        | Data Management, modal         | Data Management, as a page                   |
+| Action                             | Today                  | Target                                       |
+| ---------------------------------- | ---------------------- | -------------------------------------------- |
+| Start a sync                       | Main                   | Main; the button opens the Sync page         |
+| Review and apply a preview         | Main, one line         | Sync, as a table                             |
+| Force Full Sync, Skip preview      | Main                   | Sync                                         |
+| Restart Steam now (session budget) | Main                   | Sync; Main shows the notice                  |
+| Sync a platform on or off          | Library                | Library › Platforms                          |
+| Choose the emulator core           | Library › Platforms    | Library › Platforms                          |
+| Download BIOS files                | Library › Platforms    | Library › Platforms                          |
+| Delete BIOS files                  | Library › Platforms    | Library › Platforms                          |
+| Remove one platform's shortcuts    | Library › Platforms    | Library › Platforms                          |
+| Delete one platform's save files   | Library › Platforms    | Library › Platforms                          |
+| Fix the RetroArch `input_driver`   | Main **and** Settings  | Settings › Controller; Main shows the notice |
+| Migrate the save-file sorting      | Settings; Main links   | Settings › Save Sync; Main shows the notice  |
+| Pause or cancel a download         | Downloads              | Downloads                                    |
+| Clean up removed RomM games        | Data Management, modal | Data Management, as a page                   |
 
 ## Sequence
 
@@ -318,9 +329,10 @@ The pages land in this order under #1808, each with the open work that already s
    clearing paths, the Back row, tabs, list and detail, the measured height. No page uses it yet; it is the one piece
    that rests on Steam internals and is reviewed on its own.
 2. **Library** ([#1815](https://github.com/danielcopper/romm-tender/issues/1815)) — Platforms and Collections; System
-   and the Data Management platform modal retire. Carries #164, #1803's frontend half, #1016's frontend half, #1020's
-   collections fix. May land as two PRs, Platforms then Collections. Second on purpose: the emu-atlas work under #1735
-   renders its BIOS and core changes into the new Platforms detail instead of the retiring System page.
+   and the Data Management platform modal retire. Carries #164, #1803's column, #1016's frontend half, #1020's
+   collections fix. Lands as two PRs, Platforms then Collections. Second on purpose: the emu-atlas work under #1735
+   renders its BIOS and core changes into the new Platforms detail instead of the retiring System page. **Platforms has
+   landed**; Collections keeps the narrow page's controls and list until its own PR.
 3. **Sync** ([#1814](https://github.com/danielcopper/romm-tender/issues/1814)) — the new page, Main's four-state button
    and the Last sync row, Skip preview persisted, the run-list read, the per-platform preview breakdown. Carries #886's
    presentation half.
@@ -338,6 +350,9 @@ store screenshots (#830) are taken after.
 
 - [#1808](https://github.com/danielcopper/romm-tender/issues/1808) — the epic; its sub-issues are the sequence above.
 - [#1809](https://github.com/danielcopper/romm-tender/issues/1809) — the design issue this page answers.
+- The layout study the Platforms tab was chosen from: [library-layouts.html](../assets/library-layouts.html) — the three
+  layouts weighed for this page (list and detail, detail with a header, one wide table) at the Deck's real size, each
+  with what it costs. The second is what shipped.
 - The static prototype the decisions were made on: [qam-prototype.html](../assets/qam-prototype.html), a single
   self-contained page kept in `docs/assets/`. Every page at device size with numbered notes; its example data is
   invented, and it reflects the decisions as of this page's first version. Redrawn to the Deck's real 854 × 534 CSS px —

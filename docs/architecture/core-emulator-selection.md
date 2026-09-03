@@ -461,16 +461,20 @@ per-platform core change applies **immediately** to every installed game on the 
 `PlatformCoreReaderAdapter` holds the live settings dict, the fan-out resolves the value just written rather than a
 stale snapshot.
 
-The System page reads its per-platform data from the multi-platform `get_firmware_status` payload (not
-`get_platform_core_info`, which is the game-detail path). Each entry's **`active_core_label`** is the resolved display
-label the Emulator Core button shows: the per-platform override (`platform_cores`) when it is set and still resolves to
-a bakeable emulator, else the es_systems **default emulator** label (the first bakeable command — libretro _or_
-standalone). This is the platform-level projection of the read-path precedence (`FirmwareStatusReader`'s
-`_resolve_platform_emulator_label`, injected the same `PlatformCoreReader` the resolver uses), so after a per-platform
-pick the button reflects the applied selection on the next `refreshSystem` — the same way the game-detail menu does —
-and a standalone default reads its standalone label rather than the libretro system default. It is intentionally
-distinct from the payload's `active_core` (`core_so`), which stays the **libretro** system default the BIOS filter keys
-on (standalone-default BIOS accuracy is deferred by ADR-0020).
+The Library page's platform detail reads its core through **`get_system_core_info(platform_slug)`**, a read of its own
+rather than a slice of another payload: `get_platform_core_info` is keyed by ROM and layers that ROM's own pin on top,
+and the `get_firmware_status` overview carries no entry for a platform it has nothing to say about, so neither can
+answer for a platform the user has merely focused. It costs one ES-DE options read and a `settings.json` lookup, opens
+no Unit of Work, and is issued once per selection.
+
+Its **`active_core_label`**, and the identically-named field `get_firmware_status` still carries per platform, are both
+`domain.emulator_commands.resolve_platform_label` — the platform-level projection of the read-path precedence: the
+per-platform override (`platform_cores`) when it is set and still resolves to a bakeable emulator, else the es_systems
+**default emulator** label (the first bakeable command — libretro _or_ standalone). One function, so the two readers
+cannot drift; a stale override degrades to the default rather than naming an emulator that would not launch, and a
+standalone default reads its standalone label rather than the libretro system default. It is intentionally distinct from
+the firmware payload's `active_core` (`core_so`), which stays the **libretro** system default the BIOS filter keys on
+(standalone-default BIOS accuracy is deferred by ADR-0020).
 
 ## Why the plugin always bakes the core, never the gamelist
 

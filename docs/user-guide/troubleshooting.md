@@ -40,9 +40,9 @@ answers with its own message instead — "Server unreachable", "Sign-in rejected
 **Symptom**: A game for a system that requires BIOS files (PlayStation, Saturn, Dreamcast, etc.) fails to launch or
 shows a black screen.
 
-**Fix**: Check the game's detail page — if the BIOS indicator is orange, you're missing required BIOS files. Go to the
-**System** page in the QAM and tap **Download All** for the relevant platform. See [BIOS Management](bios-management.md)
-for details.
+**Fix**: Check the game's detail page — if the BIOS indicator is orange, you're missing required BIOS files. Open
+**Library › Platforms** in the QAM, pick the platform, and tap **Download all**. See
+[BIOS Management](bios-management.md) for details.
 
 ### ROM not downloaded
 
@@ -254,8 +254,10 @@ page.
 
 ## Danger Zone
 
-The **Danger Zone** page provides options for removing shortcuts, ROM files, save files, and BIOS files. All destructive
-actions require confirmation (tap once to see the prompt, tap again to confirm).
+The **Danger Zone** page provides the library-wide removals: shortcuts, ROM files, grid images and non-Steam games. All
+destructive actions require confirmation (tap once to see the prompt, tap again to confirm). The per-platform actions —
+removing one platform's shortcuts, deleting its save files, deleting its BIOS files — live in
+**[Library › Platforms](bios-management.md#library-platforms)**, on the platform's own pane.
 
 While a library sync is running (or cancelling), the shortcut and ROM removal actions and the grid-image cleanup are
 unavailable — the buttons are disabled with a short hint, and the backend refuses the request too. Wait for the sync to
@@ -309,11 +311,6 @@ While one is running, all the removal buttons are disabled and a spinner with a 
 the progress; the buttons re-enable and the final count appears once it finishes. You can't start a second removal (or a
 new one from another button) until the current one completes.
 
-### Remove by Platform
-
-Removes all shortcuts for a specific platform (e.g. all Game Boy Advance games). The associated Steam collection is also
-cleaned up.
-
 ### Remove All RomM Shortcuts
 
 Removes every shortcut that was created by the plugin, across all platforms. Collections are cleaned up. Does not delete
@@ -353,17 +350,12 @@ A **whitelist** system lets you protect specific shortcuts from removal:
 
 The plugin shows extra warnings if RetroDECK is not whitelisted, since removing it would break all emulation.
 
-### Delete Save Files
+### Per-platform removals moved
 
-Deletes local `.srm` save files for a specific platform. Shows each platform that has synced games, with the number of
-games affected. This only removes local save files — saves already uploaded to your RomM server are not affected.
-
-### Delete BIOS Files
-
-Deletes the BIOS files **the plugin downloaded** for a specific platform — files your emulator came with, or that you
-put in the BIOS folder yourself, are left alone even when they share a name with a file on your server. Same rule and
-same wording as [Deleting BIOS files](bios-management.md#deleting-bios-files) on the System page, where the count of
-what would be removed is also shown. You can re-download them later from the **System** page.
+Removing one platform's shortcuts, deleting its save files and deleting its BIOS files are on that platform's pane in
+**Library › Platforms**, each behind its own confirmation. See
+[Removing a platform from Steam](managing-games.md#removing-a-platform-from-steam) and
+[Deleting BIOS files](bios-management.md#deleting-bios-files).
 
 <!-- Screenshot: Danger Zone page showing removal options and whitelist -->
 

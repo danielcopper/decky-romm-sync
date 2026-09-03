@@ -493,6 +493,20 @@ while a single uninstall is running, and a single uninstall is refused while the
 is reloaded or the Deck shuts down mid-removal, the next uninstall of that game picks up where the interrupted one
 stopped.
 
+## Removing a Platform from Steam
+
+A whole platform's shortcuts and save files are removed from its own pane in **Library › Platforms** — pick the platform
+on the left, and the two actions sit last in the pane, in red.
+
+- **Remove _N_ shortcuts** takes that platform's games out of your Steam library and cleans up the Steam collection that
+  held them. Downloaded ROM files and save files are left where they are, and the games come back on the next sync while
+  the platform's toggle stays on. It is unavailable while a library sync is running.
+- **Delete save files** deletes every local save file for that platform's ROMs. Saves already uploaded to your RomM
+  server are not affected; local changes that have not been uploaded are lost. Sync your saves first.
+
+Each asks you to confirm before anything happens. Deleting that platform's BIOS files is one group up in the same pane —
+see [Deleting BIOS files](bios-management.md#deleting-bios-files).
+
 ## Refreshing Artwork and Metadata
 
 Tap **Refresh Metadata** in the game detail panel to:
