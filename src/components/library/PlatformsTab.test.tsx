@@ -353,6 +353,36 @@ describe("Library › Platforms", () => {
       expect(vi.mocked(backend.getSystemCoreInfo).mock.calls.map((c) => c[0])).toEqual(["gba", "n64"]);
     });
 
+    it("leaves an action's result on the platform it was about", async () => {
+      // Walking the list while a download's line is up must not carry that line
+      // onto another platform's pane, nor lose it on the way back.
+      vi.mocked(backend.getPlatforms).mockResolvedValue({
+        success: true,
+        platforms: [
+          platform({ id: 1, slug: "gba", name: "Game Boy Advance" }),
+          platform({ id: 2, slug: "n64", name: "Nintendo 64" }),
+        ],
+      });
+      vi.mocked(backend.downloadRequiredFirmware).mockResolvedValue({
+        success: true,
+        message: "Downloaded 1 required firmware files",
+        downloaded: 1,
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Download required")!);
+        for (let i = 0; i < 8; i++) await Promise.resolve();
+      });
+      expect(within(container).getByTestId("status-bios").textContent).toBe("Downloaded 1 required firmware files");
+
+      await focusRow(container, "Nintendo 64");
+      expect(within(container).queryByTestId("status-bios")).toBeNull();
+
+      await focusRow(container, "Game Boy Advance");
+      expect(within(container).getByTestId("status-bios").textContent).toBe("Downloaded 1 required firmware files");
+    });
+
     it("says the read failed rather than reading forever", async () => {
       vi.mocked(backend.getSystemCoreInfo).mockRejectedValue(new Error("net"));
       const { container } = render(<LibraryPage onBack={vi.fn()} />);

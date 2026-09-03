@@ -145,10 +145,11 @@ const Muted: FC<{ children: ReactNode }> = ({ children }) => (
   <div style={{ fontSize: "11px", color: MUTED, padding: "0 16px 6px" }}>{children}</div>
 );
 
-/** The status line for one group, or nothing when the last action belonged to
- *  another group — a failed core switch must not be reported under Remove. */
-const GroupStatus: FC<{ state: PlatformsPageState; scope: StatusScope }> = ({ state, scope }) =>
-  state.status && state.status.scope === scope ? (
+/** The status line for one group of one platform, or nothing. Both halves
+ *  matter: a failed core switch must not be reported under Remove, and an
+ *  action's result must not follow the reader onto the next platform's pane. */
+const GroupStatus: FC<{ state: PlatformsPageState; slug: string; scope: StatusScope }> = ({ state, slug, scope }) =>
+  state.status && state.status.slug === slug && state.status.scope === scope ? (
     <div data-testid={`status-${scope}`} style={{ fontSize: "12px", color: "#dcdedf", padding: "0 16px 8px" }}>
       {state.status.text}
     </div>
@@ -233,7 +234,7 @@ const CoreSection: FC<{ row: PlatformRow; state: PlatformsPageState; core: CoreA
       <>
         <SectionTitle title="Emulator core" />
         <Muted>Could not read the emulators for this platform. Reopen the page to try again.</Muted>
-        <GroupStatus state={state} scope="core" />
+        <GroupStatus state={state} slug={row.slug} scope="core" />
       </>
     );
   }
@@ -278,7 +279,7 @@ const CoreSection: FC<{ row: PlatformRow; state: PlatformsPageState; core: CoreA
         Change core
       </ButtonItem>
       <Muted>Switching cores may affect save compatibility.</Muted>
-      <GroupStatus state={state} scope="core" />
+      <GroupStatus state={state} slug={row.slug} scope="core" />
     </>
   );
 };
@@ -414,7 +415,7 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
           <span style={{ color: "#d94126" }}>{`Delete BIOS (${deletable})`}</span>
         </ButtonItem>
       )}
-      <GroupStatus state={state} scope="bios" />
+      <GroupStatus state={state} slug={row.slug} scope="bios" />
     </>
   );
 };
@@ -458,7 +459,7 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
       <ButtonItem layout="below" bottomSeparator="none" disabled={state.busy} onClick={confirmDeleteSaves}>
         <span style={{ color: "#d94126" }}>Delete save files</span>
       </ButtonItem>
-      <GroupStatus state={state} scope="remove" />
+      <GroupStatus state={state} slug={row.slug} scope="remove" />
     </>
   );
 };

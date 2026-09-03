@@ -60,6 +60,10 @@ const REMOVAL_REPORT_TIMEOUT_MS = 15000;
 export type StatusScope = "core" | "bios" | "remove";
 
 export interface DetailStatus {
+  /** The platform the line is about. Moving through the list changes the
+   *  detail under an action that is still running, so the line is bound to the
+   *  platform it was produced for rather than cleared on every selection. */
+  slug: string;
   scope: StatusScope;
   text: string;
 }
@@ -255,7 +259,6 @@ export function usePlatformsPage(): PlatformsPageState {
   const select = useCallback(
     (slug: string) => {
       setSelectedSlug(slug);
-      setStatus(null);
       loadCore(slug);
     },
     [loadCore],
@@ -311,7 +314,7 @@ export function usePlatformsPage(): PlatformsPageState {
               // #1016's frontend half: the switch did not happen and the label
               // still names the old core, so say so rather than leaving the
               // detail looking as though the pick landed.
-              setStatus({ scope: "core", text: result.message ?? "Could not change the core" });
+              setStatus({ slug, scope: "core", text: result.message ?? "Could not change the core" });
               return;
             }
             // Re-bake launch_options for every affected installed ROM on this
@@ -337,7 +340,7 @@ export function usePlatformsPage(): PlatformsPageState {
             );
           } catch (e) {
             detach(debugLog(`setSystemCore: error: ${e}`));
-            setStatus({ scope: "core", text: "Could not change the core" });
+            setStatus({ slug, scope: "core", text: "Could not change the core" });
           }
         })(),
       );
@@ -348,18 +351,18 @@ export function usePlatformsPage(): PlatformsPageState {
   const runDownload = useCallback(
     (slug: string, work: () => Promise<{ success: boolean; message?: string; downloaded?: number }>) => {
       setBusy(true);
-      setStatus({ scope: "bios", text: "Downloading…" });
+      setStatus({ slug, scope: "bios", text: "Downloading…" });
       detach(
         (async () => {
           try {
             const result = await work();
-            setStatus({ scope: "bios", text: result.message ?? (result.success ? "Done" : "Download failed") });
+            setStatus({ slug, scope: "bios", text: result.message ?? (result.success ? "Done" : "Download failed") });
             if (result.success) {
               await refreshFirmware();
               if ((result.downloaded ?? 0) > 0) announceBiosChange(slug);
             }
           } catch (e) {
-            setStatus({ scope: "bios", text: `Download failed: ${e}` });
+            setStatus({ slug, scope: "bios", text: `Download failed: ${e}` });
           } finally {
             setBusy(false);
           }
@@ -386,13 +389,13 @@ export function usePlatformsPage(): PlatformsPageState {
         (async () => {
           try {
             const result = await deletePlatformBios(slug);
-            setStatus({ scope: "bios", text: result.message });
+            setStatus({ slug, scope: "bios", text: result.message });
             if (result.success) {
               await refreshFirmware();
               announceBiosChange(slug);
             }
           } catch (e) {
-            setStatus({ scope: "bios", text: `Failed to delete BIOS files: ${e}` });
+            setStatus({ slug, scope: "bios", text: `Failed to delete BIOS files: ${e}` });
           } finally {
             setBusy(false);
           }
@@ -405,7 +408,7 @@ export function usePlatformsPage(): PlatformsPageState {
   const removeShortcuts = useCallback(
     (row: PlatformRow) => {
       setBusy(true);
-      setStatus({ scope: "remove", text: `Removing ${row.name} shortcuts…` });
+      setStatus({ slug: row.slug, scope: "remove", text: `Removing ${row.name} shortcuts…` });
       const admission = capturePruneLeaseAdmission(LEASE_OWNER);
       detach(
         (async () => {
@@ -415,7 +418,7 @@ export function usePlatformsPage(): PlatformsPageState {
             // to { success: false, message, ... } with no app_ids/rom_ids —
             // surface that message instead of cosmetically reporting a removal.
             if (!result.success) {
-              setStatus({ scope: "remove", text: result.message ?? "Failed to remove shortcuts" });
+              setStatus({ slug: row.slug, scope: "remove", text: result.message ?? "Failed to remove shortcuts" });
               return;
             }
             await withPruneLease(
@@ -441,6 +444,7 @@ export function usePlatformsPage(): PlatformsPageState {
               admission,
             );
             setStatus({
+              slug: row.slug,
               scope: "remove",
               text: `Removed ${row.shortcutCount} ${row.name} game${row.shortcutCount === 1 ? "" : "s"}`,
             });
@@ -452,7 +456,7 @@ export function usePlatformsPage(): PlatformsPageState {
               logWarn(`Platform shortcut removal continuation was cancelled: ${e}`);
               return;
             }
-            setStatus({ scope: "remove", text: "Failed to remove shortcuts" });
+            setStatus({ slug: row.slug, scope: "remove", text: "Failed to remove shortcuts" });
           } finally {
             setBusy(false);
             setRemovalProgress(null);
@@ -465,15 +469,15 @@ export function usePlatformsPage(): PlatformsPageState {
 
   const deleteSaves = useCallback((row: PlatformRow) => {
     setBusy(true);
-    setStatus({ scope: "remove", text: `Deleting ${row.name} saves…` });
+    setStatus({ slug: row.slug, scope: "remove", text: `Deleting ${row.name} saves…` });
     detach(
       (async () => {
         try {
           const result = await deletePlatformSaves(row.slug);
-          setStatus({ scope: "remove", text: result.message });
+          setStatus({ slug: row.slug, scope: "remove", text: result.message });
           globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync" } }));
         } catch {
-          setStatus({ scope: "remove", text: "Failed to delete saves" });
+          setStatus({ slug: row.slug, scope: "remove", text: "Failed to delete saves" });
         } finally {
           setBusy(false);
         }

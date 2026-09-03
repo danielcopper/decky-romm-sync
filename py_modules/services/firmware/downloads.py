@@ -248,7 +248,9 @@ class FirmwareDownloader:
         for a while — resolving the name against the current listing here keeps
         the platform scoping identical to :meth:`download_all_firmware` and the
         two buttons beside it. A name the platform's listing does not hold is a
-        ``not_found`` refusal, never a silent no-op.
+        ``not_in_library`` refusal, never a silent no-op — and a plain reason
+        rather than ``NOT_FOUND``, which is RomM's entity layer answering and
+        carries deletion authority downstream.
 
         Answers in the batch shape (``downloaded`` 0 or 1) because the file may
         already be at its destination, which the batch skips — the same outcome
