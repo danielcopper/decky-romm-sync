@@ -22,7 +22,6 @@ import {
   appDetailsClasses as _appDetailsClasses,
   playSectionClasses as _playSectionClasses,
   quickAccessMenuClasses as _quickAccessMenuClasses,
-  ScrollPanel as _ScrollPanel,
   ScrollPanelGroup as _ScrollPanelGroup,
   Tabs as _Tabs,
   findSP as _findSP,
@@ -45,11 +44,10 @@ export const quickAccessMenuClasses: typeof _quickAccessMenuClasses | undefined 
 export const Tabs: FC<TabsProps> | undefined = _Tabs;
 
 /**
- * What a scroll panel accepts beyond its children. Upstream types both panels
- * as `FC<{ children?: ReactNode }>`, which is narrower than they are: Steam's
- * `ScrollPanel` destructures `className` and `style` and merges the style with
- * its own scroll padding, and `ScrollPanelGroup` spreads everything it does not
- * consume down into it.
+ * What the scroll panel accepts beyond its children. Upstream types it
+ * `FC<{ children?: ReactNode }>`, which is narrower than it is: it spreads
+ * everything it does not consume into Steam's `ScrollPanel`, which destructures
+ * `className` and `style` and merges the style with its own scroll padding.
  */
 export interface ScrollPanelProps {
   children?: ReactNode;
@@ -58,24 +56,17 @@ export interface ScrollPanelProps {
 }
 
 /**
- * Steam's plain scroll container: it carries the overflow and the scrollbar, and
- * it is the element the QAM's own tab panel is built from — the panel that holds
- * `#quickaccess_content_999` IS one of these.
- *
- * Reached through a `findModuleByExport` probe on its render function, so it is
- * `undefined` whenever that probe misses.
- */
-export const ScrollPanel: FC<ScrollPanelProps> | undefined = _ScrollPanel;
-
-/**
  * The scroll container that also scrolls on gamepad direction, which is the one
  * a region of unfocusable content needs: Steam's gamepad navigation scrolls by
  * moving focus, so a plain overflow box holding text nobody can focus never
  * scrolls at all.
  *
- * Despite the name it is not a wrapper around several `ScrollPanel`s — it
- * renders one itself, with `onGamepadDirection` bound and its OK button focusing
- * its first visible child. Also a probe, so also possibly `undefined`.
+ * Despite the name it is not a wrapper around several scroll panels — it renders
+ * one itself, with `onGamepadDirection` bound and its OK button focusing its
+ * first visible child. Steam's plain `ScrollPanel` binds no direction and is not
+ * re-exported here, because a region built on it would not scroll; it is what
+ * the QAM's own tab panel and each tab's content are built from. Also a probe,
+ * so also possibly `undefined`.
  */
 export const ScrollPanelGroup: FC<ScrollPanelProps> | undefined = _ScrollPanelGroup;
 
