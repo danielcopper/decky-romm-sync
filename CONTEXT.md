@@ -277,21 +277,38 @@ platform's list is their **union**. A row the library does not hold is marked **
 readiness, because it is a real prerequisite that is really absent, and never towards a download or a progress ratio,
 because nothing in the plugin can fetch it.
 
-### Withheld verdict (firmware)
+### Row verdict (firmware): met / unmet / withheld
 
-A row the reading found something at and established nothing about — today, exactly a **directory**, since the resolver
-states that one is there and does not look inside it. It is neither present nor absent: it does not raise
-`required_downloaded`, it is not counted as a file shown to be missing, and while a **required by active core** row
-carries one the **BIOS level** declines to `unknown` rather than claiming either. The file rows below keep their own
-answers — only the one-line verdict declines. The foil to **not on server**, which is a settled absence and does count
-towards readiness.
+Whether one row's requirement is met, and the axis the **readiness** counts key off. It is **not** whether something is
+at the destination: for a **folder declaration** the two come apart completely, since what satisfies the core is a file
+_inside_ the folder and RetroDECK links LRPS2's `pcsx2/bios` onto the BIOS root, so the folder is there on every
+install. Every statement below is scoped to a **required by active core** row first — a row the launching core does not
+require moves no count whatever its verdict — and the library's own held/offered ratio is a third axis again, counting
+what the RomM library holds rather than what is met.
 
-`satisfied` is the resolver's verdict alone, and it is withheld for several unrelated causes — the cause is read off the
-fields beside it, never off `satisfied` itself. Only some of them are inherent. A file whose content was simply not
-asked about is withheld too, and that is a question declined rather than one nobody can answer: five required files the
-user holds are in that state, and counting them against readiness would report a platform unready over files that are
-there. So the directory is the only cause that travels here today — and it stops being inherent once the resolver can
-answer what is inside a folder, at which point an unverified folder joins the merely-unasked.
+- **met** — raises `required_downloaded`. For a declared folder, the resolver listed it and an image inside passes the
+  core's own content check. For a declared file it is presence at the destination, answered by the resolver wherever it
+  placed the file under the BIOS root and by the plugin's own probe for the rest — a library file no core declares, and
+  a file an emulator keeps in its own tree.
+- **unmet** — counted as a file shown to be absent, so it reads red and raises the play row's **BIOS badge**. A folder
+  the resolver listed and found no image in is exactly this, and so is one that is not there at all.
+- **withheld** — the reading established neither. It raises neither count, and while a required row carries one the
+  **BIOS level** declines to `unknown` rather than claiming either. The rows below keep their own answers; only the
+  one-line verdict declines.
+
+The CAUSE of a withheld verdict is read off the resolver's **caveat codes** carried on the row — a folder read that
+could not finish, a candidate the identity table and the core's own header check disagree about, a directory obstructing
+a destination the emulator opens as a file — because the verdict is deliberately the answer alone and carries none of
+it. What the verdict does decide is which family of codes can apply, and what a surface says when none of them is
+recognised.
+
+Not every unestablished thing is withheld here. A declared file whose _bytes_ were never verified is not — and for
+almost every such file the reason is simply that nobody asked: the verified question is put to one core at a time and
+only where a folder row is open, so on a platform whose cores declare no folder nothing is verified at all. Where it
+_is_ asked, it verifies that core's declared files too — each one the packaged identity table covers at a matching size,
+and no others — and their **verdicts** are dropped unread. Either way, reading an unasked content question as a withheld
+verdict would decline readiness for every row on every platform. The foil to **not on server**, which is a settled
+absence and does count towards readiness.
 
 ### Safely-bakeable
 

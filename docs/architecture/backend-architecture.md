@@ -1660,9 +1660,10 @@ backstop in `_handle_upload_409` (`services/saves/sync_engine/matrix.py`).
 
 #### FirmwareService notes — the live firmware resolver
 
-Which firmware files an emulator wants is read **live off the installed cores** through the `FirmwareResolver` seam,
-implemented by `adapters/atlas_firmware.py` over the vendored [emu-atlas](https://github.com/danielcopper/emu-atlas)
-copy in `py_modules/_vendor/atlas/` (provenance in
+Which firmware files an emulator wants is read **live off the installed cores** through the `FirmwareResolver` seam —
+and what a declared FOLDER holds through its narrower sibling `FirmwareFolderVerdictFn` — both implemented by
+`adapters/atlas_firmware.py` over the vendored [emu-atlas](https://github.com/danielcopper/emu-atlas) copy in
+`py_modules/_vendor/atlas/` (provenance in
 [`_vendor/README.md`](https://github.com/danielcopper/decky-romm-sync/blob/main/py_modules/_vendor/README.md)). It
 replaced `defaults/bios_registry.json`, a frozen snapshot that no longer exists upstream and could never be refreshed
 again.
@@ -1671,8 +1672,12 @@ again.
   `domain-stdlib-only` import-linter contract), so the answer has to arrive through an adapter and `domain/` keeps only
   the vocabulary — `domain/firmware_wants.py`, the same split `domain/sync_action.py` makes for the gavel core.
 - **Never cached.** A firmware answer is about files the user is actively downloading and deleting, so it is read per
-  query. The one whole-machine question (`firmware_inventory()`) costs 115–325 ms and memoises nothing, which is why the
+  query. The whole-machine question (`firmware_inventory()`) costs 115–325 ms and memoises nothing, which is why the
   System page reads it **once** and shares it across every platform rather than asking per platform.
+- **Two questions, and their scopes are the cost model.** The whole-machine inventory is asked **unverified**:
+  verification there hashes every unclaimed file under the BIOS root, plus each declared file the packaged identity
+  table covers at a matching size. The verified question — what a declared folder holds, read the way the core reads it
+  — is asked one core at a time through `FirmwareFolderVerdictFn`, and only where a folder row is still open.
 - **Failure is "unknown", never "nothing needed".** The resolver raises on its own invariant violations and promises
   nothing about not raising, so the adapter wraps every call and answers an unresolved catalogue. Downstream that
   classifies every file `unknown` — a BIOS warning is never cleared on ignorance (#1693).
@@ -1742,23 +1747,65 @@ is this service's own `exists` probe: a library file nothing declares, a placeme
 file. Two derivations of one fact is what the LRPS2 row cost — with the destination wrong, the resolver had the file and
 the service did not. `present` is three-valued and a `None` reads as absent: not a claim that anything is there, and the
 safe direction, since the row then shows work outstanding rather than a readiness nobody established. What the reading
-found travels per row beside it — `supplied_by` (the distribution whose own copy sits at the destination, in the
-resolver's identifier space, never a display form of ours) and `is_directory` (a directory was FOUND there, which the
-reading cannot tell apart from one having been declared) — so both surfaces can say what a row IS instead of describing
-every one of them as a gap in the library. All of it goes silent with the location, for the same reason.
+found travels per row beside it — `supplied_by` (the distribution whose own copy sits at the destination, named as the
+resolver's own display form for that distribution, never one mapped here) and `caveats` (the resolver's stable codes for
+whatever else it found at or in that destination, attributed as the paragraph on folder words below sets out, and
+deduplicated on the code within one destination because RetroDECK's catalogue lists one core under two system entries
+and states each of its caveats twice) — so both surfaces can say what a row IS instead of describing every one of them
+as a gap in the library. All of it goes silent with the location, for the same reason. `declared_kind` does not: it is
+what the emulator OPENS the destination at, a property of the declaration rather than of the destination, so it survives
+an empty one — a folder that is not there is still a folder to create, and both the System page's download filter and
+`_download_firmware_batch` key off it so such a row is never offered as a fetch.
 
-**A required row nothing could judge declines the verdict instead of guessing it.** A directory is that row: the
-resolver states one is there and establishes nothing about its contents, and LRPS2 declares `pcsx2/bios` — a folder,
-required, and always present because RetroDECK links it onto the root. Counted as satisfied it read "All required ready
-(2/2)" over a PS2 install with no BIOS file at all; counted as missing it read red over a folder that is plainly there.
-`BiosFileEntry.verdict_withheld` keeps it out of `required_downloaded`, and `_requirement_verdict_withheld` takes both
-`compute_bios_level` and `compute_bios_label` to `unknown` while every file row keeps its own answer. The count travels
-as `required_withheld` because three surfaces need it: the System page tells its two unknowns apart with it, the BIOS
-tab picks between "BIOS requirement unknown" and "BIOS readiness unknown", and the play-row badge subtracts it so a
-required file whose absence _was_ established still warns. The resolver's own `satisfied` is deliberately not read — it
-is withheld for every file whose bytes were not verified, which is every file here, so reading it would withhold a whole
-platform's verdicts rather than the one row nothing can be said about. Checking contents is separate work (#1803, and
-upstream is adding a real verdict); #1820 tracks the interim.
+**A folder requirement is answered by what is inside it.** LRPS2 declares `pcsx2/bios` — a folder, required, and always
+present because RetroDECK links it onto the BIOS root. Reading presence as the verdict said "All required ready (2/2)"
+over a PS2 install with no BIOS file at all; reading absence said red over a folder that is plainly there. So
+`BiosFileEntry.satisfied` is the row's verdict, and the **required** counts key off it and nothing else:
+`count_required` counts rows answered `True`, `count_required_withheld` counts rows answered `None`, and a row answered
+`False` is a requirement shown to be unmet — it reads red, and the play-row badge rises for it, because the game will
+not launch. All three are scoped to `required_by_active` first, so an unmet row the launching core does not require
+moves none of them; the library's own `server_count` / `local_count` ratio is a different axis again and keys off
+`on_server` / `downloaded`. Whose answer the verdict is depends on the declaration: a declared file is `_is_downloaded`,
+a declared folder is the resolver's own listing of that folder, and a declared file with a directory obstructing its
+destination is withheld (the resolver's `firmware-path-obstructed`, carried on the row).
+
+**The folder listing is a second, narrower question, because it costs a content read.** `firmware_inventory()` stays
+unverified: verification there hashes every declared file the packaged identity table covers at a matching size _and_
+every unclaimed file under the BIOS root, and the plugin resolves the whole machine on every game-page open. Upstream
+measures that verified whole tree at 0.8 s against 0.03 s for a single core on _its_ reference machine; nothing here has
+measured it at all, or which half of the sweep the difference sits in. The verified answer comes from
+`FirmwareFolderVerdictFn` — `installation.firmware_for_core(core_so, verify=True)`, one core per call, measured here at
+0.26 s against the inventory's 0.24 s — and it is asked only for the cores in the platform's scope whose folder row the
+inventory left open (`unanswered_folder_cores`). Which rows those are is the resolver's own three-valued answer and not
+a list of shapes held here: today an absent folder, a plain file sitting where the folder belongs, and a folder holding
+no file of a size the core would open are all settled by a stat, and only a folder with candidates in it is a question
+about bytes. `_folder_answers` memoises per query, so a System page rendering ten platforms asks each core once. The
+seam itself reads the disk, so `_firmware_folder_verdicts` — the attribute every consumer binds it to — is registered in
+`scripts/check_uow_seam_nesting.py`'s `IO_SEAM_METHODS` and must never be called with a Unit of Work open.
+
+**A settled folder's words come from the inventory's listing of it; an open one's come from the verified read.** The two
+INDEXES are exclusive, not the two sources. `_caveats_by_destination` builds one keyed by the `path` a caveat is about
+and one by the `dir` a listing was made in, and `_row_caveats` gives a row the second only when the inventory settled
+its folder — an unsettled one is what the verified read is there to answer, its caveats folded in by
+`merge_folder_verdicts`, and carrying the unverified listing on as well would leave the row saying its contents were not
+checked beside the verdict of the check. A file declaration never draws on the `dir` index at all, which matters because
+on a linked root the listed folder _is_ the firmware root and so is the resolved destination of anything that collapses
+onto it.
+
+The `path` index is carried either way, and that is the third way into an unsettled folder's words: the inventory's
+unclaimed sweep globs the firmware root and every directory a declared file sits in, and states one it could not list
+under `path` — which on a linked root is the folder declaration's own destination. Such a row reads "its contents could
+not be read in full" even where the verified read never ran — true, and more than the generic fallback says.
+
+**A required row nothing could judge declines the verdict instead of guessing it.** `_requirement_verdict_withheld`
+takes both `compute_bios_level` and `compute_bios_label` to `unknown` while every file row keeps its own answer. The
+count travels as `required_withheld` because three surfaces need it: the System page tells its two unknowns apart with
+it, the BIOS tab picks between "BIOS requirement unknown" and "BIOS readiness unknown", and the play-row badge subtracts
+it so a required file whose absence _was_ established still warns. What a withheld row SAYS comes from its caveat codes,
+because the verdict is the answer alone and carries none of its causes; the verdict decides only which family of codes
+can apply and what to say when none of them is recognised, which is the one sentence written off it —
+`src/utils/biosFileNote.ts` is the one place both surfaces derive what a row says from — a sentence, and the lines under
+it, which is how a satisfied folder's images arrive as a list rather than folded into the row's own name.
 
 **A withdrawn download is a platform condition, and only one of the unknowns earns it.** Where _nothing_ could be
 established there is no answer to download against, so `SystemPage` withdraws both buttons and says so in words rather
@@ -1998,7 +2045,7 @@ Protocol-typed (services never import each other's concrete classes). Selected w
 | **MetadataService**         | `UnitOfWorkFactory` (reads `rom_metadata` / `roms`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **SaveService**             | `RommApi`, `RetryStrategy`, `SaveFileStore`, `UnitOfWorkFactory` (`rom_save_sync_states` / `rom_save_files`), `Clock`, `RetroDeckPaths`, core-name/active-core providers, migration-detect callbacks                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | **DownloadService**         | `RommApi`, `DownloadFileStore`, `RetroDeckPaths`, `Clock`/`Sleeper`, `RomInstallRecorder` + `DownloadTargetGateFn` cross-service seams                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| **FirmwareService**         | `RommApi`, `FirmwareFileStore`, `FirmwareResolver`, `CoreInfoProvider`, `RetroDeckPaths`, `UnitOfWorkFactory` (`firmware_cache`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **FirmwareService**         | `RommApi`, `FirmwareFileStore`, `FirmwareResolver`, `FirmwareFolderVerdictFn`, `CoreInfoProvider`, `RetroDeckPaths`, `UnitOfWorkFactory` (`firmware_cache`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | **SteamGridService**        | `SteamGridDbApi`, `RommApi`, `SteamConfigStore`, `SgdbArtworkCache`, `UnitOfWorkFactory` (sgdb_id on `roms`), `PendingSyncReader`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | **MigrationService**        | `MigrationFileStore`, `RetroDeckPaths`, save-sort/active-core/core-name providers, BIOS-index callback                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | **GameDetailService**       | `BiosChecker`, `AchievementsReader` (cross-service), `Clock`, `UnitOfWorkFactory` (one read UoW over `roms` / `rom_installs` / `rom_save_sync_states` / `rom_metadata` / `kv_config`), plus `PathExistsReader` + `RetroDeckPaths` + `SystemResolver` for the single target-path `stat`                                                                                                                                                                                                                                                                                                                                                                                                                                                           |

@@ -90,6 +90,7 @@ from .core_info import (
     parse_core_info,
     unread_reason,
 )
+from .distribution_labels import distribution_label
 from .distribution_supplied import lookup_distribution_supplied
 from .esde import KIND_LIBRETRO
 from .machine import (
@@ -99,14 +100,18 @@ from .machine import (
     KIND_FILE,
     KIND_INACCESSIBLE,
     KIND_MISSING,
+    PS2_BIOS_NOT_A_BIOS,
+    PS2_BIOS_OK,
     READ_MISSING,
     READ_OK,
     SYMLINK_HOPS,
     Machine,
     PathKind,
+    Ps2BiosHeaderResult,
     ReadStatus,
 )
 from . import duckstation, emulator_settings, melonds, qt_ini
+from .ps2_bios import Ps2BiosHeader
 from .oddities import SaveMode, load_oddities
 from .standalone_firmware import (
     StandaloneFirmwareCard,
@@ -154,6 +159,27 @@ NEED_REQUIRED: FirmwareNeed = "required"
 NEED_OPTIONAL: FirmwareNeed = "optional"
 
 FIRMWARE_NEEDS = ("required", "optional")
+
+# What shape the core opens a declaration at — a property of the DECLARATION,
+# not of what happens to be at the destination. ``firmwareN_path`` is a bare
+# relative string with no type, and RetroArch's own presence check is
+# ``path_is_valid`` on the composed name (core_info.c:2381-2383 at the pinned
+# revision, :func:`_join_under`), one stat that answers "something is there"
+# for a file and a directory alike — so RetroArch itself never draws this
+# distinction, and no typed field anywhere in a ``.info`` holds it. The
+# ``firmwareN_desc`` beside it is prose a packager writes, which is why it is
+# not read either: LRPS2's says "'pcsx2/bios' folder" and is right, and nothing
+# makes the next one right. Only the core's own source settles it, which is why
+# it comes from a curated table (:data:`FIRMWARE_DECLARED_DIRECTORY`).
+DeclaredKind = Literal["file", "directory"]
+
+DECLARED_FILE: DeclaredKind = "file"
+# The core opens this path as a folder: it lists what is inside and takes the
+# images from there. A directory sitting at such a destination is the right
+# shape, and a missing one is the folder to create.
+DECLARED_DIRECTORY: DeclaredKind = "directory"
+
+FIRMWARE_DECLARED_KINDS = ("file", "directory")
 
 FirmwareChecked = Literal["verified", "mismatch", "unchecked", "unknown", "not-comparable"]
 
@@ -288,7 +314,35 @@ CAVEAT_EMULATOR_CATALOGUE_SEALED = "emulator-catalogue-sealed"
 # is not loaded — by the frontend and by atlas alike. The enumeration such an
 # answer carries is *complete*; the code states why it is as small as it is.
 CAVEAT_EMULATOR_CATALOGUE_EXCLUSIVE = "emulator-catalogue-exclusive"
+# A directory sits where the declaration names a file. Its counterpart below is
+# the same mismatch the other way round, and the pair only became stateable
+# once :data:`FIRMWARE_DECLARED_DIRECTORY` made the declaration's own shape a
+# field: before it, every directory at a destination had to hedge that the core
+# might have meant the folder.
 CAVEAT_FIRMWARE_PATH_OBSTRUCTED = "firmware-path-obstructed"
+# A file sits where the core opens a folder. The core lists that path, and a
+# regular file cannot be listed, so nothing inside it is reachable — the wrong
+# shape at a destination the table knows the shape of.
+CAVEAT_FIRMWARE_PATH_NOT_A_DIRECTORY = "firmware-path-not-a-directory"
+# The folder the core lists is there and holds no file of a size the core
+# would even open. The size test is the core's own first filter and it is a
+# stat (:class:`DeclaredDirectory`), so this settles the requirement without
+# a content check and without reading a byte — ``satisfied`` is false under
+# ``verify`` and without it alike. Not ``firmware-path-names-no-file``: that
+# code says nothing named a file — a declaration ending in a directory step,
+# or a setting left empty. Here a folder was declared, resolved and listed,
+# and its contents are the finding. Carries ``table_version`` for the reason
+# the wrong-shape code above does — the size range is a curated row's
+# knowledge.
+CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_CANDIDATE = "firmware-directory-holds-no-candidate"
+# The content read's own verdict against the folder: every file of an
+# accepted size was read the way the core reads it, and none passes the test
+# the core makes (:class:`DeclaredDirectory`, ``reader``). Beside the code
+# above, which settles by the stat and so with or without ``verify``; this
+# one settles by the read, and so only under it. Carries the files it read,
+# because on a linked root the folder is the whole BIOS collection and a
+# count alone does not say which files were meant.
+CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_IMAGE = "firmware-directory-holds-no-image"
 CAVEAT_FIRMWARE_PATH_INACCESSIBLE = "firmware-path-inaccessible"
 CAVEAT_FIRMWARE_SCAN_INCOMPLETE = "firmware-scan-incomplete"
 CAVEAT_CORE_ENUMERATION_INCOMPLETE = "core-enumeration-incomplete"
@@ -322,13 +376,29 @@ CAVEAT_FIRMWARE_CONTENT_CONTRADICTORY = "firmware-content-contradictory"
 CAVEAT_FIRMWARE_CONTENT_UNSTATED = "firmware-content-unstated"
 
 # The search family: an emulator that names no file, only a directory to look
-# in. All three are statements about what a *content* read did or did not
-# establish, which is the only thing such an answer can rest on.
-# The bytes at this path are a row of the emulator's own recognition table, so
-# this is the image it would boot — the positive counterpart of
-# CAVEAT_FIRMWARE_CONTENT_UNIDENTIFIED, and stated rather than left implicit
-# because a caller cannot re-derive it without the table.
+# in. All of them are statements about what a *content* read did or did not
+# establish, which is the only thing such an answer can rest on. Two emitters:
+# DuckStation's search, read against the emulator's own recognition table, and
+# a libretro core's folder declaration (:data:`FIRMWARE_DECLARED_DIRECTORY`),
+# read the way the core reads it and against the PACKAGED identities under
+# the prefix its row names. For the search the identified bytes are a row of
+# the emulator's own recognition table, so it is the image it would boot; for
+# a folder declaration they pass the header check the core makes itself AND
+# are a packaged identity under the row's prefix, which is what lets the
+# caveat name them. Stated rather than left implicit because a caller cannot
+# re-derive it without the table.
 CAVEAT_FIRMWARE_IMAGE_IDENTIFIED = "firmware-image-identified"
+# A folder candidate the core's own test accepts and the packaged table does
+# not list. The table is a subset of what the test accepts — it lists what
+# System.dat lists — so this is the ordinary shape of a dump nobody
+# catalogued: an image the core would offer, named by its own header, with
+# the table version it is absent from.
+CAVEAT_FIRMWARE_IMAGE_UNLISTED = "firmware-image-unlisted"
+# The hash names a packaged image and the header the core reads says the
+# bytes are not a BIOS. Two reads over one file, and they disagree — stated
+# as that and the verdict withheld, because a table hit never outranks the
+# test the core makes, and a green over a contradiction would be a guess.
+CAVEAT_FIRMWARE_IMAGE_CONTRADICTED = "firmware-image-contradicted"
 # Two or more images rank exactly alike and the emulator keeps whichever one
 # the directory hands it last — an order no read reproduces, so which of them
 # boots is not established.
@@ -441,11 +511,20 @@ class FirmwareHashes:
         for name, entry in files.items():
             contents.setdefault(_content_key(entry.md5, entry.sha1, entry.size), []).append(name)
         self._contents = {key: tuple(sorted(names)) for key, names in contents.items()}
+        # Per-prefix md5 indexes, built on first use (:meth:`for_content_under`).
+        # The table is read-only, so an index built once cannot go stale.
+        self._under: dict[str, dict[str, FirmwareHash]] = {}
 
     @property
     def meta(self) -> dict[str, Any]:
         """The table's ``_meta`` block (upstream source, version, generation date)."""
         return dict(self._meta)
+
+    @property
+    def version(self) -> str:
+        """The packaged table's schema version (``_meta['version']``) — empty where it states none."""
+        version = self._meta.get("version")
+        return version if isinstance(version, str) else ""
 
     def names(self) -> tuple[str, ...]:
         """Every name the table has an identity for, sorted."""
@@ -486,6 +565,28 @@ class FirmwareHashes:
         """
         entry = self._files.get(path) or self._files.get(os.path.basename(path))
         return None if entry is None else self._identity(entry)
+
+    def for_content_under(self, prefix: str, md5: str) -> FirmwareHash | None:
+        """The entry filed under *prefix* whose bytes these are, or ``None``.
+
+        By content within one prefix, for a core that accepts any file name
+        inside a folder it lists: the name is not asked, the bytes are, and
+        only the rows the core would recognise count — ``pcsx2/bios/`` is
+        the one prefix in use. The entry rather than an identity, because the
+        name it is filed under is what such a read wants to state.
+
+        The index is built once per prefix on first use: a scan of the whole
+        table per candidate would be paid per file per answer, and the table
+        never changes under a view.
+        """
+        index = self._under.get(prefix)
+        if index is None:
+            index = {}
+            for name, entry in sorted(self._files.items()):
+                if name.startswith(prefix):
+                    index.setdefault(entry.md5.lower(), entry)
+            self._under[prefix] = index
+        return index.get(md5.lower())
 
     def for_content(
         self, *, md5: str | None = None, sha1: str | None = None, size: int | None = None
@@ -896,6 +997,181 @@ FIRMWARE_SYSTEM_OVERRIDE: Mapping[str, str] = {
     "5200.rom": "atari5200",
 }
 
+# Declarations a core opens as a FOLDER, keyed by ``(core short name, declared
+# path)``. The short name is the ``.so`` stem without ``_libretro`` — the same
+# spelling the rule cards and the core audit key on (``pcsx2``, never a
+# nickname).
+#
+# Evidence level [V], verified: every row is read from the core's own source at
+# the shipped revision, and a row is added no other way. No typed field on the
+# machine holds this. ``firmwareN_path`` is a bare string with no type, and
+# RetroArch's presence check is one ``path_is_valid`` stat over the composed
+# name (core_info.c:2381-2383, :func:`_join_under`) that answers the same for a
+# file and a folder — so the frontend itself does not know. The
+# ``firmwareN_desc`` beside the path is not asked either, and that one is a
+# deliberate refusal rather than an absence: LRPS2's reads "'pcsx2/bios'
+# folder" and would have answered here, but a description is prose a packager
+# writes, so reading "folder" out of it would be a guess dressed as a fact.
+#
+# Deliberately incomplete. A declaration this table does not name is a
+# ``file``, so a missing row costs exactly what atlas answered before the table
+# existed, never a wrong statement about a core nobody has read. Rows are added
+# one core at a time, with the citation in the comment above them.
+#
+# Version 1 stated the shape alone. Version 2 states what the core accepts
+# INSIDE the folder — the size filter it applies and the packaged identities it
+# would recognise — so a present folder is judged by its contents rather than
+# left at ``satisfied: None`` (:class:`DeclaredDirectory`). Version 3 names
+# the content read the core makes over each file the size filter kept, so a
+# candidate is judged by the core's own test and the packaged identities are
+# what names an image, not what decides it.
+FIRMWARE_DECLARED_DIRECTORY_VERSION = "3"
+FIRMWARE_DECLARED_DIRECTORY_REVIEWED = "2026-09-03"
+
+# The content reads a row may name, each the seam question that performs it.
+# Closed, and checked at construction: a row naming a read nobody implemented
+# would be a table promising a test the resolver cannot make.
+READER_PS2_BIOS_HEADER = "ps2-bios-header"
+DECLARED_DIRECTORY_READERS = frozenset({READER_PS2_BIOS_HEADER})
+
+
+@dataclass(frozen=True, slots=True)
+class DeclaredDirectory:
+    """One row of :data:`FIRMWARE_DECLARED_DIRECTORY`: what the core accepts inside the folder.
+
+    The row's presence says the core opens the declaration as a folder; its
+    fields say what the core does with the listing, read from the core's own
+    source at the shipped revision so that the folder's contents can be judged
+    the way the core judges them:
+
+    ``min_size`` / ``max_size`` are the core's own size filter, inclusive at
+    both ends — its first test over every listed file, and a stat rather than a
+    read, which is why a folder with nothing in that range is settled without
+    a content check.
+
+    ``reader`` names the content read the core makes over each file the size
+    filter kept — its own validation, and the read that decides. It is a word
+    from :data:`DECLARED_DIRECTORY_READERS`, each the seam question that
+    performs the read: ``ps2-bios-header`` is the ROMDIR walk ``IsBIOS``
+    makes (pcsx2/ps2/BiosTools.cpp:325-335, :60-173 at 14d19f8), asked of the
+    seam as ``read_ps2_bios_header`` (:mod:`atlas.ps2_bios`).
+
+    ``identities`` is the prefix under which the packaged table files the
+    images this core recognises. A SUBSET of what the reader accepts: the
+    table lists only what ``System.dat`` lists — so a hit under the prefix is
+    a name for the bytes — it rides with an image the reader passed, and
+    stands against one it denied — and an image the table misses is named by
+    its own header.
+    """
+
+    identities: str
+    min_size: int
+    max_size: int
+    reader: str
+
+    def __post_init__(self) -> None:
+        if self.reader not in DECLARED_DIRECTORY_READERS:
+            raise ValueError(
+                f"DeclaredDirectory: reader must be one of {sorted(DECLARED_DIRECTORY_READERS)}, "
+                f"got {self.reader!r}"
+            )
+
+    def accepts_size(self, size: int | None) -> bool:
+        """Would the core keep a listed file of this size? ``None`` (unknown) is not a yes."""
+        return size is not None and self.min_size <= size <= self.max_size
+
+
+FIRMWARE_DECLARED_DIRECTORY: Mapping[tuple[str, str], DeclaredDirectory] = {
+    # LRPS2, at the shipped 14d19f8 (``core_library_version``,
+    # atlas/data/core_audit.json), upstream github.com/libretro/ps2 — the
+    # repository the Kodi add-on's own dependency file names
+    # (game.libretro.lrps2, depends/common/lrps2/lrps2.txt). Three reads at that
+    # revision, and the folder is what all three open:
+    #   - ``retro_init`` composes the system directory with ``/pcsx2/bios`` and
+    #     LISTS it — ``FileSystem::FindFiles(Path::Combine(system_base,
+    #     "/pcsx2/bios"), "*", FILESYSTEM_FIND_FILES, &results)``,
+    #     libretro/main.cpp:1801-1807 — to fill the ``pcsx2_bios`` core option
+    #     with the images it found;
+    #   - ``retro_load_game`` sets ``EmuFolders::DataRoot`` to
+    #     ``<system>/pcsx2`` (libretro/main.cpp:1905-1913), under which
+    #     ``EmuFolders::LoadConfig`` resolves the ``Folders/Bios`` default
+    #     ``"bios"`` (pcsx2/Pcsx2Config.cpp:1040-1042, :1051-1061) and
+    #     ``EnsureFoldersExist`` creates it with ``path_mkdir`` when it is not
+    #     there (:1070-1073);
+    #   - the image itself is a NAME inside it — ``FullpathToBios`` joins the
+    #     chosen file onto that folder (pcsx2/Pcsx2Config.cpp:994-998).
+    # The shipped ``pcsx2_libretro.info`` says the same in libretro's own words:
+    # ``firmware0_desc = "'pcsx2/bios' folder"`` over ``firmware0_path =
+    # "pcsx2/bios"``, with ``notes`` [1] "This only checks if the PCSX2 'bios'
+    # folder exists and is in the correct location." and [2] "Because the core
+    # doesn't require any specific filename for the BIOS files, this info file
+    # cannot tell you if the content of your 'bios' folder is correct or not."
+    #
+    # What the core does with the listing, same revision:
+    #   - it lists whenever the core has not yet read a ``pcsx2_bios`` value in
+    #     this loaded instance (``setting_bios`` empty, libretro/main.cpp:1801)
+    #     — the first ``retro_init`` after the core is loaded, since the option
+    #     is read at content load (``check_variables``, main.cpp:360-365,
+    #     called from ``retro_load_game`` at :1926, after ``retro_init`` at
+    #     :1789) and nothing clears it afterwards (``retro_deinit`` :1412-1420
+    #     included), so a re-init without unloading skips the listing —
+    #     NON-recursively,
+    #     ``"*"`` with ``FILESYSTEM_FIND_FILES`` and no hidden-files flag
+    #     (main.cpp:1807), where DuckStation's search asks for hidden names too
+    #     and this one does not. The option does not stop the listing: set,
+    #     ``LoadBIOS`` opens the named file rather than the first the listing
+    #     found, with no size filter (BiosTools.cpp:281-306, only
+    #     ``filesize > 0``), so the size verdict below is a verdict about the
+    #     auto-detect path;
+    #   - it keeps only files with ``MIN_BIOS_SIZE <= size <= MAX_BIOS_SIZE``,
+    #     4 MiB and 8 MiB (libretro/main.cpp:1810-1816; the same constants in
+    #     pcsx2/ps2/BiosTools.cpp:31-32), and validates each survivor by
+    #     content with ``IsBIOS`` (main.cpp:1818; BiosTools.cpp:325-335), which
+    #     reads the ROMDIR header (``LoadBiosVersion``, BiosTools.cpp:60-173 —
+    #     the read :mod:`atlas.ps2_bios` performs step for step). No hash
+    #     table anywhere: any file the header check passes is an image;
+    #   - it needs exactly ONE image. The first found becomes the ``pcsx2_bios``
+    #     option's default (main.cpp:1832-1834); ``LoadBIOS`` opens one file
+    #     (BiosTools.cpp:281), and when the configured one is absent
+    #     ``FindBiosImage`` returns the first file passing ``IsBIOS`` regardless
+    #     of region (BiosTools.cpp:241-250; the fallback :270-278). So one
+    #     recognised image satisfies the declaration, and several are more
+    #     choice — not a conflict, and not "better".
+    # The packaged identities under ``pcsx2/bios/`` (73 in the packaged table
+    # at schema version 6.0.0, all 4194304 bytes, all ``kind`` file) are a
+    # subset of what the header check accepts, so the check is the verdict
+    # and the identities are the name.
+    ("pcsx2", "pcsx2/bios"): DeclaredDirectory(
+        identities="pcsx2/bios/",
+        min_size=4 * 1024 * 1024,
+        max_size=8 * 1024 * 1024,
+        reader=READER_PS2_BIOS_HEADER,
+    ),
+}
+
+
+def declared_directory_of(core_stem: str, declared: str) -> DeclaredDirectory | None:
+    """The curated row for *declared* on *core_stem*, or ``None`` where the table names none.
+
+    *core_stem* is the ``.so`` stem as the enumeration reads it
+    (``pcsx2_libretro``); the table is keyed on the short name the rule cards
+    use, so the suffix is dropped here rather than at every call site.
+    """
+    short_name = core_stem.removesuffix("_libretro")
+    return FIRMWARE_DECLARED_DIRECTORY.get((short_name, declared))
+
+
+def declared_kind_of(core_stem: str, declared: str) -> DeclaredKind:
+    """What shape *core_stem* opens *declared* at — its own source's answer.
+
+    ``file`` is the answer for everything :data:`FIRMWARE_DECLARED_DIRECTORY`
+    does not name, and it is a default rather than a finding — nothing was read
+    about such a declaration. What it buys is that an uncurated declaration is
+    answered exactly as it was before the table existed.
+    """
+    return DECLARED_FILE if declared_directory_of(core_stem, declared) is None else DECLARED_DIRECTORY
+
+
 _NON_SLUG = re.compile(r"[^a-z0-9]+")
 
 # A ``systemname`` that names several machines at once. libretro writes these
@@ -958,6 +1234,11 @@ class FirmwareDeclaration:
     flag when it reads as one of its four booleans, over a slot that starts out
     ``false``, so an absent *and* an unreadable flag both mean required
     (:func:`atlas.core_info.enumerate_firmware`).
+    ``declared_kind`` is what the *core* opens this path at — a folder it lists,
+    or a file it reads — off the curated :data:`FIRMWARE_DECLARED_DIRECTORY`,
+    because the ``.info`` states no type and RetroArch's own check cannot tell
+    the two apart. It is a property of the declaration, so it holds whether or
+    not anything is at the destination.
     """
 
     path: str
@@ -966,6 +1247,7 @@ class FirmwareDeclaration:
     need: FirmwareNeed
     system: str
     system_source: SystemSource
+    declared_kind: DeclaredKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -1071,8 +1353,14 @@ class _Info:
 _UNREADABLE_INFO = _Info("", (), (), "", (), ())
 
 
-def _declaration_of(slot: FirmwareSlot, systemname: str) -> FirmwareDeclaration:
-    """One enumerated slot as atlas files it — by the file its path names."""
+def _declaration_of(slot: FirmwareSlot, systemname: str, stem: str) -> FirmwareDeclaration:
+    """One enumerated slot as atlas files it — by the file its path names.
+
+    *stem* is the core the slot belongs to, and it is here for one field:
+    whether this core opens the path as a folder is a fact about the core, so
+    the same declared string can be a folder for one core and a file for
+    another (:func:`declared_kind_of`).
+    """
     file_name = os.path.basename(slot.path)
     system, source = system_decision(file_name, systemname)
     return FirmwareDeclaration(
@@ -1082,10 +1370,11 @@ def _declaration_of(slot: FirmwareSlot, systemname: str) -> FirmwareDeclaration:
         need=NEED_OPTIONAL if slot.optional else NEED_REQUIRED,
         system=system,
         system_source=source,
+        declared_kind=declared_kind_of(stem, slot.path),
     )
 
 
-def _declarations_in(text: str) -> _Info:
+def _declarations_in(text: str, stem: str) -> _Info:
     """Read one ``.info``: its ``systemname``, its ``database``, and its firmware."""
     fields = parse_core_info(text)
     systemname = fields.get("systemname", "")
@@ -1093,7 +1382,7 @@ def _declarations_in(text: str) -> _Info:
     return _Info(
         systemname=systemname,
         database=tuple(entry for entry in fields.get("database", "").split("|") if entry),
-        firmware=tuple(_declaration_of(slot, systemname) for slot in enumeration.slots),
+        firmware=tuple(_declaration_of(slot, systemname, stem) for slot in enumeration.slots),
         firmware_count=enumeration.count,
         unread=enumeration.unread,
         unread_stating_a_path=enumeration.unread_stating_a_path,
@@ -1161,7 +1450,7 @@ def read_core_declarations(
         if stem in TEMPLATE_INFO_STEMS:
             continue
         result = machine.read_text(os.path.join(info_dir, f"{stem}.info"))
-        info = _UNREADABLE_INFO if result.text is None else _declarations_in(result.text)
+        info = _UNREADABLE_INFO if result.text is None else _declarations_in(result.text, stem)
         cores.append(
             CoreDeclarations(
                 core_so=f"{stem}.so",
@@ -1322,6 +1611,17 @@ class SuppliedBy:
     source: str
     card_version: str
 
+    @property
+    def label(self) -> str:
+        """The name ``distribution`` writes for itself — to show, never to match.
+
+        Derived rather than stored, because it is a fact about the identifier
+        and not about this file: the pair cannot drift apart if there is only
+        one of it (:mod:`atlas.distribution_labels`). A consumer renders this
+        beside "provided by" and keeps branching on ``distribution``.
+        """
+        return distribution_label(self.distribution)
+
 
 @dataclass(frozen=True, slots=True)
 class FirmwareRequirement:
@@ -1335,6 +1635,17 @@ class FirmwareRequirement:
     root on RetroDECK, so a placing client would otherwise write two copies).
     ``declared`` keeps the string the core spelled, which is the name it will
     open — nothing is lost by resolving.
+
+    ``declared_kind`` says what the core opens the declaration AT — a file it
+    reads, or a folder it lists (:data:`FIRMWARE_DECLARED_DIRECTORY`). It is a
+    property of the declaration and so survives an empty destination, which is
+    the whole reason it is a field: ``found: missing`` on a folder declaration
+    is a folder to create, and it is indistinguishable from an absent file
+    without it. Where such a folder is there, ``found`` and ``present`` keep
+    describing the folder and :attr:`satisfied` is the verdict about what it
+    holds, read the way the core reads it (``contents_satisfied``, set by the
+    ``.info`` route and never serialized — the answer's caveats carry what
+    was seen).
 
     ``need`` says what the core asks for; ``found`` and ``checked`` say what the
     machine holds. ``found`` is the path kind read at the destination and keeps
@@ -1378,6 +1689,13 @@ class FirmwareRequirement:
     found: PathKind
     checked: FirmwareChecked | None
     regions: tuple[str, ...] | None = None
+    # What the core opens this declaration at. It defaults to ``file`` because
+    # no other route declares a folder: a standalone card names a file
+    # (``StandaloneFirmwareFile.name``), and the search family resolves to one
+    # — its card names a directory to look in and nothing about which file, so
+    # the requirement it builds is the image the recognition table picked. A
+    # core's ``firmwareN_path`` is the one bare, typeless string in the model.
+    declared_kind: DeclaredKind = DECLARED_FILE
     # Provenance, not a verdict: whether the file at ``path`` is the copy the
     # distribution places itself (:class:`SuppliedBy`). It rides last because
     # it is additive to every existing construction — and it is deliberately
@@ -1386,10 +1704,29 @@ class FirmwareRequirement:
     # ecwolf.pk3 on a RetroDECK is supplied *and* not-comparable, and both
     # statements stand.
     supplied_by: SuppliedBy | None = None
+    # What listing a folder declaration's folder established about its
+    # contents — the verdict :attr:`satisfied` answers with over a directory
+    # at a directory declaration, and the one place that verdict lives, so no
+    # contract field is added for it: ``True`` for an image the core's own
+    # test passed, ``False`` for a folder holding nothing the core would even
+    # open and for one whose every candidate was read and fails that test,
+    # ``None`` for everything the read did not establish. It stays out of the
+    # serialization (:mod:`atlas.contract`) because ``satisfied`` already
+    # carries it, and one fact serialized twice is one fact that can disagree
+    # with itself. Only meaningful over a directory at a directory declaration,
+    # and refused everywhere else: a verdict about contents nobody listed
+    # would be a state that lies. Rides last for the reason ``supplied_by``
+    # does — additive to every existing construction.
+    contents_satisfied: bool | None = None
 
     def __post_init__(self) -> None:
         if self.need not in FIRMWARE_NEEDS:
             raise ValueError(f"FirmwareRequirement: need must be one of {FIRMWARE_NEEDS}, got {self.need!r}")
+        if self.declared_kind not in FIRMWARE_DECLARED_KINDS:
+            raise ValueError(
+                f"FirmwareRequirement: declared_kind must be one of {FIRMWARE_DECLARED_KINDS}, "
+                f"got {self.declared_kind!r}"
+            )
         if self.regions is not None and (
             not self.regions or any(not region for region in self.regions)
         ):
@@ -1398,6 +1735,13 @@ class FirmwareRequirement:
             )
         if self.found not in (KIND_FILE, KIND_DIRECTORY, KIND_MISSING, KIND_INACCESSIBLE):
             raise ValueError(f"FirmwareRequirement: found must be a path kind, got {self.found!r}")
+        if self.contents_satisfied is not None and (
+            self.found != KIND_DIRECTORY or self.declared_kind != DECLARED_DIRECTORY
+        ):
+            raise ValueError(
+                "FirmwareRequirement: contents_satisfied is the verdict over a directory the core lists, "
+                f"and found is {self.found!r} at a {self.declared_kind!r} declaration"
+            )
         if self.found in (KIND_FILE, KIND_DIRECTORY):
             if self.checked not in FIRMWARE_CHECKED:
                 raise ValueError(
@@ -1428,24 +1772,38 @@ class FirmwareRequirement:
         """Is the right file where this core will look for it?
 
         ``True`` only when a file is there and atlas *established* that it is
-        the right one. ``False`` when nothing is there, or when the bytes are
+        the right one — or, for a declaration the core opens as a folder, when
+        the folder is there and holds a file that passes the content read the
+        core makes itself. ``False`` when nothing is there, when the bytes are
         known to be wrong — a present file can absolutely fail this, which is
-        the whole reason the identity table exists. ``None`` for everything atlas
-        did not establish:
+        the whole reason the identity table exists — when what is there is the
+        wrong *shape*: a plain file where the core lists a folder cannot be
+        listed at all, so the core reaches nothing inside it — when the listed
+        folder holds no file of a size the core would open, its own first
+        filter and a stat, so that one settles without a content check — or
+        when every file of an accepted size in it was read and fails the
+        core's own test. ``None`` for everything atlas did not establish:
 
         - the path could not be looked at;
-        - a directory sits there (something is present, nothing is confirmed);
+        - a directory sits where the core reads a *file* (something is
+          present, nothing is confirmed);
+        - the folder the core lists holds files of an accepted size and no
+          content check was asked for, or the check met a candidate whose
+          bytes could not be read, or one the table names and the core's own
+          test denies, and none that passes — or the folder could not be
+          listed at all (``contents_satisfied``);
         - the identity is known and could not be read (unreadable bytes);
         - the identity is known and verification was **not asked for**;
         - the identity is an archive and the bytes differ (``not-comparable``).
           It is there, and whether it is right is not establishable this way:
           no whole-file comparison can tell a repacking from a wrong file.
 
-        That last one is the load-bearing case. Without hashing, "a file with
-        the right name is there" is all atlas knows, and calling it satisfied
-        would be an all-clear it did not earn. It is affordable to say so: a
-        verified single-core answer costs 0.03 s and the whole tree 0.8 s on the
-        reference machine, so a caller who wants the green light can ask for it.
+        The unverified cases are the load-bearing ones. Without hashing, "a
+        file with the right name is there" is all atlas knows, and calling it
+        satisfied would be an all-clear it did not earn. It is affordable to
+        say so: a verified single-core answer costs 0.03 s and the whole tree
+        0.8 s on the reference machine, so a caller who wants the green light
+        can ask for it.
 
         A file whose identity the table does not cover stays ``True``: nothing
         further can ever be established about it, so withholding the answer
@@ -1456,7 +1814,12 @@ class FirmwareRequirement:
         if self.found == KIND_MISSING:
             return False
         if self.found == KIND_DIRECTORY:
-            return None
+            # Over a file declaration this is the obstructed case and stays
+            # None; over a folder declaration it is whatever the listing
+            # established, and None where nothing was listed.
+            return self.contents_satisfied
+        if self.declared_kind == DECLARED_DIRECTORY:
+            return False
         if self.checked == CHECKED_MISMATCH:
             return False
         if self.checked in (CHECKED_UNCHECKED, CHECKED_NOT_COMPARABLE):
@@ -1627,6 +1990,19 @@ class CoreFirmware:
     # declaration that stated a path could have been about some particular
     # file). Also out of the contract, and for the same reason.
     unread_stating_a_path: tuple[str, ...] = ()
+    # Every file a listed folder's read accounted for — an image the core's
+    # test passed, a candidate the table names and the test denies, one whose
+    # header read did not come back, or one whose digest could not be taken
+    # — as RESOLVED paths, sorted: the
+    # exclusion compares resolved spellings, and a listed entry may be a link
+    # into another directory. The caveats that state
+    # these files carry the listed entry instead, the name the core lists
+    # and opens through the link. The declaration claims them: the
+    # inventory's unclaimed scan skips them the way it skips a declared
+    # destination, so a file the folder read stated is not stated again as
+    # an unclaimed one. Out of the contract for the same reason ``unread``
+    # is — the caveats already carry the paths a consumer acts on.
+    folder_claims: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.declaration not in CORE_DECLARATION_STATES:
@@ -1974,8 +2350,66 @@ def _unreadable_bytes(path: str) -> Caveat:
     )
 
 
+def _directory_at_the_destination(path: str, declared_kind: DeclaredKind) -> Caveat | None:
+    """A directory is at the destination — is that the shape the emulator opens?
+
+    ``None`` when the declaration is for a folder: the right shape is there and
+    this function has nothing to state about it — what the folder holds is
+    read separately (:func:`_contents_of_a_listed_folder`). Otherwise the
+    declaration is for a file, and the
+    directory is in its way — which is not an absent file and is not a verdict
+    either, because nothing about a directory can be established.
+
+    The message says only what the mechanism saw, because every route reaches
+    here and only the ``.info`` one consults
+    :data:`FIRMWARE_DECLARED_DIRECTORY`. A card, a config key and a search
+    take the ``file`` default without a core stem to look anything up by, so
+    "no row says otherwise" would describe a lookup that never ran for them.
+    "Nothing was read that puts a folder here" is true on all of them.
+    """
+    if declared_kind == DECLARED_DIRECTORY:
+        return None
+    return Caveat(
+        CAVEAT_FIRMWARE_PATH_OBSTRUCTED,
+        f"a directory is at {path}, where this declaration names a file — atlas has no source-read "
+        "statement that a folder belongs here, so nothing about what is there can be established, "
+        "and it is not a missing file",
+        {"path": path},
+    )
+
+
+def _file_where_a_folder_is_opened(path: str) -> Caveat:
+    """A plain file sits where the core lists a folder.
+
+    The core opens this path as a directory and reads what is inside; a regular
+    file has no inside, so the listing reaches nothing however right the file
+    itself might look. The shape is the finding, which is why this is its own
+    code rather than a byte verdict.
+
+    It carries ``table_version`` because the finding exists only by virtue of a
+    row. Without one, a file here would answer as a plain file — no caveat, and
+    ``satisfied`` true where the table knows nothing about its bytes — and a
+    directory here would carry :data:`CAVEAT_FIRMWARE_PATH_OBSTRUCTED`. So a
+    consumer reading this code is reading a curated table's call and gets to
+    see which vintage made it, the same reason the not-comparable caveat
+    carries the identity list's.
+    """
+    return Caveat(
+        CAVEAT_FIRMWARE_PATH_NOT_A_DIRECTORY,
+        f"a file is at {path}, where this core opens a folder and lists what is inside it — nothing there "
+        "can be reached, so this file is in the folder's place rather than in it",
+        {"path": path, "table_version": FIRMWARE_DECLARED_DIRECTORY_VERSION},
+    )
+
+
 def _observe(
-    machine: Machine, path: str, identity: FirmwareIdentity | None, *, verify: bool, file_name: str
+    machine: Machine,
+    path: str,
+    identity: FirmwareIdentity | None,
+    *,
+    verify: bool,
+    file_name: str,
+    declared_kind: DeclaredKind = DECLARED_FILE,
 ) -> tuple[PathKind, FirmwareChecked | None, Caveat | None, _ObservedBytes]:
     """What the machine says about one destination: what is there, and how sure we are.
 
@@ -1999,6 +2433,15 @@ def _observe(
     required rather than defaulted for exactly that reason: a default would be a
     second, quieter source for a name the caller already holds.
 
+    *declared_kind* is what the core opens the destination at, and it decides
+    what each of the two present shapes means. Where the core lists a folder,
+    a directory is the right thing and a file is the wrong one; where it reads
+    a file, it is the other way round. Neither answers anything about content:
+    a folder's images are a question this observation does not ask, and no
+    identity can be pinned to a folder. It carries a default because the
+    ``.info`` route is the only one whose declaration is a typeless string —
+    the card and search routes name a file by their own schema.
+
     The fourth return value is what this look learned about the destination's
     own bytes (:class:`_ObservedBytes`), for the provenance check that runs
     after it and would otherwise read the same file again.
@@ -2017,24 +2460,14 @@ def _observe(
             _ObservedBytes(),
         )
     if kind == KIND_DIRECTORY:
-        # Not necessarily wrong: LRPS2 declares "pcsx2/bios" and means the
-        # folder, and RetroDECK links it to the firmware root. Atlas states what
-        # is there and establishes nothing — telling the caller to clear the
-        # path would break exactly that arrangement.
-        return (
-            kind,
-            CHECKED_UNKNOWN,
-            Caveat(
-                CAVEAT_FIRMWARE_PATH_OBSTRUCTED,
-                f"a directory is at {path}, where this core's declaration names a file — some cores declare "
-                "a folder instead (LRPS2 does), so this may be correct; either way nothing about it can be "
-                "established, and it is not a missing file",
-                {"path": path},
-            ),
-            _ObservedBytes(),
-        )
+        return kind, CHECKED_UNKNOWN, _directory_at_the_destination(path, declared_kind), _ObservedBytes()
     if kind != KIND_FILE:
         return kind, None, None, _ObservedBytes()
+    if declared_kind == DECLARED_DIRECTORY:
+        # The shape settles it before any byte question: the core lists this
+        # path, and a file cannot be listed. Hashing it would answer a question
+        # about a file the core never opens.
+        return KIND_FILE, CHECKED_UNKNOWN, _file_where_a_folder_is_opened(path), _ObservedBytes()
     if identity is None:
         # Nothing to check against — and that is not the same as "not checked".
         return KIND_FILE, CHECKED_UNKNOWN, None, _ObservedBytes()
@@ -2411,19 +2844,511 @@ def _refusal_caveat(core: CoreDeclarations, declaration: FirmwareDeclaration, re
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _DirectoryContents:
+    """What listing a folder declaration's folder established, and the statements behind it.
+
+    ``verdict`` is what :attr:`FirmwareRequirement.satisfied` answers over the
+    folder; ``caveats`` are the observations that back it, answer-level like
+    every other ``.info``-route observation about a destination. ``claimed``
+    is every file inside the folder this read accounted for — an image the
+    core's test passed, a candidate the table names and the test denies, or
+    one whose bytes it could not read — which the declaration thereby
+    claims: the unclaimed scan must not state them a second time
+    (:func:`firmware_inventory`). Carried as RESOLVED paths, because that is
+    the spelling the scan compares (a listed entry may be a link into another
+    directory), while the caveats keep the entry the listing saw — the name
+    the core lists and opens through the link. A candidate read and failing
+    the test, with no table name and no statement of its own, is nobody's,
+    and stays out of it.
+    """
+
+    verdict: bool | None
+    caveats: tuple[Caveat, ...]
+    claimed: tuple[str, ...] = ()
+
+
+# One answer's folder reads, keyed by (resolved path, core_so): a catalogue
+# that lists one core under two entries — RetroDECK 0.10.9b's ES-DE catalogue
+# lists ps2 with two commands on ``pcsx2_libretro.so``, labels ``LRPS2`` and
+# ``PCSX2`` (components/es-de/share/es-de/resources/systems/linux/es_systems.xml
+# in the Flatpak) — reaches the same folder twice, and the second row takes
+# the verdict without restating what the first stated: a read cache, one
+# listing and one hashing per resolved path and core per answer. It covers
+# the folder read alone; what the other observations do on a doubled entry
+# is their own matter.
+_FolderReads = dict[tuple[str, str], bool | None]
+
+
+def _directory_candidates(
+    machine: Machine, row: DeclaredDirectory, directory: str
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Every file in the folder the core would go on to open, and where the listing stopped short.
+
+    One glob and ``*`` alone: the core lists with ``FindFiles(..., "*",
+    FILESYSTEM_FIND_FILES, ...)`` and no hidden-files flag
+    (libretro/main.cpp:1807 at 14d19f8), where DuckStation's search asks for
+    hidden names too and so globs ``.*`` as well (:func:`_duckstation_sized_files`).
+    Non-recursive, and at the *resolved* path: a distribution may link the
+    folder onto an ancestor — RetroDECK links ``pcsx2/bios`` onto the BIOS
+    root — and then the siblings of other systems are listed too, which is why
+    the size test comes first. It is the core's own first filter over every
+    listed file (main.cpp:1815; BiosTools.cpp:243), it is a stat, and it drops
+    a 512 KiB PlayStation image before anything is read.
+    """
+    result = machine.glob(os.path.join(_glob_escape(directory), "*"))
+    kept = tuple(path for path in sorted(result.matches) if row.accepts_size(machine.file_size(path)))
+    return kept, result.unreadable
+
+
+@dataclass(frozen=True, slots=True)
+class _TableName:
+    """What the packaged table calls a candidate's bytes: the image filed under the row's prefix, and the digest."""
+
+    image: str
+    md5: str
+
+
+@dataclass(frozen=True, slots=True)
+class _CandidateRead:
+    """One kept file read both ways: its digest against the table, its header by the core's own test.
+
+    The digest outcome is three-valued, and a digest the seam could not
+    produce is carried as a read failure, never as bytes the table does not
+    know — the distinction :func:`_observe` draws for the declared route.
+    ``digest`` is the md5 the seam produced, or ``None`` where it could not;
+    ``named`` is what the packaged table calls those bytes under the row's
+    prefix, or ``None`` where the digest missed OR was never taken, and
+    ``digest`` tells the two apart. ``header`` is the seam's answer to the
+    content read the row names. The two reads answer two different questions
+    — what the table calls these bytes, and whether the core would boot them
+    — and the verdict is the header's: a header that read is an image
+    whatever the digest did, and a header that read as no BIOS beside a
+    digest that failed is a file that is no BIOS. Beside a header that came
+    back — passed or denied — an untaken digest is stated as a read failure
+    and the header's verdict stands; only a header that did not come back
+    leaves that verdict open.
+    """
+
+    path: str
+    digest: str | None
+    named: _TableName | None
+    header: Ps2BiosHeaderResult
+
+    @property
+    def digest_taken(self) -> bool:
+        return self.digest is not None
+
+
+# The four groups a candidate falls into, in the order the folder's caveats
+# list them: images first — the read failure for an untaken digest rides in
+# this group, right beside its image — then the contradictions, then the
+# header reads that did not come back, then the read failures beside
+# rejected candidates, ahead of the no-image statement over all of them.
+_GROUP_IMAGE = "image"
+_GROUP_CONTRADICTED = "contradicted"
+_GROUP_UNREAD = "unread"
+_GROUP_REJECTED = "rejected"
+_CORE_OFFERS_THEM_ALL = (
+    "Where the folder holds several, the core offers them all as option values, up to 127 — the fill loop "
+    "stops one short of the 128-slot RETRO_NUM_CORE_OPTION_VALUES_MAX to leave room for the terminator "
+    "(main.cpp:1828, :1833) — and one is enough"
+)
+_THE_CORES_OWN_CHECK = (
+    "the check the core makes itself (LoadBiosVersion, pcsx2/ps2/BiosTools.cpp:60-173 at 14d19f8)"
+)
+
+
+def _read_candidate(
+    machine: Machine, context: FirmwareContext, row: DeclaredDirectory, path: str
+) -> _CandidateRead:
+    digest = machine.file_digest(path, DIGEST_MD5)
+    entry = None if digest is None else context.hashes.for_content_under(row.identities, digest)
+    named = None if digest is None or entry is None else _TableName(os.path.basename(entry.name), digest)
+    return _CandidateRead(path, digest, named, _content_read(machine, row, path))
+
+
+def _content_read(machine: Machine, row: DeclaredDirectory, path: str) -> Ps2BiosHeaderResult:
+    """The read the row names, asked of the seam — the dispatch lives here so the row stays data."""
+    assert row.reader == READER_PS2_BIOS_HEADER  # the one reader the table may name (DeclaredDirectory)
+    return machine.read_ps2_bios_header(path)
+
+
+def _header_fields(header: Ps2BiosHeader) -> dict[str, str]:
+    """The header's fields as caveat data: what the core's own read says the image is."""
+    return {
+        "description": header.description,
+        "zone": header.zone,
+        "version": header.version,
+        "date": header.date,
+        "serial": header.serial,
+    }
+
+
+def _image_by_header(
+    read: _CandidateRead, header: Ps2BiosHeader, row: DeclaredDirectory, *, table: str, core_so: str
+) -> Caveat:
+    """A candidate the core's test passed: named by the table where it lists the bytes, by its header otherwise.
+
+    Where the digest was never taken the image is worded without a table
+    lookup nobody made — the header is the verdict and stands, what the
+    table calls the bytes stays unestablished — and the read failure beside
+    it is the caller's to state (:func:`_candidate_statement`).
+    """
+    if read.named is not None:
+        return Caveat(
+            CAVEAT_FIRMWARE_IMAGE_IDENTIFIED,
+            f"{read.path} is {read.named.image} — the packaged table files these bytes under "
+            f"{row.identities}, and its ROMDIR header reads as '{header.description}' by "
+            f"{_THE_CORES_OWN_CHECK}. {_CORE_OFFERS_THEM_ALL}",
+            {
+                "path": read.path,
+                "image": read.named.image,
+                "md5": read.named.md5,
+                "table": table,
+                "core_so": core_so,
+                **_header_fields(header),
+            },
+        )
+    # ``md5`` is the digest when taken and empty when not — the register
+    # ``firmware-path-names-no-file`` uses for ``declared`` — so the two
+    # readings of this code are told apart in the data, not by a companion.
+    unlisted = {
+        "path": read.path,
+        **_header_fields(header),
+        "md5": read.digest or "",
+        "table": table,
+        "core_so": core_so,
+    }
+    if read.digest_taken:
+        return Caveat(
+            CAVEAT_FIRMWARE_IMAGE_UNLISTED,
+            f"{read.path} reads as a PS2 BIOS — its ROMDIR header says '{header.description}' under "
+            f"{_THE_CORES_OWN_CHECK} — and the packaged table at version {table} files no identity for "
+            f"these bytes under {row.identities}: the table lists what System.dat lists, and the listing's "
+            f"one content test is IsBIOS (main.cpp:1818), so this is an image the core offers. "
+            f"{_CORE_OFFERS_THEM_ALL}",
+            unlisted,
+        )
+    return Caveat(
+        CAVEAT_FIRMWARE_IMAGE_UNLISTED,
+        f"{read.path} reads as a PS2 BIOS — its ROMDIR header says '{header.description}' under "
+        f"{_THE_CORES_OWN_CHECK} — and its bytes could not be hashed, so whether the packaged table at "
+        f"version {table} files them under {row.identities} is not established: the header is the verdict, "
+        f"and this is an image the core offers. {_CORE_OFFERS_THEM_ALL}",
+        unlisted,
+    )
+
+
+def _untaken_digest(path: str, *, header_says: str) -> Caveat:
+    """The digest the seam could not produce, beside a header that came back — a read failure, stated as one."""
+    return Caveat(
+        CAVEAT_FIRMWARE_UNREADABLE,
+        f"{path} is of a size this core accepts, its ROMDIR header {header_says}, and its bytes could not be "
+        "hashed against the packaged table — a read failure beside a header that came back, not a verdict on the "
+        "file: what the table calls it stays unestablished, and the header's verdict stands",
+        {"path": path},
+    )
+
+
+def _contradicted_image(
+    path: str, named: _TableName, row: DeclaredDirectory, *, table: str, core_so: str
+) -> Caveat:
+    """The table names the bytes and the core's own test denies them — stated, and left undecided."""
+    return Caveat(
+        CAVEAT_FIRMWARE_IMAGE_CONTRADICTED,
+        f"{path} hashes to {named.image} — the packaged table files these bytes under {row.identities} — "
+        f"and its ROMDIR header does not read as a PS2 BIOS by {_THE_CORES_OWN_CHECK}: the two reads "
+        "disagree, and neither is taken over the other, so whether the core boots this file is not established",
+        {
+            "path": path,
+            "image": named.image,
+            "md5": named.md5,
+            "core_so": core_so,
+            "table": table,
+            "table_version": FIRMWARE_DECLARED_DIRECTORY_VERSION,
+        },
+    )
+
+
+def _unread_candidate(path: str) -> Caveat:
+    """A candidate the content read could not be given — a read failure, never a finding about the file."""
+    return Caveat(
+        CAVEAT_FIRMWARE_UNREADABLE,
+        f"{path} is of a size this core accepts and the ROMDIR header read the core's own test makes over it "
+        "did not come back, so what it is stays unestablished — a read failure, not a verdict on the file, "
+        "whatever its digest matched",
+        {"path": path},
+    )
+
+
+def _no_image(paths: list[str], *, directory: str, core_so: str) -> Caveat:
+    """Every kept file was read and none passes the core's test — the folder holds no image.
+
+    Named by path, because on a linked root the directory is the whole BIOS
+    collection and a count alone does not say which files were meant — the
+    same ``", "``-joined shape ``firmware-scan-incomplete`` gives its
+    ``unreadable``. The sentence is written around the count so it reads for
+    one file and for many.
+    """
+    subject = (
+        f"{len(paths)} files in {directory} are of a size this core accepts and none of them reads as a "
+        f"PS2 BIOS — each was read the way the core reads it, and {_THE_CORES_OWN_CHECK} fails every one"
+        if len(paths) > 1
+        else f"one file in {directory} is of a size this core accepts and it does not read as a PS2 BIOS — "
+        f"it was read the way the core reads it, and {_THE_CORES_OWN_CHECK} fails it"
+    )
+    return Caveat(
+        CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_IMAGE,
+        f"{subject} — so the listing the core makes at core load offers nothing, settled by the same read "
+        "the core makes",
+        {
+            "dir": directory,
+            "candidates": str(len(paths)),
+            "paths": ", ".join(paths),
+            "core_so": core_so,
+            "table_version": FIRMWARE_DECLARED_DIRECTORY_VERSION,
+        },
+    )
+
+
+def _candidate_statement(
+    read: _CandidateRead, row: DeclaredDirectory, *, table: str, core_so: str
+) -> tuple[str, list[Caveat]]:
+    """What one candidate's two reads establish: its group and its statements.
+
+    The header decides. A header that read makes an image, whatever the
+    digest did; a header that could not be read — or, on a fixture, one with
+    no answer for a file the listing just named, which is a read that did not
+    happen — is carried as a read failure, never as a finding; a header that
+    read as no BIOS is a verdict, unless the table names the bytes, and then
+    it is a contradiction to state rather than a side to take. Beside a
+    header that came back, a digest that was never taken is stated as a read
+    failure — riding with the image, or with the rejection — and changes no
+    verdict: the contradiction this read could not check is what the failure
+    states, and a rejected candidate stays rejected.
+    """
+    header = read.header
+    if header.status == PS2_BIOS_OK:
+        assert header.header is not None  # the result's own invariant
+        image = _image_by_header(read, header.header, row, table=table, core_so=core_so)
+        if read.digest_taken:
+            return _GROUP_IMAGE, [image]
+        return _GROUP_IMAGE, [image, _untaken_digest(read.path, header_says="reads as a PS2 BIOS")]
+    if header.status != PS2_BIOS_NOT_A_BIOS:
+        return _GROUP_UNREAD, [_unread_candidate(read.path)]
+    if read.named is not None:
+        return _GROUP_CONTRADICTED, [
+            _contradicted_image(read.path, read.named, row, table=table, core_so=core_so)
+        ]
+    if read.digest_taken:
+        return _GROUP_REJECTED, []
+    return _GROUP_REJECTED, [_untaken_digest(read.path, header_says="does not read as a PS2 BIOS")]
+
+
+def _directory_identified(
+    machine: Machine,
+    context: FirmwareContext,
+    row: DeclaredDirectory,
+    kept: tuple[str, ...],
+    *,
+    directory: str,
+    core_so: str,
+) -> _DirectoryContents:
+    """The content read over the kept files: which pass the core's own test, and what the rest are.
+
+    Each candidate is read twice — hashed against the packaged identities
+    under the row's prefix, and handed to the content read the row names —
+    and the verdict is the read's (:func:`_candidate_statement`). One
+    statement per image, because the core offers them all as option values,
+    up to 127 — the fill loop stops one short of the 128-slot
+    ``RETRO_NUM_CORE_OPTION_VALUES_MAX`` to leave room for the terminator
+    (main.cpp:1828, :1833; libretro/libretro-common/include/libretro.h:6394)
+    — and picking one would be a claim about a choice the configuration
+    makes. ``True`` on any image; ``None`` where a contradiction or a header
+    read that did not come back stands beside no image; ``False`` when every
+    candidate was read and fails the test, stated once over all of them —
+    a read failure for a rejected candidate's untaken digest rides beside
+    that statement and does not reopen it. Every file stated here is
+    claimed — the images, the contradictions, the failed reads, the untaken
+    digests — because the unclaimed scan must not state it again, and it
+    would: it hashes what it lists and states the same failure
+    (:func:`_unclaimed_identity`). A file that fails the test with no table
+    name and no statement of its own is nobody's.
+    """
+    groups: dict[str, list[Caveat]] = {
+        _GROUP_IMAGE: [],
+        _GROUP_CONTRADICTED: [],
+        _GROUP_UNREAD: [],
+        _GROUP_REJECTED: [],
+    }
+    claimed: list[str] = []
+    rejected: list[str] = []
+    for path in kept:
+        read = _read_candidate(machine, context, row, path)
+        group, statements = _candidate_statement(read, row, table=context.hashes.version, core_so=core_so)
+        groups[group].extend(statements)
+        if group == _GROUP_REJECTED:
+            rejected.append(path)
+        if statements:
+            claimed.append(resolve_links(machine, path) or path)
+    caveats = (
+        *groups[_GROUP_IMAGE],
+        *groups[_GROUP_CONTRADICTED],
+        *groups[_GROUP_UNREAD],
+        *groups[_GROUP_REJECTED],
+    )
+    if groups[_GROUP_IMAGE]:
+        return _DirectoryContents(True, caveats, tuple(claimed))
+    if groups[_GROUP_CONTRADICTED] or groups[_GROUP_UNREAD]:
+        return _DirectoryContents(None, caveats, tuple(claimed))
+    return _DirectoryContents(
+        False, (*caveats, _no_image(rejected, directory=directory, core_so=core_so)), tuple(claimed)
+    )
+
+
+def _directory_contents(
+    machine: Machine,
+    context: FirmwareContext,
+    row: DeclaredDirectory,
+    *,
+    directory: str,
+    core_so: str,
+    need: FirmwareNeed,
+    verify: bool,
+) -> _DirectoryContents:
+    """Read a folder declaration's folder the way the core reads it, and say what that establishes.
+
+    The core lists the folder, keeps the files of a size it accepts, and
+    validates those by content; the verdict follows the same three steps. A
+    listing that failed establishes nothing about contents nobody saw. A
+    folder with nothing of the right size is settled by the stat alone —
+    ``False``, with or without ``verify``. Files of the right size are a
+    question about bytes, and without a content check that question is not
+    answered "yes"; with one, each is read the way the core reads it
+    (:func:`_directory_identified`) — an image by that test satisfies the
+    declaration, and a folder whose candidates all fail it is unmet.
+    """
+    kept, unreadable = _directory_candidates(machine, row, directory)
+    caveats: list[Caveat] = []
+    if unreadable:
+        caveats.append(
+            Caveat(
+                CAVEAT_FIRMWARE_SCAN_INCOMPLETE,
+                f"{', '.join(unreadable)} could not be listed, so what this core would find in "
+                f"{directory} was seen only in part",
+                {"dir": directory, "unreadable": ", ".join(unreadable)},
+            )
+        )
+    if not kept:
+        if unreadable:
+            # "Holds nothing of the right size" is a statement about contents
+            # the failed listing never reached.
+            return _DirectoryContents(None, tuple(caveats))
+        caveats.append(
+            Caveat(
+                CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_CANDIDATE,
+                f"{directory} holds no file of a size this core accepts ({row.min_size}-{row.max_size} "
+                "bytes, its own first filter over the listing and a stat), so the folder is the right "
+                "shape and the listing the core makes at core load offers nothing — "
+                "settled without reading a byte",
+                {
+                    "dir": directory,
+                    "core_so": core_so,
+                    "need": need,
+                    "table_version": FIRMWARE_DECLARED_DIRECTORY_VERSION,
+                },
+            )
+        )
+        return _DirectoryContents(False, tuple(caveats))
+    if not verify:
+        # Written around the count, so it reads for one file and for many.
+        held = (
+            f"{directory} holds {len(kept)} files of a size this core accepts; which of them is a BIOS is "
+            "a question about their bytes"
+            if len(kept) > 1
+            else f"{directory} holds one file of a size this core accepts, and whether it is a BIOS is a "
+            "question about its bytes"
+        )
+        caveats.append(
+            Caveat(
+                CAVEAT_FIRMWARE_SEARCH_UNVERIFIED,
+                f"{held} — the core validates by reading the header, and this answer was asked for without "
+                "a content check, so nothing here says an image is there",
+                {"dir": directory, "candidates": str(len(kept)), "need": need, "core_so": core_so},
+            )
+        )
+        return _DirectoryContents(None, tuple(caveats))
+    read = _directory_identified(machine, context, row, kept, directory=directory, core_so=core_so)
+    return _DirectoryContents(read.verdict, (*caveats, *read.caveats), read.claimed)
+
+
+def _contents_of_a_listed_folder(
+    machine: Machine,
+    context: FirmwareContext,
+    core: CoreDeclarations,
+    declaration: FirmwareDeclaration,
+    *,
+    path: str,
+    found: PathKind,
+    verify: bool,
+    folders: _FolderReads,
+) -> _DirectoryContents:
+    """The folder's verdict where the core lists one and one is there; nothing anywhere else.
+
+    The row is looked up here rather than carried on the declaration because
+    the declaration's ``declared_kind`` is all every other reader needs, and
+    the row exists exactly when that kind is ``directory`` — both come off
+    :data:`FIRMWARE_DECLARED_DIRECTORY`.
+
+    Read once per resolved path and core per answer (*folders*): a second
+    entry naming the same core takes the verdict its row needs and states
+    nothing again — the caveats and the claimed files were stated by the
+    first read. The memo covers this read alone.
+    """
+    row = declared_directory_of(core.stem, declaration.path)
+    if row is None or found != KIND_DIRECTORY:
+        return _DirectoryContents(None, ())
+    key = (path, core.core_so)
+    if key in folders:
+        return _DirectoryContents(folders[key], ())
+    read = _directory_contents(
+        machine,
+        context,
+        row,
+        directory=path,
+        core_so=core.core_so,
+        need=declaration.need,
+        verify=verify,
+    )
+    folders[key] = read.verdict
+    return read
+
+
 def _requirements_for(
     machine: Machine,
     context: FirmwareContext,
     core: CoreDeclarations,
     *,
     verify: bool,
-) -> tuple[tuple[FirmwareRequirement, ...], tuple[RefusedDeclaration, ...], tuple[Caveat, ...], list[Caveat]]:
+    folders: _FolderReads,
+) -> tuple[
+    tuple[FirmwareRequirement, ...],
+    tuple[RefusedDeclaration, ...],
+    tuple[Caveat, ...],
+    list[Caveat],
+    tuple[str, ...],
+]:
     """Resolve one core's declarations: what it wants, what was refused, and why.
 
-    Returns ``(requirements, refused, core_caveats, answer_caveats)``. The
-    refusal caveat belongs to the **core** — it is a fact about that core's
-    declaration, and if it only travelled on the answer, a caller reading one
-    emulator's entry would see a requirement list that silently lost a file.
+    Returns ``(requirements, refused, core_caveats, answer_caveats,
+    folder_claims)``. The refusal caveat belongs to the **core** — it is a
+    fact about that core's declaration, and if it only travelled on the
+    answer, a caller reading one emulator's entry would see a requirement list
+    that silently lost a file. ``folder_claims`` is every file a listed
+    folder's read accounted for (:class:`_DirectoryContents`), which the
+    inventory hands to the unclaimed scan so a stated file is not stated
+    twice.
     """
     root = context.root
     assert root is not None  # callers resolve the empty-root answer before getting here
@@ -2431,6 +3356,7 @@ def _requirements_for(
     refused: list[RefusedDeclaration] = []
     core_caveats: list[Caveat] = []
     answer_caveats: list[Caveat] = []
+    folder_claims: list[str] = []
     for declaration in core.firmware:
         destination = destination_under(machine, root, declaration.path)
         if destination.path is None:
@@ -2443,7 +3369,12 @@ def _requirements_for(
         path = destination.path
         identity = context.hashes.for_path(declaration.path)
         found, checked, caveat, here = _observe(
-            machine, path, identity, verify=verify, file_name=declaration.file_name
+            machine,
+            path,
+            identity,
+            verify=verify,
+            file_name=declaration.file_name,
+            declared_kind=declaration.declared_kind,
         )
         if caveat is not None:
             answer_caveats.append(caveat)
@@ -2455,6 +3386,13 @@ def _requirements_for(
         )
         if supplied_caveat is not None:
             answer_caveats.append(supplied_caveat)
+        # What the folder holds, where the core lists one and one is there —
+        # the verdict a folder declaration's ``satisfied`` answers with.
+        contents = _contents_of_a_listed_folder(
+            machine, context, core, declaration, path=path, found=found, verify=verify, folders=folders
+        )
+        answer_caveats.extend(contents.caveats)
+        folder_claims.extend(contents.claimed)
         requirements.append(
             FirmwareRequirement(
                 core_so=core.core_so,
@@ -2468,7 +3406,9 @@ def _requirements_for(
                 identity=identity,
                 found=found,
                 checked=checked,
+                declared_kind=declaration.declared_kind,
                 supplied_by=supplied,
+                contents_satisfied=contents.verdict,
             )
         )
     return (
@@ -2476,6 +3416,7 @@ def _requirements_for(
         tuple(refused),
         tuple(core_caveats),
         answer_caveats,
+        tuple(sorted(folder_claims)),
     )
 
 
@@ -2696,6 +3637,7 @@ def _read_core(
     label: str | None,
     *,
     verify: bool,
+    folders: _FolderReads,
 ) -> tuple[CoreFirmware, list[Caveat]]:
     """One core whose ``.info`` was read: the answer for it, and what it observed.
 
@@ -2708,8 +3650,8 @@ def _read_core(
     ``_declared_without_requiring`` saw nothing declared and an empty
     ``firmware_for_system`` answer stopped saying which kind of empty it was.
     """
-    requirements, refused, core_caveats, observed = _requirements_for(
-        machine, context, core, verify=verify
+    requirements, refused, core_caveats, observed, folder_claims = _requirements_for(
+        machine, context, core, verify=verify, folders=folders
     )
     return (
         CoreFirmware(
@@ -2721,6 +3663,7 @@ def _read_core(
             refused=refused,
             unread=core.unread,
             unread_stating_a_path=core.unread_stating_a_path,
+            folder_claims=folder_claims,
         ),
         observed,
     )
@@ -2736,12 +3679,13 @@ def _resolve_cores(
 ) -> tuple[tuple[CoreFirmware, ...], list[Caveat]]:
     resolved: list[CoreFirmware] = []
     answer_caveats: list[Caveat] = []
+    folders: _FolderReads = {}
     for core in cores:
         label = None if labels is None else labels.get(core.core_so)
         if core.info_status != READ_OK:
             resolved.append(_undeclarable_core(core, label))
             continue
-        answer, observed = _read_core(machine, context, core, label, verify=verify)
+        answer, observed = _read_core(machine, context, core, label, verify=verify, folders=folders)
         answer_caveats.extend(observed)
         resolved.append(answer)
     return tuple(resolved), answer_caveats
@@ -3482,15 +4426,35 @@ def _pcsx2_standalone_core(
     )
 
 
-# xemu v0.8.135 — four files sit in ``[sys.files]`` and only three are
-# firmware. The boot ROM, the flash image and the hard disk each refuse the
-# start when missing, in the emulator's own words; the EEPROM is generated
-# where none exists and belongs to the save answer, which already states it.
-_XEMU_FILE_KEYS = (
-    "sys.files/bootrom_path",
-    "sys.files/flashrom_path",
-    "sys.files/hdd_path",
-)
+# xemu v0.8.135 — five paths sit in ``[sys.files]`` and only three are
+# firmware: the boot ROM, the flash image and the hard disk, the files xemu's
+# own documentation calls necessary to run the emulator at all. The EEPROM is
+# generated where none exists and belongs to the save answer, which already
+# states it; the disc is content.
+#
+# What an empty setting costs, per file. All three are ``required`` — need
+# states what the emulator asks for — but of the three only the flash image
+# holds the launch: its failure clears ``autostart`` (vl.c:3046-3050), while
+# an unreadable boot ROM or hard disk is queued into xemu's UI and the machine
+# is built without it (:2985-3007, :3061-3074, at v0.8.135). Each sentence
+# speaks only for its own file: several of these caveats can stand side by
+# side, so none of them may claim the outcome of the launch as a whole.
+_XEMU_MISSING_CONSEQUENCE = {
+    "sys.files/bootrom_path": (
+        "this file does not hold the launch: its absence costs the MCPX boot ROM over "
+        "the flash image, not the start"
+    ),
+    "sys.files/flashrom_path": (
+        "this is the one of the three that does hold the launch: xemu does not start "
+        "the console without it"
+    ),
+    "sys.files/hdd_path": (
+        "this file does not hold the launch: its absence costs the hard disk, not the start"
+    ),
+}
+
+# The keys are the map's, so the two cannot drift apart (order is the map's).
+_XEMU_FILE_KEYS = tuple(_XEMU_MISSING_CONSEQUENCE)
 
 
 def xemu_file_value(document: Mapping[str, Any], key: str) -> str | None:
@@ -3499,10 +4463,11 @@ def xemu_file_value(document: Mapping[str, Any], key: str) -> str | None:
     *key* may be the bare setting (``hdd_path``) or a card's own address for it
     (``sys.files/hdd_path``); the last segment is the name inside the table.
 
-    Public in this module because the save route reads the same four settings
-    out of the same file and had its own copy of these four lines — two
-    readings of one table that could drift apart while both looked right.
-    ``installations`` imports ``firmware``, so the shared one lives here.
+    Public in this module because the save and savestate routes read two of
+    the same settings out of the same file (``hdd_path`` and ``eeprom_path``,
+    installations.py:6764-6765 and :9875) and had their own copy of these four
+    lines — two readings of one table that could drift apart while both looked
+    right. ``installations`` imports ``firmware``, so the shared one lives here.
     """
     files = document.get("sys", {})
     files = files.get("files", {}) if isinstance(files, Mapping) else {}
@@ -3540,15 +4505,17 @@ def _xemu_standalone_core(
     xdg_pinned: bool,
     verify: bool,
 ) -> tuple[CoreFirmware, list[Caveat]]:
-    """xemu's expectations: the three files in ``[sys.files]`` that refuse the start.
+    """xemu's expectations: the three files in ``[sys.files]`` its documentation asks for.
 
     Each is a plain path the configuration states outright — no defaults, no
     composition — so the reading is short and the interesting part is which of
-    the four keys belong here at all. The EEPROM does not: xemu generates one
+    the five keys belong here at all. The EEPROM does not: xemu generates one
     where none exists, and it is the console's own settings, which the save
-    answer already states. The hard disk does, and is claimed by both answers
-    on purpose: a console does not start without one, and every save lives
-    inside it.
+    answer already states. The disc does not either — it is content. The hard
+    disk does, and is claimed by both answers on purpose: xemu asks for one,
+    and every save lives inside it. What ``need`` does not say is how hard
+    each launch gate is, which is why the empty-setting caveat states the
+    consequence per file rather than once for all three.
     """
     del xdg_pinned  # xemu states one base, so no launch has a root to pick
     # Which home the file sits under is the settings table's to say — xemu's
@@ -3577,8 +4544,8 @@ def _xemu_standalone_core(
             caveats.append(
                 Caveat(
                     CAVEAT_FIRMWARE_PATH_NAMES_NO_FILE,
-                    f"{entry.label}'s {key} names no file — the setting is empty, and the "
-                    "console refuses to start without this one",
+                    f"{entry.label}'s {key} names no file — the setting is empty, and "
+                    f"{_XEMU_MISSING_CONSEQUENCE[key]}",
                     {
                         "label": entry.label,
                         "token": card.token,
@@ -3606,7 +4573,7 @@ def _xemu_standalone_core(
                     "system/vl.c:2983-3095, and opened with plain fopen/access, "
                     "vl.c:2527-2535 and :2918 with osdep.h:645-653, at v0.8.135) — a "
                     "property of the launch, not of the machine, so no destination is "
-                    f"stated for a file the launch does require; fill '{HOLE_CWD}' with "
+                    f"stated for a file the emulator does ask for; fill '{HOLE_CWD}' with "
                     "the launcher's working directory to complete the path",
                     {
                         "label": entry.label,
@@ -4387,6 +5354,7 @@ def _catalogue_entry_core(
     system: str,
     *,
     verify: bool,
+    folders: _FolderReads,
 ) -> tuple[CoreFirmware, list[Caveat]]:
     """One catalogue entry resolved, plus the observations it produced.
 
@@ -4394,6 +5362,10 @@ def _catalogue_entry_core(
     declaration, live destinations), a standalone one outside atlas's
     coverage, a core the catalogue names that is not installed (not here), an
     installed core whose ``.info`` could not be read, and one that was read.
+
+    *folders* is the answer's memo of folder reads: a catalogue may list one
+    core under two entries, and each entry still answers its own rows, but a
+    declared folder is read and its contents stated once (:data:`_FolderReads`).
     """
     if entry.kind != KIND_LIBRETRO or entry.core_so is None:
         return _standalone_entry_core(machine, context, entry, system, verify=verify)
@@ -4426,7 +5398,7 @@ def _catalogue_entry_core(
         )
     if core.info_status != READ_OK:
         return _undeclarable_core(core, entry.label), []
-    return _read_core(machine, context, core, entry.label, verify=verify)
+    return _read_core(machine, context, core, entry.label, verify=verify, folders=folders)
 
 
 def _empty_system_statement(
@@ -4573,9 +5545,10 @@ def firmware_for_system(
             # further statements adjacent to it.
             caveats.append(catalogue.hole)
         by_stem = {core.stem: core for core in context.cores}
+        folders: _FolderReads = {}
         for entry in catalogue.entries:
             core, observed = _catalogue_entry_core(
-                machine, context, entry, by_stem, system, verify=verify
+                machine, context, entry, by_stem, system, verify=verify, folders=folders
             )
             resolved.append(core)
             caveats.extend(observed)
@@ -4687,6 +5660,7 @@ def _unclaimed_files(
     context: FirmwareContext,
     claimed: set[str],
     *,
+    accounted: set[str],
     verify: bool,
 ) -> tuple[tuple[UnclaimedFile, ...], list[Caveat]]:
     """Files sitting where a declaration points, that no installed core asks for.
@@ -4698,6 +5672,15 @@ def _unclaimed_files(
     needs no exclusion list and grows on its own as cores declare new paths.
     Save data the rule cards claim is excluded outright
     (:func:`save_artifact_paths`).
+
+    *accounted* is what a listed folder's read already stated — an image the
+    core's test passed, a candidate the table names and the test denies, one
+    whose header read did not come back, or one whose digest could not be
+    taken (:attr:`CoreFirmware.folder_claims`).
+    Those files are claimed by that declaration and skipped here exactly as a
+    declared destination is, so the
+    read failure the folder read stated is not stated again as an unclaimed
+    file's; they do not widen the scan, which *claimed* alone bounds.
 
     Every scanned directory is clamped to the root's subtree, and the root
     itself is the only one that may equal it. A claimed path is resolved and
@@ -4738,7 +5721,7 @@ def _unclaimed_files(
     caveats: list[Caveat] = []
     for directory in sorted(directories):
         in_directory, unreadable = _unclaimed_in(
-            machine, context, directory, claimed, artifacts, verify=verify
+            machine, context, directory, claimed | accounted, artifacts, verify=verify
         )
         found.extend(in_directory)
         caveats.extend(unreadable)
@@ -4765,7 +5748,12 @@ def firmware_inventory(machine: Machine, context: FirmwareContext, *, verify: bo
             landing = destination_under(machine, context.root, declaration.path).path
             if landing is not None:
                 claimed.add(landing)
-    unclaimed, unclaimed_caveats = _unclaimed_files(machine, context, claimed, verify=verify)
+    # What a listed folder's read already stated is that declaration's, not
+    # the scan's — stated once, by the read that saw it.
+    accounted = {path for core in cores for path in core.folder_claims}
+    unclaimed, unclaimed_caveats = _unclaimed_files(
+        machine, context, claimed, accounted=accounted, verify=verify
+    )
     caveats.extend(unclaimed_caveats)
     if not claimed:
         caveats.append(

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 from adapters.adoption_move import AdoptionMoveAdapter
 from adapters.asyncio_sleeper import AsyncioSleeper
-from adapters.atlas_firmware import AtlasFirmwareAdapter
+from adapters.atlas_firmware import AtlasFirmwareAdapter, AtlasFolderVerdictAdapter
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter
@@ -76,6 +76,7 @@ if TYPE_CHECKING:
         DownloadFileStore,
         EventEmitter,
         FirmwareFileStore,
+        FirmwareFolderVerdictFn,
         FirmwareResolver,
         GameProcessControl,
         HostnameReader,
@@ -126,6 +127,7 @@ class AdapterBundle:
     adoption_move: AdoptionMoveStore
     firmware_file_store: FirmwareFileStore
     firmware_resolver: FirmwareResolver
+    firmware_folder_verdicts: FirmwareFolderVerdictFn
     migration_file_store: MigrationFileStore
     rom_file_store: RomFileStore
     save_file_store: SaveFileStore
@@ -367,8 +369,9 @@ def bootstrap(
     debug_logger = SettingsAwareDebugLogger(settings=settings, logger=logger)
     # Built after the debug logger because the resolver never logs on its own:
     # its caveats are the whole degradation channel and reach the log through
-    # this seam or not at all.
+    # this seam or not at all. That holds for both firmware questions.
     firmware_resolver = AtlasFirmwareAdapter(user_home=user_home, log_debug=debug_logger)
+    firmware_folder_verdicts = AtlasFolderVerdictAdapter(user_home=user_home, log_debug=debug_logger)
 
     adapters = AdapterBundle(
         http_adapter=http_adapter,
@@ -381,6 +384,7 @@ def bootstrap(
         adoption_move=adoption_move,
         firmware_file_store=firmware_file_store,
         firmware_resolver=firmware_resolver,
+        firmware_folder_verdicts=firmware_folder_verdicts,
         migration_file_store=migration_file_store,
         rom_file_store=rom_file_store,
         save_file_store=save_file_store,

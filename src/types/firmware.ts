@@ -13,7 +13,37 @@
  */
 export type FirmwareWanted = "needed" | "optional" | "not_needed" | "unknown";
 
-interface FirmwareFile {
+/**
+ * What the emulator opens a firmware declaration AT — a file it reads, or a
+ * folder it lists. A property of the DECLARATION, so it survives an empty
+ * destination: a folder that is not there is still a folder to create, never a
+ * file to fetch, which is why no download affordance may offer such a row.
+ */
+export type FirmwareDeclaredKind = "file" | "directory";
+
+/**
+ * The reading's answer about one row, carried on both row shapes.
+ *
+ * `satisfied` is the verdict and the axis the REQUIRED counts key off: the
+ * requirement is met, is not met, or nothing established which. It is not
+ * `downloaded` — for a folder declaration the two come apart completely, since
+ * what satisfies the core is a file *inside* the folder and RetroDECK links
+ * LRPS2's `pcsx2/bios` onto the BIOS root, so the folder is always there. The
+ * library's held/offered ratio is a third axis and keys off neither.
+ *
+ * `caveats` are the resolver's own stable codes for what it found, and `images`
+ * names what a satisfied folder holds, in the resolver's own words. A surface
+ * takes the CAUSE of a verdict from those, because `satisfied` is deliberately
+ * the verdict alone and carries none of it.
+ */
+interface FirmwareVerdict {
+  satisfied?: boolean | null;
+  declared_kind?: FirmwareDeclaredKind;
+  caveats?: string[];
+  images?: string[];
+}
+
+interface FirmwareFile extends FirmwareVerdict {
   /** `null` for a file an installed emulator asks for that the RomM library does
    *  not hold — there is no server record to name. Nothing reads it: what the
    *  page filters the download buttons and its progress totals on is
@@ -32,7 +62,6 @@ interface FirmwareFile {
   required_by_active: boolean;
   on_server: boolean;
   supplied_by?: string | null;
-  is_directory?: boolean;
 }
 
 interface FirmwarePlatform {
@@ -124,7 +153,7 @@ export interface FirmwareStatus {
   platforms: FirmwarePlatformExt[];
 }
 
-export interface BiosFileStatus {
+export interface BiosFileStatus extends FirmwareVerdict {
   file_name: string;
   downloaded: boolean;
   local_path: string;
@@ -139,17 +168,10 @@ export interface BiosFileStatus {
    *  It still counts as missing — it just cannot be fetched from the plugin. */
   on_server?: boolean;
   /** The distribution whose own copy is sitting at the destination, as the
-   *  resolver names it (`"retrodeck"`) — printed verbatim, never mapped to a
-   *  display form of ours. Absent claims nothing: the resolver states it only
-   *  where it established the provenance. */
+   *  resolver writes that distribution's name — printed verbatim, never mapped
+   *  to a display form of ours. Absent claims nothing: the resolver states it
+   *  only where it established the provenance. */
   supplied_by?: string | null;
-  /** A directory was FOUND at the destination — not a property of what the
-   *  emulator declared, which the reading cannot tell apart: a core asking for a
-   *  folder and a folder sitting where a core's file belongs arrive the same
-   *  way. Either way what would satisfy the requirement is inside it, the
-   *  reading does not look, and the row's verdict is withheld rather than
-   *  present or missing. Nothing can say it while the folder is absent. */
-  is_directory?: boolean;
 }
 
 /**
@@ -158,9 +180,9 @@ export interface BiosFileStatus {
  * firmware and not one file of it could be answered for; the platform holds no
  * file at all and its reading was not complete, which is already the case when a
  * single core the system offers went unread; or the launching core requires a
- * file nothing could judge (`required_withheld`). A neutral state, never a green
- * all-clear — and in the third shape not a red one either, which is why the
- * count comes with it.
+ * row nothing could judge (`required_withheld`) — a declared folder the resolver
+ * could not read, say. A neutral state, never a green all-clear — and in the
+ * third shape not a red one either, which is why the count comes with it.
  */
 export type BiosLevel = "ok" | "partial" | "missing" | "unknown";
 
@@ -171,13 +193,14 @@ export interface BiosStatus {
   all_downloaded?: boolean;
   required_count?: number;
   required_downloaded?: number;
-  /** How many of `required_count` nothing could judge: rows the reading found a
-   *  folder at, whose contents it does not inspect. Something is at the
-   *  destination and nothing about the requirement was established, so such a
-   *  row raises neither `required_downloaded` nor the count of files known to be
-   *  absent — subtract it from `required_count` for that. Above zero, the
-   *  readiness verdict declines (`bios_level` `"unknown"`) while the file rows
-   *  keep their own answers. */
+  /** How many of `required_count` nothing could judge — rows whose `satisfied`
+   *  is null, such as a declared folder the resolver could not read. Nothing
+   *  about the requirement was established, so such a row raises neither
+   *  `required_downloaded` nor the count of files known to be absent — subtract
+   *  it from `required_count` for that. Above zero, the readiness verdict
+   *  declines (`bios_level` `"unknown"`) while the file rows keep their own
+   *  answers. A row answered `false` is NOT here: that is a requirement shown to
+   *  be unmet, and it reads red like any other. */
   required_withheld?: number;
   // Server files an installed emulator asks for, and files nothing could answer
   // about. A `not_needed` file is in neither — it is answered for, and wanted by

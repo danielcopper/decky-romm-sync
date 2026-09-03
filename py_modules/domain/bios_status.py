@@ -20,7 +20,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from domain.firmware_wants import WANTED_NEEDED, WANTED_OPTIONAL, WANTED_UNKNOWN, classify_wanted
+from domain.firmware_wants import (
+    DECLARED_FILE,
+    VERDICT_WITHHOLDING_CAVEATS,
+    WANTED_NEEDED,
+    WANTED_OPTIONAL,
+    WANTED_UNKNOWN,
+    classify_wanted,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -61,10 +68,26 @@ class BiosFileEntry:
     this page can fetch it — so it is shown, and it is kept out of every count
     that offers the user an action.
 
-    ``supplied_by`` and ``is_directory`` are what the reading found at the
-    destination, carried per row so the surfaces can say what a row is instead
-    of describing every one of them as a file the library is missing. Both
-    default to the silent answer, which is the one a row nothing declares has.
+    ``satisfied`` is the row's verdict and the axis the REQUIRED counts key off:
+    the requirement is met, is not met, or nothing established which. It is not
+    ``downloaded``, which answers only whether something is at the destination —
+    for a **folder** declaration the two come apart completely, since what
+    satisfies the requirement is a file inside the folder and the folder itself
+    is always there on a stock RetroDECK. The library's own held/offered ratio
+    is a third axis and keys off neither (``on_server`` and ``downloaded``).
+
+    ``declared_kind`` is what the emulator opens the destination at, and it is a
+    property of the DECLARATION: a folder that is not there is still a folder to
+    create rather than a file to fetch, which is why no surface may offer such a
+    row as a download. ``caveats`` and ``images`` are the resolver's own words
+    for what it found and what a satisfied folder holds, and a surface takes the
+    CAUSE of a verdict from them, because ``satisfied`` is deliberately the
+    verdict alone and carries none of it.
+
+    ``supplied_by`` is what the reading found at the destination, carried per row
+    so the surfaces can say what a row is instead of describing every one of them
+    as a file the library is missing. It defaults to the silent answer, which is
+    the one a row nothing declares has.
     """
 
     file_name: str
@@ -77,31 +100,10 @@ class BiosFileEntry:
     used_by_active: bool
     on_server: bool = True
     supplied_by: str | None = None
-    is_directory: bool = False
-
-    @property
-    def verdict_withheld(self) -> bool:
-        """Did the reading find something here that settles nothing about the requirement?
-
-        A directory: the resolver states that one is there and establishes
-        nothing further, because what would satisfy the requirement is inside
-        it and it does not look. ``downloaded`` says the honest half — something
-        IS at the destination — and this says the half ``downloaded`` cannot,
-        which is that the half is not an answer.
-
-        Read off ``is_directory``, which is what was FOUND rather than what was
-        declared: a folder a core asked for and a folder sitting where a core's
-        file belongs are the same withheld verdict, and the resolver does not
-        distinguish them either.
-
-        The resolver's own ``satisfied`` is the tempting field and is the wrong
-        one. It is withheld for far more than this — every file whose bytes were
-        not verified, which is every file, since nothing here asks for
-        verification — so reading it would withhold the verdict for a whole
-        platform's rows rather than for the one nothing can be said about.
-        Verifying contents is its own question and is not asked in this cut.
-        """
-        return self.is_directory
+    satisfied: bool | None = None
+    declared_kind: str = DECLARED_FILE
+    caveats: tuple[str, ...] = ()
+    images: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -155,7 +157,10 @@ def format_bios_status(
                 used_by_active=f.get("used_by_active", True),
                 on_server=f.get("on_server", True),
                 supplied_by=f.get("supplied_by"),
-                is_directory=f.get("is_directory", False),
+                satisfied=f.get("satisfied"),
+                declared_kind=f.get("declared_kind", DECLARED_FILE),
+                caveats=tuple(f.get("caveats", ())),
+                images=tuple(f.get("images", ())),
             )
             for f in raw_files
         )
@@ -209,6 +214,7 @@ def build_file_entry(
     every declaring core stands in for it, which is the same permissive default
     the platform has always fallen back to.
     """
+    folder = placement.folder if placement is not None else None
     wants = placement.wants if placement is not None else ()
     cores = {want.core_so: {"required": want.required} for want in wants if want.core_so is not None}
     if active_core_so is None:
@@ -228,8 +234,38 @@ def build_file_entry(
         used_by_active=used_by_active,
         on_server=on_server,
         supplied_by=placement.supplied_by if placement is not None else None,
-        is_directory=placement.is_directory if placement is not None else False,
+        satisfied=_row_verdict(placement, downloaded),
+        declared_kind=placement.declared_kind if placement is not None else DECLARED_FILE,
+        caveats=placement.caveats if placement is not None else (),
+        images=folder.images if folder is not None else (),
     )
+
+
+def _row_verdict(placement: FirmwarePlacement | None, downloaded: bool) -> bool | None:
+    """Is this row's requirement met? ``None`` where nothing established it.
+
+    Three shapes, and the first is the reason the axis exists at all. A **folder
+    declaration** is answered by the resolver's own listing of the folder, never
+    by the folder being there: RetroDECK links LRPS2's ``pcsx2/bios`` onto the
+    BIOS root, so it is present on every install, and reading presence as the
+    verdict would report "All required ready" over a PS2 install with no BIOS
+    file at all. No listing means no verdict.
+
+    A **file** the reading found something else at — a directory in its way — is
+    withheld for the mirror-image reason: something is at the destination and it
+    is not the file, so neither "there" nor "absent" is a claim the reading
+    supports.
+
+    Everything else is ``downloaded``, which for a declared file is the
+    resolver's own reading at the destination it will be opened from.
+    """
+    if placement is None:
+        return downloaded
+    if placement.declares_directory:
+        return placement.folder.satisfied if placement.folder is not None else None
+    if VERDICT_WITHHOLDING_CAVEATS.intersection(placement.caveats):
+        return None
+    return downloaded
 
 
 def collect_firmware_status(
@@ -267,17 +303,17 @@ def count_required(files: tuple[BiosFileEntry, ...]) -> tuple[int, int]:
     cannot launch. What it must never do is imply a download; whether anything
     is fetchable is a separate question, asked where the buttons are.
 
-    A row whose verdict was withheld raises the first number and not the second.
-    Something is at its destination and nothing is established about it, so
-    counting it as done would spend a requirement nobody met: RetroDECK links
-    LRPS2's ``pcsx2/bios`` folder onto the BIOS root, so it is always there, and
-    the ratio it completed would read "All required ready" over a PS2 install
-    with no BIOS file at all. It is not counted as missing either — that is
+    The second number is the row VERDICT, not ``downloaded``: for a folder
+    declaration the two come apart, since RetroDECK links LRPS2's ``pcsx2/bios``
+    onto the BIOS root and the folder is therefore present on every install.
+    Counting presence there would read "All required ready" over a PS2 install
+    with no BIOS file at all. A row nothing could judge raises the first number
+    and not the second, and is not counted as missing either — that is
     :func:`count_required_withheld`, and the readiness verdict declines rather
     than picking one of the two.
     """
     required = [f for f in files if f.required_by_active]
-    return len(required), sum(1 for f in required if f.downloaded and not f.verdict_withheld)
+    return len(required), sum(1 for f in required if f.satisfied)
 
 
 def count_required_withheld(files: tuple[BiosFileEntry, ...]) -> int:
@@ -289,7 +325,7 @@ def count_required_withheld(files: tuple[BiosFileEntry, ...]) -> int:
     ``required_downloaded`` is the requirement whose absence really was
     established.
     """
-    return sum(1 for f in files if f.required_by_active and f.verdict_withheld)
+    return sum(1 for f in files if f.required_by_active and f.satisfied is None)
 
 
 def _nothing_established(status: BiosStatus) -> bool:
@@ -330,8 +366,13 @@ def _requirement_verdict_withheld(status: BiosStatus) -> bool:
     that is deliberate. Where one required row cannot be judged, neither "ready"
     nor "some of it is absent" is a claim the reading supports, and the rows
     below the verdict still say which is which per file.
+
+    A required row the reading answered ``False`` is NOT this shape: it is a
+    requirement shown to be unmet, so the level goes to ``'missing'`` or
+    ``'partial'`` and the play row raises its badge. A folder the resolver
+    listed and found no image in is exactly that answer.
     """
-    return any(f.required_by_active and f.verdict_withheld for f in status.files)
+    return any(f.required_by_active and f.satisfied is None for f in status.files)
 
 
 def compute_bios_level(status: BiosStatus) -> str:

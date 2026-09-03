@@ -13,7 +13,7 @@ from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_core_info_provider import FakeCoreInfoProvider, libretro_option
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
-from fakes.fake_firmware_resolver import FakeFirmwareResolver
+from fakes.fake_firmware_resolver import FakeFirmwareResolver, FakeFolderVerdicts
 from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_renderer_gc import FakeRendererGc
 from fakes.fake_renderer_rss import FakeRendererRss
@@ -27,6 +27,7 @@ from adapters.steam_config import SteamConfigAdapter
 from domain.bios_file import BiosFile
 from domain.bios_status import BiosFileEntry
 from domain.firmware_cache import FirmwareCacheEntry
+from domain.firmware_wants import FolderVerdict
 from domain.rom import Rom
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
@@ -85,6 +86,7 @@ def _make_firmware_service(
     clock: FakeClock | None = None,
     firmware_file_store=None,
     firmware_resolver: FakeFirmwareResolver | None = None,
+    firmware_folder_verdicts: FakeFolderVerdicts | None = None,
     retrodeck_paths: FakeRetroDeckPaths | None = None,
     core_info: FakeCoreInfoProvider | None = None,
     resolve_system: FakeSystemResolver | None = None,
@@ -123,6 +125,9 @@ def _make_firmware_service(
             clock=clock if clock is not None else _make_clock(),
             firmware_file_store=store,
             firmware_resolver=resolver,
+            firmware_folder_verdicts=firmware_folder_verdicts
+            if firmware_folder_verdicts is not None
+            else FakeFolderVerdicts(),
             retrodeck_paths=paths,
             core_info=core_info if core_info is not None else FakeCoreInfoProvider(),
             resolve_system=resolve_system if resolve_system is not None else FakeSystemResolver(),
@@ -458,7 +463,7 @@ class TestPresenceComesFromTheReading:
 
 
 class TestDestinationReadingsReachBothSurfaces:
-    """``supplied_by`` and ``is_directory`` travel to the game page and the System page."""
+    """``supplied_by`` and ``declared_kind`` travel to the game page and the System page."""
 
     _CORE = "flycast_libretro"
 
@@ -478,48 +483,52 @@ class TestDestinationReadingsReachBothSurfaces:
     @pytest.mark.asyncio
     async def test_the_game_page_row_names_the_supplying_distribution(self, plugin, tmp_path):
         resolver = FakeFirmwareResolver()
-        resolver.declare("codehandler.bin", required_by=[self._CORE], present=True, supplied_by="retrodeck")
+        resolver.declare("codehandler.bin", required_by=[self._CORE], present=True, supplied_by="RetroDECK")
         fw = self._service(plugin, tmp_path, resolver)
         _stub_listing(fw, [])
 
         result = await fw.check_platform_bios("dc")
 
-        assert result["files"][0]["supplied_by"] == "retrodeck"
-        assert result["files"][0]["is_directory"] is False
+        assert result["files"][0]["supplied_by"] == "RetroDECK"
+        assert result["files"][0]["declared_kind"] == "file"
 
     @pytest.mark.asyncio
-    async def test_the_system_page_row_names_the_directory(self, plugin, tmp_path):
+    async def test_the_system_page_row_names_the_folder_declaration(self, plugin, tmp_path):
         _seed_rom(plugin._uow, rom_id=51, platform_slug="dc", app_id=1)
         resolver = FakeFirmwareResolver()
-        resolver.declare("bios", required_by=[self._CORE], relative_path="pcsx2/bios", present=True, is_directory=True)
+        resolver.declare(
+            "bios", required_by=[self._CORE], relative_path="pcsx2/bios", present=True, declares_directory=True
+        )
         fw = self._service(plugin, tmp_path, resolver)
         _stub_listing(fw, [])
 
         result = await fw.get_firmware_status()
         row = next(p for p in result["platforms"] if p["platform_slug"] == "dc")["files"][0]
 
-        assert row["is_directory"] is True
+        assert row["declared_kind"] == "directory"
         assert row["supplied_by"] is None
         assert row["downloaded"] is True
 
 
-class TestARequiredFolderIsNotASatisfiedRequirement:
-    """A folder the reading found and did not look inside settles nothing.
+class TestAFolderRequirementIsAnsweredByItsContents:
+    """LRPS2's ``pcsx2/bios`` is answered by what is inside it, never by its being there.
 
-    LRPS2 declares ``pcsx2/bios`` — a folder — and declares it required, and
-    RetroDECK links that path onto the BIOS root, so it is present on every
-    install. Counted as satisfied it read "All required ready" over a PS2 system
-    with no BIOS file at all; counted as missing it read red over a folder that
-    is plainly there. The verdict declines instead, and the rows keep theirs.
+    RetroDECK links that folder onto the BIOS root, so it is present on every
+    install: reading presence as the verdict reports "All required ready" over a
+    PS2 system with no BIOS file at all, and reading absence reports red over a
+    folder that is plainly there. The verified read settles it, and the readiness
+    verdict declines only where that read established nothing.
     """
 
     _CORE = "pcsx2_libretro"
+    _IMAGES = ("Europe  v02.00(14/06/2004)  Console 20040614-100914",)
 
-    def _service(self, plugin, tmp_path, resolver):
+    def _service(self, plugin, tmp_path, resolver, verdicts=None):
         fw = _make_firmware_service(
             romm_api=plugin._romm_api,
             uow_factory=FakeUnitOfWorkFactory(plugin._uow),
             firmware_resolver=resolver,
+            firmware_folder_verdicts=verdicts,
             core_info=FakeCoreInfoProvider(
                 active_core=(self._CORE, "LRPS2"), options=[libretro_option(self._CORE, "LRPS2")]
             ),
@@ -530,9 +539,11 @@ class TestARequiredFolderIsNotASatisfiedRequirement:
         return fw
 
     def _resolver(self) -> FakeFirmwareResolver:
-        """What LRPS2 asks for: a folder, and a file beside it."""
+        """What LRPS2 asks for: a folder that is there, and a file beside it."""
         resolver = FakeFirmwareResolver()
-        resolver.declare("bios", required_by=[self._CORE], relative_path="pcsx2/bios", present=True, is_directory=True)
+        resolver.declare(
+            "bios", required_by=[self._CORE], relative_path="pcsx2/bios", present=True, declares_directory=True
+        )
         resolver.declare(
             "GameIndex.yaml",
             required_by=[self._CORE],
@@ -541,66 +552,206 @@ class TestARequiredFolderIsNotASatisfiedRequirement:
         )
         return resolver
 
+    def _verdicts(self, satisfied: bool | None, *, caveats=(), images=()) -> FakeFolderVerdicts:
+        return FakeFolderVerdicts(
+            {self._CORE: {"bios": FolderVerdict(satisfied=satisfied, images=images, caveats=caveats)}}
+        )
+
     @pytest.mark.asyncio
-    async def test_the_folder_does_not_complete_the_required_ratio(self, plugin, tmp_path):
-        fw = self._service(plugin, tmp_path, self._resolver())
+    async def test_an_image_in_the_folder_completes_the_required_ratio(self, plugin, tmp_path):
+        fw = self._service(plugin, tmp_path, self._resolver(), self._verdicts(True, images=self._IMAGES))
 
         result = await fw.check_platform_bios("ps2")
 
         assert result["required_count"] == 2
-        assert result["required_downloaded"] == 1
-        assert result["required_withheld"] == 1
+        assert result["required_downloaded"] == 2
+        assert result["required_withheld"] == 0
+        assert result["bios_level"] == "ok"
 
     @pytest.mark.asyncio
-    async def test_the_platform_declines_to_claim_readiness(self, plugin, tmp_path):
-        fw = self._service(plugin, tmp_path, self._resolver())
+    async def test_the_row_names_the_images_the_read_identified(self, plugin, tmp_path):
+        fw = self._service(plugin, tmp_path, self._resolver(), self._verdicts(True, images=self._IMAGES))
+
+        result = await fw.check_platform_bios("ps2")
+        row = next(row for row in result["files"] if row["file_name"] == "bios")
+
+        assert row["satisfied"] is True
+        assert row["images"] == self._IMAGES
+        assert row["declared_kind"] == "directory"
+
+    @pytest.mark.asyncio
+    async def test_a_folder_holding_no_image_is_a_requirement_shown_to_be_unmet(self, plugin, tmp_path):
+        """Not a declined verdict: the read happened and the answer is no."""
+        verdicts = self._verdicts(False, caveats=("firmware-directory-holds-no-image",))
+        fw = self._service(plugin, tmp_path, self._resolver(), verdicts)
+
+        result = await fw.check_platform_bios("ps2")
+        row = next(row for row in result["files"] if row["file_name"] == "bios")
+
+        assert result["required_downloaded"] == 1
+        assert result["required_withheld"] == 0
+        assert result["bios_level"] == "partial"
+        assert row["satisfied"] is False
+        assert row["caveats"] == ("firmware-directory-holds-no-image",)
+
+    @pytest.mark.asyncio
+    async def test_a_read_that_established_nothing_still_declines_the_verdict(self, plugin, tmp_path):
+        """The resolver could not answer, so neither ready nor missing is a claim."""
+        fw = self._service(plugin, tmp_path, self._resolver(), FakeFolderVerdicts())
 
         result = await fw.check_platform_bios("ps2")
 
+        assert result["required_downloaded"] == 1
+        assert result["required_withheld"] == 1
         assert result["bios_level"] == "unknown"
         assert result["bios_label"] == "Unknown"
 
     @pytest.mark.asyncio
-    async def test_the_rows_keep_their_own_answers(self, plugin, tmp_path):
-        """Only the one-line verdict declines — the file beside the folder is answered for."""
-        fw = self._service(plugin, tmp_path, self._resolver())
+    async def test_the_rows_beside_the_folder_keep_their_own_answers(self, plugin, tmp_path):
+        fw = self._service(plugin, tmp_path, self._resolver(), self._verdicts(True, images=self._IMAGES))
 
         result = await fw.check_platform_bios("ps2")
         rows = {row["file_name"]: row for row in result["files"]}
 
         assert rows["GameIndex.yaml"]["downloaded"] is True
-        assert rows["GameIndex.yaml"]["is_directory"] is False
+        assert rows["GameIndex.yaml"]["satisfied"] is True
+        assert rows["GameIndex.yaml"]["declared_kind"] == "file"
         assert rows["GameIndex.yaml"]["wanted"] == "needed"
-        # Present, and not an answer: the row says a folder is there, the verdict
-        # says nothing follows from that.
-        assert rows["bios"]["downloaded"] is True
-        assert rows["bios"]["is_directory"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_folder_the_machine_wide_reading_settled_is_not_asked_again(self, plugin, tmp_path):
+        """An absent folder is settled by a stat, so nothing pays for a content read."""
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "bios",
+            required_by=[self._CORE],
+            relative_path="pcsx2/bios",
+            present=False,
+            declares_directory=True,
+            folder=FolderVerdict(satisfied=False),
+        )
+        verdicts = FakeFolderVerdicts()
+        fw = self._service(plugin, tmp_path, resolver, verdicts)
+
+        result = await fw.check_platform_bios("ps2")
+
+        assert verdicts.calls == []
+        assert result["required_downloaded"] == 0
+        assert result["bios_level"] == "missing"
+
+    @pytest.mark.asyncio
+    async def test_a_folder_the_stat_settled_reaches_the_row_with_the_code_that_words_it(self, plugin, tmp_path):
+        """Red is not enough on its own — the row has to say why, and nothing asks again.
+
+        A folder holding no file of a size the core would open is answered
+        without verification, so this row is never re-asked and the code the
+        inventory carried is the only word it will ever have.
+        """
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "bios",
+            required_by=[self._CORE],
+            relative_path="pcsx2/bios",
+            present=True,
+            declares_directory=True,
+            folder=FolderVerdict(satisfied=False),
+            caveats=("firmware-directory-holds-no-candidate",),
+        )
+        verdicts = FakeFolderVerdicts()
+        fw = self._service(plugin, tmp_path, resolver, verdicts)
+
+        result = await fw.check_platform_bios("ps2")
+        row = next(row for row in result["files"] if row["file_name"] == "bios")
+
+        assert verdicts.calls == []
+        assert row["satisfied"] is False
+        assert row["caveats"] == ("firmware-directory-holds-no-candidate",)
+        assert result["bios_level"] == "missing"
+
+    @pytest.mark.asyncio
+    async def test_a_platform_whose_cores_declare_no_folder_never_asks(self, plugin, tmp_path):
+        """The cost is paid where the folder row is, and nowhere else."""
+        resolver = FakeFirmwareResolver()
+        resolver.declare("GameIndex.yaml", required_by=[self._CORE], present=True)
+        verdicts = FakeFolderVerdicts()
+        fw = self._service(plugin, tmp_path, resolver, verdicts)
+
+        await fw.check_platform_bios("ps2")
+
+        assert verdicts.calls == []
+
+    @pytest.mark.asyncio
+    async def test_the_system_page_asks_each_core_once_and_reads_the_same_verdict(self, plugin, tmp_path):
+        """Every platform offering the core shares one answer — the read is per core."""
+        _seed_rom(plugin._uow, rom_id=52, platform_slug="ps2", app_id=2)
+        _seed_rom(plugin._uow, rom_id=53, platform_slug="ps2-alt", app_id=3)
+        verdicts = self._verdicts(True, images=self._IMAGES)
+        fw = self._service(plugin, tmp_path, self._resolver(), verdicts)
+
+        result = await fw.get_firmware_status()
+        platform = next(p for p in result["platforms"] if p["platform_slug"] == "ps2")
+
+        assert verdicts.calls == [self._CORE]
+        assert platform["bios_level"] == "ok"
+        assert platform["required_count"] == 2
+        assert platform["required_downloaded"] == 2
+        assert platform["required_withheld"] == 0
 
     @pytest.mark.asyncio
     async def test_a_folder_no_installed_core_requires_leaves_the_verdict_alone(self, plugin, tmp_path):
         """The scope is the launching core's requirement, not every folder on the page."""
         resolver = FakeFirmwareResolver()
-        resolver.declare("bios", optional_for=[self._CORE], relative_path="pcsx2/bios", present=True, is_directory=True)
-        fw = self._service(plugin, tmp_path, resolver)
+        resolver.declare(
+            "bios", optional_for=[self._CORE], relative_path="pcsx2/bios", present=True, declares_directory=True
+        )
+        fw = self._service(plugin, tmp_path, resolver, FakeFolderVerdicts())
 
         result = await fw.check_platform_bios("ps2")
 
         assert result["required_withheld"] == 0
         assert result["bios_level"] == "ok"
 
+
+class TestAFileWithSomethingElseAtItsDestination:
+    """A directory in a declared file's way settles nothing about the requirement.
+
+    The resolver states one shape at the destination and it is not the file, so
+    neither "there" nor "absent" is a claim the reading supports — the mirror
+    image of the folder whose contents could not be read.
+    """
+
+    _CORE = "flycast_libretro"
+
     @pytest.mark.asyncio
-    async def test_the_system_page_platform_declines_too(self, plugin, tmp_path):
-        """The System page reads the same verdict off the same builder."""
-        _seed_rom(plugin._uow, rom_id=52, platform_slug="ps2", app_id=2)
-        fw = self._service(plugin, tmp_path, self._resolver())
+    async def test_an_obstructed_file_declines_the_verdict_rather_than_reading_as_present(self, plugin, tmp_path):
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "dc_boot.bin",
+            required_by=[self._CORE],
+            present=True,
+            caveats=("firmware-path-obstructed",),
+        )
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "Flycast"), options=[libretro_option(self._CORE, "Flycast")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        _stub_listing(fw, [])
 
-        result = await fw.get_firmware_status()
-        platform = next(p for p in result["platforms"] if p["platform_slug"] == "ps2")
+        result = await fw.check_platform_bios("dc")
+        row = result["files"][0]
 
-        assert platform["bios_level"] == "unknown"
-        assert platform["required_count"] == 2
-        assert platform["required_downloaded"] == 1
-        assert platform["required_withheld"] == 1
+        assert row["downloaded"] is True
+        assert row["satisfied"] is None
+        assert row["caveats"] == ("firmware-path-obstructed",)
+        assert result["required_downloaded"] == 0
+        assert result["required_withheld"] == 1
+        assert result["bios_level"] == "unknown"
 
 
 class TestGetFirmwareStatus:
@@ -994,6 +1145,7 @@ class TestGetFirmwareStatusBiosAggregates:
         fw = _make_firmware_service(
             romm_api=romm_api,
             firmware_resolver=FakeFirmwareResolver(),
+            firmware_folder_verdicts=FakeFolderVerdicts(),
             core_info=FakeCoreInfoProvider(options=[libretro_option("snes9x_libretro", "Snes9x")]),
         )
         _inline_executor(fw)
@@ -1182,6 +1334,7 @@ class TestGetFirmwareStatusBiosAggregates:
             romm_api=plugin._romm_api,
             uow_factory=FakeUnitOfWorkFactory(plugin._uow),
             firmware_resolver=FakeFirmwareResolver(),
+            firmware_folder_verdicts=FakeFolderVerdicts(),
             core_info=_test_core_info(),
         )
         fw._loop = asyncio.get_event_loop()
@@ -1206,6 +1359,7 @@ class TestGetFirmwareStatusBiosAggregates:
             romm_api=plugin._romm_api,
             uow_factory=FakeUnitOfWorkFactory(plugin._uow),
             firmware_resolver=FakeFirmwareResolver(),
+            firmware_folder_verdicts=FakeFolderVerdicts(),
             core_info=FakeCoreInfoProvider(options=[]),
         )
         fw._loop = asyncio.get_event_loop()
@@ -1528,6 +1682,7 @@ class TestCheckPlatformBiosUnknown:
         fw = _make_firmware_service(
             romm_api=romm_api,
             firmware_resolver=FakeFirmwareResolver(),
+            firmware_folder_verdicts=FakeFolderVerdicts(),
             core_info=FakeCoreInfoProvider(available=False),
         )
         _inline_executor(fw)
@@ -1740,6 +1895,45 @@ class TestDownloadAllFirmware:
         assert result["downloaded"] == 1
         assert 2 in download_called_ids
         assert 1 not in download_called_ids
+
+    @pytest.mark.asyncio
+    async def test_a_folder_declaration_is_never_fetched(self, plugin, fw, tmp_path):
+        """The emulator lists that name, so there is no file to fetch into it.
+
+        The folder is ABSENT here, which is the case the already-there skip
+        would let through: a download would write a file where the core opens a
+        directory, and stage its ``.tmp`` beside the BIOS root.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        firmware_list = [
+            {"id": 3, "file_name": "bios", "file_path": "bios/ps2/bios", "file_size_bytes": 0, "md5_hash": ""}
+        ]
+        resolver = _resolver(fw)
+        resolver.declare(
+            "bios",
+            required_by=["pcsx2_libretro"],
+            relative_path="pcsx2/bios",
+            present=False,
+            declares_directory=True,
+            folder=FolderVerdict(satisfied=False),
+        )
+        fw._loop = asyncio.get_event_loop()
+        download_called_ids = []
+
+        async def fake_download_firmware(fw_id, _placements):
+            download_called_ids.append(fw_id)
+            return {"success": True}
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
+            patch.object(fw, "_download_one", side_effect=fake_download_firmware),
+            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_all_firmware("ps2")
+
+        assert download_called_ids == []
+        assert result["downloaded"] == 0
 
 
 class TestDeletePlatformBios:

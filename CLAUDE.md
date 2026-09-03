@@ -295,33 +295,36 @@ Format: **invariant** — tier — enforced by.
   the parse cache: `es_systems.xml` for the first three, `es_find_rules.xml` for the launcher read, and both for the
   options read, which globs each option's emulator install through the find rules), `SystemResolver` (parses the
   plugin's **own** bundled `config.json`, not RetroDECK's `retrodeck.json`, and does no network work despite living on
-  the RomM HTTP adapter), and `SystemSupportedExtensionsFn` / `SystemKnownFn` (two questions to `es_systems.xml` through
-  that same per-call probe). Two other real I/O seams were weighed and kept out — the reasons are in the script's
-  docstring, and neither is an exemption; nor are those two an inventory of what else touches the disk. **"It's only a
-  read" is the reasoning this rule exists to refuse**: `SqliteUnitOfWork.__enter__` issues `BEGIN IMMEDIATE`, so even a
-  read-only UoW takes the write lock. The database is in WAL, so readers are unaffected — but every other **writer**
-  waits on the lock for up to `busy_timeout=5000` and fails with `SQLITE_BUSY` if it is still held then, and
-  `FakeUnitOfWork` shares no connection, so no unit test notices. Six call sites had drifted across the rule before
-  anything looked (#1779), for the reason the check exists: nothing at a call site reveals that an injected seam touches
-  the disk. **The rule and the gate come from reading code — no measurement of how long any of those transactions
-  actually held the lock exists, and nothing here should be read as one.** What the check sees is the deadlock rule's
-  matcher unchanged — an **attribute** call naming a listed seam, lexically inside a `with <...>uow_factory()` block in
-  the same function scope — so it inherits every blind spot of that half: a seam behind a helper one level down, an
-  alias to a local, a factory attribute whose name does not end in `uow_factory`, a nested `def`/`lambda` (which resets
-  the scope by design), a seam **passed as a bound method**
-  (`run_in_executor(None, self._disc_resolver.enumerate_discs, install)` — an attribute, not a call, and
+  the RomM HTTP adapter), `SystemSupportedExtensionsFn` / `SystemKnownFn` (two questions to `es_systems.xml` through
+  that same per-call probe), and `FirmwareFolderVerdictFn` (lists one core's declared folder and reads every candidate
+  inside it the way the core does — 0.26 s for LRPS2 on the reference machine, the one seam here a cost was measured
+  for). Two other real I/O seams were weighed and kept out — the reasons are in the script's docstring, and neither is
+  an exemption; nor are those two an inventory of what else touches the disk. **"It's only a read" is the reasoning this
+  rule exists to refuse**: `SqliteUnitOfWork.__enter__` issues `BEGIN IMMEDIATE`, so even a read-only UoW takes the
+  write lock. The database is in WAL, so readers are unaffected — but every other **writer** waits on the lock for up to
+  `busy_timeout=5000` and fails with `SQLITE_BUSY` if it is still held then, and `FakeUnitOfWork` shares no connection,
+  so no unit test notices. Six call sites had drifted across the rule before anything looked (#1779), for the reason the
+  check exists: nothing at a call site reveals that an injected seam touches the disk. **The rule and the gate come from
+  reading code — no measurement of how long any of those transactions actually held the lock exists, and nothing here
+  should be read as one.** What the check sees is the deadlock rule's matcher unchanged — an **attribute** call naming a
+  listed seam, lexically inside a `with <...>uow_factory()` block in the same function scope — so it inherits every
+  blind spot of that half: a seam behind a helper one level down, an alias to a local, a factory attribute whose name
+  does not end in `uow_factory`, a nested `def`/`lambda` (which resets the scope by design), a seam **passed as a bound
+  method** (`run_in_executor(None, self._disc_resolver.enumerate_discs, install)` — an attribute, not a call, and
   `run_in_executor` is exactly how `disc.py` and `cores.py` reach their `_io` bodies; the same shape
   `check_read_only_module.py` records for its own gate), and the hand-maintained list itself, which cannot notice a seam
   whose implementation _grows_ a file read later. Matching only attribute calls is deliberate: the pure
   `domain.disc_selection.enumerate_discs` shares a name with the seam and does no I/O — it is safe because its call site
   imports it bare, not because of the name. The call-shaped blind spot is shared with the deadlock rule and only this
-  family closes it: its three `__call__`-only seams have no method name a consumer would write, so the list carries the
-  attribute each is bound to (`_resolve_system`, `_system_extensions`, `_system_known`) — by convention rather than by
-  construction, and only while such a name means one thing, which is exactly what keeps `_list_files` out. The deadlock
-  rule's own call-shaped seams stay open. `SystemResolver` is the odd one out for a second reason: the adapter memoises
-  its map for the life of the process, so exactly one call ever opens the file, and the entry earns its place because
-  that one call can land inside a UoW. One `# pragma: no uow-check` covers both families — it suppresses the line, and
-  no seam is in both lists, so where a line does name two seams it silences both
+  family closes it: for its four `__call__`-only seams the list carries the attribute each is bound to
+  (`_resolve_system`, `_system_extensions`, `_system_known`, `_firmware_folder_verdicts`) — by convention rather than by
+  construction, and only while such a name means one thing, which is exactly what keeps `_list_files` out. Three of the
+  four have no method name a consumer could write instead; `SystemResolver` does, its implementation being
+  `RommHttpAdapter.resolve_system`, which is why `resolve_system` is listed beside its attribute. The deadlock rule's
+  own call-shaped seams stay open. `SystemResolver` is the odd one out for a second reason: the adapter memoises its map
+  for the life of the process, so exactly one call ever opens the file, and the entry earns its place because that one
+  call can land inside a UoW. One `# pragma: no uow-check` covers both families — it suppresses the line, and no seam is
+  in both lists, so where a line does name two seams it silences both
 - **Services never call clocks / sleep / uuid / random directly (inject the Protocol)** — check —
   `scripts/check_cosmic_call_bans.sh`
 - **No module in `services/`, `bootstrap/`, `adapters/`, `domain/`, `lib/` or `models/` crosses the ~1000-LOC
@@ -357,9 +360,35 @@ Format: **invariant** — tier — enforced by.
   than a readiness nobody established. **Nothing enforces the crossing point.** A fourth status builder calling
   `_firmware_file_store.exists(dest)` directly would go green, and its rows would silently answer from the weaker source
   — `os.path.exists` on a path the plugin assembled, which is what this cut removed after it rendered a satisfied
-  requirement as missing. Related and separate: a verdict the resolver WITHHELD is not an absence (CONTEXT.md → Withheld
-  verdict), and the causes of a withheld `satisfied` are read off `found` / `checked` / the caveats, never off
-  `satisfied` itself — only some are inherent, and a content question merely not asked is not one of them
+  requirement as missing. Related and separate: presence is not the row's verdict (CONTEXT.md → Row verdict), and a
+  withheld verdict is not an absence — its cause is read off the row's caveat codes, never off the verdict itself
+- **A firmware row's verdict is `BiosFileEntry.satisfied`, and for a folder declaration it is what the folder HOLDS —
+  never that the folder is there** — test + prompt-only —
+  `tests/services/test_firmware.py::TestAFolderRequirementIsAnsweredByItsContents` pins all three answers end-to-end,
+  `tests/domain/test_firmware_wants.py` pins the two folds the service asks through, and
+  `tests/adapters/test_atlas_firmware.py` pins which folder answers the unverified reading already settles and which
+  codes those rows carry. The rule spans four modules and no diff-scoped review sees it whole: the adapter carries
+  `declared_kind` and the folder verdict, `domain/bios_status.py::_row_verdict` decides the row's answer,
+  `services/firmware.py::_folder_answers` scopes the verified read, and both frontend surfaces colour and word the row
+  off it. **Nothing mechanical joins those four**, which is what a consumer reading `downloaded` for a folder row breaks
+  — an `if row.downloaded` beside the verdict, a count that spends presence as readiness. RetroDECK links LRPS2's
+  `pcsx2/bios` onto the BIOS root, so such a consumer reports "All required ready" over a PS2 install with no BIOS file
+  at all; that was the state before #1807 declined the verdict, and this cut replaced the declining with a real answer,
+  so the same field access brings it straight back. The same holds for the third value: a required row answered `None`
+  takes the level to `unknown`, and folding it into `False` claims an absence nothing established. `declared_kind`
+  carries a second rule with **no check at all**: a folder declaration is never offered as a download — the emulator
+  lists that name, so there is no file to fetch into it. Two places refuse it today (`SystemPage.tsx`'s fetchable filter
+  and `FirmwareService._download_firmware_batch`); `FirmwareService.download_firmware(firmware_id)` does not, and is
+  unreachable only because no callable exposes it (`main.py` offers the two batch entry points and `src/api/backend.ts`
+  names no single-file download). It is the DECLARATION's kind, so it survives an absent folder, which is exactly the
+  case a presence check would let through
+- **The whole-machine firmware inventory is never asked with content verification** — prompt-only —
+  `firmware_inventory()` is asked unverified and the verified question goes through `FirmwareFolderVerdictFn`, one core
+  per call, only for the folder rows `unanswered_folder_cores` reports still open. `verify=True` on the inventory sweeps
+  every unclaimed file under the BIOS root, plus each declared file the packaged identity table covers at a matching
+  size; the plugin resolves the whole machine on every game-page open, so the flag would be a per-open cost over the
+  user's entire BIOS directory. Nothing detects it — `firmware_inventory(verify=True)` is one keyword argument and every
+  test stays green
 - **No sentinel objects on the wire — explicit JSON-representable tagged values only** — prompt-only — no sentinel
   survives on the wire today (`NO_MIGRATION` retired with #1004, legacy `slot:null` confirmation with #1276), so the
   rule now guards reintroduction; nothing mechanical detects a new one

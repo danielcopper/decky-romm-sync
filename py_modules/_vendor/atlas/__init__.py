@@ -48,7 +48,7 @@ from __future__ import annotations
 # tests/test_version.py holds it equal to pyproject — CI's package job holds
 # dist-info to pyproject in a clean venv — so drift is a red test, not a
 # silent fork.
-__version__ = "0.6.0"  # x-release-please-version
+__version__ = "0.9.0"  # x-release-please-version
 
 # --- The two entry points, and the aggregate over them -----------------------
 from .detect import detect
@@ -205,14 +205,19 @@ from .firmware import (
     CAVEAT_FIRMWARE_CONTENT_UNSTATED,
     CAVEAT_FIRMWARE_IDENTITY_NOT_COMPARABLE,
     CAVEAT_FIRMWARE_IMAGE_AMBIGUOUS,
+    CAVEAT_FIRMWARE_IMAGE_CONTRADICTED,
     CAVEAT_FIRMWARE_IMAGE_IDENTIFIED,
+    CAVEAT_FIRMWARE_IMAGE_UNLISTED,
     CAVEAT_FIRMWARE_DECLARATION_UNKNOWN,
     CAVEAT_FIRMWARE_PACKAGED_DECLARATION,
     CAVEAT_FIRMWARE_DECLARATION_UNREAD,
+    CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_CANDIDATE,
+    CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_IMAGE,
     CAVEAT_FIRMWARE_PATH_ESCAPES_ROOT,
     CAVEAT_FIRMWARE_PATH_INACCESSIBLE,
     CAVEAT_FIRMWARE_PATH_LAUNCH_DEPENDENT,
     CAVEAT_FIRMWARE_PATH_NAMES_NO_FILE,
+    CAVEAT_FIRMWARE_PATH_NOT_A_DIRECTORY,
     CAVEAT_FIRMWARE_PATH_OBSTRUCTED,
     CAVEAT_FIRMWARE_PATH_UNRESOLVABLE,
     CAVEAT_FIRMWARE_ROOT_MISSING,
@@ -239,6 +244,8 @@ from .firmware import (
     DECLARATION_READ,
     DECLARATION_UNREADABLE,
     DECLARATION_UNSUPPORTED,
+    DECLARED_DIRECTORY,
+    DECLARED_FILE,
     IDENTITY_ARCHIVE,
     IDENTITY_FILE,
     NEED_OPTIONAL,
@@ -251,6 +258,7 @@ from .firmware import (
     SYSTEMS_WITHOUT_CATALOGUE_ID,
     ArchiveReason,
     CoreDeclarationState,
+    DeclaredKind,
     FirmwareChecked,
     FirmwareIdentityKind,
     FirmwareNeed,
@@ -261,6 +269,11 @@ from .content_tree_wiring import (
     WiringRow,
     load_content_tree_wiring,
     lookup_content_tree_wiring,
+)
+from .distribution_labels import (
+    DistributionLabel,
+    distribution_label,
+    load_distribution_labels,
 )
 from .distribution_supplied import (
     DistributionSupplied,
@@ -531,6 +544,7 @@ __all__ = [
     "PatchFormat",
     "FirmwareNeed",
     "FirmwareChecked",
+    "DeclaredKind",
     "FirmwareIdentityKind",
     "ArchiveReason",
     "CoreDeclarationState",
@@ -561,6 +575,8 @@ __all__ = [
     "FILE_SET_UNKNOWN",
     "NEED_REQUIRED",
     "NEED_OPTIONAL",
+    "DECLARED_FILE",
+    "DECLARED_DIRECTORY",
     "CHECKED_VERIFIED",
     "CHECKED_MISMATCH",
     "CHECKED_UNCHECKED",
@@ -645,6 +661,10 @@ __all__ = [
     "SuppliedEntry",
     "load_distribution_supplied",
     "lookup_distribution_supplied",
+    # How a distribution spells its own name (presentation, never a key)
+    "DistributionLabel",
+    "distribution_label",
+    "load_distribution_labels",
     # Typed outcome codes
     "UNRESOLVED_CORE_NOT_INSTALLED",
     "UNRESOLVED_STANDALONE",
@@ -698,14 +718,19 @@ __all__ = [
     "CAVEAT_FIRMWARE_CONTENT_UNIDENTIFIED",
     "CAVEAT_FIRMWARE_CONTENT_UNSTATED",
     "CAVEAT_FIRMWARE_IMAGE_AMBIGUOUS",
+    "CAVEAT_FIRMWARE_IMAGE_CONTRADICTED",
     "CAVEAT_FIRMWARE_IMAGE_IDENTIFIED",
+    "CAVEAT_FIRMWARE_IMAGE_UNLISTED",
     "CAVEAT_FIRMWARE_DECLARATION_UNKNOWN",
     "CAVEAT_FIRMWARE_PACKAGED_DECLARATION",
     "CAVEAT_FIRMWARE_DECLARATION_UNREAD",
+    "CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_CANDIDATE",
+    "CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_IMAGE",
     "CAVEAT_FIRMWARE_PATH_ESCAPES_ROOT",
     "CAVEAT_FIRMWARE_PATH_INACCESSIBLE",
     "CAVEAT_FIRMWARE_PATH_LAUNCH_DEPENDENT",
     "CAVEAT_FIRMWARE_PATH_NAMES_NO_FILE",
+    "CAVEAT_FIRMWARE_PATH_NOT_A_DIRECTORY",
     "CAVEAT_FIRMWARE_PATH_OBSTRUCTED",
     "CAVEAT_FIRMWARE_PATH_UNRESOLVABLE",
     "CAVEAT_FIRMWARE_ROOT_MISSING",

@@ -529,6 +529,16 @@ _SANDBOX_XDG_BINDS: tuple[tuple[str, str], ...] = (
     ("/var/cache", "cache"),
 )
 
+# Where a flatpak app reads its own deploy tree: the deploy's ``files``
+# directory, which is what ``/app`` is for the app that runs (:class:`_Deploy`).
+# That makes it the one prefix a configured value carries whose meaning atlas
+# never takes from this host — it names a different tree for each app, and a
+# launch inside no sandbox has no such tree at all — so it is resolved against
+# the deploy that runs where the reading knows which app that is, and refused
+# where it does not. A machine that really does keep an unrelated host
+# directory at /app is the cost of that rule, stated at :class:`_Sandbox` (#317).
+_APP_TREE_PREFIX = "/app/"
+
 # Prefixes that name something else inside the sandbox than on the host, once the
 # binds above, /app, and the machine's own home are ruled out: the rest of /var is
 # the runtime's own filesystem (a different device from the host's /var), and
@@ -609,9 +619,19 @@ class _Sandbox:
 
     Every cfg value that becomes a host read passes through here: an app writes
     its config from inside its sandbox, so the paths in it are sandbox paths.
-    ``app_id`` is ``None`` for a native install — its cfg is host-native, a
-    ``/var/...`` value there is a real (if unusual) host path, and translating
-    it would invent a location the emulator never uses.
+    ``app_id`` is ``None`` where no flatpak of the emulator is established for
+    the launch being read — a native install, an AppImage, an unpacked binary.
+    Its cfg is host-native then: a ``/var/...`` value there is a real (if
+    unusual) host path, and translating it would invent a location the emulator
+    never uses.
+
+    ``/app`` is the one spelling that stays untranslatable rather than becoming
+    host-native, because it is where the running app's own deploy is mounted
+    rather than anything this host keeps (:data:`_APP_TREE_PREFIX`): with no app
+    id there is no deploy to resolve it against, and probing it as a host path
+    would answer about a directory the running emulator never opens (#317). That
+    draws one boundary, deliberately: a machine that really does keep an
+    unrelated host directory at ``/app`` has a value there refused, not read.
     """
 
     machine: Machine
@@ -656,21 +676,35 @@ class _Sandbox:
     def _translate(self, path: str) -> tuple[str | None, bool]:
         """``(host path or None, whether this was a sandbox spelling)``.
 
-        The XDG binds are a deterministic per-app mapping, so they translate
-        unconditionally and the caller's own existence check stays the one that
-        decides usability. ``/app`` is the tree of the deploy that runs, which
-        is a resolution of its own (:func:`_running_deploy`).
+        ``/app`` is answered before the XDG binds, and for every reading — with
+        an id or without one: it is the tree of the deploy that runs, a
+        resolution of its own (:func:`_running_deploy`), and a spelling that
+        means nothing outside a sandbox, so a reading that establishes no app
+        answers "no host path" instead of probing it
+        (:data:`_APP_TREE_PREFIX`). What comes first is neither: a relative
+        value is nobody's to translate, and a path in this machine's own home
+        is shared with every sandbox.
+
+        The rest applies only where an app is established. The XDG binds are a
+        deterministic per-app mapping, so they translate unconditionally and the
+        caller's own existence check stays the one that decides usability; the
+        remaining sandbox-only prefixes pass untouched without an id, because
+        outside a sandbox they are ordinary host paths.
         """
         app_id = self.app_id
-        if app_id is None or not path.startswith("/") or self._is_host_home(path):
+        if not path.startswith("/") or self._is_host_home(path):
+            return path, False
+        if path.startswith(_APP_TREE_PREFIX):
+            if app_id is None:
+                return None, True
+            return self._deployment_path(app_id, path[len(_APP_TREE_PREFIX) :]), True
+        if app_id is None:
             return path, False
         for prefix, xdg_dir in _SANDBOX_XDG_BINDS:
             if path == prefix or path.startswith(prefix + "/"):
                 rest = path[len(prefix) :].lstrip("/")
                 app_dir = os.path.join(self.home, ".var", "app", app_id, xdg_dir)
                 return (os.path.join(app_dir, rest) if rest else app_dir), True
-        if path.startswith("/app/"):
-            return self._deployment_path(app_id, path[len("/app/") :]), True
         if path.startswith(_SANDBOX_ONLY_PREFIXES):
             return None, True
         return path, False
@@ -16992,7 +17026,7 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
             self._machine,
             card=card,
             homes=homes,
-            sandbox=self._standalone_sandbox(),
+            sandbox=self._standalone_sandbox(homes),
             system=spec.system,
             command=spec.command,
             extra_caveats=(
@@ -17249,15 +17283,40 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
             return None
         return self._homes_for_token(self._launch_variant(launch), launch.token)
 
-    def _standalone_sandbox(self) -> _Sandbox:
-        """No path translation: both established variants read host paths.
+    def _standalone_sandbox(self, homes: _XdgHomes) -> _Sandbox:
+        """How the launch that reads *homes* spells its own configured paths.
 
-        Nothing sandboxes an AppImage, and EmuDeck grants every emulator
-        flatpak ``--filesystem=host`` (installEmuFP.sh:33) — either way a
-        configured path means the host path it spells, and ``~`` expands to
-        the host home (flatpak leaves ``$HOME`` itself untouched).
+        The sandbox carries the app id these homes were built from — ``None``
+        for the AppImage, for the unpacked binary, and for the arrangement-wide
+        pair the firmware seam builds (:meth:`_firmware_context_from`), while a
+        flatpak the settings table names no id for never arrives at all: it has
+        no homes to hand over (:meth:`_homes_for_token`) and every caller
+        refuses on that before reaching here. Reading it
+        off the homes rather than probing the table again is what keeps the two
+        from ever disagreeing about which installation is being read.
+
+        With an id the launch runs inside that app's sandbox, and its
+        configuration is read in that sandbox's spellings
+        (:meth:`_Sandbox._translate`): ``/var/config``, ``/var/data`` and
+        ``/var/cache`` are flatpak's bind points for the app's own trees below
+        ``~/.var/app``; ``/app`` is the deploy that runs, resolved against the
+        installation ``flatpak run`` would start — EmuDeck installs these into
+        the user installation (``flatpak install flathub "$ID" -y --user``,
+        installEmuFP.sh:32) and may leave an older system one behind until the
+        user one is confirmed (:36-38), which is the order
+        :func:`_running_deploy` searches; and the sandbox-only prefixes left
+        over name nothing this host shares, so a value there is refused. Every
+        HOST spelling stays the path it names, because EmuDeck grants each
+        emulator flatpak ``--filesystem=host`` (installEmuFP.sh:33). That grant
+        is what makes a host path mean what it says; it says nothing about
+        where the sandbox's own bind points lead.
+
+        Without an id nothing sandboxes the launch, so every spelling but
+        ``/app`` is the host path it names — and ``/app`` is refused, because
+        it names a deployed package no launch here runs (#317). ``~`` expands
+        to the host home either way: flatpak leaves ``$HOME`` itself untouched.
         """
-        return _Sandbox(self._machine, self._home, None, expansion_home=self._home)
+        return _Sandbox(self._machine, self._home, homes.flatpak, expansion_home=self._home)
 
     def entry_savestate_location(
         self,
@@ -17329,7 +17388,7 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
             self._machine,
             card=card,
             homes=homes,
-            sandbox=self._standalone_sandbox(),
+            sandbox=self._standalone_sandbox(homes),
             system=spec.system,
             command=spec.command,
             extra_caveats=(
@@ -17412,7 +17471,7 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
             self._machine,
             card=card,
             homes=gate.homes,
-            sandbox=self._standalone_sandbox(),
+            sandbox=self._standalone_sandbox(gate.homes),
             extra_caveats=self._standalone_entry_caveats(spec, entry_caveats, content_path),
         )
 
@@ -17435,7 +17494,7 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
             self._machine,
             card=card,
             homes=gate.homes,
-            sandbox=self._standalone_sandbox(),
+            sandbox=self._standalone_sandbox(gate.homes),
             extra_caveats=self._standalone_entry_caveats(spec, entry_caveats, content_path),
         )
 
@@ -17644,8 +17703,22 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
         and every part of its answer describes that one revision. The sandbox
         arrives with its ``~`` base composed from the bare Flatpak's override
         files (:meth:`_cfg_sandbox`) — this context's one read of those files.
+
+        The standalone pair the context carries is the arrangement's, not one
+        launch's: this seam is asked once for the whole answer while the
+        firmware route picks its bases per entry, so the sandbox is built from
+        the same arrangement-wide homes the context states beside it and
+        establishes no app id. A sandbox spelling in a standalone emulator's
+        config is therefore read here as the host path it is not — ``/app``
+        refused, ``/var/config`` left standing — where the savefile and
+        savestate answers resolve both against the launch's own app (#317).
+        Those two are where it shows today: they are the routes whose
+        configured-path cards cover emulators the settings table names an id
+        for. The texture and mod answers take the same per-launch sandbox and
+        would follow the moment one of their cards does.
         """
         sandbox, environment_sources = self._cfg_sandbox()
+        standalone_homes = self._standalone_xdg_homes()
         return _retroarch_firmware_context(
             sandbox=sandbox,
             global_text=cfg.text,
@@ -17655,8 +17728,8 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
             # ``settings.sh`` names no EmuDeck version — the backend
             # checkout's HEAD is the version this machine states about itself.
             arrangement_version=self._observed_backend_head(),
-            standalone_homes=self._standalone_xdg_homes(),
-            standalone_sandbox=self._standalone_sandbox(),
+            standalone_homes=standalone_homes,
+            standalone_sandbox=self._standalone_sandbox(standalone_homes),
             extra_sources=environment_sources,
         )
 
@@ -17804,7 +17877,9 @@ class _RetroArchInstall(_FirmwareQueries, _CatalogueQueries):
         outside any sandbox, so a ``/var/...`` value there is a real host path
         (odd, but the user's), and the existence checks downstream judge it like
         any other. Translating it would move the answer to a directory this
-        RetroArch never touches.
+        RetroArch never touches. ``/app`` is where that stops being true — it
+        names a flatpak's deployed package and nothing a native install owns —
+        so a value there is refused rather than probed (:class:`_Sandbox`).
         """
         return _Sandbox(self._machine, self._home, self._app_id, expansion_home=self._home)
 

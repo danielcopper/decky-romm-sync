@@ -187,16 +187,27 @@ describe("extractBiosInfo", () => {
     });
 
     it("is clear when the only required file left is one nothing could judge", () => {
-      // PS2: LRPS2 requires a folder RetroDECK links onto the BIOS root, so
-      // `required_downloaded` can never reach `required_count`. The badge says a
-      // required file is NOT THERE, and a folder nobody looked inside has not
-      // shown that — it would be red on every PS2 game forever.
+      // A required row whose verdict nothing established — a declared folder
+      // the resolver could not read, say. The badge says a required file is NOT
+      // THERE, and a reading that established nothing has not shown that.
       const answer = {
         bios_status: { ...requirement, required_count: 2, required_downloaded: 1, required_withheld: 1 },
         bios_level: "unknown" as const,
         bios_label: "Unknown",
       };
       expect(extractBiosInfo(answer)!.biosRequiredMissing).toBe(false);
+    });
+
+    it("is set when the required folder was read and holds no image", () => {
+      // A folder answered `false` is a requirement shown to be unmet, so it is
+      // not withheld and the badge is exactly what it is for — the game will
+      // not launch.
+      const answer = {
+        bios_status: { ...requirement, required_count: 1, required_downloaded: 0, required_withheld: 0 },
+        bios_level: "missing" as const,
+        bios_label: "Missing",
+      };
+      expect(extractBiosInfo(answer)!.biosRequiredMissing).toBe(true);
     });
 
     it("is still set when a judgeable required file is absent beside the unjudgeable one", () => {

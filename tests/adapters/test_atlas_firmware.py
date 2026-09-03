@@ -15,9 +15,19 @@ too — a fixture that could not come off a real machine fails to construct.
 from __future__ import annotations
 
 import pytest
+from _vendor.atlas import (
+    CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_CANDIDATE,
+    CAVEAT_FIRMWARE_IMAGE_IDENTIFIED,
+    CAVEAT_FIRMWARE_IMAGE_UNLISTED,
+    CAVEAT_FIRMWARE_PATH_OBSTRUCTED,
+    CAVEAT_FIRMWARE_SEARCH_UNVERIFIED,
+)
+from _vendor.atlas.firmware import DECLARED_DIRECTORY as ATLAS_DECLARED_DIRECTORY
+from _vendor.atlas.firmware import DECLARED_FILE as ATLAS_DECLARED_FILE
 from _vendor.atlas.firmware import (
     CoreDeclarationState,
     CoreFirmware,
+    DeclaredKind,
     FirmwareAlternatives,
     FirmwareAnswer,
     FirmwareChecked,
@@ -29,7 +39,12 @@ from _vendor.atlas.firmware import (
 from _vendor.atlas.machine import KIND_DIRECTORY, KIND_FILE, KIND_INACCESSIBLE, KIND_MISSING, PathKind
 from _vendor.atlas.placement import Caveat
 
-from adapters.atlas_firmware import AtlasFirmwareAdapter
+from adapters.atlas_firmware import AtlasFirmwareAdapter, AtlasFolderVerdictAdapter
+from domain.firmware_wants import (
+    CAVEAT_PATH_OBSTRUCTED,
+    DECLARED_DIRECTORY,
+    DECLARED_FILE,
+)
 
 _ROOT = "/home/deck/retrodeck/bios"
 
@@ -46,6 +61,8 @@ def _requirement(
     found: PathKind = KIND_MISSING,
     checked: FirmwareChecked | None = None,
     supplied_by: SuppliedBy | None = None,
+    declared_kind: DeclaredKind = ATLAS_DECLARED_FILE,
+    contents_satisfied: bool | None = None,
 ) -> FirmwareRequirement:
     """One (core, declared file) pair, defaulting to a flat destination with nothing there.
 
@@ -68,6 +85,8 @@ def _requirement(
         checked=checked,
         regions=regions,
         supplied_by=supplied_by,
+        declared_kind=declared_kind,
+        contents_satisfied=contents_satisfied,
     )
 
 
@@ -119,6 +138,12 @@ class _Installation:
         self._answer = answer
 
     def firmware_inventory(self, *, verify: bool = False) -> FirmwareAnswer:
+        if isinstance(self._answer, Exception):
+            raise self._answer
+        return self._answer
+
+    def firmware_for_core(self, core_so: str, *, verify: bool = False) -> FirmwareAnswer:
+        self.asked_for = (core_so, verify)
         if isinstance(self._answer, Exception):
             raise self._answer
         return self._answer
@@ -263,7 +288,8 @@ class TestDestinationReadings:
         placement = self._placement(adapter, monkeypatch, _requirement(found=KIND_FILE, checked="unchecked"))
 
         assert placement.present is True
-        assert placement.is_directory is False
+        assert placement.declared_kind == DECLARED_FILE
+        assert placement.folder is None
 
     def test_nothing_at_the_destination_is_absent(self, adapter, monkeypatch):
         assert self._placement(adapter, monkeypatch, _requirement()).present is False
@@ -274,18 +300,25 @@ class TestDestinationReadings:
 
         assert placement.present is None
 
-    def test_a_directory_at_the_destination_is_named_as_one(self, adapter, monkeypatch):
+    def test_a_directory_a_core_declares_is_named_by_the_declaration(self, adapter, monkeypatch):
+        """The kind is what the core OPENS the path at, never what was found there."""
         placement = self._placement(
             adapter,
             monkeypatch,
-            _requirement(file_name="bios", declared="pcsx2/bios", found=KIND_DIRECTORY, checked="unchecked"),
+            _requirement(
+                file_name="bios",
+                declared="pcsx2/bios",
+                found=KIND_DIRECTORY,
+                checked="unchecked",
+                declared_kind=ATLAS_DECLARED_DIRECTORY,
+            ),
         )
 
-        assert placement.is_directory is True
+        assert placement.declared_kind == DECLARED_DIRECTORY
         assert placement.present is True
 
-    def test_the_supplying_distribution_travels_verbatim(self, adapter, monkeypatch):
-        """The identifier as stated — the plugin has no display form to map it to."""
+    def test_the_supplying_distribution_travels_as_the_resolver_writes_it(self, adapter, monkeypatch):
+        """The resolver's own display form — the plugin never maps an identifier itself."""
         placement = self._placement(
             adapter,
             monkeypatch,
@@ -299,7 +332,7 @@ class TestDestinationReadings:
             ),
         )
 
-        assert placement.supplied_by == "retrodeck"
+        assert placement.supplied_by == "RetroDECK"
 
     def test_a_reading_at_a_destination_we_cannot_honour_does_not_travel(self, adapter, monkeypatch):
         """An emulator keeping its firmware in its own tree: that file is not the plugin's.
@@ -322,7 +355,8 @@ class TestDestinationReadings:
 
         assert placement.relative_path is None
         assert placement.present is None
-        assert placement.is_directory is False
+        assert placement.folder is None
+        assert placement.caveats == ()
         assert placement.supplied_by is None
 
     def test_no_stated_provenance_claims_nothing(self, adapter, monkeypatch):
@@ -463,3 +497,353 @@ class TestCaveats:
         adapter()
 
         assert any("retrodeck" in trace and "requirements=1" in trace for trace in traces)
+
+
+class TestVocabularyConformance:
+    """The words ``domain/`` spells for itself are the resolver's own.
+
+    ``domain/`` may not import the vendored resolver, so its copies of the
+    declaration kinds and the caveat codes are a second spelling. Held equal
+    here rather than trusted, so an upstream rename is a red test instead of a
+    rule that quietly stops firing.
+    """
+
+    def test_the_declaration_kinds_match(self):
+        assert (DECLARED_FILE, DECLARED_DIRECTORY) == (ATLAS_DECLARED_FILE, ATLAS_DECLARED_DIRECTORY)
+
+    def test_the_obstruction_code_matches(self):
+        assert CAVEAT_PATH_OBSTRUCTED == CAVEAT_FIRMWARE_PATH_OBSTRUCTED
+
+
+class TestFolderVerdictsTheInventoryAlreadySettles:
+    """A folder question the resolver answers without a content read costs none.
+
+    Whether the unverified machine-wide reading settles a folder is its own
+    three-valued answer, not a shape this adapter enumerates. What matters here
+    is that a settled answer is carried — with the codes that speak for it — and
+    that only an unsettled one is left for the verified per-core question, which
+    opens and reads every candidate in the folder.
+    """
+
+    def _placement(self, adapter, monkeypatch, requirement, *caveats):
+        answer = _answer(_core(core_so="pcsx2_libretro.so", requirements=(requirement,)), caveats=caveats)
+        monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(_Installation(answer)))
+        return adapter().placements[0]
+
+    def _folder(self, **kwargs):
+        return _requirement(
+            file_name="bios",
+            declared="pcsx2/bios",
+            path=f"{_ROOT}/pcsx2/bios",
+            declared_kind=ATLAS_DECLARED_DIRECTORY,
+            **kwargs,
+        )
+
+    def test_an_absent_folder_is_unmet_without_reading_a_byte(self, adapter, monkeypatch):
+        placement = self._placement(adapter, monkeypatch, self._folder(found=KIND_MISSING))
+
+        assert placement.declared_kind == DECLARED_DIRECTORY
+        assert placement.folder is not None
+        assert placement.folder.satisfied is False
+
+    def test_a_file_where_the_core_lists_a_folder_is_unmet_too(self, adapter, monkeypatch):
+        """A regular file has no inside, so the listing the core makes reaches nothing."""
+        placement = self._placement(adapter, monkeypatch, self._folder(found=KIND_FILE, checked="unknown"))
+
+        assert placement.folder is not None
+        assert placement.folder.satisfied is False
+
+    def test_a_settled_folder_carries_what_the_listing_found_in_it(self, adapter, monkeypatch):
+        """The stat settles it, so this row is never asked again — its words come from here.
+
+        A folder holding no file of a size the core would even open is answered
+        without verification, and the code saying so names the folder as ``dir``
+        rather than as ``path``. Dropped, the row renders red with no word at
+        all, which is the ordinary state of a RetroDECK holding no PS2 image.
+        """
+        placement = self._placement(
+            adapter,
+            monkeypatch,
+            self._folder(found=KIND_DIRECTORY, checked="unknown", contents_satisfied=False),
+            Caveat(
+                code=CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_CANDIDATE,
+                message="holds no file of a size this core accepts",
+                data={"dir": f"{_ROOT}/pcsx2/bios", "core_so": "pcsx2_libretro.so", "need": "required"},
+            ),
+        )
+
+        assert placement.folder is not None
+        assert placement.folder.satisfied is False
+        assert placement.caveats == (CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_CANDIDATE,)
+
+    def test_a_folder_the_stat_leaves_open_carries_none_of_the_unverified_words(self, adapter, monkeypatch):
+        """The verified read replaces this answer, so its statement must not survive beside it.
+
+        Carried on, the row would say its contents were not checked next to the
+        verdict of the check.
+        """
+        placement = self._placement(
+            adapter,
+            monkeypatch,
+            self._folder(found=KIND_DIRECTORY, checked="unknown"),
+            Caveat(
+                code=CAVEAT_FIRMWARE_SEARCH_UNVERIFIED,
+                message="which of them is a BIOS is a question about their bytes",
+                data={"dir": f"{_ROOT}/pcsx2/bios", "candidates": "3", "core_so": "pcsx2_libretro.so"},
+            ),
+        )
+
+        assert placement.folder is None
+        assert placement.caveats == ()
+
+    def test_a_file_declaration_never_picks_up_a_listings_findings(self, adapter, monkeypatch):
+        """On a linked root the listed folder IS the root, and so is this file's destination.
+
+        RetroDECK points ``<bios>/pcsx2/bios`` back at ``<bios>``, so a
+        declaration collapsing onto the root resolves to the same place the
+        folder was listed at. Only a folder declaration is ever listed, which is
+        what keeps a statement about that listing off this row.
+        """
+        placement = self._placement(
+            adapter,
+            monkeypatch,
+            _requirement(core_so="pcsx2_libretro.so", file_name="stray.bin", path=_ROOT, found=KIND_MISSING),
+            Caveat(
+                code=CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_CANDIDATE,
+                message="holds no file of a size this core accepts",
+                data={"dir": _ROOT, "core_so": "pcsx2_libretro.so", "need": "required"},
+            ),
+        )
+
+        assert placement.declared_kind == DECLARED_FILE
+        assert placement.caveats == ()
+
+
+class TestDestinationCaveats:
+    """What else the reading found at a row's own destination, in the resolver's codes."""
+
+    def _placement(self, adapter, monkeypatch, requirement, *caveats):
+        answer = _answer(_core(core_so="mgba_libretro.so", requirements=(requirement,)), caveats=caveats)
+        monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(_Installation(answer)))
+        return adapter().placements[0]
+
+    def test_a_caveat_naming_the_rows_destination_travels_with_the_row(self, adapter, monkeypatch):
+        placement = self._placement(
+            adapter,
+            monkeypatch,
+            _requirement(found=KIND_DIRECTORY, checked="unknown"),
+            Caveat(
+                code=CAVEAT_FIRMWARE_PATH_OBSTRUCTED,
+                message="a directory is in the way",
+                data={"path": f"{_ROOT}/gba_bios.bin"},
+            ),
+        )
+
+        assert placement.caveats == (CAVEAT_FIRMWARE_PATH_OBSTRUCTED,)
+
+    def test_a_caveat_about_another_destination_does_not(self, adapter, monkeypatch):
+        placement = self._placement(
+            adapter,
+            monkeypatch,
+            _requirement(found=KIND_FILE, checked="unchecked"),
+            Caveat(code="firmware-unreadable", message="elsewhere", data={"path": f"{_ROOT}/other.bin"}),
+        )
+
+        assert placement.caveats == ()
+
+    def test_one_statement_arriving_twice_is_carried_once(self, adapter, monkeypatch):
+        """RetroDECK lists one core under two entries, so its caveats are stated twice."""
+        duplicate = Caveat(
+            code=CAVEAT_FIRMWARE_PATH_OBSTRUCTED,
+            message="a directory is in the way",
+            data={"path": f"{_ROOT}/gba_bios.bin"},
+        )
+        placement = self._placement(
+            adapter, monkeypatch, _requirement(found=KIND_DIRECTORY, checked="unknown"), duplicate, duplicate
+        )
+
+        assert placement.caveats == (CAVEAT_FIRMWARE_PATH_OBSTRUCTED,)
+
+
+_FOLDER = f"{_ROOT}/pcsx2/bios"
+
+
+def _image(name: str, description: str, *, code: str = CAVEAT_FIRMWARE_IMAGE_IDENTIFIED) -> Caveat:
+    """One caveat of the folder read's image family, as the resolver states it."""
+    return Caveat(
+        code=code,
+        message=f"{name} reads as a PS2 BIOS",
+        data={
+            "path": f"{_FOLDER}/{name}",
+            "image": name,
+            "md5": "d333558cc14561c1fdc334c75d5f37b7",
+            "table": "6.0.0",
+            "core_so": "pcsx2_libretro.so",
+            "description": description,
+        },
+    )
+
+
+def _folder_requirement(*, contents_satisfied: bool | None, found: PathKind = KIND_DIRECTORY):
+    return _requirement(
+        core_so="pcsx2_libretro.so",
+        file_name="bios",
+        declared="pcsx2/bios",
+        path=_FOLDER,
+        found=found,
+        checked="unknown" if found in (KIND_DIRECTORY, KIND_FILE) else None,
+        declared_kind=ATLAS_DECLARED_DIRECTORY,
+        contents_satisfied=contents_satisfied,
+    )
+
+
+@pytest.fixture
+def folder_adapter(traces):
+    return AtlasFolderVerdictAdapter(user_home="/home/deck", log_debug=traces.append)
+
+
+class TestFolderVerdictAdapter:
+    """The verified per-core read: what the folder holds, and in whose words."""
+
+    def _verdicts(self, folder_adapter, monkeypatch, answer, core_so="pcsx2_libretro"):
+        installation = _Installation(answer)
+        monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(installation))
+        return folder_adapter(core_so), installation
+
+    def test_the_question_is_asked_of_the_core_with_verification_on(self, folder_adapter, monkeypatch):
+        """A folder verdict without a content check is not a verdict at all."""
+        answer = _answer(
+            _core(core_so="pcsx2_libretro.so", requirements=(_folder_requirement(contents_satisfied=True),))
+        )
+
+        _, installation = self._verdicts(folder_adapter, monkeypatch, answer)
+
+        assert installation.asked_for == ("pcsx2_libretro.so", True)
+
+    def test_an_identified_image_satisfies_the_folder_and_is_named(self, folder_adapter, monkeypatch):
+        answer = _answer(
+            _core(core_so="pcsx2_libretro.so", requirements=(_folder_requirement(contents_satisfied=True),)),
+            caveats=(
+                _image("ps2-0200e-20040614.bin", "Europe  v02.00(14/06/2004)  Console 20040614-100914"),
+                _image("ps2-0200j-20040614.bin", "Japan   v02.00(14/06/2004)  Console 20040614-100905"),
+            ),
+        )
+
+        verdicts, _ = self._verdicts(folder_adapter, monkeypatch, answer)
+
+        assert verdicts["bios"].satisfied is True
+        assert verdicts["bios"].images == (
+            "Europe  v02.00(14/06/2004)  Console 20040614-100914",
+            "Japan   v02.00(14/06/2004)  Console 20040614-100905",
+        )
+
+    def test_an_image_the_packaged_table_does_not_list_counts_all_the_same(self, folder_adapter, monkeypatch):
+        """The table lists what System.dat lists; the core's own test is the verdict."""
+        answer = _answer(
+            _core(core_so="pcsx2_libretro.so", requirements=(_folder_requirement(contents_satisfied=True),)),
+            caveats=(_image("dump.bin", "USA v01.60", code=CAVEAT_FIRMWARE_IMAGE_UNLISTED),),
+        )
+
+        verdicts, _ = self._verdicts(folder_adapter, monkeypatch, answer)
+
+        assert verdicts["bios"].images == ("USA v01.60",)
+
+    def test_a_folder_holding_no_image_is_unmet_and_says_which_code(self, folder_adapter, monkeypatch):
+        answer = _answer(
+            _core(core_so="pcsx2_libretro.so", requirements=(_folder_requirement(contents_satisfied=False),)),
+            caveats=(
+                Caveat(
+                    code="firmware-directory-holds-no-image",
+                    message="none of them reads as a PS2 BIOS",
+                    data={"dir": _FOLDER, "candidates": "1", "core_so": "pcsx2_libretro.so"},
+                ),
+            ),
+        )
+
+        verdicts, _ = self._verdicts(folder_adapter, monkeypatch, answer)
+
+        assert verdicts["bios"].satisfied is False
+        assert verdicts["bios"].caveats == ("firmware-directory-holds-no-image",)
+        assert verdicts["bios"].images == ()
+
+    def test_a_contradiction_withholds_the_verdict_and_names_no_image(self, folder_adapter, monkeypatch):
+        """The table names the bytes and the core's own test denies them."""
+        answer = _answer(
+            _core(core_so="pcsx2_libretro.so", requirements=(_folder_requirement(contents_satisfied=None),)),
+            caveats=(
+                Caveat(
+                    code="firmware-image-contradicted",
+                    message="the two reads disagree",
+                    data={"path": f"{_FOLDER}/odd.bin", "image": "odd.bin", "core_so": "pcsx2_libretro.so"},
+                ),
+            ),
+        )
+
+        verdicts, _ = self._verdicts(folder_adapter, monkeypatch, answer)
+
+        assert verdicts["bios"].satisfied is None
+        assert verdicts["bios"].caveats == ("firmware-image-contradicted",)
+        assert verdicts["bios"].images == ()
+
+    def test_a_caveat_about_another_folder_stays_out(self, folder_adapter, monkeypatch):
+        answer = _answer(
+            _core(core_so="pcsx2_libretro.so", requirements=(_folder_requirement(contents_satisfied=True),)),
+            caveats=(Caveat(code="firmware-scan-incomplete", message="elsewhere", data={"dir": f"{_ROOT}/other"}),),
+        )
+
+        verdicts, _ = self._verdicts(folder_adapter, monkeypatch, answer)
+
+        assert verdicts["bios"].caveats == ()
+
+    def test_one_statement_arriving_twice_is_carried_once(self, folder_adapter, monkeypatch):
+        duplicate = _image("ps2-0200e-20040614.bin", "Europe  v02.00")
+        answer = _answer(
+            _core(core_so="pcsx2_libretro.so", requirements=(_folder_requirement(contents_satisfied=True),)),
+            caveats=(duplicate, duplicate),
+        )
+
+        verdicts, _ = self._verdicts(folder_adapter, monkeypatch, answer)
+
+        assert verdicts["bios"].images == ("Europe  v02.00",)
+        assert verdicts["bios"].caveats == (CAVEAT_FIRMWARE_IMAGE_IDENTIFIED,)
+
+    def test_a_file_declaration_gets_no_folder_verdict(self, folder_adapter, monkeypatch):
+        """A verdict about contents nobody listed would be a state that lies."""
+        answer = _answer(
+            _core(
+                core_so="pcsx2_libretro.so",
+                requirements=(
+                    _requirement(
+                        core_so="pcsx2_libretro.so",
+                        file_name="GameIndex.yaml",
+                        found=KIND_FILE,
+                        checked="unchecked",
+                    ),
+                ),
+            )
+        )
+
+        verdicts, _ = self._verdicts(folder_adapter, monkeypatch, answer)
+
+        assert verdicts == {}
+
+    def test_a_raising_resolver_answers_no_verdict_rather_than_an_empty_folder(
+        self, folder_adapter, monkeypatch, traces
+    ):
+        monkeypatch.setattr(
+            "adapters.atlas_firmware.detect",
+            _detecting(_Installation(ValueError("FirmwareRequirement: need must be one of ..."))),
+        )
+
+        assert folder_adapter("pcsx2_libretro") == {}
+        assert any("verified folder read failed" in trace for trace in traces)
+
+    def test_no_installation_answers_no_verdict(self, folder_adapter, monkeypatch):
+        monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting())
+
+        assert folder_adapter("pcsx2_libretro") == {}
+
+    def test_an_answer_without_a_root_answers_no_verdict(self, folder_adapter, monkeypatch):
+        monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(_Installation(_answer(root=None))))
+
+        assert folder_adapter("pcsx2_libretro") == {}

@@ -73,13 +73,14 @@ own) has no method name to match: the consumer writes
 ``self._candidate_probe(...)``, never the seam's own name. Rule 1 leaves it
 open — the ``current_save_sorting`` / ``has_adoption_candidate`` entries guard
 only call sites that name the method, which is the owning service's own and any
-peer holding the object rather than the bound method. Rule 2's three
+peer holding the object rather than the bound method. Rule 2's four
 call-shaped seams are closed the cheap way instead: every consumer in
 ``services/`` binds each to one attribute — ``self._resolve_system``,
-``self._system_extensions``, ``self._system_known`` — and those attribute names
-are what the list carries (``resolve_system`` is listed beside its own, being
-the implementation's real method name, ``RommHttpAdapter.resolve_system``, for
-a peer holding the object; the other two have no such twin). That is a
+``self._system_extensions``, ``self._system_known``,
+``self._firmware_folder_verdicts`` — and those attribute names are what the
+list carries (``resolve_system`` is listed beside its own, being the
+implementation's real method name, ``RommHttpAdapter.resolve_system``, for a
+peer holding the object; the other three have no such twin). That is a
 convention, not a guarantee — a consumer binding one under a different
 attribute slips past, and it only works while the attribute name means one
 thing. Doing the same for rule 1 means a second list of holding attributes to
@@ -98,11 +99,11 @@ rule — a UoW held across either is a breach — and the reason is not that the
 I/O matters less:
 
 * ``DirectoryFileListerFn`` — a directory listing, and its consumer binds it to
-  ``self._list_files``. Its two call-shaped siblings are *in* the list, matched
-  by the attribute they are bound to, so the mechanism plainly reaches this
-  shape; what stops this one is the name. ``_list_files`` says nothing about
-  which seam it holds — any class might bind it to something unrelated — so an
-  entry would key the gate on a coincidence, where ``_system_extensions`` and
+  ``self._list_files``. Its call-shaped siblings are *in* the list, matched by
+  the attribute they are bound to, so the mechanism plainly reaches this shape;
+  what stops this one is the name. ``_list_files`` says nothing about which seam
+  it holds — any class might bind it to something unrelated — so an entry would
+  key the gate on a coincidence, where ``_system_extensions`` and
   ``_resolve_system`` each mean one thing.
 * ``RetroDeckPaths``'s path getters sit behind a 30-second TTL cache
   (``adapters/retrodeck_paths.py``), so a call is usually a dict lookup and a
@@ -193,6 +194,13 @@ IO_SEAM_METHODS: frozenset[str] = frozenset(
         # `resolve_system`, the implementation's own method name.
         "resolve_system",
         "_resolve_system",
+        # FirmwareFolderVerdictFn (services/protocols/paths.py) — lists one
+        # core's declared folder and reads every candidate inside it the way the
+        # core does (0.26 s for LRPS2 on the reference machine, against 0.24 s
+        # for the whole machine's unverified inventory). The fourth call-shaped
+        # seam, so the list carries the attribute every consumer in services/
+        # binds it to, as it does for the other three.
+        "_firmware_folder_verdicts",
         # SystemSupportedExtensionsFn / SystemKnownFn (services/protocols/paths.py)
         # — two questions to es_systems.xml, through the same every-call flatpak
         # probe as the CoreInfoProvider reads above. Both Protocols are

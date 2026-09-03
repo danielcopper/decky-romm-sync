@@ -3336,7 +3336,7 @@ describe("RomMGameInfoPanel", () => {
               cores: { dolphin_libretro: { required: true } },
               used_by_active: true,
               on_server: false,
-              supplied_by: "retrodeck",
+              supplied_by: "RetroDECK",
             },
           ],
         } as never,
@@ -3351,16 +3351,16 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
       });
 
-      expect(container.textContent).toContain("Dolphin 'Sys' folder — provided by retrodeck");
+      expect(container.textContent).toContain("Dolphin 'Sys' folder — provided by RetroDECK");
       expect(container.textContent).not.toContain("not in your RomM library");
     });
 
-    it("declines the readiness claim over a folder it cannot look inside", async () => {
+    it("declines the readiness claim over a folder whose contents could not be read", async () => {
       // LRPS2 requires `pcsx2/bios`, a FOLDER that RetroDECK links onto the BIOS
-      // root — so it is always there. Read as a satisfied requirement it said
-      // "All required ready (1/1)" over a PS2 install with no BIOS file in it;
-      // read as a missing one it said the folder was the thing to fetch. The
-      // header declines, and the row says which of its files is which.
+      // root — so it is always there. Its verdict is what the folder HOLDS, and
+      // where that read failed neither "All required ready (1/1)" nor a missing
+      // file is a claim the reading supports. The header declines, and the row
+      // says why.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
@@ -3386,7 +3386,9 @@ describe("RomMGameInfoPanel", () => {
               cores: { pcsx2_libretro: { required: true } },
               used_by_active: true,
               on_server: false,
-              is_directory: true,
+              declared_kind: "directory",
+              satisfied: null,
+              caveats: ["firmware-scan-incomplete"],
             },
           ],
         } as never,
@@ -3403,9 +3405,7 @@ describe("RomMGameInfoPanel", () => {
 
       expect(container.textContent).toContain("BIOS readiness unknown");
       expect(container.textContent).not.toContain("BIOS requirement unknown");
-      expect(container.textContent).toContain(
-        "'pcsx2/bios' folder — a folder is here — its contents cannot be checked",
-      );
+      expect(container.textContent).toContain("'pcsx2/bios' folder — its contents could not be read in full");
       expect(container.textContent).not.toContain("missing");
     });
 

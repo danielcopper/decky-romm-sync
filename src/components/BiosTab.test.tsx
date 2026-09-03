@@ -86,10 +86,100 @@ describe("BiosTab", () => {
     expect(container.textContent).not.toContain("files held");
   });
 
-  it("draws a folder row amber rather than the green a present file gets", () => {
+  it("puts a satisfied folder's images on their own lines, under a name short enough to keep its dot", () => {
+    // The row's name and its status dot share one flex line. Folding three
+    // image descriptions into that name ran it to ~150 characters, wrapped the
+    // line and left the dot stranded above the text — so the images go in the
+    // indented block below, beside the per-core lines.
+    const images = [
+      "USA     v02.00(14/06/2004)  Console 20040614-100909",
+      "Europe  v02.00(14/06/2004)  Console 20040614-100914",
+    ];
+    const { container } = render(
+      <BiosTab
+        biosStatus={{
+          needs_bios: true,
+          server_count: 0,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: 1,
+          required_withheld: 0,
+          files: [
+            {
+              file_name: "bios",
+              downloaded: true,
+              local_path: "",
+              description: "'pcsx2/bios' folder",
+              wanted: "needed",
+              required_by_active: true,
+              cores: {},
+              on_server: false,
+              declared_kind: "directory",
+              satisfied: true,
+              caveats: ["firmware-image-identified"],
+              images,
+            },
+          ],
+        }}
+        biosLevel="ok"
+        coreInfo={coreInfo}
+        isActive={true}
+      />,
+    );
+
+    const name = container.querySelector(".romm-panel-file-name");
+    const rendered = [...container.querySelectorAll("div")].map((div) => div.textContent);
+    for (const image of images) expect(rendered).toContain(image);
+    // The name carries the row and nothing else — no joined run of images, and
+    // no "holds" heading over a list that is its own sentence.
+    expect(name?.textContent).toBe("'pcsx2/bios' folder");
+    expect(container.textContent).not.toContain(images.join(", "));
+  });
+
+  it("names an unreadable destination on a file row, which otherwise says nothing at all", () => {
+    // This pane leaves plain absence to its dot and appends no word of its own,
+    // so without the note an unreadable destination is indistinguishable from a
+    // file that is simply not there.
+    const { container } = render(
+      <BiosTab
+        biosStatus={{
+          needs_bios: true,
+          server_count: 1,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: 0,
+          required_withheld: 0,
+          files: [
+            {
+              file_name: "dc_boot.bin",
+              downloaded: false,
+              local_path: "",
+              description: "Dreamcast boot ROM",
+              wanted: "needed",
+              required_by_active: true,
+              cores: {},
+              on_server: true,
+              declared_kind: "file",
+              satisfied: false,
+              caveats: ["firmware-path-inaccessible"],
+            },
+          ],
+        }}
+        biosLevel="missing"
+        coreInfo={coreInfo}
+        isActive={true}
+      />,
+    );
+
+    expect(container.textContent).toContain("Dreamcast boot ROM — its location could not be read");
+  });
+
+  it("draws a folder row whose contents could not be read amber, never green", () => {
     // The colours are the pane's own, so they are pinned here rather than
     // through the panel: `downloaded` is true for a folder — something is at the
-    // destination — and green over contents nothing looked inside is the false
+    // destination — and green over a verdict nothing established is the false
     // all-clear this row exists to avoid. No core matches `coreInfo`'s active
     // one, so the amber cannot have come from the active-core highlight.
     const { container } = render(
@@ -112,7 +202,9 @@ describe("BiosTab", () => {
               required_by_active: true,
               cores: {},
               on_server: false,
-              is_directory: true,
+              declared_kind: "directory",
+              satisfied: null,
+              caveats: ["firmware-scan-incomplete"],
             },
           ],
         }}
@@ -123,6 +215,54 @@ describe("BiosTab", () => {
     );
     expect(container.innerHTML).toContain("#d4a72c");
     expect(container.innerHTML).not.toContain("#5ba32b");
+  });
+
+  it.each([
+    ["green over a folder holding an image", true, "#5ba32b", "#d94126", ["firmware-image-identified"], ["Europe"]],
+    ["red over a folder holding none", false, "#d94126", "#5ba32b", ["firmware-directory-holds-no-image"], []],
+  ] as const)("draws %s", (_name, satisfied, colour, otherColour, caveats, images) => {
+    // The folder's verdict is what it HOLDS, so it takes the same two colours a
+    // declared file does — the amber above is for a verdict, not for a folder.
+    //
+    // Asserted on the file row alone, because the header dot beside it emits the
+    // same hex for these two levels: over the whole container the presence check
+    // would pass on the header without the row's dot ever being drawn.
+    const { container } = render(
+      <BiosTab
+        biosStatus={{
+          needs_bios: true,
+          server_count: 0,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: satisfied ? 1 : 0,
+          required_withheld: 0,
+          files: [
+            {
+              file_name: "bios",
+              downloaded: true,
+              local_path: "",
+              description: "'pcsx2/bios' folder",
+              wanted: "needed",
+              required_by_active: true,
+              cores: {},
+              on_server: false,
+              declared_kind: "directory",
+              satisfied,
+              caveats: [...caveats],
+              images: [...images],
+            },
+          ],
+        }}
+        biosLevel={satisfied ? "ok" : "missing"}
+        coreInfo={coreInfo}
+        isActive={true}
+      />,
+    );
+    const row = container.querySelector(".romm-panel-file-row");
+    expect(row?.innerHTML).toContain(colour);
+    expect(row?.innerHTML).not.toContain(otherColour);
+    expect(row?.innerHTML).not.toContain("#d4a72c");
   });
 
   it("falls back to 'Default' when no active core is resolved", () => {

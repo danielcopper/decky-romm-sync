@@ -81,7 +81,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Callable, Iterable, Literal, Mapping, Protocol
 
-from . import squashfs
+from . import ps2_bios, squashfs
 
 _CORE_PROBE_TIMEOUT_SECONDS = 15
 SYMLINK_HOPS = 40
@@ -131,6 +131,18 @@ APPIMAGE_NOT_APPIMAGE: AppImageReadStatus = "not-appimage"
 APPIMAGE_ENTRY_MISSING: AppImageReadStatus = "entry-missing"
 APPIMAGE_CAPABILITY_MISSING: AppImageReadStatus = "capability-missing"
 
+# A PS2 BIOS header read has one way to fail beyond a plain file read:
+# "not-a-bios" is a file that was opened and read and fails the core's own
+# test (atlas.ps2_bios) — a finding about the bytes, never a read failure,
+# which is why it is its own word rather than a missing header.
+Ps2BiosHeaderStatus = Literal["ok", "missing", "unreadable", "not-a-bios"]
+# The plain read's three words again, typed as this read's so a result can be
+# built from them; the fourth is this read's own.
+PS2_BIOS_OK: Ps2BiosHeaderStatus = "ok"
+PS2_BIOS_MISSING: Ps2BiosHeaderStatus = "missing"
+PS2_BIOS_UNREADABLE: Ps2BiosHeaderStatus = "unreadable"
+PS2_BIOS_NOT_A_BIOS: Ps2BiosHeaderStatus = "not-a-bios"
+
 KIND_FILE: PathKind = "file"
 KIND_DIRECTORY: PathKind = "directory"
 KIND_MISSING: PathKind = "missing"
@@ -174,6 +186,25 @@ class AppImageReadResult:
         if (self.text is None) == (self.status == READ_OK):
             raise ValueError(
                 f"AppImageReadResult: text must be set exactly when status is 'ok' (got {self.status!r})"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class Ps2BiosHeaderResult:
+    """One ROMDIR header read's explicit outcome — ``header`` is set exactly when ``status`` is ok.
+
+    ``missing`` / ``unreadable`` mean what they mean on :class:`ReadResult`;
+    ``not-a-bios`` is documented on :data:`Ps2BiosHeaderStatus`. The header is
+    :class:`atlas.ps2_bios.Ps2BiosHeader`, the fields the core extracts.
+    """
+
+    status: Ps2BiosHeaderStatus
+    header: ps2_bios.Ps2BiosHeader | None = None
+
+    def __post_init__(self) -> None:
+        if (self.header is None) == (self.status == PS2_BIOS_OK):
+            raise ValueError(
+                f"Ps2BiosHeaderResult: header must be set exactly when status is 'ok' (got {self.status!r})"
             )
 
 
@@ -396,6 +427,8 @@ class Machine(Protocol):
 
     def read_appimage_text(self, path: str, inner_path: str) -> AppImageReadResult: ...
 
+    def read_ps2_bios_header(self, path: str) -> Ps2BiosHeaderResult: ...
+
     def glob(self, pattern: str) -> GlobResult: ...
 
     def path_kind(self, path: str) -> PathKind: ...
@@ -474,6 +507,35 @@ class RealMachine:
             return AppImageReadResult(READ_OK, data.decode("utf-8"))
         except UnicodeDecodeError:
             return AppImageReadResult(READ_INVALID_TEXT)
+
+    def read_ps2_bios_header(self, path: str) -> Ps2BiosHeaderResult:
+        """The ROMDIR read LRPS2 makes over a folder candidate — a status, and the fields where it passes.
+
+        Regular files only, checked before opening, for the reason
+        ``file_digest`` checks: the folder route hands this whatever a listed
+        directory holds. The reader is :mod:`atlas.ps2_bios`; its one refusal
+        maps to ``not-a-bios``, and every read failure keeps the plain read's
+        words, so a caller can tell a file that failed the test from a file
+        that could not be given it.
+        """
+        try:
+            st = os.stat(path)
+        except (FileNotFoundError, NotADirectoryError):
+            return Ps2BiosHeaderResult(PS2_BIOS_MISSING)
+        except OSError:
+            return Ps2BiosHeaderResult(PS2_BIOS_UNREADABLE)
+        if not _stat.S_ISREG(st.st_mode):
+            return Ps2BiosHeaderResult(PS2_BIOS_UNREADABLE)
+        try:
+            with open(path, "rb") as f:
+                header = ps2_bios.read_header(f)
+        except (FileNotFoundError, NotADirectoryError):
+            return Ps2BiosHeaderResult(PS2_BIOS_MISSING)
+        except ps2_bios.NotAPs2Bios:
+            return Ps2BiosHeaderResult(PS2_BIOS_NOT_A_BIOS)
+        except OSError:
+            return Ps2BiosHeaderResult(PS2_BIOS_UNREADABLE)
+        return Ps2BiosHeaderResult(PS2_BIOS_OK, header)
 
     def glob(self, pattern: str) -> GlobResult:
         return _GlobWalk(self._list_dir, self._is_dir, self._lexists).run(pattern)
@@ -856,6 +918,77 @@ def _validate_fixture_appimages(
     return validated
 
 
+# The states a fixture PS2 BIOS header may declare short of the two strings:
+# what RealMachine can report about a file it opened. "missing" is not among
+# them — an absent file is modeled by not declaring it in ``files``.
+_FIXTURE_PS2_BIOS_STATES = ("unreadable", "not-a-bios")
+_FIXTURE_PS2_BIOS_FIELDS = ("romver", "serial")
+
+
+def _validate_fixture_ps2_bios_headers(
+    headers: Mapping[str, Mapping[str, object] | str],
+    files: Mapping[str, tuple[ReadStatus, str | None]],
+) -> dict[str, ps2_bios.Ps2BiosHeader | str]:
+    """The declared header answers, built once by the reader's own code.
+
+    A header describes a file's bytes, so its path must be a declared file,
+    and one whose bytes can be read: a header beside ``unreadable`` would let
+    a vector assert a read the machine it models never completes — the same
+    refusal ``files`` makes for a digest on an unreadable file.
+    """
+    validated: dict[str, ps2_bios.Ps2BiosHeader | str] = {}
+    for path, spec in headers.items():
+        if path not in files:
+            raise ValueError(
+                f"ps2 bios header {path!r}: a header describes a file's bytes, and no file is declared there"
+            )
+        if files[path][0] == READ_UNREADABLE:
+            raise ValueError(
+                f"ps2 bios header {path!r}: an unreadable file states no header answer — its bytes are "
+                "what cannot be read, so a real one answers 'unreadable' before any test"
+            )
+        if isinstance(spec, str):
+            if spec not in _FIXTURE_PS2_BIOS_STATES:
+                raise ValueError(
+                    f"ps2 bios header {path!r}: a state must be one of {_FIXTURE_PS2_BIOS_STATES}, got {spec!r}"
+                )
+            validated[path] = spec
+            continue
+        validated[path] = _fixture_ps2_bios_header(path, spec)
+    return validated
+
+
+def _fixture_ps2_bios_header(path: str, spec: Mapping[str, object]) -> ps2_bios.Ps2BiosHeader:
+    """The two strings the ROMDIR walk yields, checked to the lengths the core reads them at."""
+    if set(spec) != set(_FIXTURE_PS2_BIOS_FIELDS):
+        raise ValueError(
+            f"ps2 bios header {path!r}: expected a state or an object with exactly "
+            f"{_FIXTURE_PS2_BIOS_FIELDS}, got {spec!r}"
+        )
+    strings: dict[str, bytes] = {}
+    for key in _FIXTURE_PS2_BIOS_FIELDS:
+        value = spec[key]
+        if not isinstance(value, str):
+            raise ValueError(f"ps2 bios header {path!r}: {key} must be a string, got {value!r}")
+        try:
+            strings[key] = value.encode("latin-1")
+        except UnicodeEncodeError as error:
+            raise ValueError(
+                f"ps2 bios header {path!r}: {key} must be one byte per character (latin-1), got {value!r}"
+            ) from error
+    if len(strings["romver"]) != ps2_bios.ROMVER_LENGTH:
+        raise ValueError(
+            f"ps2 bios header {path!r}: romver is the {ps2_bios.ROMVER_LENGTH} bytes the core reads, "
+            f"got {len(strings['romver'])}"
+        )
+    if len(strings["serial"]) > ps2_bios.SERIAL_LENGTH or b"\x00" in strings["serial"]:
+        raise ValueError(
+            f"ps2 bios header {path!r}: serial is at most {ps2_bios.SERIAL_LENGTH} bytes and carries no NUL "
+            "— what a C string read from fifteen bytes can hold"
+        )
+    return ps2_bios.Ps2BiosHeader.from_strings(strings["romver"], strings["serial"])
+
+
 class FixtureMachine:
     """A machine backed by plain data: files, directories, symlinks, core answers.
 
@@ -872,7 +1005,9 @@ class FixtureMachine:
     maps link paths to their targets (absolute, or relative to the link's
     directory). ``cores`` maps ``.so`` paths to core-answer objects
     (``{"library_name": ...}``); a path mapped to ``None`` is a core that is
-    present but unloadable.
+    present but unloadable. ``appimages`` and ``ps2_bios_headers`` model two
+    content reads at the seam rather than as bytes — see
+    :meth:`read_appimage_text` and :meth:`read_ps2_bios_header`.
 
     Two lists say what cannot be read, and which one applies is decided by one
     question: does the ``stat`` succeed?
@@ -918,11 +1053,13 @@ class FixtureMachine:
         inaccessible: Iterable[str] | None = None,
         unlistable: Iterable[str] | None = None,
         appimages: Mapping[str, Mapping[str, object] | str] | None = None,
+        ps2_bios_headers: Mapping[str, Mapping[str, object] | str] | None = None,
     ) -> None:
         self._files, self._blobs = _index_fixture_files(files)
         self._symlinks = dict(symlinks or {})
         self._cores = dict(cores or {})
         self._appimages = _validate_fixture_appimages(appimages or {})
+        self._ps2_bios_headers = _validate_fixture_ps2_bios_headers(ps2_bios_headers or {}, self._files)
         self._inaccessible = set(inaccessible or ())
         self._unlistable = set(unlistable or ())
         _refuse_both_unreadable_lists(self._inaccessible, self._unlistable)
@@ -1041,6 +1178,36 @@ class FixtureMachine:
             return AppImageReadResult(READ_OK, entry)
         entry_status: AppImageReadStatus = entry["status"]  # type: ignore[index,assignment]
         return AppImageReadResult(entry_status)
+
+    def read_ps2_bios_header(self, path: str) -> Ps2BiosHeaderResult:
+        """The modeled ROMDIR read — the two strings the walk yields in, the same outcomes RealMachine reports.
+
+        Modeling lives beside the seam rather than in ``files`` for the reason
+        ``appimages`` does: what the real read needs — a ROMDIR table inside a
+        4 MiB blob — is exactly what a fixture must not carry. A path declared
+        in ``ps2_bios_headers`` answers its header, built by the reader's own
+        code from the ``romver`` and ``serial`` strings, or the state it
+        names. A declared file with no entry there answers ``missing``: the
+        fixture has no header to answer with, and answering ``not-a-bios``
+        instead would let a vector that forgot the key prove a verdict nobody
+        modeled — the folder route treats ``missing`` for a file it has just
+        listed as a read that did not happen. An ``unreadable`` file answers
+        ``unreadable`` before any test, as the real one does.
+        """
+        if self._is_inaccessible(path):
+            return Ps2BiosHeaderResult(PS2_BIOS_UNREADABLE)
+        resolved = self._resolve(path).path
+        if resolved is None:
+            return Ps2BiosHeaderResult(PS2_BIOS_MISSING)
+        spec = self._ps2_bios_headers.get(resolved)
+        if isinstance(spec, str):
+            status: Ps2BiosHeaderStatus = spec  # type: ignore[assignment]  # validated at construction
+            return Ps2BiosHeaderResult(status)
+        if spec is not None:
+            return Ps2BiosHeaderResult(PS2_BIOS_OK, spec)
+        if resolved in self._dirs or self._files.get(resolved, (READ_MISSING, None))[0] == READ_UNREADABLE:
+            return Ps2BiosHeaderResult(PS2_BIOS_UNREADABLE)
+        return Ps2BiosHeaderResult(PS2_BIOS_MISSING)
 
     def read_text(self, path: str) -> ReadResult:
         if self._is_inaccessible(path):

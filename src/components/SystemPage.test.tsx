@@ -145,11 +145,14 @@ function makeBiosPlatform(overrides: Partial<FirmwarePlatformExt> = {}): Firmwar
   const localCount = files.filter((f) => f.downloaded).length;
   const requiredFiles = files.filter((f) => f.required_by_active);
   const requiredCount = requiredFiles.length;
-  // A folder is where the reading stops: something is at the destination and
-  // nothing about the requirement was established, so it raises neither the
-  // done count nor the level's confidence.
-  const requiredWithheld = requiredFiles.filter((f) => f.is_directory).length;
-  const requiredDownloaded = requiredFiles.filter((f) => f.downloaded && !f.is_directory).length;
+  // The row VERDICT, as the backend derives it: a row nothing could judge
+  // (`satisfied` null) raises neither the done count nor the level's
+  // confidence, and a row with no verdict field at all falls back to
+  // `downloaded`, which is what the verdict is for a plain file.
+  const verdictOf = (f: FirmwarePlatformExt["files"][number]) =>
+    f.satisfied === undefined ? f.downloaded : f.satisfied;
+  const requiredWithheld = requiredFiles.filter((f) => verdictOf(f) === null).length;
+  const requiredDownloaded = requiredFiles.filter((f) => verdictOf(f) === true).length;
   const biosLevel: BiosLevel =
     requiredWithheld > 0
       ? "unknown"
@@ -1224,7 +1227,9 @@ describe("SystemPage", () => {
                 wanted: "needed",
                 required_by_active: true,
                 on_server: false,
-                is_directory: true,
+                declared_kind: "directory",
+                satisfied: null,
+                caveats: ["firmware-scan-incomplete"],
               },
               {
                 id: null,
@@ -1246,7 +1251,7 @@ describe("SystemPage", () => {
       await flushAsync();
 
       expect(container.textContent).toContain("BIOS readiness unknown");
-      expect(container.textContent).toContain("A required folder is here and its contents cannot be checked");
+      expect(container.textContent).toContain("A required file could not be judged");
       expect(container.textContent).not.toContain("All required ready");
       expect(container.textContent).not.toContain("required missing");
       // Not a "nothing could be established" platform: its rows were answered,
@@ -1276,7 +1281,9 @@ describe("SystemPage", () => {
                 wanted: "needed",
                 required_by_active: true,
                 on_server: false,
-                is_directory: true,
+                declared_kind: "directory",
+                satisfied: null,
+                caveats: ["firmware-scan-incomplete"],
               },
               {
                 id: 7,
@@ -1298,6 +1305,43 @@ describe("SystemPage", () => {
       await flushAsync();
 
       expect(queryByText("Download All")).not.toBeNull();
+    });
+
+    it("never offers a folder declaration as a download, even when the folder is absent", async () => {
+      // The emulator lists that name, so there is no file to fetch into it —
+      // what would satisfy it is a BIOS image inside the folder. The folder is
+      // missing here, which is the only state a presence check would let
+      // through, and the library happens to hold a file under the same name.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "ps2",
+            files: [
+              {
+                id: 9,
+                file_name: "bios",
+                local_path: "pcsx2/bios",
+                size: 0,
+                md5: "",
+                downloaded: false,
+                description: "'pcsx2/bios' folder",
+                wanted: "needed",
+                required_by_active: true,
+                on_server: true,
+                declared_kind: "directory",
+                satisfied: false,
+                caveats: [],
+              },
+            ],
+          }),
+        ],
+      });
+      const { queryByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(queryByText("Download All")).toBeNull();
+      expect(queryByText("Download Required")).toBeNull();
     });
   });
 
@@ -1340,21 +1384,71 @@ describe("SystemPage", () => {
     }
 
     it("names the distribution that supplied the file instead of the library it is not in", async () => {
-      const text = await expandedRowText({ supplied_by: "retrodeck" });
+      const text = await expandedRowText({ supplied_by: "RetroDECK" });
 
-      expect(text).toContain("codehandler.bin — provided by retrodeck");
+      expect(text).toContain("codehandler.bin — provided by RetroDECK");
       expect(text).not.toContain("not in your RomM library");
     });
 
-    it("says a folder's contents were never checked", async () => {
-      const container = await expandedRow({ file_name: "bios", is_directory: true });
+    it("lists what a satisfied folder holds one line each, and gives it the green a met requirement gets", async () => {
+      const images = ["Europe  v02.00(14/06/2004)", "Japan   v02.00(14/06/2004)"];
+      const container = await expandedRow({
+        file_name: "bios",
+        declared_kind: "directory",
+        satisfied: true,
+        caveats: ["firmware-image-identified"],
+        images,
+      });
+      const rendered = [...container.querySelectorAll("span")].map((span) => span.textContent);
 
-      expect(container.textContent).toContain("bios — a folder is here — its contents cannot be checked");
+      // Each image is an element of its own. Joined into one sentence they ran
+      // to ~150 characters, which wrapped the row and orphaned its status dot.
+      for (const image of images) expect(rendered).toContain(image);
+      expect(container.textContent).not.toContain(images.join(", "));
+      expect(container.textContent).toContain("bios");
+      expect(container.innerHTML).toContain("#5ba32b");
+    });
+
+    it("reds an unmet folder like any other requirement that is not there", async () => {
+      const container = await expandedRow({
+        file_name: "bios",
+        declared_kind: "directory",
+        satisfied: false,
+        caveats: ["firmware-directory-holds-no-image"],
+      });
+
+      expect(container.textContent).toContain("bios — holds no BIOS image");
+      expect(container.innerHTML).toContain("#d94126");
+      expect(container.innerHTML).not.toContain("#5ba32b");
+    });
+
+    it("ambers a folder whose contents could not be read", async () => {
+      const container = await expandedRow({
+        file_name: "bios",
+        declared_kind: "directory",
+        satisfied: null,
+        caveats: ["firmware-scan-incomplete"],
+      });
+
+      expect(container.textContent).toContain("bios — its contents could not be read in full");
       expect(container.textContent).not.toContain("Missing");
-      // Amber, never the green a present file gets: `downloaded` is true for a
-      // folder, and green would claim an all-clear over contents nobody read.
       expect(container.innerHTML).toContain("#d4a72c");
       expect(container.innerHTML).not.toContain("#5ba32b");
+    });
+
+    it("says a destination could not be read instead of calling the file missing", async () => {
+      // This page prints its own "Missing" for a row with no note, which over an
+      // unreadable destination sends the user looking for a file that may be
+      // sitting right there.
+      const text = await expandedRowText({
+        downloaded: false,
+        on_server: true,
+        satisfied: false,
+        caveats: ["firmware-path-inaccessible"],
+      });
+
+      expect(text).toContain("codehandler.bin — its location could not be read");
+      expect(text).not.toContain("Missing");
     });
 
     it("still says a library file is missing in the page's own words", async () => {

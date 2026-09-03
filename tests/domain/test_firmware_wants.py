@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from domain.firmware_wants import (
+    DECLARED_DIRECTORY,
     WANTED_NEEDED,
     WANTED_NOT_NEEDED,
     WANTED_OPTIONAL,
@@ -12,7 +13,10 @@ from domain.firmware_wants import (
     FirmwareCatalogue,
     FirmwarePlacement,
     FirmwareWant,
+    FolderVerdict,
     classify_wanted,
+    merge_folder_verdicts,
+    unanswered_folder_cores,
 )
 
 
@@ -129,3 +133,89 @@ class TestByFileName:
 )
 def test_absence_is_classified_by_the_reading_state_alone(complete, expected):
     assert classify_wanted(None, complete=complete) == expected
+
+
+def _folder(*wants: FirmwareWant, verdict: FolderVerdict | None = None, caveats=()) -> FirmwarePlacement:
+    return FirmwarePlacement(
+        file_name="bios",
+        relative_path="pcsx2/bios",
+        description="'pcsx2/bios' folder",
+        wants=wants,
+        declared_kind=DECLARED_DIRECTORY,
+        caveats=caveats,
+        folder=verdict,
+    )
+
+
+_LRPS2 = FirmwareWant(core_so="pcsx2_libretro", required=True)
+
+
+class TestUnansweredFolderCores:
+    def test_a_core_whose_folder_row_is_open_is_named(self):
+        placements = {"bios": _folder(_LRPS2)}
+
+        assert unanswered_folder_cores(placements, ["pcsx2_libretro", "mgba_libretro"]) == ("pcsx2_libretro",)
+
+    def test_a_folder_the_reading_already_settled_is_not_asked_about(self):
+        placements = {"bios": _folder(_LRPS2, verdict=FolderVerdict(satisfied=False))}
+
+        assert unanswered_folder_cores(placements, ["pcsx2_libretro"]) == ()
+
+    def test_a_core_outside_the_scope_is_not_asked_about(self):
+        placements = {"bios": _folder(_LRPS2)}
+
+        assert unanswered_folder_cores(placements, ["mgba_libretro"]) == ()
+
+    def test_an_unestablished_scope_asks_nobody(self):
+        placements = {"bios": _folder(_LRPS2)}
+
+        assert unanswered_folder_cores(placements, None) == ()
+
+    def test_a_file_declaration_never_puts_its_cores_on_the_list(self):
+        placements = {"gba_bios.bin": _placement("gba_bios.bin", FirmwareWant(core_so="mgba_libretro", required=True))}
+
+        assert unanswered_folder_cores(placements, ["mgba_libretro"]) == ()
+
+    def test_one_core_named_twice_is_asked_about_once(self):
+        """An ES-DE catalogue can list one core under two entries for a system."""
+        placements = {"bios": _folder(_LRPS2, _LRPS2)}
+
+        assert unanswered_folder_cores(placements, ["pcsx2_libretro", "pcsx2_libretro"]) == ("pcsx2_libretro",)
+
+
+class TestMergeFolderVerdicts:
+    def test_the_verdict_lands_on_its_row(self):
+        placements = {"bios": _folder(_LRPS2)}
+
+        merged = merge_folder_verdicts(placements, {"bios": FolderVerdict(satisfied=True, images=("Europe",))})
+
+        assert merged["bios"].folder == FolderVerdict(satisfied=True, images=("Europe",))
+
+    def test_the_verdicts_caveats_join_the_destinations(self):
+        """Both are statements about one place, and both are true."""
+        placements = {"bios": _folder(_LRPS2, caveats=("firmware-scan-incomplete",))}
+
+        merged = merge_folder_verdicts(
+            placements, {"bios": FolderVerdict(satisfied=None, caveats=("firmware-image-contradicted",))}
+        )
+
+        assert merged["bios"].caveats == ("firmware-scan-incomplete", "firmware-image-contradicted")
+
+    def test_a_verdict_for_a_file_declaration_is_dropped(self):
+        """The declaration decides what the emulator opens; a folder verdict cannot override it."""
+        placements = {"gba_bios.bin": _placement("gba_bios.bin", FirmwareWant(core_so="mgba_libretro", required=True))}
+
+        merged = merge_folder_verdicts(placements, {"gba_bios.bin": FolderVerdict(satisfied=True)})
+
+        assert merged["gba_bios.bin"].folder is None
+
+    def test_a_verdict_for_a_row_that_is_not_there_is_dropped(self):
+        assert merge_folder_verdicts({}, {"bios": FolderVerdict(satisfied=True)}) == {}
+
+    def test_the_rows_beside_it_are_untouched(self):
+        beside = _placement("GameIndex.yaml", FirmwareWant(core_so="pcsx2_libretro", required=True))
+        placements = {"bios": _folder(_LRPS2), "GameIndex.yaml": beside}
+
+        merged = merge_folder_verdicts(placements, {"bios": FolderVerdict(satisfied=True)})
+
+        assert merged["GameIndex.yaml"] is beside

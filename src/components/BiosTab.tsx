@@ -110,8 +110,9 @@ function buildBiosHeader(bios: BiosStatus, biosLevel: BiosTabProps["biosLevel"])
   if (biosLevel === "unknown") {
     // Two ignorances behind one grey dot, and they are not the same sentence.
     // With a required row nothing could judge, the requirement IS known — a
-    // folder is wanted — and it is the readiness that cannot be stated. Without
-    // one, nothing installed could say whether these files are wanted at all.
+    // folder whose contents could not be read, say — and it is the readiness
+    // that cannot be stated. Without one, nothing installed could say whether
+    // these files are wanted at all.
     // Neither is the "Nothing required" below, which is an answer.
     biosLabel = (bios.required_withheld ?? 0) > 0 ? "BIOS readiness unknown" : "BIOS requirement unknown";
   } else if (reqCount > 0) {
@@ -136,12 +137,15 @@ function buildBiosHeader(bios: BiosStatus, biosLevel: BiosTabProps["biosLevel"])
 
 /** The dot beside one file row: what it means for THIS launch, then for others. */
 function fileDotColor(file: BiosFileStatus): string {
-  // A folder is checked first because `downloaded` is true for one — something
-  // is at the destination — and green would read as an all-clear over contents
-  // nothing looked at. Amber is the colour this surface already gives a row it
-  // cannot call settled.
-  if (file.is_directory) return "#d4a72c";
-  if (file.downloaded) return "#5ba32b";
+  // The row's VERDICT, not `downloaded`: for a declared folder the two come
+  // apart, since the folder is there on every RetroDECK install and what
+  // satisfies the core is a file inside it. A payload with no verdict at all
+  // falls back to `downloaded`, which is what the verdict is for a plain file.
+  const verdict = file.satisfied === undefined ? file.downloaded : file.satisfied;
+  // Amber is the colour this surface already gives a row it cannot call
+  // settled, and a null verdict is exactly that.
+  if (verdict === null) return "#d4a72c";
+  if (verdict) return "#5ba32b";
   if (file.required_by_active) return "#d94126";
   // Missing and not required here, but demanded by some other installed core:
   // amber, because switching cores would make it a blocker.
@@ -150,16 +154,43 @@ function fileDotColor(file: BiosFileStatus): string {
 }
 
 /**
- * The note after a file's name, as an em-dash suffix.
+ * The lines under a file's name — what its read found, then who uses it.
  *
- * The wording is {@link biosFileNote}'s so this pane and the System page cannot
- * describe one row two ways; what stays here is the framing. Empty for every
- * plain library row this pane has always shown — downloaded state is the dot's
- * job, and repeating it in text would be a redesign rather than a fix.
+ * One indented block, because they are one column to the eye and two blocks
+ * would leave the images floating between the row and its cores. The row's own
+ * name stays short so the status dot beside it keeps its line: folding a
+ * folder's three image lines into that name is what wrapped the row and
+ * orphaned the dot above it.
+ *
+ * The image text is the resolver's verbatim string, and `pre-wrap` keeps the
+ * column padding PCSX2 puts in its own option labels — that alignment is what
+ * makes a line matchable against the emulator's picker, and it still wraps
+ * rather than overflowing the panel.
  */
-function fileNote(file: BiosFileStatus): string {
-  const note = biosFileNote(file);
-  return note ? ` — ${note}` : "";
+function fileLines(lines: string[], coreLines: ReactElement[]): ReactElement | null {
+  if (lines.length === 0 && coreLines.length === 0) return null;
+  return (
+    <div
+      key="lines"
+      style={{
+        flexBasis: "100%",
+        display: "flex",
+        flexDirection: "column" as const,
+        gap: "2px",
+        marginLeft: "18px",
+      }}
+    >
+      {lines.map((line) => (
+        <div
+          key={`image-${line}`}
+          style={{ color: "rgba(255, 255, 255, 0.5)", fontSize: "12px", whiteSpace: "pre-wrap" }}
+        >
+          {line}
+        </div>
+      ))}
+      {coreLines}
+    </div>
+  );
 }
 
 /**
@@ -186,27 +217,16 @@ function buildBiosFileList(bios: BiosStatus, coreInfo: CoreInfo | null): ReactEl
 
   const fileElements = wantedFiles.map((f) => {
     const coreLines = f.cores ? buildBiosCoreLines(f.cores, coreLabelMap, coreInfo?.active_core) : [];
+    const { note, lines } = biosFileNote(f);
+    const suffix = note ? ` — ${note}` : "";
 
     return (
       <div key={f.file_name} className="romm-panel-file-row">
         <span key="dot" className="romm-status-dot" style={{ backgroundColor: fileDotColor(f) }} />
         <span key="name" className="romm-panel-file-name">
-          {`${f.description || f.file_name}${fileNote(f)}`}
+          {`${f.description || f.file_name}${suffix}`}
         </span>
-        {coreLines.length > 0 ? (
-          <div
-            key="cores"
-            style={{
-              flexBasis: "100%",
-              display: "flex",
-              flexDirection: "column" as const,
-              gap: "2px",
-              marginLeft: "18px",
-            }}
-          >
-            {coreLines}
-          </div>
-        ) : null}
+        {fileLines(lines, coreLines)}
       </div>
     );
   });

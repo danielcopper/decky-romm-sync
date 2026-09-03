@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "version": "1",
+  "reviewed": "2026-09-02",
+  "spec": "DESIGN.md — the contract's identifiers. How a distribution spells its own name, keyed by the installation kind atlas already answers under, so the word in the contract and the word a handle reports stay one word. World knowledge under CLAUDE.md's boundary rule: no machine states a spelling as a NAME. The strings do occur on a machine — EmuDeck's marker lives under a directory called 'EmuDeck', the bare Flatpak's application id is 'org.libretro.RetroArch', RetroDECK's marker names 'RetroDECK' as the repository it updates from — but each is a path segment, an application id or a repository name: reading a display name out of them yields 'retroarch' for a native install, whose config directory is spelled lowercase, and nothing that tells the two RetroArch installations apart. So the spelling is packaged, versioned and cited to the project's own text. It is PRESENTATION: the identifier stays the key a consumer branches on, and nothing branches on a label — the only comparisons anywhere are the loader's check that the cited spelling survives inside the label, and the vector gate's check that a corpus states the packaged one. Every kind atlas can report has an entry (a test derives the kind set from the handle classes and fails on a gap), because a missing entry is a table error rather than a reason to fall back to the identifier. Not to be confused with the 'label' in arrangement_evidence.json, which is a sentence fragment for caveat prose ('an EmuDeck arrangement'); this file holds the project's own display name.",
+  "description": "distributions: identifier -> {label, spelling, citation}. 'spelling' is the name as the cited source writes it and 'citation' says where it was read, pinned to the commit the README was read at; 'label' is what atlas presents, which is the spelling itself wherever one name is enough. Where two kinds are the same program in two packagings, the label adds a qualifier of atlas's own to tell them apart, and the loader requires the cited spelling to survive verbatim inside it — a label may say more than the source does, never something else.",
+  "distributions": {
+    "retrodeck": {
+      "label": "RetroDECK",
+      "spelling": "RetroDECK",
+      "citation": "the project's own README at RetroDECK/RetroDECK 4f3861e90281afdca05069551cbe411f80946e4e: the title '# RetroDECK' (README.md:10) and the paragraph under it, 'RetroDECK is an all-in-one retro gaming platform for Linux-based systems …' (README.md:13)"
+    },
+    "emudeck": {
+      "label": "EmuDeck",
+      "spelling": "EmuDeck",
+      "citation": "the project's own README at dragoonDorise/EmuDeck 36f2807df33f3a0d2aac635ef9c26662afdca01b: the title '# EmuDeck' (README.md:1) and the first paragraph below it, past the badge and the hero image, 'EmuDeck is a collection of scripts that allows you to autoconfigure your Steam Deck or any other Linux Distro …' (README.md:6)"
+    },
+    "bare_retroarch_flatpak": {
+      "label": "RetroArch (Flatpak)",
+      "spelling": "RetroArch",
+      "citation": "the program's own README at libretro/RetroArch 0630231f681b050a1ae81a7f5b47003146f53139: the title '# RetroArch' (README.md:3) and the sentence under it, 'RetroArch is the reference frontend for the libretro API.' (README.md:5). The '(Flatpak)' half is atlas's own qualifier, not RetroArch's: the two bare kinds are one program in two packagings and its own text spells no distinction between them, so the qualifier follows atlas's identifiers (bare_retroarch_flatpak, bare_retroarch_native) rather than claiming a name upstream uses."
+    },
+    "bare_retroarch_native": {
+      "label": "RetroArch (native)",
+      "spelling": "RetroArch",
+      "citation": "the program's own README at libretro/RetroArch 0630231f681b050a1ae81a7f5b47003146f53139: the title '# RetroArch' (README.md:3) and the sentence under it, 'RetroArch is the reference frontend for the libretro API.' (README.md:5). The '(native)' half is atlas's own qualifier, not RetroArch's: the two bare kinds are one program in two packagings and its own text spells no distinction between them, so the qualifier follows atlas's identifiers (bare_retroarch_flatpak, bare_retroarch_native) rather than claiming a name upstream uses."
+    }
+  }
+}
