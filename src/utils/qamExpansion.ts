@@ -23,10 +23,9 @@ export const WIDE_ROOT_CLASS = "romm-wide-qam-root";
 const WIDE_PANEL_STYLE_ID = "romm-wide-qam-styles";
 
 // Decky registers a single QAM tab (`QuickAccessTab.Decky = 999`), so the
-// plugin's panel is `#quickaccess_content_999`. This is the handle for walking
-// the DOM: the id is on the panel itself, whereas `TabGroupPanel` is a class
-// whose element the spike never isolated — `:has()` matches from any ancestor,
-// so a rule that works proves nothing about which element carries it.
+// plugin's panel is `#quickaccess_content_999`. Measured on the device: the id
+// and the `TabGroupPanel` class are on that same element, so walking the DOM by
+// id lands where the CSS below matches by class.
 const PANEL_ID_SELECTOR = '[id^="quickaccess_content_"]';
 
 const TAB_PANEL_SELECTOR = quickAccessMenuClasses?.TabGroupPanel
@@ -34,11 +33,11 @@ const TAB_PANEL_SELECTOR = quickAccessMenuClasses?.TabGroupPanel
   : PANEL_ID_SELECTOR;
 
 // Steam caps every tab's content panel at 300 px and lifts it only for its own
-// Friends panel, through the compound selector `.TabGroupPanel.tab_Friends`
-// (ADR-0029) — one element carrying both classes, which is evidence the cap
-// sits on the panel element itself. The `> *` line is cheap insurance against
-// it sitting one level in, kept until a device check settles which it is.
-// `:has()` scopes the lift to a panel holding a wide page of ours.
+// Friends panel (ADR-0029). The cap is on the panel element itself: with these
+// rules up, the device measured `#quickaccess_content_999` at 806 px. The `> *`
+// line covers a child carrying a cap of its own, which was never separately
+// measured and costs one selector to keep. `:has()` scopes the lift to a panel
+// holding a wide page of ours.
 const WIDE_PANEL_CSS = `
 ${TAB_PANEL_SELECTOR}:has(.${WIDE_ROOT_CLASS}) { max-width: none; }
 ${TAB_PANEL_SELECTOR}:has(.${WIDE_ROOT_CLASS}) > * { max-width: none; }

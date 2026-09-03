@@ -16,20 +16,20 @@ without restating it. The width mechanism's decision record is
 
 ## Where the code lives
 
-| Module                                                        | Responsibility                                                                                                       |
-| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `src/index.tsx` (`QAMPanel`)                                  | The router: one `Page` value, one mounted page, a module-level `currentPage` that survives a QAM remount             |
-| `src/types/navigation.ts`                                     | The `Page` union — every page the router can land on                                                                 |
-| `src/components/MainPage.tsx`                                 | Main                                                                                                                 |
-| `src/components/LibraryPage.tsx`                              | Library — Platforms and Collections                                                                                  |
-| `src/components/SettingsPage.tsx`, `src/components/settings/` | Settings and its sections                                                                                            |
-| `src/components/DangerZone.tsx`, `RemovedGamesCleanup.tsx`    | Data Management                                                                                                      |
-| `src/components/DownloadQueue.tsx`                            | Downloads                                                                                                            |
-| `src/components/SystemPage.tsx`                               | System — retires into Library › Platforms                                                                            |
-| `src/utils/deckyUiInternals.ts`                               | Honest typing for `@decky/ui` values that come from a webpack probe; the wide frame's class names and `Tabs` go here |
-| `src/utils/qamExpansion.ts`                                   | The panel's width: the expand and hide messages, the injected `max-width` rule, and the four paths that clear both   |
-| `src/components/qam/`                                         | The wide-page frame: `WidePage` (Back row, title, tabs, measured height) and `ListDetail`                            |
-| `src/utils/` module stores                                    | State that must outlive a page: sync progress, pending preview, downloads, prune, notices                            |
+| Module                                                        | Responsibility                                                                                                      |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `src/index.tsx` (`QAMPanel`)                                  | The router: one `Page` value, one mounted page, a module-level `currentPage` that survives a QAM remount            |
+| `src/types/navigation.ts`                                     | The `Page` union — every page the router can land on                                                                |
+| `src/components/MainPage.tsx`                                 | Main                                                                                                                |
+| `src/components/LibraryPage.tsx`                              | Library — Platforms and Collections                                                                                 |
+| `src/components/SettingsPage.tsx`, `src/components/settings/` | Settings and its sections                                                                                           |
+| `src/components/DangerZone.tsx`, `RemovedGamesCleanup.tsx`    | Data Management                                                                                                     |
+| `src/components/DownloadQueue.tsx`                            | Downloads                                                                                                           |
+| `src/components/SystemPage.tsx`                               | System — retires into Library › Platforms                                                                           |
+| `src/utils/deckyUiInternals.ts`                               | Honest typing for `@decky/ui` values that come from a webpack probe: the frame's class names, `Tabs`, scroll panels |
+| `src/utils/qamExpansion.ts`                                   | The panel's width: the expand and hide messages, the injected `max-width` rule, and the four paths that clear both  |
+| `src/components/qam/`                                         | The wide-page frame: `WidePage` (Back row, title, tabs, measured height), `ListDetail` and `ScrollRegion`           |
+| `src/utils/` module stores                                    | State that must outlive a page: sync progress, pending preview, downloads, prune, notices                           |
 
 ## Two widths
 
@@ -37,30 +37,56 @@ Every page is either narrow (348 px, 300 px of content) or wide (854 px, 806 px 
 page: a page is wide or it is not, and no view inside a page changes it. Main and Downloads are narrow; Sync, Library,
 Settings and Data Management are wide.
 
-How a page gets wide, measured on the device (Big Picture, CEF Chrome 126) rather than read from documentation:
+**On the Deck, wide means full screen.** The Big Picture viewport is 854 × 534 CSS px at `devicePixelRatio` 1.5 (1280 ×
+800 physical), so the narrow panel covers 41 % of the width and the wide one covers all of it — there is no library left
+beside a wide page. A desktop Big Picture window is wider and shows one, which is why width judgements are made under
+`mise run dev:ui-scale deck` and nowhere else.
 
-- Steam's main window holds the QAM in `.ViewPlaceholder`, always 854 px wide, anchored right and pushed off-screen by
-  `transform: translateX(506px)`, so 348 px stay visible. Steam's `Expanded` class sets `translateX(0)`. The class
-  follows one MobX observable on the FriendsUI store, which listens for `message` events on the SharedJSContext window —
-  the window plugin code runs in. A wide page posts `{ message: "QamFriendsExpanded" }` to `window` on mount and
-  `{ message: "QamFriendsHidden" }` when it lets go. The target origin is always `window.origin`, which addresses the
-  message to that window and always matches it. A well-formed target origin that does not match is checked at delivery
-  and the message is discarded in silence, so a literal one would leave the panel simply never widening.
+How a page gets wide, measured on the device rather than read from documentation:
+
+- Steam's main window holds the QAM in a sliding container: an absolutely positioned element as wide as the viewport and
+  854 × 454 CSS px on the Deck — the 80 px above it is Steam's top bar — anchored right and pushed off-screen by
+  `transform: translateX(506px)`, so 348 px stay visible. Steam's `Expanded` class sets `translateX(0)`. Its class names
+  are hashed and there is no `ViewPlaceholder` to match on any more, so the container is found by geometry: absolutely
+  positioned, a transform set, at least 800 × 400. The class follows one MobX observable on the FriendsUI store, which
+  listens for `message` events on the SharedJSContext window — the window plugin code runs in. A wide page posts
+  `{ message: "QamFriendsExpanded" }` to `window` on mount and `{ message: "QamFriendsHidden" }` when it lets go. The
+  target origin is always `window.origin`, which addresses the message to that window and always matches it. A
+  well-formed target origin that does not match is checked at delivery and the message is discarded in silence, so a
+  literal one would leave the panel simply never widening.
 - Every tab's content panel carries `max-width: 300px`; only Steam's Friends panel lifts it. A wide page injects one
   stylesheet whose `:has()` rule lifts the cap for a marker class on the plugin's own subtree. Class names come from
   `quickAccessMenuClasses`, which can be `undefined`; `[id^="quickaccess_content_"]` is the fallback selector. Decky
-  registers one QAM tab (`QuickAccessTab.Decky = 999`), so the plugin's panel is `#quickaccess_content_999`.
+  registers one QAM tab (`QuickAccessTab.Decky = 999`), so the plugin's panel is `#quickaccess_content_999` — and
+  `TabGroupPanel` sits on that same element, measured, which is why walking the DOM by id and writing the CSS against
+  the class reach the same panel.
 - Result: the visible panel goes from 348 px to 854 px and the tab panel from 300 px to 806 px (854 minus the 48 px tab
-  rail). The QAM browser view itself is 855 px wide in both states, so only the placeholder's geometry, read through
-  `findSP()`, proves an expansion.
+  rail). The QAM browser view itself is 855 px wide in both states, so only the sliding container's geometry, read
+  through `findSP()`, proves an expansion.
 
 The flag is Steam's and global, so the page that set it clears it: on unmount (navigation away, plugin closed), when the
 Decky tab stops being the active QAM tab (the `ActiveTab` class on the panel's parent — a tab switch is a class change,
 not an unmount), when the QAM closes (`useQuickAccessVisible`), and from `onDismount`.
 
+Steam moves the same flag on its own, in both directions, and neither is a bug in the plugin. `OpenQuickAccessMenu`
+clears it (`SetQAMFriendsChatExpanded(false)`) on every QAM tab change away from Friends, which is a second net under
+the plugin's own `ActiveTab` observer; and the Friends tab's list expands it from `onFocusWithin`, so Friends goes wide
+the moment gamepad focus enters it. A Friends panel that widens after a wide page closed is Steam doing that. Both are
+in `chunk~2dcc5aaf7.js` in Steam's own bundle, where the receiver is also visible: `OnMessage` on the FriendsUI store
+sets `m_bQamFriendsExpanded` from exactly the two messages the plugin sends, and Steam's own senders post with the
+literal `"https://steamloopback.host"` — which is what `window.origin` is in the SharedJSContext.
+
 Steam's tabbed page fills its parent instead of growing, and nothing in the QAM chain provides a height. A wide page
 therefore measures the viewport left below its header and takes that as its height; its regions scroll inside it. A
-`min-height` is not enough — it clips.
+`min-height` is not enough — it clips. Under Decky's title bar, the frame's Back row, its title and a tab bar, that
+leaves a body of roughly 260 px inside the 454 px view.
+
+A region's own scrolling is Steam's, not CSS. Steam's gamepad navigation scrolls by moving focus, so an `overflow: auto`
+box holding content nobody can focus — a detail pane of text — cannot be scrolled with a controller at all. Every
+scrolling region therefore goes through `ScrollRegion`, which renders Steam's scroll panel: the same component the QAM's
+own tab panel is built from, with gamepad direction bound to scrolling. Both of a list-and-detail page's regions are
+ones, and so is the frame's body when the page has no tabs; a tabbed page's body is not, because Steam's tabbed page
+brings a scroll panel per tab.
 
 ## Pages
 
