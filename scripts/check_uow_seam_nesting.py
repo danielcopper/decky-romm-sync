@@ -176,7 +176,7 @@ IO_SEAM_METHODS: frozenset[str] = frozenset(
         # cache: es_systems.xml for the first three, es_find_rules.xml for
         # resolve_sandbox_launcher. get_emulator_options touches both — it globs
         # every option's emulator install through the find rules. Listing one of
-        # the four would be arbitrary: services/firmware.py calls two of them
+        # the four would be arbitrary: services/firmware/status.py calls two of them
         # inside one loop, and services/active_core_resolver.py the other two.
         "get_active_core",
         "get_default_emulator",

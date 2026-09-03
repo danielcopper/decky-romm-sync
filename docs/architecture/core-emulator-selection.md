@@ -465,7 +465,7 @@ The System page reads its per-platform data from the multi-platform `get_firmwar
 `get_platform_core_info`, which is the game-detail path). Each entry's **`active_core_label`** is the resolved display
 label the Emulator Core button shows: the per-platform override (`platform_cores`) when it is set and still resolves to
 a bakeable emulator, else the es_systems **default emulator** label (the first bakeable command — libretro _or_
-standalone). This is the platform-level projection of the read-path precedence (`FirmwareService`'s
+standalone). This is the platform-level projection of the read-path precedence (`FirmwareStatusReader`'s
 `_resolve_platform_emulator_label`, injected the same `PlatformCoreReader` the resolver uses), so after a per-platform
 pick the button reflects the applied selection on the next `refreshSystem` — the same way the game-detail menu does —
 and a standalone default reads its standalone label rather than the libretro system default. It is intentionally

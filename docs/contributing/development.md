@@ -344,7 +344,7 @@ py_modules/
     library/                         # LibraryService façade — fetcher, sync_orchestrator, reporter, shared state box
     saves/                           # SaveService aggregate — state, sync_engine/, slots/, status/, versions
     downloads.py                     # DownloadService — ROM downloads, ZIP/M3U, fcntl queue
-    firmware.py                      # FirmwareService — BIOS registry + downloads
+    firmware/                        # FirmwareService façade — listing, demand, status, downloads, deletion
     session_lifecycle.py             # SessionLifecycleService — post-exit orchestration
     migration.py                     # MigrationService — RetroDECK path + save-sort migration
     steamgrid.py                     # SteamGridService — SteamGridDB artwork

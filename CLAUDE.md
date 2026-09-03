@@ -251,28 +251,28 @@ Format: **invariant** — tier — enforced by.
   `tests/services/test_firmware.py::TestCheckPlatformBiosUnknown` pins the same listing answering `not_needed` under a
   whole reading and `unknown` under a partial one. The rule spans four modules and no diff-scoped review sees it whole:
   the adapter decides whether the reading happened, `domain/firmware_wants.py` holds the two values apart,
-  `services/firmware.py` scopes the doubt to the emulators ES-DE offers for the platform, and both frontend surfaces
-  render them as different sentences. **Nothing mechanical stands behind the scoping half.** A future caller that folds
-  the two values back together — a truthiness test on a placement, a `wanted != "needed"` bucket, a default of
-  `not_needed` where the catalogue is silent — goes green: the collapse is the upstream defect this swap removed, and it
-  is one careless `or` away from returning. The scope is the second half, and there the two ends now agree rather than
-  one trusting the other: `_core_scope` answers `None` both when `es_systems.xml` is unreadable **and** when it offers
-  the platform no libretro core (35 of ES-DE's 172 systems, `ps3` among them — a mapped RomM platform whose only entry
-  is RPCS3), and `reading_complete_for` refuses an empty scope as well as a `None` one. An empty scope read as complete
-  is a finished reading of nobody: every server file classifies `not_needed`, `required_count` is 0, and the platform
-  reports a green "Nothing required" over firmware the standalone emulator will not boot without
+  `services/firmware/status.py` scopes the doubt to the emulators ES-DE offers for the platform, and both frontend
+  surfaces render them as different sentences. **Nothing mechanical stands behind the scoping half.** A future caller
+  that folds the two values back together — a truthiness test on a placement, a `wanted != "needed"` bucket, a default
+  of `not_needed` where the catalogue is silent — goes green: the collapse is the upstream defect this swap removed, and
+  it is one careless `or` away from returning. The scope is the second half, and there the two ends now agree rather
+  than one trusting the other: `_core_scope` answers `None` both when `es_systems.xml` is unreadable **and** when it
+  offers the platform no libretro core (35 of ES-DE's 172 systems, `ps3` among them — a mapped RomM platform whose only
+  entry is RPCS3), and `reading_complete_for` refuses an empty scope as well as a `None` one. An empty scope read as
+  complete is a finished reading of nobody: every server file classifies `not_needed`, `required_count` is 0, and the
+  platform reports a green "Nothing required" over firmware the standalone emulator will not boot without
 - **A firmware row the RomM library does not hold (`on_server: False`) counts towards readiness, and never towards a
   download affordance or a progress ratio** — test + prompt-only — `tests/services/test_firmware.py` pins the row's
   shape (`id` absent, `on_server` clear), that it raises `required_count`, and that it stays out of `server_count`;
   `src/components/SystemPage.test.tsx` pins that the buttons key off the fetchable set. **The three axes live in three
   places and nothing joins them.** `domain/bios_status.py::count_required` is readiness and counts every required row;
-  `services/firmware.py::_bios_aggregates` scopes `server_count` / `local_count` to `on_server` rows; the download
-  buttons' condition is a filter inside `SystemPage.tsx` and exists nowhere else. Each fold has its own quiet failure:
-  drop the row from readiness and a platform reads ready while a required file is absent; add it to the ratio and a SNES
-  page reports `0 / 26 files, 26 missing` for twenty-six optional files no core wants; add it to the buttons and the
-  page offers a download that cannot succeed. `on_server` is the one field all three read; the row's `id: None` is an
-  honest absence with no consumer at all, so nothing breaks if it is filled in and nothing is guarded by leaving it
-  empty
+  `services/firmware/status.py::_bios_aggregates` scopes `server_count` / `local_count` to `on_server` rows; the
+  download buttons' condition is a filter inside `SystemPage.tsx` and exists nowhere else. Each fold has its own quiet
+  failure: drop the row from readiness and a platform reads ready while a required file is absent; add it to the ratio
+  and a SNES page reports `0 / 26 files, 26 missing` for twenty-six optional files no core wants; add it to the buttons
+  and the page offers a download that cannot succeed. `on_server` is the one field all three read; the row's `id: None`
+  is an honest absence with no consumer at all, so nothing breaks if it is filled in and nothing is guarded by leaving
+  it empty
 - **No BIOS answer outlives the page that asked for it** — test + prompt-only —
   `tests/services/test_game_detail.py::TestGetCachedGameDetailCarriesNoBiosAnswer` and the two contract cases in
   `tests/contract/test_game_detail_read.py`. `get_cached_game_detail` carries none and says so (`bios_status_unknown`,
@@ -352,16 +352,18 @@ Format: **invariant** — tier — enforced by.
 - **Server-supplied path components pass `safe_join` (`lib/path_safety.py`)** — test + prompt-only — traversal tests per
   path builder; new call sites are prompt-only
 - **A firmware row's presence comes from the resolver wherever the resolver declared it; the plugin's own filesystem
-  probe covers only three leftovers** — prompt-only — `FirmwareService._is_downloaded` is the single crossing point and
-  states the boundary: the probe answers for a library file no core declares, for a placement whose location the plugin
-  cannot honour, and for the already-there skip in the download batch. Everything else reads the resolver's `present`,
-  which follows symlinks the plugin would have to re-implement — the PS2 folder is one directory reached through two
-  spellings. `present is None` reads as absent, the safe direction, because the row then shows work outstanding rather
-  than a readiness nobody established. **Nothing enforces the crossing point.** A fourth status builder calling
-  `_firmware_file_store.exists(dest)` directly would go green, and its rows would silently answer from the weaker source
-  — `os.path.exists` on a path the plugin assembled, which is what this cut removed after it rendered a satisfied
-  requirement as missing. Related and separate: presence is not the row's verdict (CONTEXT.md → Row verdict), and a
-  withheld verdict is not an absence — its cause is read off the row's caveat codes, never off the verdict itself
+  probe covers only three leftovers** — prompt-only — `services/firmware/demand.py::FirmwareDemand.is_downloaded` is the
+  single crossing point and states the boundary: the probe answers for a library file no core declares, for a placement
+  whose location the plugin cannot honour, and for the already-there skip in the download batch. Everything else reads
+  the resolver's `present`, which follows symlinks the plugin would have to re-implement — the PS2 folder is one
+  directory reached through two spellings. `present is None` reads as absent, the safe direction, because the row then
+  shows work outstanding rather than a readiness nobody established. **Nothing enforces the crossing point.** A fourth
+  status builder calling `_firmware_file_store.exists(dest)` directly would go green, and its rows would silently answer
+  from the weaker source — `os.path.exists` on a path the plugin assembled, which is what this cut removed after it
+  rendered a satisfied requirement as missing. `services/firmware/status.py` holds that store itself, for
+  `_deletable_count`'s records-still-on-disk count, so the wrong probe is one line away from every row builder that
+  should be asking `FirmwareDemand`. Related and separate: presence is not the row's verdict (CONTEXT.md → Row verdict),
+  and a withheld verdict is not an absence — its cause is read off the row's caveat codes, never off the verdict itself
 - **A firmware row's verdict is `BiosFileEntry.satisfied`, and for a folder declaration it is what the folder HOLDS —
   never that the folder is there** — test + prompt-only —
   `tests/services/test_firmware.py::TestAFolderRequirementIsAnsweredByItsContents` pins all three answers end-to-end,
@@ -369,19 +371,19 @@ Format: **invariant** — tier — enforced by.
   `tests/adapters/test_atlas_firmware.py` pins which folder answers the unverified reading already settles and which
   codes those rows carry. The rule spans four modules and no diff-scoped review sees it whole: the adapter carries
   `declared_kind` and the folder verdict, `domain/bios_status.py::_row_verdict` decides the row's answer,
-  `services/firmware.py::_folder_answers` scopes the verified read, and both frontend surfaces colour and word the row
-  off it. **Nothing mechanical joins those four**, which is what a consumer reading `downloaded` for a folder row breaks
-  — an `if row.downloaded` beside the verdict, a count that spends presence as readiness. RetroDECK links LRPS2's
-  `pcsx2/bios` onto the BIOS root, so such a consumer reports "All required ready" over a PS2 install with no BIOS file
-  at all; that was the state before #1807 declined the verdict, and this cut replaced the declining with a real answer,
-  so the same field access brings it straight back. The same holds for the third value: a required row answered `None`
-  takes the level to `unknown`, and folding it into `False` claims an absence nothing established. `declared_kind`
-  carries a second rule with **no check at all**: a folder declaration is never offered as a download — the emulator
-  lists that name, so there is no file to fetch into it. Two places refuse it today (`SystemPage.tsx`'s fetchable filter
-  and `FirmwareService._download_firmware_batch`); `FirmwareService.download_firmware(firmware_id)` does not, and is
-  unreachable only because no callable exposes it (`main.py` offers the two batch entry points and `src/api/backend.ts`
-  names no single-file download). It is the DECLARATION's kind, so it survives an absent folder, which is exactly the
-  case a presence check would let through
+  `services/firmware/demand.py::FirmwareDemand.folder_answers` scopes the verified read, and both frontend surfaces
+  colour and word the row off it. **Nothing mechanical joins those four**, which is what a consumer reading `downloaded`
+  for a folder row breaks — an `if row.downloaded` beside the verdict, a count that spends presence as readiness.
+  RetroDECK links LRPS2's `pcsx2/bios` onto the BIOS root, so such a consumer reports "All required ready" over a PS2
+  install with no BIOS file at all; that was the state before #1807 declined the verdict, and this cut replaced the
+  declining with a real answer, so the same field access brings it straight back. The same holds for the third value: a
+  required row answered `None` takes the level to `unknown`, and folding it into `False` claims an absence nothing
+  established. `declared_kind` carries a second rule with **no check at all**: a folder declaration is never offered as
+  a download — the emulator lists that name, so there is no file to fetch into it. Two places refuse it today
+  (`SystemPage.tsx`'s fetchable filter and `FirmwareDownloader._download_firmware_batch`);
+  `FirmwareDownloader.download_firmware(firmware_id)` does not, and is unreachable only because no callable exposes it
+  (`main.py` offers the two batch entry points and `src/api/backend.ts` names no single-file download). It is the
+  DECLARATION's kind, so it survives an absent folder, which is exactly the case a presence check would let through
 - **The whole-machine firmware inventory is never asked with content verification** — prompt-only —
   `firmware_inventory()` is asked unverified and the verified question goes through `FirmwareFolderVerdictFn`, one core
   per call, only for the folder rows `unanswered_folder_cores` reports still open. `verify=True` on the inventory sweeps
