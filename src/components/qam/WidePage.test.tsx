@@ -82,6 +82,8 @@ describe("WidePage", () => {
   });
 
   it("never measures the body below its floor", async () => {
+    // Undone by the `vi.unstubAllGlobals()` in src/test-setup.ts's global
+    // afterEach, so the viewport is back to its default for the next test.
     vi.stubGlobal("innerHeight", 100);
     const WidePage = await loadWidePage(StubTabs);
 

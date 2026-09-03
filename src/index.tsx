@@ -1009,9 +1009,12 @@ export default definePlugin(() => {
     content: <QAMPanel />,
     alwaysRender: true,
     onDismount() {
-      // First: the panel width is a global Steam flag, and a page still mounted
-      // here has no React cleanup left to clear it. Leaving it set would keep
-      // Steam's own QAM expanded until its Friends tab toggles it back.
+      // Ahead of every step below that can throw: the panel width is a global
+      // Steam flag with no React cleanup left to clear it here, so a teardown
+      // that dies halfway must not be what leaves Steam's own QAM expanded.
+      // Safe in that position because this call cannot throw itself — the width
+      // message goes to `window.origin`, the one target origin postMessage
+      // accepts.
       collapseQamOnDismount();
       syncContinuationController.abort();
       destroySessionManager();
