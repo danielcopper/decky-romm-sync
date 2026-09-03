@@ -8,8 +8,8 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { useState, type FC } from "react";
-import { ListDetail, type ListDetailItem } from "./ListDetail";
+import { useState, type CSSProperties, type FC, type ReactNode } from "react";
+import { ListDetail, type ListDetailItem, type ListDetailProps } from "./ListDetail";
 
 const PLATFORMS = [
   { id: "n64", name: "Nintendo 64" },
@@ -108,6 +108,35 @@ describe("ListDetail", () => {
     expect(detail).toContainElement(screen.getByText("detail for n64"));
     expect(list?.style.overflow).toBe("auto");
     expect(detail?.style.overflow).toBe("auto");
+  });
+
+  it("gives each region Steam's scroll panel, so unfocusable detail content scrolls", async () => {
+    vi.resetModules();
+    vi.doMock("../../utils/deckyUiInternals", () => ({
+      ScrollPanelGroup: ({ style, children }: { style?: CSSProperties; children?: ReactNode }) => (
+        <div data-testid="scroll-panel" style={style}>
+          {children}
+        </div>
+      ),
+    }));
+    const Scrolling = (await import("./ListDetail")).ListDetail as FC<ListDetailProps>;
+
+    render(
+      <Scrolling
+        items={platformItems(() => {})}
+        selectedId="n64"
+        onSelect={vi.fn()}
+        renderDetail={() => <div>plain text nobody can focus</div>}
+      />,
+    );
+    const [list, detail] = screen.getAllByTestId("scroll-panel");
+
+    // The detail pane is the case that forced this: Steam scrolls by moving
+    // focus, so rows that take no focus scroll only from inside the panel.
+    expect(list).toContainElement(screen.getByRole("button", { name: /Nintendo 64/ }));
+    expect(detail).toContainElement(screen.getByText("plain text nobody can focus"));
+    expect(list?.style.width).toBe("264px");
+    expect(detail?.style.height).toBe("100%");
   });
 
   it("renders a detail for an empty selection", () => {

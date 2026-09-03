@@ -13,6 +13,7 @@ import { useLayoutEffect, useRef, useState, type FC, type ReactNode } from "reac
 import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
 import { Tabs } from "../../utils/deckyUiInternals";
 import { WIDE_ROOT_CLASS, useWideQamPanel } from "../../utils/qamExpansion";
+import { ScrollRegion } from "./ScrollRegion";
 
 export interface WidePageTab {
   id: string;
@@ -74,7 +75,10 @@ export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, on
   // clips instead of growing, so the body needs a definite height.
   const bodyStyle = { height: bodyHeight === null ? undefined : `${bodyHeight}px`, overflow: "hidden" };
 
-  let body: ReactNode = children;
+  // Only the untabbed body gets a scroll region of its own. Steam's tabbed page
+  // brings one per tab, and the branch below it is the probe-missed fallback,
+  // which renders the tab's content exactly as Steam's own page would have.
+  let body: ReactNode = <ScrollRegion>{children}</ScrollRegion>;
   if (tabs) {
     body = Tabs ? (
       <Tabs tabs={tabs} activeTab={activeTab} onShowTab={onShowTab} />

@@ -34,9 +34,24 @@ const StubTabs: FC<StubTabsProps> = ({ tabs, activeTab, onShowTab }) => (
   </div>
 );
 
-async function loadWidePage(tabs: FC<StubTabsProps> | undefined): Promise<FC<WidePageProps>> {
+/** Stand-in for Steam's scroll panel, which the frame reaches via `ScrollRegion`. */
+const StubScrollPanelGroup: FC<{ children?: ReactNode }> = ({ children }) => (
+  <div data-testid="scroll-panel">{children}</div>
+);
+
+async function loadWidePage(
+  tabs: FC<StubTabsProps> | undefined,
+  scrollPanelGroup?: FC<{ children?: ReactNode }>,
+): Promise<FC<WidePageProps>> {
   vi.resetModules();
-  vi.doMock("../../utils/deckyUiInternals", () => ({ quickAccessMenuClasses: undefined, Tabs: tabs }));
+  // Every export the graph under test imports has to be named here — Vitest
+  // throws on an import of a name the factory left out, which is how the scroll
+  // panel reaches this file at all: `ScrollRegion` asks for it, `WidePage` does not.
+  vi.doMock("../../utils/deckyUiInternals", () => ({
+    quickAccessMenuClasses: undefined,
+    Tabs: tabs,
+    ScrollPanelGroup: scrollPanelGroup,
+  }));
   return (await import("./WidePage")).WidePage;
 }
 
@@ -155,6 +170,29 @@ describe("WidePage", () => {
     // Dropping the hook while the module stays imported elsewhere leaves the
     // rest of this file green.
     expect(post).toHaveBeenCalledWith({ message: "QamFriendsExpanded" }, window.origin);
+  });
+
+  it("gives an untabbed body a scroll panel of its own", async () => {
+    const WidePage = await loadWidePage(StubTabs, StubScrollPanelGroup);
+
+    render(
+      <WidePage title="Settings" onBack={vi.fn()}>
+        <div>page body</div>
+      </WidePage>,
+    );
+
+    expect(screen.getByTestId("scroll-panel")).toContainElement(screen.getByText("page body"));
+  });
+
+  it("leaves a tabbed body's scrolling to Steam's tabbed page", async () => {
+    const WidePage = await loadWidePage(StubTabs, StubScrollPanelGroup);
+
+    render(<WidePage title="Library" onBack={vi.fn()} tabs={TAB_SET} activeTab="platforms" onShowTab={vi.fn()} />);
+
+    // Steam's tabbed page brings a scroll panel per tab. A second one wrapped
+    // around it would nest two scrollers on the same content.
+    expect(screen.queryByTestId("scroll-panel")).not.toBeInTheDocument();
+    expect(screen.getByTestId("steam-tabs")).toBeInTheDocument();
   });
 
   it("takes no children beside tabs, whose body is the active tab's content", async () => {
