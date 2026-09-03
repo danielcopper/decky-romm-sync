@@ -150,6 +150,10 @@ detail pane is built from focusable rows, not from paragraphs.
 A list that is grouped or sorted by state computes its order when the page mounts and keeps it while the page is open,
 so toggling a row does not move it out from under the focus. The next mount shows the new order.
 
+A control that acts on the whole list — Enable all, Disable all — goes in the layout's `listHeader`, above the first row
+and inside the same scrolling region. It sits outside every row on purpose: focus moving onto it must not report a
+selection, because a page may do real work on one.
+
 ### Tables
 
 Anything with more than two facts per row is a table with a header row: BIOS files (Wanted, On disk, Contents), the

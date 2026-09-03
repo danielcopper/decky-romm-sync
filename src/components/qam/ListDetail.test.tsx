@@ -147,6 +147,29 @@ describe("ListDetail", () => {
     expect(detail?.style.height).toBe("100%");
   });
 
+  it("puts a whole-list control above the rows without making it a selection", () => {
+    const onSelect = vi.fn();
+    const onEnableAll = vi.fn();
+    render(
+      <ListDetail
+        items={platformItems(() => {})}
+        listHeader={<button onClick={onEnableAll}>Enable all</button>}
+        selectedId="n64"
+        onSelect={onSelect}
+        renderDetail={(id) => <div>detail for {id ?? "nothing"}</div>}
+      />,
+    );
+
+    const header = screen.getByRole("button", { name: "Enable all" });
+    // Reaching it must not report a selection: it belongs to the list, not to a
+    // row of it, and a page may do real work on onSelect.
+    fireEvent.focusIn(header);
+    fireEvent.click(header);
+
+    expect(onEnableAll).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it("renders a detail for an empty selection", () => {
     render(
       <ListDetail
