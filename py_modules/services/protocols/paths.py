@@ -14,7 +14,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
-    from domain.firmware_wants import FirmwareCatalogue
+    from collections.abc import Mapping
+
+    from domain.firmware_wants import FirmwareCatalogue, FolderVerdict
     from domain.save_layout import SaveLayout
     from domain.shortcut_data import EmulatorInvocation
     from lib.retrodeck_health import RetroDeckConfigHealth
@@ -40,6 +42,26 @@ class FirmwareResolver(Protocol):
     """
 
     def __call__(self) -> FirmwareCatalogue: ...
+
+
+class FirmwareFolderVerdictFn(Protocol):
+    """Read what one core's declared FOLDERS hold, verified off the machine.
+
+    The question :class:`FirmwareResolver` deliberately does not answer. A core
+    that lists a folder is satisfied by a file *inside* it, so the only reading
+    that settles such a row opens the candidates and reads them the way the core
+    does — and doing that across a whole machine would hash every file under the
+    BIOS root on every game-page open. So the scope is one core, and a caller
+    asks only for the cores whose folder row the whole-machine reading left
+    unanswered (``domain.firmware_wants.unanswered_folder_cores``).
+
+    *core_so* is the plugin's identifier space: the bare ``.so`` basename
+    without its extension. Implementations never raise and never guess — a
+    reading that fails answers with no verdict at all, which leaves the row
+    withheld rather than claiming the folder holds nothing.
+    """
+
+    def __call__(self, core_so: str) -> Mapping[str, FolderVerdict]: ...
 
 
 class RetroDeckPaths(Protocol):

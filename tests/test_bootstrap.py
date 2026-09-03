@@ -19,7 +19,7 @@ from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 from fakes.fake_download_file_store import FakeDownloadFileStore
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
-from fakes.fake_firmware_resolver import FakeFirmwareResolver
+from fakes.fake_firmware_resolver import FakeFirmwareResolver, FakeFolderVerdicts
 from fakes.fake_game_process_control import FakeGameProcessControlAdapter
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
@@ -248,6 +248,7 @@ class TestWireServices:
             "adoption_move": MagicMock(),
             "firmware_file_store": FakeFirmwareFileStore(),
             "firmware_resolver": FakeFirmwareResolver(),
+            "firmware_folder_verdicts": FakeFolderVerdicts(),
             "migration_file_store": FakeMigrationFileStore(),
             "rom_file_store": FakeRomFileStore(),
             "save_file_store": FakeSaveFileStore(),
@@ -308,6 +309,7 @@ class TestWireServices:
                 adoption_move=deps["adoption_move"],
                 firmware_file_store=deps["firmware_file_store"],
                 firmware_resolver=deps["firmware_resolver"],
+                firmware_folder_verdicts=deps["firmware_folder_verdicts"],
                 migration_file_store=deps["migration_file_store"],
                 rom_file_store=deps["rom_file_store"],
                 save_file_store=deps["save_file_store"],

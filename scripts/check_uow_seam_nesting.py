@@ -193,6 +193,13 @@ IO_SEAM_METHODS: frozenset[str] = frozenset(
         # `resolve_system`, the implementation's own method name.
         "resolve_system",
         "_resolve_system",
+        # FirmwareFolderVerdictFn (services/protocols/paths.py) — lists one
+        # core's declared folder and reads every candidate inside it the way the
+        # core does (0.26 s for LRPS2 on the reference machine, against 0.24 s
+        # for the whole machine's unverified inventory). Call-shaped like the
+        # three below, so the list carries the attribute every consumer in
+        # services/ binds it to.
+        "_firmware_folder_verdicts",
         # SystemSupportedExtensionsFn / SystemKnownFn (services/protocols/paths.py)
         # — two questions to es_systems.xml, through the same every-call flatpak
         # probe as the CoreInfoProvider reads above. Both Protocols are

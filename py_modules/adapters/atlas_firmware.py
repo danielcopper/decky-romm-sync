@@ -1,11 +1,12 @@
-"""Atlas firmware adapter — the seam through which firmware questions reach the resolver.
+"""Atlas firmware adapters — the seam through which firmware questions reach the resolver.
 
 The single place the vendored `emu-atlas <https://github.com/danielcopper/emu-atlas>`_
-resolver is asked what the installed emulators want. It implements the
-``FirmwareResolver`` Protocol, so services see a :class:`domain.firmware_wants.FirmwareCatalogue`
-and never an atlas type — which is not a stylistic choice: ``domain/`` may not
-import ``_vendor`` at all (the ``domain-stdlib-only`` contract), so the vocabulary
-and the resolver have to meet at an adapter.
+resolver is asked what the installed emulators want. Services see a
+:class:`domain.firmware_wants.FirmwareCatalogue` or a
+:class:`domain.firmware_wants.FolderVerdict` and never an atlas type — which is
+not a stylistic choice: ``domain/`` may not import ``_vendor`` at all (the
+``domain-stdlib-only`` contract), so the vocabulary and the resolver have to
+meet at an adapter.
 
 Two properties of the resolver decide this module's shape:
 
@@ -21,11 +22,14 @@ Two properties of the resolver decide this module's shape:
   may change freely. The codes are carried on the catalogue and traced through
   the injected debug logger; nothing here parses a message.
 
-One question per call, machine-wide: ``firmware_inventory()`` costs 115-325 ms
-and memoises nothing, so asking it once per platform would multiply that by the
-platform count. Nothing is cached here — a firmware answer is about files on
-disk that the user is actively adding and removing, and a cached one would
-outlive the download that changed it.
+Two questions, and their scopes are the cost model. ``firmware_inventory()``
+answers the whole machine unverified in 115-325 ms and memoises nothing, so
+asking it once per platform would multiply that by the platform count;
+``firmware_for_core(..., verify=True)`` answers one core's folder declarations
+by reading the candidate files themselves, which the inventory must never do
+across a whole BIOS root. Nothing is cached in either — a firmware answer is
+about files on disk that the user is actively adding and removing, and a cached
+one would outlive the download that changed it.
 """
 
 from __future__ import annotations
@@ -33,12 +37,19 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any
 
-from _vendor.atlas import KIND_DIRECTORY, detect
+from _vendor.atlas import CAVEAT_FIRMWARE_IMAGE_IDENTIFIED, CAVEAT_FIRMWARE_IMAGE_UNLISTED, detect
 
-from domain.firmware_wants import FirmwareCatalogue, FirmwarePlacement, FirmwareWant
+from domain.firmware_wants import (
+    DECLARED_DIRECTORY,
+    DECLARED_FILE,
+    FirmwareCatalogue,
+    FirmwarePlacement,
+    FirmwareWant,
+    FolderVerdict,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
 # Declaration states in which the core stated what it wants. ``read`` is its own
 # ``.info`` off the machine; ``packaged`` is a rule card for an emulator that
@@ -47,6 +58,13 @@ if TYPE_CHECKING:
 _STATED_DECLARATIONS = frozenset({"read", "packaged"})
 
 _CORE_SO_SUFFIX = ".so"
+
+# The two codes that name an image the core would boot. ``unlisted`` counts as
+# much as ``identified``: both mean the file passed the header check the core
+# makes itself, and they differ only in whether the packaged identity table also
+# files those bytes — the table lists what System.dat lists, so an uncatalogued
+# dump is the ordinary case rather than a lesser answer.
+_IDENTIFIED_IMAGE_CODES = frozenset({CAVEAT_FIRMWARE_IMAGE_IDENTIFIED, CAVEAT_FIRMWARE_IMAGE_UNLISTED})
 
 
 def _plugin_core_so(core_so: str | None) -> str | None:
@@ -116,12 +134,111 @@ class AtlasFirmwareAdapter:
         )
 
 
+class AtlasFolderVerdictAdapter:
+    """Reads what one core's declared FOLDERS hold, verified, through the vendored resolver.
+
+    The second firmware question, and it is asked per core because of what it
+    costs. A folder declaration is satisfied by a file *inside* the folder, so
+    the only reading that can answer it is one that opens the candidates and
+    reads them the way the core does — 0.26 s for one core on the reference
+    machine, against 0.24 s for the whole machine's unverified inventory. The
+    same verification over the whole machine hashes every declared file AND
+    every unclaimed file under the BIOS root, and this plugin resolves the whole
+    machine on every game-page open; so the inventory stays unverified and this
+    seam is asked only for the cores whose folder row is still unanswered.
+
+    It shares :class:`AtlasFirmwareAdapter`'s two properties and answers them
+    the same way: the resolver raises on its own invariant violations, so every
+    call is wrapped and a failure comes back as no verdict at all — which reads
+    downstream as "nothing could be established", never as a folder holding
+    nothing. And it never logs, so its caveats are traced through the injected
+    debug logger.
+    """
+
+    def __init__(self, *, user_home: str, log_debug: Callable[[str], None]) -> None:
+        self._user_home = user_home
+        self._log_debug = log_debug
+
+    def __call__(self, core_so: str) -> Mapping[str, FolderVerdict]:
+        """*core_so*'s folder verdicts by file name, or nothing where none was established."""
+        try:
+            return self._read_folders(core_so)
+        except Exception as exc:
+            self._log_debug(f"[firmware] verified folder read failed for {core_so}: {exc!r}")
+            return {}
+
+    def _read_folders(self, core_so: str) -> dict[str, FolderVerdict]:
+        installations = detect(self._user_home)
+        if not installations:
+            return {}
+        answer = installations[0].firmware_for_core(f"{core_so}{_CORE_SO_SUFFIX}", verify=True)
+        if answer.root is None:
+            return {}
+        caveats = _deduplicated(_every_caveat(answer))
+        verdicts: dict[str, FolderVerdict] = {}
+        for core in answer.cores:
+            for requirement in _requirement_entries(core):
+                if requirement.declared_kind != DECLARED_DIRECTORY:
+                    continue
+                verdicts.setdefault(requirement.file_name, _folder_verdict(requirement, caveats))
+        self._log_debug(f"[firmware] {core_so} folders: {[(n, v.satisfied) for n, v in verdicts.items()]}")
+        return verdicts
+
+
+def _folder_verdict(requirement: Any, caveats: tuple[Any, ...]) -> FolderVerdict:
+    """One folder declaration's verdict, with the caveats that speak for it.
+
+    A caveat belongs to this folder when it names the folder itself (``dir``, or
+    a ``path`` at the folder) or a file inside it (a ``path`` one level down) —
+    the folder read states its findings per file, and the requirement carries no
+    identifier for them to point back at.
+
+    The images are the descriptions of what the read identified, which is the
+    core's own option-label text. Only a satisfied verdict has any: an image the
+    core's own test rejected, or one it never got to read, is not something the
+    folder holds for the purpose of this row.
+    """
+    here = [caveat for caveat in caveats if _names_destination(caveat.data, requirement.path)]
+    return FolderVerdict(
+        satisfied=requirement.satisfied,
+        images=tuple(
+            description
+            for caveat in here
+            if caveat.code in _IDENTIFIED_IMAGE_CODES and (description := caveat.data.get("description"))
+        ),
+        caveats=tuple(dict.fromkeys(caveat.code for caveat in here)),
+    )
+
+
+def _names_destination(data: Mapping[str, Any], destination: str) -> bool:
+    """Does this caveat's data name *destination*, or something directly inside it?"""
+    if data.get("dir") == destination:
+        return True
+    path = data.get("path")
+    return isinstance(path, str) and destination in (path, os.path.dirname(path))
+
+
+def _deduplicated(caveats: tuple[Any, ...]) -> tuple[Any, ...]:
+    """*caveats* with byte-identical repeats of one statement collapsed to the first.
+
+    RetroDECK's ES-DE catalogue lists ``pcsx2_libretro.so`` under two PS2
+    entries, so a caveat about that core can be stated twice with identical data
+    (emu-atlas #361). Keyed on ``(code, data)`` rather than on the code alone:
+    two statements of one code about two different files are two findings.
+    """
+    seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
+    kept: list[Any] = []
+    for caveat in caveats:
+        key = (caveat.code, tuple(sorted((k, str(v)) for k, v in caveat.data.items())))
+        if key not in seen:
+            seen.add(key)
+            kept.append(caveat)
+    return tuple(kept)
+
+
 def _caveat_codes(answer: Any) -> tuple[str, ...]:
     """Every stable caveat code the answer states, at the answer and at each core."""
-    return (
-        *(caveat.code for caveat in answer.caveats),
-        *(caveat.code for core in answer.cores for caveat in core.caveats),
-    )
+    return tuple(caveat.code for caveat in _every_caveat(answer))
 
 
 def _unread_cores(answer: Any) -> frozenset[str]:
@@ -214,6 +331,7 @@ def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
     the caller will never write.
     """
     root = answer.root
+    at_path = _caveats_by_destination(answer)
     by_name: dict[str, list[Any]] = {}
     for core in answer.cores:
         for requirement in _requirement_entries(core):
@@ -224,6 +342,7 @@ def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
         first = pairs[0][1]
         location = _declared_location(first, root)
         supplied = first.supplied_by if location is not None else None
+        directory = first.declared_kind == DECLARED_DIRECTORY
         placements.append(
             FirmwarePlacement(
                 file_name=file_name,
@@ -237,8 +356,49 @@ def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
                     for core, requirement in pairs
                 ),
                 present=first.present if location is not None else None,
-                is_directory=location is not None and first.found == KIND_DIRECTORY,
-                supplied_by=supplied.distribution if supplied is not None else None,
+                declared_kind=DECLARED_DIRECTORY if directory else DECLARED_FILE,
+                caveats=at_path.get(first.path, ()) if location is not None else (),
+                folder=_settled_folder(first) if directory and location is not None else None,
+                supplied_by=supplied.label if supplied is not None else None,
             )
         )
     return tuple(sorted(placements, key=lambda placement: placement.file_name))
+
+
+def _settled_folder(requirement: Any) -> FolderVerdict | None:
+    """The folder verdict this unverified reading already settles, or ``None``.
+
+    A folder declaration whose folder is absent, or has a plain file sitting
+    where it belongs, is settled by the stat alone — the resolver answers
+    ``satisfied`` for both without reading a byte. Only a folder that IS there
+    leaves the question open, and answering that one is what costs a verified
+    resolve per core. Carrying the settled half here is what keeps the caller's
+    "ask where it pays" scope down to that one shape.
+    """
+    return None if requirement.satisfied is None else FolderVerdict(satisfied=requirement.satisfied)
+
+
+def _caveats_by_destination(answer: Any) -> dict[str, tuple[str, ...]]:
+    """The answer's caveat codes indexed by the destination each one names.
+
+    A caveat about one destination carries that destination as ``path``, so the
+    row it belongs to is the requirement resolving there — the resolver states
+    these once per answer rather than once per requirement, and two cores
+    declaring one file share the row as they share the place.
+
+    Deduplicated on the code, because the same statement arrives more than once:
+    RetroDECK's ES-DE catalogue lists ``pcsx2_libretro.so`` under two PS2
+    entries, so every caveat about that core is stated twice with byte-identical
+    data (emu-atlas #361).
+    """
+    by_path: dict[str, list[str]] = {}
+    for caveat in _every_caveat(answer):
+        path = caveat.data.get("path")
+        if isinstance(path, str):
+            by_path.setdefault(path, []).append(caveat.code)
+    return {path: tuple(dict.fromkeys(codes)) for path, codes in by_path.items()}
+
+
+def _every_caveat(answer: Any) -> tuple[Any, ...]:
+    """Every caveat the answer states, at the answer and at each core."""
+    return (*answer.caveats, *(caveat for core in answer.cores for caveat in core.caveats))

@@ -25,11 +25,11 @@ about is not.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Collection
+    from collections.abc import Collection, Mapping
 
 WANTED_NEEDED = "needed"
 WANTED_OPTIONAL = "optional"
@@ -37,6 +37,47 @@ WANTED_NOT_NEEDED = "not_needed"
 WANTED_UNKNOWN = "unknown"
 
 WANTED_VALUES = (WANTED_NEEDED, WANTED_OPTIONAL, WANTED_NOT_NEEDED, WANTED_UNKNOWN)
+
+# What the emulator opens the declaration AT — a file it reads, or a folder it
+# lists. A property of the DECLARATION, so it survives an empty destination:
+# nothing is at a missing folder to read a kind off, and the row is still a
+# folder to create rather than a file to fetch.
+DECLARED_FILE = "file"
+DECLARED_DIRECTORY = "directory"
+
+# The resolver's stable degradation codes this vocabulary acts on, spelled here
+# because ``domain/`` may not import the vendored resolver. Every one of them is
+# held equal to its upstream constant by ``tests/adapters/test_atlas_firmware.py``,
+# so a rename upstream is a red test rather than a rule that quietly stops firing.
+CAVEAT_PATH_OBSTRUCTED = "firmware-path-obstructed"
+
+# Codes that withhold a FILE row's verdict: something is at the destination and
+# it is not the file, so neither "there" nor "absent" is a claim the reading
+# supports. A folder declaration is not judged from here at all — its verdict is
+# :class:`FolderVerdict`, which the resolver answers by listing the folder.
+VERDICT_WITHHOLDING_CAVEATS = frozenset({CAVEAT_PATH_OBSTRUCTED})
+
+
+@dataclass(frozen=True)
+class FolderVerdict:
+    """What listing a declared folder established about what is inside it.
+
+    The resolver's answer to the one question a file's presence cannot settle:
+    a core that lists a folder needs a file *in* it, and the folder being there
+    says nothing about that. ``satisfied`` is the verdict — ``True`` for a
+    folder holding an image the core's own test accepts, ``False`` for one
+    holding none, ``None`` for everything the read did not establish.
+
+    ``images`` names what was found, in the resolver's own words, and is empty
+    for every verdict but a satisfied one. ``caveats`` carries the stable codes
+    stating why the verdict reads as it does — the codes are the contract, the
+    messages are prose — and they are what a surface words the row off, because
+    ``satisfied`` is the verdict alone and never its cause.
+    """
+
+    satisfied: bool | None
+    images: tuple[str, ...] = ()
+    caveats: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -68,25 +109,30 @@ class FirmwarePlacement:
     firmware in its own XDG tree — and the consumer then falls back to its own
     layout.
 
-    ``present`` and ``is_directory`` are what the resolver read AT that
+    ``present``, ``caveats`` and ``folder`` are what the resolver read AT that
     destination, and a consumer takes them from here rather than probing the
     path a second time: the resolver follows the symlinks a distribution
     strings through the firmware tree, while a bare existence check answers
     about whatever the consumer's own join happens to name. ``present`` is
-    three-valued because "could not look" is not "not there"; ``is_directory``
-    says a directory was found, which for a requirement that names a folder is
-    the shape its contents have to fill, and which nothing can say while the
-    folder is absent.
+    three-valued because "could not look" is not "not there"; ``caveats`` names
+    what else the reading found there, in the resolver's stable codes.
+
+    ``folder`` is the verdict about what a **declared folder** holds, and it is
+    ``None`` for every file declaration and for a folder nothing looked inside
+    — the resolver answers it only when asked to verify contents, which costs a
+    read of every candidate's bytes.
 
     ``supplied_by`` names the distribution whose own copy is sitting at the
-    destination, in the resolver's identifier space (``retrodeck``) and never
-    a display form of our own. ``None`` claims nothing: the resolver states it
-    only where it established the provenance.
+    destination, as the resolver writes that distribution's name — a display
+    form it derives from its own identifier, never one mapped here. ``None``
+    claims nothing: the resolver states it only where it established the
+    provenance.
 
-    All three go silent together with ``relative_path``: with no location to
+    All four go silent together with ``relative_path``: with no location to
     honour, the consumer's fallback layout is a different place from the one
     that was read, and a reading carried across would describe somewhere the
-    consumer will never write.
+    consumer will never write. ``declared_kind`` does not, because it is a
+    property of the declaration rather than of the destination.
 
     ``wants`` is never empty: a placement exists because at least one emulator
     declared the file, and a placement without an owning emulator is exactly the
@@ -98,13 +144,20 @@ class FirmwarePlacement:
     description: str
     wants: tuple[FirmwareWant, ...]
     present: bool | None = None
-    is_directory: bool = False
+    declared_kind: str = DECLARED_FILE
+    caveats: tuple[str, ...] = ()
+    folder: FolderVerdict | None = None
     supplied_by: str | None = None
 
     @property
     def required_by_any(self) -> bool:
         """Does any emulator refuse to run without this file?"""
         return any(want.required for want in self.wants)
+
+    @property
+    def declares_directory(self) -> bool:
+        """Does the emulator open this declaration as a folder it lists?"""
+        return self.declared_kind == DECLARED_DIRECTORY
 
     @property
     def destination(self) -> str:
@@ -184,3 +237,57 @@ def classify_wanted(placement: FirmwarePlacement | None, complete: bool) -> str:
     if placement is not None:
         return WANTED_NEEDED if placement.required_by_any else WANTED_OPTIONAL
     return WANTED_NOT_NEEDED if complete else WANTED_UNKNOWN
+
+
+def unanswered_folder_cores(
+    placements: Mapping[str, FirmwarePlacement], core_sos: Collection[str] | None
+) -> tuple[str, ...]:
+    """The cores in *core_sos* whose folder declaration still has no verdict.
+
+    The scope of the one question that costs a content read: the resolver
+    answers a folder declaration from the folder's own listing, and a listing
+    it was not asked to make leaves ``folder`` unset. Every other row is
+    already answered — a missing folder, and a file sitting where the folder
+    belongs, are settled by the machine-wide reading's own stat — so asking
+    about them would pay a whole verified per-core resolve for an answer
+    already in hand.
+
+    Sorted and deduplicated: an ES-DE catalogue can list one core under two
+    entries, and the caller asks the resolver once per name it is handed.
+    """
+    if not core_sos:
+        return ()
+    scope = set(core_sos)
+    return tuple(
+        sorted(
+            {
+                want.core_so
+                for placement in placements.values()
+                if placement.declares_directory and placement.folder is None
+                for want in placement.wants
+                if want.core_so is not None and want.core_so in scope
+            }
+        )
+    )
+
+
+def merge_folder_verdicts(
+    placements: Mapping[str, FirmwarePlacement], verdicts: Mapping[str, FolderVerdict]
+) -> dict[str, FirmwarePlacement]:
+    """*placements* with each named folder's verdict folded into its row.
+
+    The verdict's caveats join the destination's rather than replacing them:
+    both are statements about one place, and a row that says a folder holds no
+    image and that something obstructs it is saying two true things.
+
+    A verdict for a file declaration is dropped. The resolver states one only
+    over a folder it listed, so such an entry would mean the two disagree about
+    what the emulator opens, and the declaration is the half that decides.
+    """
+    merged = dict(placements)
+    for file_name, verdict in verdicts.items():
+        placement = merged.get(file_name)
+        if placement is None or not placement.declares_directory:
+            continue
+        merged[file_name] = replace(placement, folder=verdict, caveats=(*placement.caveats, *verdict.caveats))
+    return merged

@@ -90,8 +90,8 @@ function getBiosSummary(
  * they are different sentences.
  *
  * `requiredWithheld` above zero is a platform whose emulators DID answer and one
- * of whose required rows nothing could judge — a folder, whose contents the
- * reading does not inspect. Zero is the older shape: no installed emulator's
+ * of whose required rows nothing could judge — a declared folder the resolver
+ * could not read, say. Zero is the older shape: no installed emulator's
  * answer could be established for the platform at all, which splits again on
  * whether there are rows to point at, because a platform whose emulators are all
  * standalone has none and "0 file(s) nothing installed could answer for" would
@@ -103,8 +103,8 @@ function getUnknownSummary(requiredWithheld: number, total: number) {
       summaryLabel: "BIOS readiness unknown",
       summaryDescription:
         requiredWithheld === 1
-          ? "A required folder is here and its contents cannot be checked"
-          : `${requiredWithheld} required folders are here and their contents cannot be checked`,
+          ? "A required file could not be judged — see the file list"
+          : `${requiredWithheld} required files could not be judged — see the file list`,
     };
   }
   return {
@@ -363,8 +363,8 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     //
     // Two shapes reach it and they are different sentences. `requiredWithheld`
     // above zero is a platform whose emulators DID answer and one of whose
-    // required rows nothing could judge — a folder, whose contents the reading
-    // does not inspect. Everything else here was answered, so the rows below
+    // required rows nothing could judge — a declared folder the resolver could
+    // not read, say. Everything else here was answered, so the rows below
     // stand and so do the downloads. Zero is the older shape: no installed
     // emulator's answer could be established for this platform at all. Its
     // description splits again on whether there are rows to point at, because a
@@ -396,7 +396,13 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     // here is keyed to a platform name — the condition is the backend's verdict,
     // so a system starts offering downloads again the moment anything can speak
     // for it.
-    const fetchableMissing = nothingEstablished ? [] : platform.files.filter((f) => f.on_server && !f.downloaded);
+    //
+    // A folder declaration is out whatever its state: the emulator lists that
+    // name, so there is no file to fetch into it — what would satisfy it is a
+    // BIOS image inside the folder, which is a different row.
+    const fetchableMissing = nothingEstablished
+      ? []
+      : platform.files.filter((f) => f.on_server && !f.downloaded && f.declared_kind !== "directory");
     const hasRequiredMissing = fetchableMissing.some((f) => f.required_by_active);
     const hasOptionalMissing = fetchableMissing.some((f) => !f.required_by_active);
 
@@ -484,13 +490,17 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
           <Focusable>
             {platform.files.map((file) => {
               let dotColor: string;
-              // A folder is amber for the same reason an unanswerable row is:
-              // `downloaded` is true for one — something is at the destination —
-              // and green would claim an all-clear over contents nothing looked
-              // inside.
-              if (file.wanted === "unknown" || file.is_directory) {
+              // The row's VERDICT, not `downloaded`: for a declared folder the
+              // two come apart, since the folder is there on every RetroDECK
+              // install and what satisfies the core is a file inside it. A
+              // payload with no verdict falls back to `downloaded`, which is
+              // what the verdict is for a plain file.
+              const verdict = file.satisfied === undefined ? file.downloaded : file.satisfied;
+              // A row nothing could judge is amber for the same reason a row
+              // nothing could be asked about is.
+              if (file.wanted === "unknown" || verdict === null) {
                 dotColor = "#d4a72c";
-              } else if (file.downloaded) {
+              } else if (verdict) {
                 dotColor = "#5ba32b";
               } else if (file.required_by_active) {
                 dotColor = "#d94126";

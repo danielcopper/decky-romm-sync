@@ -359,6 +359,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             clock=cfg.runtime.clock,
             firmware_file_store=cfg.adapters.firmware_file_store,
             firmware_resolver=cfg.adapters.firmware_resolver,
+            firmware_folder_verdicts=cfg.adapters.firmware_folder_verdicts,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             core_info=cfg.adapters.core_info_provider,
             resolve_system=cfg.adapters.http_adapter.resolve_system,

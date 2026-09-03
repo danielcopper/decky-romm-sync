@@ -47,6 +47,7 @@ from domain.bios_status import (
 )
 from domain.emulator_commands import label_to_invocation, options_to_payload, select_default_option
 from domain.firmware_cache import FirmwareCacheEntry
+from domain.firmware_wants import merge_folder_verdicts, unanswered_folder_cores
 from lib.errors import error_response
 from lib.list_result import ErrorCode
 from lib.path_safety import PathTraversalError, safe_join
@@ -56,11 +57,12 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Mapping
 
-    from domain.firmware_wants import FirmwareCatalogue, FirmwarePlacement
+    from domain.firmware_wants import FirmwareCatalogue, FirmwarePlacement, FolderVerdict
     from services.protocols import (
         Clock,
         CoreInfoProvider,
         FirmwareFileStore,
+        FirmwareFolderVerdictFn,
         FirmwareResolver,
         PlatformCoreReader,
         RetroDeckPaths,
@@ -89,6 +91,7 @@ class FirmwareServiceConfig:
     clock: Clock
     firmware_file_store: FirmwareFileStore
     firmware_resolver: FirmwareResolver
+    firmware_folder_verdicts: FirmwareFolderVerdictFn
     retrodeck_paths: RetroDeckPaths
     core_info: CoreInfoProvider
     resolve_system: SystemResolver
@@ -110,6 +113,7 @@ class FirmwareService:
         self._clock = config.clock
         self._firmware_file_store = config.firmware_file_store
         self._firmware_resolver = config.firmware_resolver
+        self._firmware_folder_verdicts = config.firmware_folder_verdicts
         self._retrodeck_paths = config.retrodeck_paths
         self._core_info = config.core_info
         self._resolve_system = config.resolve_system
@@ -166,6 +170,27 @@ class FirmwareService:
         """The machine's demand indexed by file name, for the paths that need only that."""
         return self._firmware_resolver().by_file_name()
 
+    def _folder_answers(
+        self,
+        placements: Mapping[str, FirmwarePlacement],
+        scope: list[str] | None,
+        asked: dict[str, Mapping[str, FolderVerdict]],
+    ) -> Mapping[str, FirmwarePlacement]:
+        """*placements* with the folder rows in *scope* answered by a verified read.
+
+        Blocking: the read opens the folder's candidates and reads them the way
+        the core does, so it is asked per core and only for the rows the
+        machine-wide reading left open. *asked* is the query's memo — the cores
+        are per platform, the answer per core.
+        """
+        verdicts: dict[str, FolderVerdict] = {}
+        for core_so in unanswered_folder_cores(placements, scope):
+            if core_so not in asked:
+                asked[core_so] = self._firmware_folder_verdicts(core_so)
+            for file_name, verdict in asked[core_so].items():
+                verdicts.setdefault(file_name, verdict)
+        return merge_folder_verdicts(placements, verdicts) if verdicts else placements
+
     # ── Destinations ─────────────────────────────────────────
 
     def _firmware_dest_path(self, firmware, placement: FirmwarePlacement | None) -> str:
@@ -191,14 +216,8 @@ class FirmwareService:
         That leaves one shape this returns a directory for: a server file whose
         name matches a directory declaration — ``bios``, say, against LRPS2's
         ``pcsx2/bios``, which RetroDECK links onto the root. The read paths want
-        exactly that (it is the row's destination, and its verdict is withheld
-        there). The write path would want a file position and does not get one,
-        so ``_download_one``'s ``dest + ".tmp"`` would be a sibling of the root
-        rather than a path under it. Nothing reaches it today: no callable
-        downloads a single firmware file by id, and the batch that could skips
-        every destination that already exists, which a directory always does.
-        The shape is recorded rather than guarded because a guard here would be
-        a refusal invented for a case no caller can produce.
+        exactly that; the write path would place a ``.tmp`` sibling of the root,
+        which is why the batch skips a folder declaration outright.
         """
         bios_base = self._retrodeck_paths.bios_path()
         if placement is not None:
@@ -249,15 +268,10 @@ class FirmwareService:
         there, so it reads as absent — the safe direction, since the row then
         shows work outstanding rather than a readiness nobody established.
 
-        What this never asks is whether the file is the RIGHT one. For a
-        directory the resolver withholds that verdict, and the withholding is
-        carried on rather than dropped: ``present`` is the honest half here
-        (something is at the destination) and
-        ``BiosFileEntry.verdict_withheld`` is the half this answer cannot
-        carry, which is where the readiness verdict picks it up. Folding the
-        two together in either direction is the failure — a green ``True`` for a
-        folder nobody looked inside, or a red ``False`` for a folder that is
-        plainly there.
+        What this never asks is whether the requirement is MET — that is
+        ``BiosFileEntry.satisfied``. For a folder declaration the two are
+        unrelated: the folder is there on every RetroDECK install, and what
+        satisfies the core is a file inside it.
         """
         if placement is None or placement.relative_path is None:
             return self._firmware_file_store.exists(dest)
@@ -594,7 +608,7 @@ class FirmwareService:
         paths = {record.file_path for record in records if record.platform_slug in slugs}
         return sum(1 for path in paths if self._firmware_file_store.exists(path))
 
-    def _enrich_platform_map(
+    async def _enrich_platform_map(
         self,
         platforms_map,
         synced_slugs,
@@ -626,9 +640,12 @@ class FirmwareService:
         listing's file names rather than one platform's slice — see
         :meth:`_wanted_beyond_server`. *records* is every BIOS download row, read
         once for the same reason and sliced per platform by
-        :meth:`_deletable_count`.
+        :meth:`_deletable_count`. The folder verdicts are scoped per platform and
+        memoised across them (:meth:`_folder_answers`) — the cores are the
+        platform's, the answer is the core's.
         """
-        placements = catalogue.by_file_name()
+        index = catalogue.by_file_name()
+        asked: dict[str, Mapping[str, FolderVerdict]] = {}
         for plat in platforms_map.values():
             slug = plat["platform_slug"]
             system = self._resolve_system(slug)
@@ -639,6 +656,7 @@ class FirmwareService:
             plat["emulators"] = options_to_payload(options["options"])
             plat["emulator_data_available"] = options["available"]
             scope = self._core_scope(options)
+            placements = await self._loop.run_in_executor(None, self._folder_answers, index, scope, asked)
             complete = catalogue.reading_complete_for(scope)
             plat["files"].extend(
                 _overview_row(item) for item in self._wanted_beyond_server(placements, scope, in_library)
@@ -731,7 +749,7 @@ class FirmwareService:
 
         seeded = self._seed_synced_platforms(platforms_map, synced_slugs)
         in_library = {fw.get("file_name", "") for fw in firmware_list}
-        self._enrich_platform_map(platforms_map, synced_slugs, catalogue, in_library, records)
+        await self._enrich_platform_map(platforms_map, synced_slugs, catalogue, in_library, records)
         platforms = sorted(
             (plat for slug, plat in platforms_map.items() if slug not in seeded or _has_something_to_say(plat)),
             key=lambda p: p["platform_slug"],
@@ -882,11 +900,18 @@ class FirmwareService:
         catalogue's answer (:meth:`_is_downloaded`) — that answer predates every
         download this batch has performed, and re-reading the whole machine per
         file to refresh it is the cost the index exists to avoid.
+
+        A folder declaration is skipped whatever is at its destination: the
+        emulator lists that name, so there is no file to fetch into it — the
+        requirement is met by a BIOS image *inside* the folder, a different row.
         """
         downloaded = 0
         errors = []
         for fw in platform_firmware:
-            dest = self._safe_firmware_dest_path(fw, placements.get(fw.get("file_name", "")))
+            placement = placements.get(fw.get("file_name", ""))
+            if placement is not None and placement.declares_directory:
+                continue
+            dest = self._safe_firmware_dest_path(fw, placement)
             if dest is not None and self._firmware_file_store.exists(dest):
                 continue
             result = await self._download_one(fw["id"], placements)
@@ -957,7 +982,7 @@ class FirmwareService:
             firmware_list = []
 
         catalogue = await self._loop.run_in_executor(None, self._firmware_resolver)
-        placements = catalogue.by_file_name()
+        placements = await self._loop.run_in_executor(None, self._folder_answers, catalogue.by_file_name(), scope, {})
         items = self._build_firmware_status_items(
             (fw for fw in firmware_list if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs),
             placements,
@@ -1128,7 +1153,10 @@ def _wanted_fields(entry) -> dict[str, Any]:
         "wanted": entry.wanted,
         "required_by_active": entry.required_by_active,
         "supplied_by": entry.supplied_by,
-        "is_directory": entry.is_directory,
+        "satisfied": entry.satisfied,
+        "declared_kind": entry.declared_kind,
+        "caveats": entry.caveats,
+        "images": entry.images,
     }
 
 

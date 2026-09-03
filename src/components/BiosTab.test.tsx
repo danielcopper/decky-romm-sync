@@ -86,10 +86,10 @@ describe("BiosTab", () => {
     expect(container.textContent).not.toContain("files held");
   });
 
-  it("draws a folder row amber rather than the green a present file gets", () => {
+  it("draws a folder row whose contents could not be read amber, never green", () => {
     // The colours are the pane's own, so they are pinned here rather than
     // through the panel: `downloaded` is true for a folder — something is at the
-    // destination — and green over contents nothing looked inside is the false
+    // destination — and green over a verdict nothing established is the false
     // all-clear this row exists to avoid. No core matches `coreInfo`'s active
     // one, so the amber cannot have come from the active-core highlight.
     const { container } = render(
@@ -112,7 +112,9 @@ describe("BiosTab", () => {
               required_by_active: true,
               cores: {},
               on_server: false,
-              is_directory: true,
+              declared_kind: "directory",
+              satisfied: null,
+              caveats: ["firmware-search-unverified"],
             },
           ],
         }}
@@ -123,6 +125,47 @@ describe("BiosTab", () => {
     );
     expect(container.innerHTML).toContain("#d4a72c");
     expect(container.innerHTML).not.toContain("#5ba32b");
+  });
+
+  it.each([
+    ["green over a folder holding an image", true, "#5ba32b", ["firmware-image-identified"], ["Europe  v02.00"]],
+    ["red over a folder holding none", false, "#d94126", ["firmware-directory-holds-no-image"], []],
+  ] as const)("draws %s", (_name, satisfied, colour, caveats, images) => {
+    // The folder's verdict is what it HOLDS, so it takes the same two colours a
+    // declared file does — the amber above is for a verdict, not for a folder.
+    const { container } = render(
+      <BiosTab
+        biosStatus={{
+          needs_bios: true,
+          server_count: 0,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: satisfied ? 1 : 0,
+          required_withheld: 0,
+          files: [
+            {
+              file_name: "bios",
+              downloaded: true,
+              local_path: "",
+              description: "'pcsx2/bios' folder",
+              wanted: "needed",
+              required_by_active: true,
+              cores: {},
+              on_server: false,
+              declared_kind: "directory",
+              satisfied,
+              caveats: [...caveats],
+              images: [...images],
+            },
+          ],
+        }}
+        biosLevel={satisfied ? "ok" : "missing"}
+        coreInfo={coreInfo}
+        isActive={true}
+      />,
+    );
+    expect(container.innerHTML).toContain(colour);
   });
 
   it("falls back to 'Default' when no active core is resolved", () => {

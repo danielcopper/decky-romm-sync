@@ -1,14 +1,21 @@
-"""In-memory ``FirmwareResolver`` implementation for service tests."""
+"""In-memory firmware seams for service tests — the demand, and the folder verdicts."""
 
 from __future__ import annotations
 
 import os
 from typing import TYPE_CHECKING
 
-from domain.firmware_wants import FirmwareCatalogue, FirmwarePlacement, FirmwareWant
+from domain.firmware_wants import (
+    DECLARED_DIRECTORY,
+    DECLARED_FILE,
+    FirmwareCatalogue,
+    FirmwarePlacement,
+    FirmwareWant,
+    FolderVerdict,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from types import EllipsisType
 
 
@@ -66,7 +73,9 @@ class FakeFirmwareResolver:
         relative_path: str | None | EllipsisType = ...,
         description: str | None = None,
         present: bool | None = None,
-        is_directory: bool = False,
+        declares_directory: bool = False,
+        folder: FolderVerdict | None = None,
+        caveats: tuple[str, ...] = (),
         supplied_by: str | None = None,
     ) -> FirmwarePlacement:
         """State that some emulators ask for *file_name*, and return the placement.
@@ -79,6 +88,12 @@ class FakeFirmwareResolver:
 
         ``present`` left unset defers to ``bios_root``; set it to pin a reading
         the files under that root would not give.
+
+        ``declares_directory`` is what the EMULATOR opens the destination at, not
+        what is there — a folder declaration whose folder is absent is still one.
+        ``folder`` is the verdict about its contents where the reading settled
+        one; leaving it unset is the folder that has not been looked inside, and
+        :class:`FakeFolderVerdicts` is what answers it.
         """
         placement = FirmwarePlacement(
             file_name=file_name,
@@ -89,7 +104,9 @@ class FakeFirmwareResolver:
                 + [FirmwareWant(core_so=core, required=False) for core in optional_for]
             ),
             present=present,
-            is_directory=is_directory,
+            declared_kind=DECLARED_DIRECTORY if declares_directory else DECLARED_FILE,
+            caveats=caveats,
+            folder=folder,
             supplied_by=supplied_by,
         )
         self.placements.append(placement)
@@ -106,7 +123,9 @@ class FakeFirmwareResolver:
             description=placement.description,
             wants=placement.wants,
             present=there,
-            is_directory=placement.is_directory,
+            declared_kind=placement.declared_kind,
+            caveats=placement.caveats,
+            folder=placement.folder,
             supplied_by=placement.supplied_by,
         )
 
@@ -118,3 +137,21 @@ class FakeFirmwareResolver:
             resolved=self.resolved,
             caveats=self.caveats,
         )
+
+
+class FakeFolderVerdicts:
+    """The verified folder reading, stated by the test instead of read off disk.
+
+    Seeded per core, because that is the seam's scope: a verified read opens one
+    core's declared folder and reads the candidates inside it. ``calls`` records
+    the cores it was asked about, in order, so a test can pin that the expensive
+    question is asked once per core and only where a folder row is unanswered.
+    """
+
+    def __init__(self, verdicts: dict[str, dict[str, FolderVerdict]] | None = None) -> None:
+        self.verdicts = verdicts or {}
+        self.calls: list[str] = []
+
+    def __call__(self, core_so: str) -> Mapping[str, FolderVerdict]:
+        self.calls.append(core_so)
+        return self.verdicts.get(core_so, {})

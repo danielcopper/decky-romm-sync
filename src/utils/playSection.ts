@@ -109,9 +109,10 @@ export function extractBiosInfo(answer: BiosAnswer): BiosInfoFields | null {
   const requiredDownloaded = answer.bios_status.required_downloaded ?? 0;
   // A required row nothing could judge is neither present nor absent, so it is
   // taken out of the count before the comparison: the badge says a required file
-  // is NOT THERE, and a folder the reading did not look inside has not shown
-  // that. Leaving it in raised the badge on every PS2 game, whose core requires
-  // a folder RetroDECK links onto the BIOS root.
+  // is NOT THERE, and a reading that established nothing has not shown that. A
+  // row answered `false` stays in and DOES raise the badge — a declared folder
+  // the resolver listed and found no BIOS image in is exactly the state the
+  // badge is for.
   const requiredJudged = requiredCount - (answer.bios_status.required_withheld ?? 0);
   return {
     biosNeeded: true,

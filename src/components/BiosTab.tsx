@@ -110,8 +110,9 @@ function buildBiosHeader(bios: BiosStatus, biosLevel: BiosTabProps["biosLevel"])
   if (biosLevel === "unknown") {
     // Two ignorances behind one grey dot, and they are not the same sentence.
     // With a required row nothing could judge, the requirement IS known — a
-    // folder is wanted — and it is the readiness that cannot be stated. Without
-    // one, nothing installed could say whether these files are wanted at all.
+    // folder whose contents could not be read, say — and it is the readiness
+    // that cannot be stated. Without one, nothing installed could say whether
+    // these files are wanted at all.
     // Neither is the "Nothing required" below, which is an answer.
     biosLabel = (bios.required_withheld ?? 0) > 0 ? "BIOS readiness unknown" : "BIOS requirement unknown";
   } else if (reqCount > 0) {
@@ -136,12 +137,15 @@ function buildBiosHeader(bios: BiosStatus, biosLevel: BiosTabProps["biosLevel"])
 
 /** The dot beside one file row: what it means for THIS launch, then for others. */
 function fileDotColor(file: BiosFileStatus): string {
-  // A folder is checked first because `downloaded` is true for one — something
-  // is at the destination — and green would read as an all-clear over contents
-  // nothing looked at. Amber is the colour this surface already gives a row it
-  // cannot call settled.
-  if (file.is_directory) return "#d4a72c";
-  if (file.downloaded) return "#5ba32b";
+  // The row's VERDICT, not `downloaded`: for a declared folder the two come
+  // apart, since the folder is there on every RetroDECK install and what
+  // satisfies the core is a file inside it. A payload with no verdict at all
+  // falls back to `downloaded`, which is what the verdict is for a plain file.
+  const verdict = file.satisfied === undefined ? file.downloaded : file.satisfied;
+  // Amber is the colour this surface already gives a row it cannot call
+  // settled, and a null verdict is exactly that.
+  if (verdict === null) return "#d4a72c";
+  if (verdict) return "#5ba32b";
   if (file.required_by_active) return "#d94126";
   // Missing and not required here, but demanded by some other installed core:
   // amber, because switching cores would make it a blocker.

@@ -277,21 +277,29 @@ platform's list is their **union**. A row the library does not hold is marked **
 readiness, because it is a real prerequisite that is really absent, and never towards a download or a progress ratio,
 because nothing in the plugin can fetch it.
 
-### Withheld verdict (firmware)
+### Row verdict (firmware): met / unmet / withheld
 
-A row the reading found something at and established nothing about — today, exactly a **directory**, since the resolver
-states that one is there and does not look inside it. It is neither present nor absent: it does not raise
-`required_downloaded`, it is not counted as a file shown to be missing, and while a **required by active core** row
-carries one the **BIOS level** declines to `unknown` rather than claiming either. The file rows below keep their own
-answers — only the one-line verdict declines. The foil to **not on server**, which is a settled absence and does count
-towards readiness.
+Whether one row's requirement is met, and the single axis every readiness count keys off. It is **not** whether
+something is at the destination: for a **folder declaration** the two come apart completely, since what satisfies the
+core is a file _inside_ the folder and RetroDECK links LRPS2's `pcsx2/bios` onto the BIOS root, so the folder is there
+on every install.
 
-`satisfied` is the resolver's verdict alone, and it is withheld for several unrelated causes — the cause is read off the
-fields beside it, never off `satisfied` itself. Only some of them are inherent. A file whose content was simply not
-asked about is withheld too, and that is a question declined rather than one nobody can answer: five required files the
-user holds are in that state, and counting them against readiness would report a platform unready over files that are
-there. So the directory is the only cause that travels here today — and it stops being inherent once the resolver can
-answer what is inside a folder, at which point an unverified folder joins the merely-unasked.
+- **met** — raises `required_downloaded`. For a declared file, the resolver read it at the destination; for a declared
+  folder, the resolver listed the folder and an image inside it passes the core's own content check.
+- **unmet** — counted as a file shown to be absent, so it reads red and raises the play row's **BIOS badge**. A folder
+  the resolver listed and found no image in is exactly this, and so is one that is not there at all.
+- **withheld** — the reading established neither. It raises neither count, and while a **required by active core** row
+  carries one the **BIOS level** declines to `unknown` rather than claiming either. The rows below keep their own
+  answers; only the one-line verdict declines.
+
+A withheld verdict is never worded off the verdict itself, which is deliberately the answer alone. The cause is read off
+the resolver's **caveat codes** carried on the row — a folder read that could not finish, a candidate the identity table
+and the core's own header check disagree about, a directory obstructing a destination the emulator opens as a file.
+
+Not every unestablished thing is withheld here. A declared file whose _bytes_ were never verified is not: the plugin
+asks for content verification only for a folder declaration, where it is the whole question, and reading an unasked
+content question as a withheld verdict would decline readiness for every row on every platform. The foil to **not on
+server**, which is a settled absence and does count towards readiness.
 
 ### Safely-bakeable
 

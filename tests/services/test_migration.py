@@ -12,7 +12,7 @@ from _factories import _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_disc_resolver import FakeDiscResolver
-from fakes.fake_firmware_resolver import FakeFirmwareResolver
+from fakes.fake_firmware_resolver import FakeFirmwareResolver, FakeFolderVerdicts
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_relaunch_options_resolver import FakeRelaunchOptionsResolver
@@ -94,6 +94,7 @@ def plugin(tmp_path, fake_romm_api):
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             firmware_file_store=FirmwareFileAdapter(),
             firmware_resolver=FakeFirmwareResolver(),
+            firmware_folder_verdicts=FakeFolderVerdicts(),
             retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),
             resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
