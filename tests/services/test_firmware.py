@@ -274,24 +274,29 @@ _FACADE_ATTRIBUTES = frozenset({"_config", "_listing", "_demand", "_status", "_d
 
 @pytest.fixture(autouse=True)
 def _no_dead_rebind_on_the_facade(fw):
-    """Fail a test that assigned firmware state to the façade instead of a sub-service.
+    """Fail an assignment to a name the façade does not have.
 
-    Python answers an assignment to an unknown name by creating it, so
-    ``fw._loop = loop`` — a line meaning to swap the loop the offloaded hops run
-    on — lands on the façade, does nothing, and leaves the test green against
-    whichever loop the fixture built the service under. Nothing else notices: the
-    call it was meant to redirect still works, just against the old object. This
-    makes the assignment itself the failure.
+    Python answers such an assignment by creating the name, so ``fw._loop = loop``
+    — a line meaning to swap the loop the offloaded hops run on — lands on the
+    façade, does nothing, and leaves the test green against whichever loop the
+    fixture built the service under. Nothing else notices: the call it was meant
+    to redirect still works, just against the old object. This makes the
+    assignment itself the failure.
 
-    Replacing a name the façade already answers to is a different thing and stays
-    allowed — stubbing ``fw.check_platform_bios`` shadows a real method rather
-    than inventing one.
+    Two assignments stay allowed, and only one of them is safe. Shadowing a name
+    the façade already answers to is deliberate — ``fw.check_platform_bios = mock``
+    replaces a real method rather than inventing one. Rebinding one of the six
+    construction slots is NOT: ``fw._listing = FakeListing()`` reaches
+    ``invalidate_firmware_cache`` and nothing else, because every sub-service bound
+    its own reference to the listing when it was built, and the same holds for
+    ``_demand``. A swap has to reach every holder, so build the service around the
+    fake rather than rebinding it afterwards.
     """
     yield
     stray = sorted(name for name in vars(fw) if name not in _FACADE_ATTRIBUTES and not hasattr(type(fw), name))
     assert not stray, (
         f"assigned {stray} to the façade, which holds no such name — the assignment did nothing. "
-        f"Firmware state lives on a sub-service: reach fw._listing / fw._demand / fw._status / "
+        f"Firmware state lives on a sub-service: assign inside fw._listing / fw._demand / fw._status / "
         f"fw._downloads / fw._deletion, or _set_loop(fw, loop) for the event loop."
     )
 
