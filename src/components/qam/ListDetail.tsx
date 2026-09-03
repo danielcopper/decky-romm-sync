@@ -3,6 +3,10 @@
  * focused entry's detail on the right, each scrolling on its own inside the
  * frame's measured height.
  *
+ * A region scrolls by moving focus, so what a reader must be able to reach in
+ * either pane — a detail's table rows included — has to be focusable; plain
+ * text scrolls along with the row it accompanies but cannot be scrolled to.
+ *
  * Focus selects — moving through the list changes the detail at once, as Steam's
  * own settings do. The row's own control keeps A, so this component never
  * intercepts it; a row that carries a toggle still toggles on press.

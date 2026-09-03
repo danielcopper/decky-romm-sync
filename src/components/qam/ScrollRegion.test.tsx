@@ -3,8 +3,10 @@
  * probe found one, that it still is a bounded region of the focus tree when the
  * probe missed, and that a caller can place it without losing its bounds.
  *
- * What the panel then does with a gamepad is Steam's, and happy-dom has neither
- * the panel nor a gamepad; the device round covers the scrolling itself.
+ * What the panel then does with focus is Steam's: it takes none of its own, and
+ * the focused row is what scrolls into view. happy-dom has neither the panel nor
+ * a gamepad, so nothing here can pin that the region is not a focus stop — the
+ * device round is what pins it.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -18,7 +20,7 @@ interface StubPanelProps {
 }
 
 /** Stand-in for Steam's scroll panel: it keeps the style so bounds stay assertable. */
-const StubScrollPanelGroup: FC<StubPanelProps> = ({ style, children }) => (
+const StubScrollPanel: FC<StubPanelProps> = ({ style, children }) => (
   <div data-testid="scroll-panel" style={style}>
     {children}
   </div>
@@ -30,7 +32,7 @@ const StubScrollPanelGroup: FC<StubPanelProps> = ({ style, children }) => (
  */
 async function loadScrollRegion(panel: FC<StubPanelProps> | undefined): Promise<FC<ScrollRegionProps>> {
   vi.resetModules();
-  vi.doMock("../../utils/deckyUiInternals", () => ({ ScrollPanelGroup: panel }));
+  vi.doMock("../../utils/deckyUiInternals", () => ({ ScrollPanel: panel }));
   return (await import("./ScrollRegion")).ScrollRegion;
 }
 
@@ -45,7 +47,7 @@ function expectBounds(el: HTMLElement): void {
 
 describe("ScrollRegion", () => {
   it("puts its content in Steam's scroll panel when the probe found one", async () => {
-    const ScrollRegion = await loadScrollRegion(StubScrollPanelGroup);
+    const ScrollRegion = await loadScrollRegion(StubScrollPanel);
 
     render(
       <ScrollRegion>
@@ -53,16 +55,15 @@ describe("ScrollRegion", () => {
       </ScrollRegion>,
     );
 
-    // Steam's gamepad navigation scrolls by moving focus, so content nobody can
-    // focus scrolls only from inside the panel. A bare div here would leave a
-    // detail pane of text rows reachable with a mouse and nothing else.
+    // The panel is the container the QAM's own tab panel is built from: rows
+    // inside it take focus directly and the focused one is scrolled into view.
     const panel = screen.getByTestId("scroll-panel");
     expect(panel).toContainElement(screen.getByText("region content"));
     expectBounds(panel);
   });
 
   it("leaves the panel's overflow to Steam, which clips it sideways", async () => {
-    const ScrollRegion = await loadScrollRegion(StubScrollPanelGroup);
+    const ScrollRegion = await loadScrollRegion(StubScrollPanel);
 
     render(
       <ScrollRegion>
@@ -71,9 +72,9 @@ describe("ScrollRegion", () => {
     );
 
     // Steam's ScrollY class is `overflow-y: auto` with `overflow-x: hidden`, and
-    // an inline shorthand beats both. The horizontal room it would restore is
-    // what the panel's gamepad-direction handler consumes left and right for,
-    // and left↔right is how focus crosses from a list to its detail.
+    // an inline shorthand beats both axes. The sideways scroll it would restore
+    // is one Steam clips on purpose: one over-wide row and every focus step
+    // would drag the pane left and right under the reader.
     expect(screen.getByTestId("scroll-panel").style.overflow).toBe("");
   });
 
@@ -87,8 +88,9 @@ describe("ScrollRegion", () => {
     );
 
     expect(screen.queryByTestId("scroll-panel")).not.toBeInTheDocument();
-    // A Focusable rather than a div: the region is a level of the focus tree
-    // either way, so a missed probe costs the scrolling and nothing else.
+    // A Focusable rather than a div: it is the base panel Steam's scroll panel
+    // itself renders, so the region stays one level of the focus tree and a
+    // missed probe costs Steam's scroll padding, not the structure.
     const region = screen.getByTestId("focusable");
     expect(region).toContainElement(screen.getByText("region content"));
     expectBounds(region);
@@ -97,7 +99,7 @@ describe("ScrollRegion", () => {
   });
 
   it("lets the caller place the region without losing its bounds", async () => {
-    const ScrollRegion = await loadScrollRegion(StubScrollPanelGroup);
+    const ScrollRegion = await loadScrollRegion(StubScrollPanel);
 
     render(<ScrollRegion style={{ flex: "0 0 264px", width: "264px" }} />);
 

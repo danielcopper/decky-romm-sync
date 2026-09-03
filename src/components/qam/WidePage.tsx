@@ -85,11 +85,12 @@ export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, on
   // clips instead of growing, so the body needs a definite height.
   const bodyStyle = { height: bodyHeight === null ? undefined : `${bodyHeight}px`, overflow: "hidden" };
 
-  // Only the untabbed body gets a region from the frame. A tab's content is the
-  // page's own business, and the frame cannot know whether it needs one — so a
-  // page whose tab holds content nobody can focus wraps that in `ScrollRegion`
-  // itself. Steam's per-tab scroller does not cover it: like the QAM's own tab
-  // panel it is the plain `ScrollPanel`, which binds no gamepad direction.
+  // Only the untabbed body gets a region from the frame. Steam's tabbed page
+  // already wraps each tab's content in this same plain scroll panel
+  // (`ScrollingTab<id>`, `scrollDirection: "y"`, in `chunk~2dcc5aaf7.js`), so
+  // one from the frame would nest a second scroller inside it. A tab that needs
+  // more than that one — a list and a detail scrolling side by side — builds its
+  // regions with `ScrollRegion` itself.
   let body: ReactNode = <ScrollRegion>{children}</ScrollRegion>;
   if (tabs) {
     // `autoFocusContents` lands entry focus in the active tab's content — the

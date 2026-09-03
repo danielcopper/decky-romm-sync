@@ -40,13 +40,13 @@ const StubTabs: FC<StubTabsProps> = ({ tabs, activeTab, onShowTab, autoFocusCont
 );
 
 /** Stand-in for Steam's scroll panel, which the frame reaches via `ScrollRegion`. */
-const StubScrollPanelGroup: FC<{ children?: ReactNode }> = ({ children }) => (
+const StubScrollPanel: FC<{ children?: ReactNode }> = ({ children }) => (
   <div data-testid="scroll-panel">{children}</div>
 );
 
 async function loadWidePage(
   tabs: FC<StubTabsProps> | undefined,
-  scrollPanelGroup?: FC<{ children?: ReactNode }>,
+  scrollPanel?: FC<{ children?: ReactNode }>,
 ): Promise<FC<WidePageProps>> {
   vi.resetModules();
   // Every export the graph under test imports has to be named here — Vitest
@@ -55,7 +55,7 @@ async function loadWidePage(
   vi.doMock("../../utils/deckyUiInternals", () => ({
     quickAccessMenuClasses: undefined,
     Tabs: tabs,
-    ScrollPanelGroup: scrollPanelGroup,
+    ScrollPanel: scrollPanel,
   }));
   return (await import("./WidePage")).WidePage;
 }
@@ -178,7 +178,7 @@ describe("WidePage", () => {
   });
 
   it("gives an untabbed body a scroll panel of its own", async () => {
-    const WidePage = await loadWidePage(StubTabs, StubScrollPanelGroup);
+    const WidePage = await loadWidePage(StubTabs, StubScrollPanel);
 
     render(
       <WidePage title="Settings" onBack={vi.fn()}>
@@ -190,13 +190,13 @@ describe("WidePage", () => {
   });
 
   it("gives a tabbed body no region, leaving its tabs' content to the page", async () => {
-    const WidePage = await loadWidePage(StubTabs, StubScrollPanelGroup);
+    const WidePage = await loadWidePage(StubTabs, StubScrollPanel);
 
     render(<WidePage title="Library" onBack={vi.fn()} tabs={TAB_SET} activeTab="platforms" onShowTab={vi.fn()} />);
 
-    // A tab's content is the page's business — a page whose tab holds
-    // unfocusable content wraps it in `ScrollRegion` itself, which it could not
-    // do if the frame had already wrapped the whole tabbed page in one.
+    // Steam's tabbed page already scrolls each tab's content in this same panel,
+    // so a region here would nest a second scroller around all of them — and a
+    // tab that needs regions of its own could no longer place them.
     expect(screen.queryByTestId("scroll-panel")).not.toBeInTheDocument();
     expect(screen.getByTestId("steam-tabs")).toBeInTheDocument();
   });

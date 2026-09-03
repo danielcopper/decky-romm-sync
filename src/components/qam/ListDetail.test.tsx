@@ -118,10 +118,10 @@ describe("ListDetail", () => {
     expect(detail?.style.overflow).toBe("auto");
   });
 
-  it("gives each region Steam's scroll panel, so unfocusable detail content scrolls", async () => {
+  it("gives each pane Steam's scroll panel, so the two scroll independently", async () => {
     vi.resetModules();
     vi.doMock("../../utils/deckyUiInternals", () => ({
-      ScrollPanelGroup: ({ style, children }: { style?: CSSProperties; children?: ReactNode }) => (
+      ScrollPanel: ({ style, children }: { style?: CSSProperties; children?: ReactNode }) => (
         <div data-testid="scroll-panel" style={style}>
           {children}
         </div>
@@ -134,15 +134,15 @@ describe("ListDetail", () => {
         items={platformItems(() => {})}
         selectedId="n64"
         onSelect={vi.fn()}
-        renderDetail={() => <div>plain text nobody can focus</div>}
+        renderDetail={() => <button>a detail row</button>}
       />,
     );
     const [list, detail] = screen.getAllByTestId("scroll-panel");
 
-    // The detail pane is the case that forced this: Steam scrolls by moving
-    // focus, so rows that take no focus scroll only from inside the panel.
+    // Two panels rather than one around both: the panes scroll independently, so
+    // a long detail must not carry the list up with it.
     expect(list).toContainElement(screen.getByRole("button", { name: /Nintendo 64/ }));
-    expect(detail).toContainElement(screen.getByText("plain text nobody can focus"));
+    expect(detail).toContainElement(screen.getByRole("button", { name: "a detail row" }));
     expect(list?.style.width).toBe("264px");
     expect(detail?.style.height).toBe("100%");
   });

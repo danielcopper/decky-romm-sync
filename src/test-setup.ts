@@ -282,7 +282,7 @@ vi.mock("@decky/ui", () => {
     // every file that reaches @decky/ui through deckyUiInternals.
     quickAccessMenuClasses: undefined,
     Tabs: undefined,
-    ScrollPanelGroup: undefined,
+    ScrollPanel: undefined,
     // The QAM is open for any test that renders a wide page; the hook's
     // clear-on-close path is exercised in src/utils/qamExpansion.test.tsx.
     useQuickAccessVisible: () => true,
