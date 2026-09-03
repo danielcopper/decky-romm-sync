@@ -25,11 +25,12 @@ Two properties of the resolver decide this module's shape:
 Two questions, and their scopes are the cost model. ``firmware_inventory()``
 answers the whole machine unverified in 115-325 ms and memoises nothing, so
 asking it once per platform would multiply that by the platform count;
-``firmware_for_core(..., verify=True)`` answers one core's folder declarations
-by reading the candidate files themselves, which the inventory must never do
-across a whole BIOS root. Nothing is cached in either — a firmware answer is
-about files on disk that the user is actively adding and removing, and a cached
-one would outlive the download that changed it.
+``firmware_for_core(..., verify=True)`` reads the candidate files inside one
+core's declared folder, which is affordable per core and is not what the
+inventory would do under verification — there the sweep takes in every
+unclaimed file under the BIOS root as well. Nothing is cached in either — a
+firmware answer is about files on disk that the user is actively adding and
+removing, and a cached one would outlive the download that changed it.
 """
 
 from __future__ import annotations
@@ -142,10 +143,10 @@ class AtlasFolderVerdictAdapter:
     the only reading that can answer it is one that opens the candidates and
     reads them the way the core does — 0.26 s for one core on the reference
     machine, against 0.24 s for the whole machine's unverified inventory. The
-    same verification over the whole machine hashes every declared file AND
-    every unclaimed file under the BIOS root, and this plugin resolves the whole
-    machine on every game-page open; so the inventory stays unverified and this
-    seam is asked only for the cores whose folder row is still unanswered.
+    same verification over the whole machine sweeps every unclaimed file under
+    the BIOS root as well, and this plugin resolves the whole machine on every
+    game-page open; so the inventory stays unverified and this seam is asked
+    only for the cores whose folder row is still unanswered.
 
     It shares :class:`AtlasFirmwareAdapter`'s two properties and answers them
     the same way: the resolver raises on its own invariant violations, so every
@@ -331,7 +332,7 @@ def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
     the caller will never write.
     """
     root = answer.root
-    at_path = _caveats_by_destination(answer)
+    at_path, in_folder = _caveats_by_destination(answer)
     by_name: dict[str, list[Any]] = {}
     for core in answer.cores:
         for requirement in _requirement_entries(core):
@@ -343,6 +344,7 @@ def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
         location = _declared_location(first, root)
         supplied = first.supplied_by if location is not None else None
         directory = first.declared_kind == DECLARED_DIRECTORY
+        folder = _settled_folder(first) if directory and location is not None else None
         placements.append(
             FirmwarePlacement(
                 file_name=file_name,
@@ -357,8 +359,8 @@ def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
                 ),
                 present=first.present if location is not None else None,
                 declared_kind=DECLARED_DIRECTORY if directory else DECLARED_FILE,
-                caveats=at_path.get(first.path, ()) if location is not None else (),
-                folder=_settled_folder(first) if directory and location is not None else None,
+                caveats=_row_caveats(first, at_path, in_folder, settled=folder) if location is not None else (),
+                folder=folder,
                 supplied_by=supplied.label if supplied is not None else None,
             )
         )
@@ -368,35 +370,68 @@ def _placements(answer: Any) -> tuple[FirmwarePlacement, ...]:
 def _settled_folder(requirement: Any) -> FolderVerdict | None:
     """The folder verdict this unverified reading already settles, or ``None``.
 
-    A folder declaration whose folder is absent, or has a plain file sitting
-    where it belongs, is settled by the stat alone — the resolver answers
-    ``satisfied`` for both without reading a byte. Only a folder that IS there
-    leaves the question open, and answering that one is what costs a verified
-    resolve per core. Carrying the settled half here is what keeps the caller's
-    "ask where it pays" scope down to that one shape.
+    Read off the resolver's own three-valued answer rather than off a list of
+    shapes, because the shapes that settle without a content check are the
+    resolver's business and not this adapter's to enumerate: today an absent
+    folder, a plain file where the folder belongs, and a folder holding no file
+    of a size the core would even open are all settled by a stat. ``None`` is
+    the question a content read has to answer, and it is the only shape the
+    caller pays a verified per-core resolve for.
     """
     return None if requirement.satisfied is None else FolderVerdict(satisfied=requirement.satisfied)
 
 
-def _caveats_by_destination(answer: Any) -> dict[str, tuple[str, ...]]:
-    """The answer's caveat codes indexed by the destination each one names.
+def _row_caveats(
+    requirement: Any,
+    at_path: dict[str, tuple[str, ...]],
+    in_folder: dict[str, tuple[str, ...]],
+    *,
+    settled: FolderVerdict | None,
+) -> tuple[str, ...]:
+    """The codes one row carries: what was found AT its destination, and IN it.
 
-    A caveat about one destination carries that destination as ``path``, so the
-    row it belongs to is the requirement resolving there — the resolver states
-    these once per answer rather than once per requirement, and two cores
-    declaring one file share the row as they share the place.
-
-    Deduplicated on the code, because the same statement arrives more than once:
-    RetroDECK's ES-DE catalogue lists ``pcsx2_libretro.so`` under two PS2
-    entries, so every caveat about that core is stated twice with byte-identical
-    data (emu-atlas #361).
+    The second half rides only on a folder declaration the unverified reading
+    SETTLED, and both halves of that are load-bearing. A file declaration must
+    not pick up a listing's findings at all — on a linked root the listed folder
+    IS the firmware root, which is the resolved destination of any declaration
+    that collapses onto it. And an unsettled folder is one the verified read is
+    there to answer, its caveats folded in by ``merge_folder_verdicts``;
+    carrying the unverified statement on as well would leave the row saying its
+    contents were not checked beside the verdict of the check.
     """
-    by_path: dict[str, list[str]] = {}
+    codes = at_path.get(requirement.path, ())
+    if settled is None:
+        return codes
+    return tuple(dict.fromkeys((*codes, *in_folder.get(requirement.path, ()))))
+
+
+def _caveats_by_destination(answer: Any) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
+    """The answer's caveat codes, indexed by the destination each one names.
+
+    Two indexes, because the resolver names a destination two ways and they are
+    different statements. ``path`` is the thing the caveat is ABOUT, so the row
+    is the requirement resolving there. ``dir`` is a folder that was listed, and
+    the caveat is about what the listing found IN it — only a folder declaration
+    is ever listed, which is what :func:`_row_caveats` keys on.
+
+    Deduplicated on the code within one destination, because the same statement
+    arrives more than once: RetroDECK's ES-DE catalogue lists
+    ``pcsx2_libretro.so`` under two PS2 entries, so every caveat about that core
+    is stated twice with byte-identical data (emu-atlas #361).
+    """
+    at_path: dict[str, list[str]] = {}
+    in_folder: dict[str, list[str]] = {}
     for caveat in _every_caveat(answer):
-        path = caveat.data.get("path")
-        if isinstance(path, str):
-            by_path.setdefault(path, []).append(caveat.code)
-    return {path: tuple(dict.fromkeys(codes)) for path, codes in by_path.items()}
+        for key, index in (("path", at_path), ("dir", in_folder)):
+            named = caveat.data.get(key)
+            if isinstance(named, str):
+                index.setdefault(named, []).append(caveat.code)
+    return _deduplicated_codes(at_path), _deduplicated_codes(in_folder)
+
+
+def _deduplicated_codes(by_destination: dict[str, list[str]]) -> dict[str, tuple[str, ...]]:
+    """One destination's codes, first occurrence kept and repeats dropped."""
+    return {destination: tuple(dict.fromkeys(codes)) for destination, codes in by_destination.items()}
 
 
 def _every_caveat(answer: Any) -> tuple[Any, ...]:

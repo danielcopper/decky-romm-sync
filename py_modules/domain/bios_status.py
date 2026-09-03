@@ -68,20 +68,21 @@ class BiosFileEntry:
     this page can fetch it — so it is shown, and it is kept out of every count
     that offers the user an action.
 
-    ``satisfied`` is the row's verdict and the single axis every count keys off:
+    ``satisfied`` is the row's verdict and the axis the REQUIRED counts key off:
     the requirement is met, is not met, or nothing established which. It is not
     ``downloaded``, which answers only whether something is at the destination —
     for a **folder** declaration the two come apart completely, since what
     satisfies the requirement is a file inside the folder and the folder itself
-    is always there on a stock RetroDECK.
+    is always there on a stock RetroDECK. The library's own held/offered ratio
+    is a third axis and keys off neither (``on_server`` and ``downloaded``).
 
     ``declared_kind`` is what the emulator opens the destination at, and it is a
     property of the DECLARATION: a folder that is not there is still a folder to
     create rather than a file to fetch, which is why no surface may offer such a
     row as a download. ``caveats`` and ``images`` are the resolver's own words
-    for why the verdict reads as it does and what a satisfied folder holds —
-    a surface words the row off those, never off ``satisfied``, which is
-    deliberately the verdict alone.
+    for what it found and what a satisfied folder holds, and a surface takes the
+    CAUSE of a verdict from them, because ``satisfied`` is deliberately the
+    verdict alone and carries none of it.
 
     ``supplied_by`` is what the reading found at the destination, carried per row
     so the surfaces can say what a row is instead of describing every one of them

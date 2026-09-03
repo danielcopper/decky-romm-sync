@@ -17,11 +17,12 @@
  * "present". Only then does the library note stand, which is honest for every
  * row nothing else was established for.
  *
- * The wording keys off the resolver's own caveat CODES, never off the
- * declaration kind: what a row is and what was established about it are two
- * questions, and only the second has a sentence to write. `satisfied` decides
- * which family of codes to read, and is never worded on its own — it is the
- * verdict alone and carries none of its causes.
+ * The CAUSE of a verdict comes from the resolver's own caveat codes, because
+ * `satisfied` is deliberately the verdict alone and carries none of it. What the
+ * verdict does decide is which family of codes can apply — with the declaration
+ * kind, since a folder's findings and a destination's are different families —
+ * and what to say when no code in that family is recognised, which is the one
+ * sentence written off the verdict itself.
  */
 
 import type { BiosFileStatus } from "../types";
@@ -48,9 +49,6 @@ const IMAGE_CONTRADICTED = "firmware-image-contradicted";
 /** The folder could not be listed in full, or a candidate's bytes would not come
  *  back — a read failure, never a finding about what is in there. */
 const READ_INCOMPLETE = ["firmware-scan-incomplete", "firmware-unreadable"];
-/** Files of an accepted size are there and nothing was hashed: the content
- *  question was declined rather than answered. */
-const SEARCH_UNVERIFIED = "firmware-search-unverified";
 
 /**
  * What the reading established about *row*, or `""` where it has nothing to add.
@@ -59,6 +57,15 @@ const SEARCH_UNVERIFIED = "firmware-search-unverified";
  * are the core's own option labels, and the core needs exactly one of them, so
  * they carry no per-image required/optional marking and no mark for which one
  * will be loaded (that is a core option this plugin does not read).
+ *
+ * There is deliberately no branch for `firmware-search-unverified`, the code for
+ * a folder whose candidates were never hashed. The backend asks the folder
+ * question with verification on, so the resolver never emits it there; and the
+ * unverified machine-wide reading emits it only for a row it leaves open, which
+ * is exactly the row whose codes that reading does not carry. So it reaches no
+ * row at all — and a folder whose contents genuinely went unread, because the
+ * read failed or the platform's scope never covered its core, arrives with no
+ * code and takes the fallback below, which claims nothing either way.
  */
 function verdictNote(row: BiosNoteRow): string {
   const caveats = row.caveats ?? [];
@@ -76,7 +83,6 @@ function verdictNote(row: BiosNoteRow): string {
   }
   if (has(IMAGE_CONTRADICTED)) return "holds an image that could not be confirmed";
   if (READ_INCOMPLETE.some(has)) return "its contents could not be read in full";
-  if (has(SEARCH_UNVERIFIED)) return "its contents were not checked";
   return row.satisfied === null ? "its contents could not be checked" : "";
 }
 

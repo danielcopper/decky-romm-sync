@@ -214,10 +214,9 @@ class FirmwareService:
         at the root, and none of those three is a file.
 
         That leaves one shape this returns a directory for: a server file whose
-        name matches a directory declaration — ``bios``, say, against LRPS2's
+        name matches a directory declaration — ``bios`` against LRPS2's
         ``pcsx2/bios``, which RetroDECK links onto the root. The read paths want
-        exactly that; the write path would place a ``.tmp`` sibling of the root,
-        which is why the batch skips a folder declaration outright.
+        exactly that; the write path would place a ``.tmp`` sibling of the root.
         """
         bios_base = self._retrodeck_paths.bios_path()
         if placement is not None:
@@ -269,9 +268,8 @@ class FirmwareService:
         shows work outstanding rather than a readiness nobody established.
 
         What this never asks is whether the requirement is MET — that is
-        ``BiosFileEntry.satisfied``. For a folder declaration the two are
-        unrelated: the folder is there on every RetroDECK install, and what
-        satisfies the core is a file inside it.
+        ``BiosFileEntry.satisfied``, and for a folder declaration the two are
+        unrelated: the folder is there, and what satisfies the core is inside it.
         """
         if placement is None or placement.relative_path is None:
             return self._firmware_file_store.exists(dest)
@@ -815,7 +813,11 @@ class FirmwareService:
         return md5_match, None
 
     async def download_firmware(self, firmware_id) -> dict[str, Any]:
-        """Download a single firmware file from RomM."""
+        """Download one firmware file — with none of the batch's eligibility checks.
+
+        The folder-declaration refusal is among them, and no callable exposes
+        this method, which is the only reason that gap is unreachable.
+        """
         placements = await self._loop.run_in_executor(None, self._placement_index)
         return await self._download_one(firmware_id, placements)
 
@@ -902,8 +904,7 @@ class FirmwareService:
         file to refresh it is the cost the index exists to avoid.
 
         A folder declaration is skipped whatever is at its destination: the
-        emulator lists that name, so there is no file to fetch into it — the
-        requirement is met by a BIOS image *inside* the folder, a different row.
+        emulator lists that name, so there is no file to fetch into it.
         """
         downloaded = 0
         errors = []

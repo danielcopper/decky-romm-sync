@@ -71,8 +71,8 @@ class FolderVerdict:
     ``images`` names what was found, in the resolver's own words, and is empty
     for every verdict but a satisfied one. ``caveats`` carries the stable codes
     stating why the verdict reads as it does — the codes are the contract, the
-    messages are prose — and they are what a surface words the row off, because
-    ``satisfied`` is the verdict alone and never its cause.
+    messages are prose — and a surface takes the CAUSE from them, because
+    ``satisfied`` is the verdict alone and carries none of it.
     """
 
     satisfied: bool | None
@@ -245,12 +245,11 @@ def unanswered_folder_cores(
     """The cores in *core_sos* whose folder declaration still has no verdict.
 
     The scope of the one question that costs a content read: the resolver
-    answers a folder declaration from the folder's own listing, and a listing
-    it was not asked to make leaves ``folder`` unset. Every other row is
-    already answered — a missing folder, and a file sitting where the folder
-    belongs, are settled by the machine-wide reading's own stat — so asking
-    about them would pay a whole verified per-core resolve for an answer
-    already in hand.
+    answers a folder declaration from the folder's own listing, and a listing it
+    was not asked to make leaves ``folder`` unset. A row the machine-wide
+    reading already settled is left alone — asking about it would pay a whole
+    verified per-core resolve for an answer in hand — and which rows those are
+    is the resolver's own verdict rather than a list of shapes kept here.
 
     Sorted and deduplicated: an ES-DE catalogue can list one core under two
     entries, and the caller asks the resolver once per name it is handed.

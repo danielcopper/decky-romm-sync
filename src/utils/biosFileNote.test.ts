@@ -70,7 +70,8 @@ describe("biosFileNote", () => {
     );
     expect(biosFileNote(folder(null, ["firmware-scan-incomplete"]))).toBe("its contents could not be read in full");
     expect(biosFileNote(folder(null, ["firmware-unreadable"]))).toBe("its contents could not be read in full");
-    expect(biosFileNote(folder(null, ["firmware-search-unverified"]))).toBe("its contents were not checked");
+    // No code at all is the shape a failed verified read leaves: the question
+    // was asked and did not come back, which is not the same as unasked.
     expect(biosFileNote(folder(null))).toBe("its contents could not be checked");
   });
 

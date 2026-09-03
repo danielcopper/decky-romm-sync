@@ -51,7 +51,7 @@ Beside the Play button there is also a short **BIOS** badge, which is a shortcut
 condition and no other: a file the active core **requires** is shown to be absent from your BIOS folder. If that core
 requires nothing, or requires only files you already have, there is no badge — however many optional files are missing,
 and whether or not the requirement could be worked out at all. A required **folder** counts here like any other
-requirement: if the plugin looked inside it and found no BIOS image, the badge appears, because the game will not
+requirement: once the plugin has established that it holds no BIOS image, the badge appears, because the game will not
 launch. What raises no badge is a requirement nothing could settle — a folder the plugin could not read, say — since it
 has not shown anything to be absent. Those cases are worth reading, but not worth a warning next to Play, so they live
 in the tab.
@@ -113,15 +113,19 @@ reads them the way the core does:
   one of them, so none of them is marked required, and which one your emulator loads is a core setting the plugin does
   not read.
 - A folder holding no image is red, exactly like a missing file: _holds no BIOS image_. That is the honest answer for a
-  PS2 system that will not boot, and it is what the red **BIOS** badge beside Play appears for.
+  PS2 system that will not boot, and it is what the red **BIOS** badge beside Play appears for. The plugin does not
+  always have to read the files to say it — a folder holding nothing even the right size for a BIOS is answered by their
+  sizes alone — and the row reads the same either way.
 - Where the read could not finish — a file whose bytes would not come back, a folder that could not be listed in full,
   or an image the plugin's identity table and the emulator's own check disagree about — the row says so and gets an
   amber dot, and the system's readiness line declines (see
   [When readiness cannot be stated](#when-readiness-cannot-be-stated) below). Nothing is being claimed either way.
 
-A folder that is **absent** reads _missing_ like any other requirement, and is never offered as a download: what the
-emulator opens there is a folder, so there is no file to fetch into it. On a stock RetroDECK that will not happen for
-`pcsx2/bios`, which RetroDECK links onto the BIOS folder itself.
+A folder that is **absent** is red like any other requirement that is not there, with no note beside it: there is
+nothing to have found, so there is nothing to say. It is never offered as a download either — what the emulator opens
+there is a folder, so there is no file to fetch into it. On a stock RetroDECK that will not happen for `pcsx2/bios`,
+which RetroDECK links onto the BIOS folder itself. (The **System** page words that row _Missing_, because that page
+spells absence out where this tab leaves it to the dot.)
 
 <!-- Screenshot: Game detail page showing orange BIOS status with "2/5 required files ready" -->
 
@@ -220,9 +224,10 @@ emulator keeps somewhere outside your BIOS folder entirely.
 
 Where a core asks for a **folder** rather than a file, that reading is not enough — a folder is satisfied by what is in
 it — so the plugin asks a second, narrower question for just that core, and it opens the candidate files and reads them
-the way the core does. It only asks it where there is something to settle: a folder that is not there, or a plain file
-sitting where the folder belongs, is already answered. Asking it for your whole BIOS folder every time a game page
-opened would mean reading every file in it, which is why it is scoped this tightly.
+the way the core does. It only asks it where there is something left to settle — a folder that is not there, one with a
+file sitting where it belongs, and one holding nothing even the right size are all answered without opening anything.
+Asking it for your whole BIOS folder every time a game page opened would mean reading every file in it, which is why it
+is scoped this tightly.
 
 **Standalone emulators are not asked.** RetroDECK also offers emulators that are not RetroArch cores — RPCS3, Vita3K,
 Cemu, xemu and others — and they state their firmware in their own formats rather than in that one description file.
@@ -305,9 +310,9 @@ come back, a folder it could not list in full, or an image its identity table an
 about. It is not the ordinary state of a PS2 system — a folder that reads cleanly is answered green or red like any
 other requirement.
 
-What the plugin will not do is guess. "The folder exists" would be a green light earned by RetroDECK's plumbing rather
-than by any BIOS file of yours, and "the folder is missing" would be plainly false. It declines instead, and says which
-of the two it is doing.
+What the plugin will not do is guess at the part it could not reach. A folder whose listing broke off part-way might
+hold a BIOS image in the part that was never read, or might not; calling it ready and calling it empty are both claims
+about files nobody looked at. It declines instead, and says so.
 
 What that state does **not** do is flatten the rest of the page:
 

@@ -1229,7 +1229,7 @@ describe("SystemPage", () => {
                 on_server: false,
                 declared_kind: "directory",
                 satisfied: null,
-                caveats: ["firmware-search-unverified"],
+                caveats: ["firmware-scan-incomplete"],
               },
               {
                 id: null,
@@ -1283,7 +1283,7 @@ describe("SystemPage", () => {
                 on_server: false,
                 declared_kind: "directory",
                 satisfied: null,
-                caveats: ["firmware-search-unverified"],
+                caveats: ["firmware-scan-incomplete"],
               },
               {
                 id: 7,

@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import pytest
 from _vendor.atlas import (
+    CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_CANDIDATE,
     CAVEAT_FIRMWARE_IMAGE_IDENTIFIED,
     CAVEAT_FIRMWARE_IMAGE_UNLISTED,
     CAVEAT_FIRMWARE_PATH_OBSTRUCTED,
+    CAVEAT_FIRMWARE_SEARCH_UNVERIFIED,
 )
 from _vendor.atlas.firmware import DECLARED_DIRECTORY as ATLAS_DECLARED_DIRECTORY
 from _vendor.atlas.firmware import DECLARED_FILE as ATLAS_DECLARED_FILE
@@ -514,20 +516,28 @@ class TestVocabularyConformance:
 
 
 class TestFolderVerdictsTheInventoryAlreadySettles:
-    """A folder question a stat answers costs no content read.
+    """A folder question the resolver answers without a content read costs none.
 
-    The unverified machine-wide reading settles two of the three shapes on its
-    own, and carrying those keeps the verified per-core question — which opens
-    and reads every candidate — scoped to the one that is genuinely open.
+    Whether the unverified machine-wide reading settles a folder is its own
+    three-valued answer, not a shape this adapter enumerates. What matters here
+    is that a settled answer is carried — with the codes that speak for it — and
+    that only an unsettled one is left for the verified per-core question, which
+    opens and reads every candidate in the folder.
     """
 
-    def _placement(self, adapter, monkeypatch, requirement):
-        answer = _answer(_core(core_so="pcsx2_libretro.so", requirements=(requirement,)))
+    def _placement(self, adapter, monkeypatch, requirement, *caveats):
+        answer = _answer(_core(core_so="pcsx2_libretro.so", requirements=(requirement,)), caveats=caveats)
         monkeypatch.setattr("adapters.atlas_firmware.detect", _detecting(_Installation(answer)))
         return adapter().placements[0]
 
     def _folder(self, **kwargs):
-        return _requirement(file_name="bios", declared="pcsx2/bios", declared_kind=ATLAS_DECLARED_DIRECTORY, **kwargs)
+        return _requirement(
+            file_name="bios",
+            declared="pcsx2/bios",
+            path=f"{_ROOT}/pcsx2/bios",
+            declared_kind=ATLAS_DECLARED_DIRECTORY,
+            **kwargs,
+        )
 
     def test_an_absent_folder_is_unmet_without_reading_a_byte(self, adapter, monkeypatch):
         placement = self._placement(adapter, monkeypatch, self._folder(found=KIND_MISSING))
@@ -543,11 +553,70 @@ class TestFolderVerdictsTheInventoryAlreadySettles:
         assert placement.folder is not None
         assert placement.folder.satisfied is False
 
-    def test_a_folder_that_is_there_stays_open(self, adapter, monkeypatch):
-        """What it holds is a question about bytes, and the inventory asks none."""
-        placement = self._placement(adapter, monkeypatch, self._folder(found=KIND_DIRECTORY, checked="unknown"))
+    def test_a_settled_folder_carries_what_the_listing_found_in_it(self, adapter, monkeypatch):
+        """The stat settles it, so this row is never asked again — its words come from here.
+
+        A folder holding no file of a size the core would even open is answered
+        without verification, and the code saying so names the folder as ``dir``
+        rather than as ``path``. Dropped, the row renders red with no word at
+        all, which is the ordinary state of a RetroDECK holding no PS2 image.
+        """
+        placement = self._placement(
+            adapter,
+            monkeypatch,
+            self._folder(found=KIND_DIRECTORY, checked="unknown", contents_satisfied=False),
+            Caveat(
+                code=CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_CANDIDATE,
+                message="holds no file of a size this core accepts",
+                data={"dir": f"{_ROOT}/pcsx2/bios", "core_so": "pcsx2_libretro.so", "need": "required"},
+            ),
+        )
+
+        assert placement.folder is not None
+        assert placement.folder.satisfied is False
+        assert placement.caveats == (CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_CANDIDATE,)
+
+    def test_a_folder_the_stat_leaves_open_carries_none_of_the_unverified_words(self, adapter, monkeypatch):
+        """The verified read replaces this answer, so its statement must not survive beside it.
+
+        Carried on, the row would say its contents were not checked next to the
+        verdict of the check.
+        """
+        placement = self._placement(
+            adapter,
+            monkeypatch,
+            self._folder(found=KIND_DIRECTORY, checked="unknown"),
+            Caveat(
+                code=CAVEAT_FIRMWARE_SEARCH_UNVERIFIED,
+                message="which of them is a BIOS is a question about their bytes",
+                data={"dir": f"{_ROOT}/pcsx2/bios", "candidates": "3", "core_so": "pcsx2_libretro.so"},
+            ),
+        )
 
         assert placement.folder is None
+        assert placement.caveats == ()
+
+    def test_a_file_declaration_never_picks_up_a_listings_findings(self, adapter, monkeypatch):
+        """On a linked root the listed folder IS the root, and so is this file's destination.
+
+        RetroDECK points ``<bios>/pcsx2/bios`` back at ``<bios>``, so a
+        declaration collapsing onto the root resolves to the same place the
+        folder was listed at. Only a folder declaration is ever listed, which is
+        what keeps a statement about that listing off this row.
+        """
+        placement = self._placement(
+            adapter,
+            monkeypatch,
+            _requirement(core_so="pcsx2_libretro.so", file_name="stray.bin", path=_ROOT, found=KIND_MISSING),
+            Caveat(
+                code=CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_CANDIDATE,
+                message="holds no file of a size this core accepts",
+                data={"dir": _ROOT, "core_so": "pcsx2_libretro.so", "need": "required"},
+            ),
+        )
+
+        assert placement.declared_kind == DECLARED_FILE
+        assert placement.caveats == ()
 
 
 class TestDestinationCaveats:

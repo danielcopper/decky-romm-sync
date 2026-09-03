@@ -24,16 +24,17 @@ export type FirmwareDeclaredKind = "file" | "directory";
 /**
  * The reading's answer about one row, carried on both row shapes.
  *
- * `satisfied` is the verdict and the only axis the counts key off: the
+ * `satisfied` is the verdict and the axis the REQUIRED counts key off: the
  * requirement is met, is not met, or nothing established which. It is not
  * `downloaded` — for a folder declaration the two come apart completely, since
  * what satisfies the core is a file *inside* the folder and RetroDECK links
- * LRPS2's `pcsx2/bios` onto the BIOS root, so the folder is always there.
+ * LRPS2's `pcsx2/bios` onto the BIOS root, so the folder is always there. The
+ * library's held/offered ratio is a third axis and keys off neither.
  *
- * `caveats` are the resolver's own stable codes for why the verdict reads as it
- * does, and `images` names what a satisfied folder holds, in the resolver's own
- * words. A surface words the row off those, never off `satisfied`, which is
- * deliberately the verdict alone and never its cause.
+ * `caveats` are the resolver's own stable codes for what it found, and `images`
+ * names what a satisfied folder holds, in the resolver's own words. A surface
+ * takes the CAUSE of a verdict from those, because `satisfied` is deliberately
+ * the verdict alone and carries none of it.
  */
 interface FirmwareVerdict {
   satisfied?: boolean | null;

@@ -114,7 +114,7 @@ describe("BiosTab", () => {
               on_server: false,
               declared_kind: "directory",
               satisfied: null,
-              caveats: ["firmware-search-unverified"],
+              caveats: ["firmware-scan-incomplete"],
             },
           ],
         }}
@@ -128,11 +128,15 @@ describe("BiosTab", () => {
   });
 
   it.each([
-    ["green over a folder holding an image", true, "#5ba32b", ["firmware-image-identified"], ["Europe  v02.00"]],
-    ["red over a folder holding none", false, "#d94126", ["firmware-directory-holds-no-image"], []],
-  ] as const)("draws %s", (_name, satisfied, colour, caveats, images) => {
+    ["green over a folder holding an image", true, "#5ba32b", "#d94126", ["firmware-image-identified"], ["Europe"]],
+    ["red over a folder holding none", false, "#d94126", "#5ba32b", ["firmware-directory-holds-no-image"], []],
+  ] as const)("draws %s", (_name, satisfied, colour, otherColour, caveats, images) => {
     // The folder's verdict is what it HOLDS, so it takes the same two colours a
     // declared file does — the amber above is for a verdict, not for a folder.
+    //
+    // Asserted on the file row alone, because the header dot beside it emits the
+    // same hex for these two levels: over the whole container the presence check
+    // would pass on the header without the row's dot ever being drawn.
     const { container } = render(
       <BiosTab
         biosStatus={{
@@ -165,7 +169,10 @@ describe("BiosTab", () => {
         isActive={true}
       />,
     );
-    expect(container.innerHTML).toContain(colour);
+    const row = container.querySelector(".romm-panel-file-row");
+    expect(row?.innerHTML).toContain(colour);
+    expect(row?.innerHTML).not.toContain(otherColour);
+    expect(row?.innerHTML).not.toContain("#d4a72c");
   });
 
   it("falls back to 'Default' when no active core is resolved", () => {

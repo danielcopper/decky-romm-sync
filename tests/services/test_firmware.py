@@ -640,6 +640,35 @@ class TestAFolderRequirementIsAnsweredByItsContents:
         assert result["bios_level"] == "missing"
 
     @pytest.mark.asyncio
+    async def test_a_folder_the_stat_settled_reaches_the_row_with_the_code_that_words_it(self, plugin, tmp_path):
+        """Red is not enough on its own — the row has to say why, and nothing asks again.
+
+        A folder holding no file of a size the core would open is answered
+        without verification, so this row is never re-asked and the code the
+        inventory carried is the only word it will ever have.
+        """
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "bios",
+            required_by=[self._CORE],
+            relative_path="pcsx2/bios",
+            present=True,
+            declares_directory=True,
+            folder=FolderVerdict(satisfied=False),
+            caveats=("firmware-directory-holds-no-candidate",),
+        )
+        verdicts = FakeFolderVerdicts()
+        fw = self._service(plugin, tmp_path, resolver, verdicts)
+
+        result = await fw.check_platform_bios("ps2")
+        row = next(row for row in result["files"] if row["file_name"] == "bios")
+
+        assert verdicts.calls == []
+        assert row["satisfied"] is False
+        assert row["caveats"] == ("firmware-directory-holds-no-candidate",)
+        assert result["bios_level"] == "missing"
+
+    @pytest.mark.asyncio
     async def test_a_platform_whose_cores_declare_no_folder_never_asks(self, plugin, tmp_path):
         """The cost is paid where the folder row is, and nowhere else."""
         resolver = FakeFirmwareResolver()
@@ -681,6 +710,48 @@ class TestAFolderRequirementIsAnsweredByItsContents:
 
         assert result["required_withheld"] == 0
         assert result["bios_level"] == "ok"
+
+
+class TestAFileWithSomethingElseAtItsDestination:
+    """A directory in a declared file's way settles nothing about the requirement.
+
+    The resolver states one shape at the destination and it is not the file, so
+    neither "there" nor "absent" is a claim the reading supports — the mirror
+    image of the folder whose contents could not be read.
+    """
+
+    _CORE = "flycast_libretro"
+
+    @pytest.mark.asyncio
+    async def test_an_obstructed_file_declines_the_verdict_rather_than_reading_as_present(self, plugin, tmp_path):
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "dc_boot.bin",
+            required_by=[self._CORE],
+            present=True,
+            caveats=("firmware-path-obstructed",),
+        )
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "Flycast"), options=[libretro_option(self._CORE, "Flycast")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        _stub_listing(fw, [])
+
+        result = await fw.check_platform_bios("dc")
+        row = result["files"][0]
+
+        assert row["downloaded"] is True
+        assert row["satisfied"] is None
+        assert row["caveats"] == ("firmware-path-obstructed",)
+        assert result["required_downloaded"] == 0
+        assert result["required_withheld"] == 1
+        assert result["bios_level"] == "unknown"
 
 
 class TestGetFirmwareStatus:

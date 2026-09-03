@@ -279,27 +279,32 @@ because nothing in the plugin can fetch it.
 
 ### Row verdict (firmware): met / unmet / withheld
 
-Whether one row's requirement is met, and the single axis every readiness count keys off. It is **not** whether
-something is at the destination: for a **folder declaration** the two come apart completely, since what satisfies the
-core is a file _inside_ the folder and RetroDECK links LRPS2's `pcsx2/bios` onto the BIOS root, so the folder is there
-on every install.
+Whether one row's requirement is met, and the axis the **readiness** counts key off. It is **not** whether something is
+at the destination: for a **folder declaration** the two come apart completely, since what satisfies the core is a file
+_inside_ the folder and RetroDECK links LRPS2's `pcsx2/bios` onto the BIOS root, so the folder is there on every
+install. Every statement below is scoped to a **required by active core** row first — a row the launching core does not
+require moves no count whatever its verdict — and the library's own held/offered ratio is a third axis again, counting
+what the RomM library holds rather than what is met.
 
 - **met** — raises `required_downloaded`. For a declared file, the resolver read it at the destination; for a declared
   folder, the resolver listed the folder and an image inside it passes the core's own content check.
 - **unmet** — counted as a file shown to be absent, so it reads red and raises the play row's **BIOS badge**. A folder
   the resolver listed and found no image in is exactly this, and so is one that is not there at all.
-- **withheld** — the reading established neither. It raises neither count, and while a **required by active core** row
-  carries one the **BIOS level** declines to `unknown` rather than claiming either. The rows below keep their own
-  answers; only the one-line verdict declines.
+- **withheld** — the reading established neither. It raises neither count, and while a required row carries one the
+  **BIOS level** declines to `unknown` rather than claiming either. The rows below keep their own answers; only the
+  one-line verdict declines.
 
-A withheld verdict is never worded off the verdict itself, which is deliberately the answer alone. The cause is read off
-the resolver's **caveat codes** carried on the row — a folder read that could not finish, a candidate the identity table
-and the core's own header check disagree about, a directory obstructing a destination the emulator opens as a file.
+The CAUSE of a withheld verdict is read off the resolver's **caveat codes** carried on the row — a folder read that
+could not finish, a candidate the identity table and the core's own header check disagree about, a directory obstructing
+a destination the emulator opens as a file — because the verdict is deliberately the answer alone and carries none of
+it. What the verdict does decide is which family of codes can apply, and what a surface says when none of them is
+recognised.
 
-Not every unestablished thing is withheld here. A declared file whose _bytes_ were never verified is not: the plugin
-asks for content verification only for a folder declaration, where it is the whole question, and reading an unasked
-content question as a withheld verdict would decline readiness for every row on every platform. The foil to **not on
-server**, which is a settled absence and does count towards readiness.
+Not every unestablished thing is withheld here. A declared file whose _bytes_ were never verified is not, and the reason
+is that nothing READS a file's content verdict rather than that nothing asked for one: the verified per-core question
+answers for everything that core declares, and the adapter keeps only the folder answers. Reading an unasked content
+question as a withheld verdict would decline readiness for every row on every platform. The foil to **not on server**,
+which is a settled absence and does count towards readiness.
 
 ### Safely-bakeable
 

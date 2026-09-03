@@ -297,9 +297,9 @@ Format: **invariant** — tier — enforced by.
   plugin's **own** bundled `config.json`, not RetroDECK's `retrodeck.json`, and does no network work despite living on
   the RomM HTTP adapter), `SystemSupportedExtensionsFn` / `SystemKnownFn` (two questions to `es_systems.xml` through
   that same per-call probe), and `FirmwareFolderVerdictFn` (lists one core's declared folder and reads every candidate
-  inside it the way the core does — the most expensive of the lot at 0.26 s for LRPS2 on the reference machine). Two
-  other real I/O seams were weighed and kept out — the reasons are in the script's docstring, and neither is an
-  exemption; nor are those two an inventory of what else touches the disk. **"It's only a read" is the reasoning this
+  inside it the way the core does — 0.26 s for LRPS2 on the reference machine, the one seam here a cost was measured
+  for). Two other real I/O seams were weighed and kept out — the reasons are in the script's docstring, and neither is
+  an exemption; nor are those two an inventory of what else touches the disk. **"It's only a read" is the reasoning this
   rule exists to refuse**: `SqliteUnitOfWork.__enter__` issues `BEGIN IMMEDIATE`, so even a read-only UoW takes the
   write lock. The database is in WAL, so readers are unaffected — but every other **writer** waits on the lock for up to
   `busy_timeout=5000` and fails with `SQLITE_BUSY` if it is still held then, and `FakeUnitOfWork` shares no connection,
@@ -316,13 +316,13 @@ Format: **invariant** — tier — enforced by.
   whose implementation _grows_ a file read later. Matching only attribute calls is deliberate: the pure
   `domain.disc_selection.enumerate_discs` shares a name with the seam and does no I/O — it is safe because its call site
   imports it bare, not because of the name. The call-shaped blind spot is shared with the deadlock rule and only this
-  family closes it: its three `__call__`-only seams have no method name a consumer would write, so the list carries the
-  attribute each is bound to (`_resolve_system`, `_system_extensions`, `_system_known`) — by convention rather than by
-  construction, and only while such a name means one thing, which is exactly what keeps `_list_files` out. The deadlock
-  rule's own call-shaped seams stay open. `SystemResolver` is the odd one out for a second reason: the adapter memoises
-  its map for the life of the process, so exactly one call ever opens the file, and the entry earns its place because
-  that one call can land inside a UoW. One `# pragma: no uow-check` covers both families — it suppresses the line, and
-  no seam is in both lists, so where a line does name two seams it silences both
+  family closes it: its four `__call__`-only seams have no method name a consumer would write, so the list carries the
+  attribute each is bound to (`_resolve_system`, `_system_extensions`, `_system_known`, `_firmware_folder_verdicts`) —
+  by convention rather than by construction, and only while such a name means one thing, which is exactly what keeps
+  `_list_files` out. The deadlock rule's own call-shaped seams stay open. `SystemResolver` is the odd one out for a
+  second reason: the adapter memoises its map for the life of the process, so exactly one call ever opens the file, and
+  the entry earns its place because that one call can land inside a UoW. One `# pragma: no uow-check` covers both
+  families — it suppresses the line, and no seam is in both lists, so where a line does name two seams it silences both
 - **Services never call clocks / sleep / uuid / random directly (inject the Protocol)** — check —
   `scripts/check_cosmic_call_bans.sh`
 - **No module in `services/`, `bootstrap/`, `adapters/`, `domain/`, `lib/` or `models/` crosses the ~1000-LOC
@@ -364,25 +364,29 @@ Format: **invariant** — tier — enforced by.
   never that the folder is there** — test + prompt-only —
   `tests/services/test_firmware.py::TestAFolderRequirementIsAnsweredByItsContents` pins all three answers end-to-end,
   `tests/domain/test_firmware_wants.py` pins the two folds the service asks through, and
-  `tests/adapters/test_atlas_firmware.py` pins which folder shapes the unverified reading already settles. The rule
-  spans four modules and no diff-scoped review sees it whole: the adapter carries `declared_kind` and the folder
-  verdict, `domain/bios_status.py::_row_verdict` decides the row's answer, `services/firmware.py::_folder_answers`
-  scopes the verified read, and both frontend surfaces colour and word the row off it. **Nothing mechanical stands
-  behind any of it.** RetroDECK links LRPS2's `pcsx2/bios` onto the BIOS root, so a consumer that reads `downloaded` for
-  that row — an `if row.downloaded` beside the verdict, a count that spends presence as readiness — reports "All
-  required ready" over a PS2 install with no BIOS file at all, which is the defect this cut removed and is one careless
-  field access away from returning. The same holds for the third value: a required row answered `None` takes the level
-  to `unknown`, and folding it into `False` claims an absence nothing established. `declared_kind` carries a second rule
-  with two enforcement points and no check: a folder declaration is never offered as a download — the emulator lists
-  that name, so there is no file to fetch into it — and the two places that must refuse it are `SystemPage.tsx`'s
-  fetchable filter and `FirmwareService._download_firmware_batch`. It is the DECLARATION's kind, so it survives an
-  absent folder, which is exactly the case a presence check would let through
+  `tests/adapters/test_atlas_firmware.py` pins which folder answers the unverified reading already settles and which
+  codes those rows carry. The rule spans four modules and no diff-scoped review sees it whole: the adapter carries
+  `declared_kind` and the folder verdict, `domain/bios_status.py::_row_verdict` decides the row's answer,
+  `services/firmware.py::_folder_answers` scopes the verified read, and both frontend surfaces colour and word the row
+  off it. **Nothing mechanical joins those four**, which is what a consumer reading `downloaded` for a folder row breaks
+  — an `if row.downloaded` beside the verdict, a count that spends presence as readiness. RetroDECK links LRPS2's
+  `pcsx2/bios` onto the BIOS root, so such a consumer reports "All required ready" over a PS2 install with no BIOS file
+  at all; that was the state before #1807 declined the verdict, and this cut replaced the declining with a real answer,
+  so the same field access brings it straight back. The same holds for the third value: a required row answered `None`
+  takes the level to `unknown`, and folding it into `False` claims an absence nothing established. `declared_kind`
+  carries a second rule with **no check at all**: a folder declaration is never offered as a download — the emulator
+  lists that name, so there is no file to fetch into it. Two places refuse it today (`SystemPage.tsx`'s fetchable filter
+  and `FirmwareService._download_firmware_batch`); `FirmwareService.download_firmware(firmware_id)` does not, and is
+  unreachable only because no callable exposes it (`main.py` offers the two batch entry points and `src/api/backend.ts`
+  names no single-file download). It is the DECLARATION's kind, so it survives an absent folder, which is exactly the
+  case a presence check would let through
 - **The whole-machine firmware inventory is never asked with content verification** — prompt-only —
   `firmware_inventory()` is asked unverified and the verified question goes through `FirmwareFolderVerdictFn`, one core
-  per call, only for the folder rows `unanswered_folder_cores` reports still open. `verify=True` on the inventory hashes
-  every declared file AND every unclaimed file under the BIOS root; the plugin resolves the whole machine on every
-  game-page open, so the flag would be a per-open cost over the user's entire BIOS directory. Nothing detects it —
-  `firmware_inventory(verify=True)` is one keyword argument and every test stays green
+  per call, only for the folder rows `unanswered_folder_cores` reports still open. `verify=True` on the inventory sweeps
+  every unclaimed file under the BIOS root, plus each declared file the packaged identity table covers at a matching
+  size; the plugin resolves the whole machine on every game-page open, so the flag would be a per-open cost over the
+  user's entire BIOS directory. Nothing detects it — `firmware_inventory(verify=True)` is one keyword argument and every
+  test stays green
 - **No sentinel objects on the wire — explicit JSON-representable tagged values only** — prompt-only — no sentinel
   survives on the wire today (`NO_MIGRATION` retired with #1004, legacy `slot:null` confirmation with #1276), so the
   rule now guards reintroduction; nothing mechanical detects a new one
