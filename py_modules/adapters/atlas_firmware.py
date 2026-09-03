@@ -192,7 +192,11 @@ def _folder_verdict(requirement: Any, caveats: tuple[Any, ...]) -> FolderVerdict
     A caveat belongs to this folder when it names the folder itself (``dir``, or
     a ``path`` at the folder) or a file inside it (a ``path`` one level down) —
     the folder read states its findings per file, and the requirement carries no
-    identifier for them to point back at.
+    identifier for them to point back at. One level down is a place, not a role,
+    so a caveat about a DECLARED file sitting directly in the folder is taken
+    the same way. That needs one core declaring both a folder and a file in it;
+    LRPS2 declares ``pcsx2/bios`` and ``pcsx2/resources/GameIndex.yaml``, which
+    is two levels down, so no shape on a reference machine collides.
 
     The images are the descriptions of what the read identified, which is the
     core's own option-label text. Only a satisfied verdict has any: an image the
@@ -399,6 +403,15 @@ def _row_caveats(
     carrying the unverified statement on as well would leave the row saying its
     contents were not checked beside the verdict of the check.
 
+    The verified read is not the only thing that words an unsettled folder,
+    though, because ``at_path`` is carried either way. The inventory's unclaimed
+    sweep states a directory it could not list under ``path``, and on a linked
+    root that directory IS the folder declaration's destination — so an
+    unlistable folder hands the row ``firmware-scan-incomplete`` even where the
+    verified read never runs, which is a better sentence than the fallback it
+    would otherwise get. (The sweep globs the escaped spelling, so a BIOS path
+    containing ``*``, ``?`` or ``[`` would not match; no normal one does.)
+
     Both indexes are keyed by **place**, so requirements resolving to one place
     share its statements — which is right for two cores declaring one file, and
     is the residual for two folder declarations landing on one directory: they
@@ -423,11 +436,16 @@ def _caveats_by_destination(answer: Any) -> tuple[dict[str, tuple[str, ...]], di
     :func:`_row_caveats` keys on.
 
     In the two questions this module asks, every ``dir`` is a folder
-    declaration's own: both resolve through the resolver's libretro core walk,
-    where the folder route is the only lister. The resolver states ``dir`` more
-    widely than that — a standalone emulator's search directory carries one too
-    — so a third question put to it (``firmware_for_system``) would need this
-    keying revisited before a search finding could land on a folder row.
+    declaration's own: both answer through the resolver's libretro core walk,
+    and the folder route is the only thing there that states one. It is not the
+    only *lister* — ``firmware_inventory`` also sweeps for unclaimed files,
+    globbing the firmware root and every directory a declared file sits in —
+    but that sweep records a listing it could not make under ``path``, so its
+    statements land in the other index.
+    The resolver states ``dir`` more widely again: a standalone emulator's
+    search directory carries one too, so a third question put to it
+    (``firmware_for_system``) would need this keying revisited before a search
+    finding could land on a folder row.
 
     Deduplicated on the code within one destination, because the same statement
     arrives more than once: RetroDECK's ES-DE catalogue lists

@@ -305,9 +305,10 @@ recognised.
 Not every unestablished thing is withheld here. A declared file whose _bytes_ were never verified is not — and for
 almost every such file the reason is simply that nobody asked: the verified question is put to one core at a time and
 only where a folder row is open, so on a platform whose cores declare no folder nothing is verified at all. Where it
-_is_ asked, it answers for every file that core declares as well, and those answers are dropped unread. Either way,
-reading an unasked content question as a withheld verdict would decline readiness for every row on every platform. The
-foil to **not on server**, which is a settled absence and does count towards readiness.
+_is_ asked, it verifies that core's declared files too — each one the packaged identity table covers at a matching size,
+and no others — and their **verdicts** are dropped unread. Either way, reading an unasked content question as a withheld
+verdict would decline readiness for every row on every platform. The foil to **not on server**, which is a settled
+absence and does count towards readiness.
 
 ### Safely-bakeable
 

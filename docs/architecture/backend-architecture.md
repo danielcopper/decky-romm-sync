@@ -1783,14 +1783,19 @@ about bytes. `_folder_answers` memoises per query, so a System page rendering te
 seam itself reads the disk, so `_firmware_folder_verdicts` — the attribute every consumer binds it to — is registered in
 `scripts/check_uow_seam_nesting.py`'s `IO_SEAM_METHODS` and must never be called with a Unit of Work open.
 
-**A settled folder's words come from the inventory; an open one's come from the verified read.** The two are exclusive
-on purpose. `_caveats_by_destination` builds two indexes over the answer's caveats — one keyed by the `path` a caveat is
-about, one by the `dir` a listing was made in — and `_row_caveats` gives a row the second only when the inventory
-settled its folder. A file declaration never draws on the `dir` index at all, which matters because on a linked root the
-listed folder _is_ the firmware root and so is the resolved destination of anything that collapses onto it. And an
-unsettled folder is the one the verified read is there to answer, its caveats folded in by `merge_folder_verdicts` —
-carrying the unverified statement on as well would leave the row saying its contents were not checked beside the verdict
-of the check.
+**A settled folder's words come from the inventory's listing of it; an open one's come from the verified read.** The two
+INDEXES are exclusive, not the two sources. `_caveats_by_destination` builds one keyed by the `path` a caveat is about
+and one by the `dir` a listing was made in, and `_row_caveats` gives a row the second only when the inventory settled
+its folder — an unsettled one is what the verified read is there to answer, its caveats folded in by
+`merge_folder_verdicts`, and carrying the unverified listing on as well would leave the row saying its contents were not
+checked beside the verdict of the check. A file declaration never draws on the `dir` index at all, which matters because
+on a linked root the listed folder _is_ the firmware root and so is the resolved destination of anything that collapses
+onto it.
+
+The `path` index is carried either way, and that is the third way into an unsettled folder's words: the inventory's
+unclaimed sweep globs the firmware root and every directory a declared file sits in, and states one it could not list
+under `path` — which on a linked root is the folder declaration's own destination. Such a row reads "its contents could
+not be read in full" even where the verified read never ran — true, and more than the generic fallback says.
 
 **A required row nothing could judge declines the verdict instead of guessing it.** `_requirement_verdict_withheld`
 takes both `compute_bios_level` and `compute_bios_label` to `unknown` while every file row keeps its own answer. The
