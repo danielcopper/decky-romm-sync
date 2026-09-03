@@ -6,10 +6,10 @@
  * focusin event rather than Steam's gamepad engine.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { useState, type FC } from "react";
-import { ListDetail, type ListDetailItem } from "./ListDetail";
+import { useState, type CSSProperties, type FC, type ReactNode } from "react";
+import { ListDetail, type ListDetailItem, type ListDetailProps } from "./ListDetail";
 
 const PLATFORMS = [
   { id: "n64", name: "Nintendo 64" },
@@ -48,6 +48,14 @@ const ControlledHost: FC<{ onSelect?: (id: string) => void; onToggle?: (id: stri
 };
 
 describe("ListDetail", () => {
+  // The scroll-panel test swaps deckyUiInternals for a stub in the module
+  // registry, where a `vi.doMock` otherwise stands for the rest of the file and
+  // would reach any later test that imports dynamically.
+  afterEach(() => {
+    vi.doUnmock("../../utils/deckyUiInternals");
+    vi.resetModules();
+  });
+
   it("selects the row that takes focus and swaps the detail with it", () => {
     const onSelect = vi.fn();
     render(<ControlledHost onSelect={onSelect} />);
@@ -108,6 +116,35 @@ describe("ListDetail", () => {
     expect(detail).toContainElement(screen.getByText("detail for n64"));
     expect(list?.style.overflow).toBe("auto");
     expect(detail?.style.overflow).toBe("auto");
+  });
+
+  it("gives each pane Steam's scroll panel, so the two scroll independently", async () => {
+    vi.resetModules();
+    vi.doMock("../../utils/deckyUiInternals", () => ({
+      ScrollPanel: ({ style, children }: { style?: CSSProperties; children?: ReactNode }) => (
+        <div data-testid="scroll-panel" style={style}>
+          {children}
+        </div>
+      ),
+    }));
+    const Scrolling = (await import("./ListDetail")).ListDetail as FC<ListDetailProps>;
+
+    render(
+      <Scrolling
+        items={platformItems(() => {})}
+        selectedId="n64"
+        onSelect={vi.fn()}
+        renderDetail={() => <button>a detail row</button>}
+      />,
+    );
+    const [list, detail] = screen.getAllByTestId("scroll-panel");
+
+    // Two panels rather than one around both: the panes scroll independently, so
+    // a long detail must not carry the list up with it.
+    expect(list).toContainElement(screen.getByRole("button", { name: /Nintendo 64/ }));
+    expect(detail).toContainElement(screen.getByRole("button", { name: "a detail row" }));
+    expect(list?.style.width).toBe("264px");
+    expect(detail?.style.height).toBe("100%");
   });
 
   it("renders a detail for an empty selection", () => {

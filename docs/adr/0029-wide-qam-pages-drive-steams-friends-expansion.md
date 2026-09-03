@@ -13,11 +13,13 @@ was built inside that number: six pages behind a router, each a full-screen repl
 narrow column cannot show a list and its detail at once; sections without titles; rows that fold two facts into a label
 and a description because a third column has nowhere to go.
 
-Steam's own Friends tab runs at 854 px. The main window's `.ViewPlaceholder` is always 854 px wide, anchored right and
-pushed off-screen by `transform: translateX(506px)`; Steam's `Expanded` class sets `translateX(0)`. That class follows
-one MobX observable, `qamFriendsExpanded`, on the FriendsUI store, which registers a `message` listener on the
-SharedJSContext window — the window plugin code runs in — and flips on `QamFriendsExpanded` / `QamFriendsHidden`. The
-per-tab 300 px cap is a second, independent rule; only `.TabGroupPanel.tab_Friends` lifts it.
+Steam's own Friends tab runs at 854 px. The QAM lives in a sliding container in the main window — an absolutely
+positioned element the width of the viewport, anchored right and pushed off-screen by `transform: translateX(506px)`, so
+348 px stay visible; Steam's `Expanded` class sets `translateX(0)`. Its class names are hashed, so it is identified by
+geometry rather than by a selector. That class follows one MobX observable, `qamFriendsExpanded`, on the FriendsUI
+store, which registers a `message` listener on the SharedJSContext window — the window plugin code runs in — and flips
+on `QamFriendsExpanded` / `QamFriendsHidden`. The per-tab 300 px cap is a second, independent rule; only
+`.TabGroupPanel.tab_Friends` lifts it.
 
 Measured on the device (Big Picture, CEF Chrome 126), not read from documentation: posting the message widens the
 visible panel from 348 px to 854 px; lifting the cap widens the plugin's tab panel from 300 px to 806 px (854 minus the
@@ -53,14 +55,22 @@ change, no unmount), when the QAM closes (`useQuickAccessVisible`), and from the
 
 ## Consequences
 
-- **The wide state rests on undocumented Steam internals** — the message name, the placeholder, the `Expanded` class,
-  the per-tab cap. A Steam update can silently stop the expansion; the plugin's own rule would still lift the cap, so a
-  wide page would render 806 px of content inside a 348 px panel and clip. No fallback switch is built for that case:
-  the rebuild proceeds, and a switch or a width-dependent navigation is reconsidered only if updates keep breaking it.
-  The expansion is measurable in the dev loop through the placeholder's geometry (`findSP()`); the QAM browser view
-  itself is 855 px wide in both states and proves nothing.
+- **The wide state rests on undocumented Steam internals** — the message name, the sliding container, the `Expanded`
+  class, the per-tab cap. A Steam update can silently stop the expansion; the plugin's own rule would still lift the
+  cap, so a wide page would render 806 px of content inside a 348 px panel and clip. No fallback switch is built for
+  that case: the rebuild proceeds, and a switch or a width-dependent navigation is reconsidered only if updates keep
+  breaking it. The expansion is measurable in the dev loop through the sliding container's geometry (`findSP()`); the
+  QAM browser view itself is 854 px wide in both states and proves nothing.
+- **On the Deck a wide page covers the whole screen.** The Big Picture viewport is 854 × 534 CSS px at
+  `devicePixelRatio` 1.5 (1280 × 800 physical), so 854 px is not a wider panel over a visible library — it is the
+  library gone. On a desktop Big Picture window, which is wider, the same page is a panel with the library beside it, so
+  every width judgement has to be made under `mise run dev:ui-scale deck` or it is made against a layout no Deck ever
+  shows.
 - **The flag is Steam's and global.** A page that leaks it leaves Steam's own QAM expanded until the Friends tab toggles
-  it back. The four clearing paths above are the whole discipline.
+  it back. The four clearing paths above are the whole discipline — with two of Steam's own behaviours behind them:
+  `OpenQuickAccessMenu` calls `SetQAMFriendsChatExpanded(false)` on every QAM tab change away from Friends, and the
+  Friends tab re-expands itself from its list's `onFocusWithin`. So the flag is never ours alone to hold, and a Friends
+  panel that widens after our page closed is Steam doing that, not a leak of ours.
 - **`window.origin`, never a literal origin.** It addresses the message to the one window meant to receive it and always
   matches it. A well-formed target origin that does not match is checked at delivery and the message is discarded in
   silence, so a literal is a failure with no symptom but a panel that never widens; `"*"` is always delivered, but to

@@ -82,7 +82,7 @@
   .subtabs { display: flex; gap: 8px; margin: 0 0 12px; }
 
   .stage { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: #0e1116; }
-  .deck { position: absolute; top: 0; left: 0; width: 1280px; height: 800px; transform-origin: 0 0; overflow: hidden;
+  .deck { position: absolute; top: 0; left: 0; width: 854px; height: 534px; transform-origin: 0 0; overflow: hidden;
           background: radial-gradient(1100px 620px at 28% 18%, #262c39, #0e1116 70%); }
   .caption { display: flex; gap: 18px; margin: 8px 0 22px; font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
 
@@ -115,7 +115,10 @@
           --blue: #1a9fff; --ok: #59bf40; --warn: #f0a030; --dng: #e8686a; --fill: rgba(255,255,255,.08); --fill2: rgba(255,255,255,.14);
           font-family: var(--font-mock); color: var(--t); font-size: 14px; line-height: 1.35; }
   .bgtile { position: absolute; border-radius: 6px; background: rgba(255,255,255,.035); }
-  .qam { position: absolute; top: 0; right: 0; bottom: 0; width: 348px; display: flex; box-shadow: -12px 0 40px rgba(0,0,0,.45); }
+  /* Steam's top bar takes the first 80 of the 534 CSS px; the QuickAccess view is the 454 px below it. */
+  .deck::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 80px; background: #0b0d11; }
+  .deck::after { content: "95 %   13:28"; position: absolute; top: 28px; right: 24px; font: 600 15px/1 var(--font-mock); color: #dcdedf; letter-spacing: .02em; }
+  .qam { position: absolute; top: 80px; right: 0; bottom: 0; width: 348px; display: flex; box-shadow: -12px 0 40px rgba(0,0,0,.45); }
   .qam.wide { width: 854px; }
   .rail { width: 48px; background: var(--p2); display: flex; flex-direction: column; align-items: center; padding-top: 14px; gap: 16px; flex: none; }
   .rail i { width: 18px; height: 18px; border: 2px solid #5a6270; border-radius: 4px; display: block; }
@@ -198,11 +201,10 @@
 
   @media (prefers-reduced-motion: no-preference) { .chip, .index button { transition: background .12s; } }
 </style>
-
 </head>
 <body>
 <header class="top">
-  <h1>Tender QAM Prototype <small>static · 1280×800 · panel 348 / 854 px</small></h1>
+  <h1>Tender QAM Prototype <small>static · 854×534 CSS px, the Deck at 1.5× · panel 348 / 854 px</small></h1>
   <div class="switch">
     <span class="lab">DECIDED 2026-09-02</span>
     <span class="chip" aria-pressed="true" style="cursor:default">everything about one platform in one place</span>
@@ -229,7 +231,7 @@
     <!-- ================= STRUKTUR ================= -->
     <section class="screen on" id="s-struktur">
       <h2>Structure</h2>
-      <p class="sub">Main stays narrow and is the entry point. Behind it are pages that are wide, where list and detail sit next to each other. Everything about one platform is in one place, Sync gets its own page.</p>
+      <p class="sub">Main stays narrow and is the entry point. Behind it are pages that are wide, where list and detail sit next to each other. Everything about one platform is in one place, Sync gets its own page. Drawn at the Deck's real metrics, measured on the device: 854 × 534 CSS px at 1.5× scale, so a wide page is the full screen, and the panel below Steam's top bar is 454 px tall.</p>
 
       <div class="trees">
         <div class="tree">
@@ -337,7 +339,7 @@
           </div>
         </div>
       </div></div>
-      <div class="caption"><span>Panel 348 px · content 300 px</span><span>Unchanged: status rows, download summary</span></div>
+      <div class="caption"><span>Panel 348 px, 41 % of the screen · content 300 px · 454 px tall</span><span>Unchanged: status rows, download summary</span></div>
 
       <div class="notes">
         <div><h3>Notes</h3>
@@ -412,7 +414,7 @@
           </div>
         </div>
       </div></div>
-      <div class="caption"><span>Panel 854 px · content 806 px</span><span>Left column flexible, right column 270 px</span></div>
+      <div class="caption"><span>Panel 854 px, the full screen width · content 806 px · 454 px tall</span><span>Left column flexible, right column 270 px</span></div>
       <div class="notes">
         <div><h3>Notes</h3>
           <ol>
@@ -518,7 +520,7 @@
           </div>
         </div>
       </div></div>
-      <div class="caption"><span>Panel 854 px · content 806 px</span><span>List 264 px · detail 524 px</span></div>
+      <div class="caption"><span>Panel 854 px, the full screen width · content 806 px · 454 px tall</span><span>List 264 px · detail 524 px</span></div>
 
       <div class="notes">
         <div><h3>Notes</h3>
@@ -586,7 +588,7 @@
           </div>
         </div>
       </div></div>
-      <div class="caption"><span>Panel 854 px · content 806 px</span><span>Sections 220 px · content 568 px</span></div>
+      <div class="caption"><span>Panel 854 px, the full screen width · content 806 px · 454 px tall</span><span>Sections 220 px · content 568 px</span></div>
       <div class="notes">
         <div><h3>Notes</h3>
           <ol>
@@ -646,7 +648,7 @@
           </div>
         </div>
       </div></div>
-      <div class="caption"><span>Panel 854 px · content 806 px</span><span>Operations 240 px · content 548 px</span></div>
+      <div class="caption"><span>Panel 854 px, the full screen width · content 806 px · 454 px tall</span><span>Operations 240 px · content 548 px</span></div>
       <div class="notes">
         <div><h3>Notes</h3>
           <ol>
@@ -690,7 +692,7 @@
           </div>
         </div>
       </div></div>
-      <div class="caption"><span>Panel 348 px · content 300 px</span></div>
+      <div class="caption"><span>Panel 348 px, 41 % of the screen · content 300 px · 454 px tall</span></div>
       <div class="notes">
         <div><h3>Notes</h3>
           <ul>
@@ -718,9 +720,9 @@
     function fit() {
       document.querySelectorAll('.screen.on .stage').forEach(function (s) {
         var w = s.clientWidth; if (!w) return;
-        var sc = Math.min(1, w / 1280);
+        var sc = Math.min(1, w / 854);
         s.querySelector('.deck').style.transform = 'scale(' + sc + ')';
-        s.style.height = Math.round(800 * sc) + 'px';
+        s.style.height = Math.round(534 * sc) + 'px';
       });
     }
 

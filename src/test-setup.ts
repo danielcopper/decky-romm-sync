@@ -275,10 +275,14 @@ vi.mock("@decky/ui", () => {
     appDetailsClasses: undefined,
     playSectionClasses: undefined,
     // The wide-QAM probes. Undefined is the honest default here: happy-dom has
-    // no Steam webpack modules, so a test that wants the class names or the
-    // tabbed page mocks `src/utils/deckyUiInternals` with its own values.
+    // no Steam webpack modules, so a test that wants the class names, the tabbed
+    // page or a scroll panel mocks `src/utils/deckyUiInternals` with its own
+    // values. Named explicitly rather than left off: Vitest throws on an import
+    // of a name the mock factory does not define, so an omission would break
+    // every file that reaches @decky/ui through deckyUiInternals.
     quickAccessMenuClasses: undefined,
     Tabs: undefined,
+    ScrollPanel: undefined,
     // The QAM is open for any test that renders a wide page; the hook's
     // clear-on-close path is exercised in src/utils/qamExpansion.test.tsx.
     useQuickAccessVisible: () => true,

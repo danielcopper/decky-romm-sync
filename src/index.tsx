@@ -8,6 +8,7 @@ import { LibraryPage } from "./components/LibraryPage";
 import { SystemPage } from "./components/SystemPage";
 import { DangerZone } from "./components/DangerZone";
 import { DownloadQueue } from "./components/DownloadQueue";
+import { OWNS_ENTRY_FOCUS_ATTR } from "./components/qam/WidePage";
 import { initUnitSyncManager, resetSyncCancel } from "./utils/syncManager";
 import { setSyncProgress, getSyncProgress, updateSyncProgress } from "./utils/syncProgress";
 import { estimatePlanSeconds } from "./utils/syncEstimate";
@@ -115,13 +116,23 @@ const QAMPanel: FC = () => {
     // resolves it on the next input — landing on a button at the old page's
     // position. Force focus to the first button so navigation starts at the
     // top. Same querySelector + .focus() + gpfocus pattern as CustomPlayButton.
-    const focusTimer = setTimeout(() => {
-      const btn = el.querySelector("button");
-      if (btn) {
-        btn.focus();
-        btn.classList.add("gpfocus");
-      }
-    }, 50);
+    //
+    // A page carrying the opt-out marker places entry focus itself, and this
+    // focus would undo it: the first button of a wide page is the Back row,
+    // which sits above the tabs and therefore outside Steam's tabbed page —
+    // and Steam draws the L1/R1 glyphs only while gamepad focus is within it
+    // (`chunk~2dcc5aaf7.js`, the tab row's `showGlyphs`). Landing here would
+    // leave a tabbed page with no visible way to switch tabs.
+    const ownsFocus = el.querySelector(`[${OWNS_ENTRY_FOCUS_ATTR}]`) !== null;
+    const focusTimer = ownsFocus
+      ? undefined
+      : setTimeout(() => {
+          const btn = el.querySelector("button");
+          if (btn) {
+            btn.focus();
+            btn.classList.add("gpfocus");
+          }
+        }, 50);
     return () => {
       cancelAnimationFrame(rafHandle);
       clearTimeout(focusTimer);

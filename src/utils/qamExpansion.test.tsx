@@ -59,9 +59,10 @@ interface QamFixture {
  * The QAM shape the hook walks up through: the panel Decky's tab renders into,
  * inside the parent Steam marks with `ActiveTab`.
  *
- * `tabPanelClassOn` says which element carries `TabGroupPanel` — the panel
- * itself, or an ancestor. The spike could not tell the two apart, because
- * `:has()` matches from any ancestor, so both shapes have to work.
+ * `tabPanelClassOn` says which element carries `TabGroupPanel`. On the device it
+ * is the panel itself, measured — but `:has()` matches from any ancestor, so a
+ * Steam build that moves the class up would leave the CSS working and the DOM
+ * walk broken. Both shapes are mounted so the walk is pinned either way.
  */
 function mountQamDom(tabPanelClassOn: "panel" | "ancestor" = "panel", doc: Document = document): QamFixture {
   const ancestor = doc.createElement("div");
