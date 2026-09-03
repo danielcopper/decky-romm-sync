@@ -59,6 +59,7 @@ import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError, setServerRetryProgress } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
 import { findOutermostScrollParent } from "./utils/scrollHelpers";
+import { collapseQamOnDismount } from "./utils/qamExpansion";
 import { detach } from "./utils/detach";
 import type {
   SyncProgress,
@@ -1008,6 +1009,10 @@ export default definePlugin(() => {
     content: <QAMPanel />,
     alwaysRender: true,
     onDismount() {
+      // First: the panel width is a global Steam flag, and a page still mounted
+      // here has no React cleanup left to clear it. Leaving it set would keep
+      // Steam's own QAM expanded until its Friends tab toggles it back.
+      collapseQamOnDismount();
       syncContinuationController.abort();
       destroySessionManager();
       unregisterLaunchInterceptor();
