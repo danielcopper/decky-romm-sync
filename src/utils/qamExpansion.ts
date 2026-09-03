@@ -23,19 +23,31 @@ export const WIDE_ROOT_CLASS = "romm-wide-qam-root";
 const WIDE_PANEL_STYLE_ID = "romm-wide-qam-styles";
 
 // Decky registers a single QAM tab (`QuickAccessTab.Decky = 999`), so the
-// plugin's tab panel is `#quickaccess_content_999` — the fallback for a
-// `quickAccessMenuClasses` probe that came back undefined.
+// plugin's panel is `#quickaccess_content_999`. This is the handle for walking
+// the DOM: the id is on the panel itself, whereas `TabGroupPanel` is a class
+// whose element the spike never isolated — `:has()` matches from any ancestor,
+// so a rule that works proves nothing about which element carries it.
+const PANEL_ID_SELECTOR = '[id^="quickaccess_content_"]';
+
 const TAB_PANEL_SELECTOR = quickAccessMenuClasses?.TabGroupPanel
   ? `.${quickAccessMenuClasses.TabGroupPanel}`
-  : '[id^="quickaccess_content_"]';
+  : PANEL_ID_SELECTOR;
 
-// Every tab's content panel is capped at 300 px; only Steam's own Friends panel
-// lifts it. The cap sits on the panel and on its first child, so both need the
-// rule, and `:has()` scopes it to a panel holding a wide page of ours.
+// Steam caps every tab's content panel at 300 px and lifts it only for its own
+// Friends panel (ADR-0029). Covering the panel and its children is the shape
+// the spike proved on the device; which of the two carries the cap was never
+// isolated, so both stay. `:has()` scopes the lift to a panel holding a wide
+// page of ours.
 const WIDE_PANEL_CSS = `
 ${TAB_PANEL_SELECTOR}:has(.${WIDE_ROOT_CLASS}) { max-width: none; }
 ${TAB_PANEL_SELECTOR}:has(.${WIDE_ROOT_CLASS}) > * { max-width: none; }
 `;
+
+// The stylesheet a wide page has up, held by reference rather than looked up by
+// id: it lives in the page's own document, and plugin code runs in a different
+// one, so the ambient `document` cannot reach it. One reference is enough — the
+// panel's router mounts one page at a time.
+let injectedStyle: HTMLStyleElement | null = null;
 
 /**
  * Drive Steam's Friends-tab expansion. The FriendsUI store listens for `message`
@@ -50,17 +62,36 @@ export function setQamExpanded(expanded: boolean): void {
   window.postMessage({ message: expanded ? "QamFriendsExpanded" : "QamFriendsHidden" }, window.origin);
 }
 
-function removeWidePanelStyle(): void {
-  document.getElementById(WIDE_PANEL_STYLE_ID)?.remove();
+/**
+ * Give the panel's width back, if this plugin ever took it. A no-op otherwise:
+ * the flag is Steam's own and global, so posting the hide message unasked would
+ * retract a Friends panel the user opened.
+ */
+function collapseWidePanel(): void {
+  const style = injectedStyle;
+  if (!style) return;
+  injectedStyle = null;
+  style.remove();
+  setQamExpanded(false);
+}
+
+function expandWidePanel(root: HTMLElement): void {
+  if (injectedStyle) return;
+  setQamExpanded(true);
+  const doc = root.ownerDocument;
+  const style = doc.createElement("style");
+  style.id = WIDE_PANEL_STYLE_ID;
+  style.textContent = WIDE_PANEL_CSS;
+  doc.head.appendChild(style);
+  injectedStyle = style;
 }
 
 /**
- * Collapse the panel from the plugin's `onDismount`, where no React cleanup
- * runs any more. Safe to call when no wide page was ever mounted.
+ * Collapse the panel from the plugin's `onDismount`, where no React cleanup runs
+ * any more.
  */
 export function collapseQamOnDismount(): void {
-  setQamExpanded(false);
-  removeWidePanelStyle();
+  collapseWidePanel();
 }
 
 /**
@@ -77,10 +108,11 @@ export function useWideQamPanel(rootRef: RefObject<HTMLElement | null>): void {
   const qamVisible = useQuickAccessVisible();
 
   useEffect(() => {
-    if (!qamVisible) return;
+    const root = rootRef.current;
+    if (!qamVisible || !root) return;
 
     const activeTabClass = quickAccessMenuClasses?.ActiveTab;
-    const panelParent = rootRef.current?.closest(TAB_PANEL_SELECTOR)?.parentElement;
+    const panelParent = root.closest(PANEL_ID_SELECTOR)?.parentElement;
 
     // True while the question cannot be asked — no panel around us, or a probe
     // that came back undefined so there is no class name to look for. The other
@@ -88,25 +120,7 @@ export function useWideQamPanel(rootRef: RefObject<HTMLElement | null>): void {
     // leaked expansion the QAM-close, unmount and dismount paths still clear.
     const deckyTabActive = () => !activeTabClass || !panelParent || panelParent.classList.contains(activeTabClass);
 
-    let injected: HTMLStyleElement | null = null;
-
-    const expand = () => {
-      if (injected) return;
-      setQamExpanded(true);
-      injected = document.createElement("style");
-      injected.id = WIDE_PANEL_STYLE_ID;
-      injected.textContent = WIDE_PANEL_CSS;
-      document.head.appendChild(injected);
-    };
-
-    const collapse = () => {
-      if (!injected) return;
-      setQamExpanded(false);
-      injected.remove();
-      injected = null;
-    };
-
-    const syncPanelWidth = () => (deckyTabActive() ? expand() : collapse());
+    const syncPanelWidth = () => (deckyTabActive() ? expandWidePanel(root) : collapseWidePanel());
     syncPanelWidth();
 
     // Switching QAM tabs changes the parent's class and unmounts nothing, so the
@@ -119,7 +133,7 @@ export function useWideQamPanel(rootRef: RefObject<HTMLElement | null>): void {
 
     return () => {
       observer?.disconnect();
-      collapse();
+      collapseWidePanel();
     };
   }, [qamVisible, rootRef]);
 }

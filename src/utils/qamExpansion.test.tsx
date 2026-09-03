@@ -49,20 +49,33 @@ async function loadQamExpansion(classes: Record<string, string> | undefined): Pr
   return await import("./qamExpansion");
 }
 
+interface QamFixture {
+  host: HTMLElement;
+  /** The element the observer has to watch: the parent of the id-bearing panel. */
+  panelParent: HTMLElement;
+}
+
 /**
- * The QAM shape the hook walks up through: the tab panel Decky's tab renders
- * into, inside the parent Steam marks with `ActiveTab`.
+ * The QAM shape the hook walks up through: the panel Decky's tab renders into,
+ * inside the parent Steam marks with `ActiveTab`.
+ *
+ * `tabPanelClassOn` says which element carries `TabGroupPanel` — the panel
+ * itself, or an ancestor. The spike could not tell the two apart, because
+ * `:has()` matches from any ancestor, so both shapes have to work.
  */
-function mountQamDom(): { host: HTMLElement; panelParent: HTMLElement } {
-  const panelParent = document.createElement("div");
+function mountQamDom(tabPanelClassOn: "panel" | "ancestor" = "panel", doc: Document = document): QamFixture {
+  const ancestor = doc.createElement("div");
+  const panelParent = doc.createElement("div");
   panelParent.className = ACTIVE_TAB_CLASS;
-  const panel = document.createElement("div");
+  const panel = doc.createElement("div");
   panel.id = "quickaccess_content_999";
-  panel.className = TAB_PANEL_CLASS;
-  const host = document.createElement("div");
+  const host = doc.createElement("div");
+
+  (tabPanelClassOn === "panel" ? panel : ancestor).className = TAB_PANEL_CLASS;
   panel.appendChild(host);
   panelParent.appendChild(panel);
-  document.body.appendChild(panelParent);
+  ancestor.appendChild(panelParent);
+  doc.body.appendChild(ancestor);
   return { host, panelParent };
 }
 
@@ -75,9 +88,9 @@ function renderWidePage(mod: QamExpansion, host: HTMLElement) {
   return render(<Page />, { container: host });
 }
 
-/** Every injected stylesheet carrying the wide-page rule. */
-function wideStyles(markerClass: string): HTMLStyleElement[] {
-  return [...document.head.querySelectorAll("style")].filter((el) => el.textContent.includes(markerClass));
+/** Every stylesheet in `doc` carrying the wide-page rule. */
+function wideStyles(markerClass: string, doc: Document = document): HTMLStyleElement[] {
+  return [...doc.head.querySelectorAll("style")].filter((el) => el.textContent.includes(markerClass));
 }
 
 describe("setQamExpanded", () => {
@@ -138,6 +151,53 @@ describe("useWideQamPanel", () => {
 
     expect(lastMessage()).toBe("QamFriendsExpanded");
     expect(wideStyles(mod.WIDE_ROOT_CLASS)).toHaveLength(1);
+  });
+
+  it("injects the rule into the page's own document, not the one plugin code runs in", async () => {
+    const mod = await loadQamExpansion(PROBE_CLASSES);
+    // Plugin JS runs in the SharedJSContext document; the QAM panel and the wide
+    // page's root live in a rendered-UI document. A rule injected into the
+    // ambient one would leave the panel expanded and its content still capped,
+    // with nothing to show for it.
+    const panelDoc = document.implementation.createHTMLDocument("qam");
+    const { host } = mountQamDom("panel", panelDoc);
+
+    renderWidePage(mod, host);
+
+    expect(wideStyles(mod.WIDE_ROOT_CLASS, panelDoc)).toHaveLength(1);
+    expect(wideStyles(mod.WIDE_ROOT_CLASS)).toHaveLength(0);
+
+    mod.collapseQamOnDismount();
+
+    expect(wideStyles(mod.WIDE_ROOT_CLASS, panelDoc)).toHaveLength(0);
+  });
+
+  it("watches the parent of the panel's id, not of whatever carries the tab-panel class", async () => {
+    const mod = await loadQamExpansion(PROBE_CLASSES);
+    const { host, panelParent } = mountQamDom("ancestor");
+
+    // Walking to the TabGroupPanel element instead would land a level too high:
+    // its parent carries no ActiveTab, so the page would never expand at all.
+    renderWidePage(mod, host);
+
+    expect(lastMessage()).toBe("QamFriendsExpanded");
+
+    await act(async () => {
+      panelParent.classList.remove(ACTIVE_TAB_CLASS);
+    });
+
+    expect(lastMessage()).toBe("QamFriendsHidden");
+  });
+
+  it("posts nothing from dismount when no wide page took the panel", async () => {
+    const mod = await loadQamExpansion(PROBE_CLASSES);
+
+    // The flag is Steam's own: an unconditional hide would retract a Friends
+    // panel the user opened, and the frame has no consumer yet, so every plugin
+    // dismount would do exactly that.
+    mod.collapseQamOnDismount();
+
+    expect(post).not.toHaveBeenCalled();
   });
 
   it("never expands when the page mounts under an inactive Decky tab", async () => {
