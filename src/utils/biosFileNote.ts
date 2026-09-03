@@ -7,7 +7,9 @@
  * gained on one surface was a fact missing on the other. This is the one place
  * that decides; each surface still frames the result its own way, because the
  * BIOS tab leaves plain absence to its status dot while the System page spells
- * it out in the row's description.
+ * it out in the row's description. What it hands over is a sentence and a list
+ * of lines ({@link BiosFileWords}); where those go on the page is each
+ * surface's own business, what they SAY is decided only here.
  *
  * Precedence is deliberate. A file the distribution itself put there is not a
  * gap in the RomM library — it is not the library's file at all, and telling
@@ -33,6 +35,24 @@ export type BiosNoteRow = Pick<
   BiosFileStatus,
   "downloaded" | "on_server" | "supplied_by" | "satisfied" | "declared_kind" | "caveats" | "images"
 >;
+
+/**
+ * Everything a row says about itself: one sentence, and the lines under it.
+ *
+ * Both come back together because they are alternatives as often as they are
+ * companions — a folder that lists what it holds needs no sentence saying it
+ * holds something — and a surface taking one without the other would render a
+ * satisfied folder as a bare name. What each surface still chooses is where the
+ * lines go: the BIOS tab has an indented block under the row, the System page
+ * puts them in the field's description.
+ */
+export interface BiosFileWords {
+  /** The em-dash note after the row's name, or `""` where there is none. */
+  note: string;
+  /** One line each, rendered under the row. Empty for every row but a folder
+   *  whose read identified images, where the list IS the content. */
+  lines: string[];
+}
 
 /** A directory is at a destination the emulator opens as a file, so nothing
  *  about what belongs there can be established — and it is not an absent file. */
@@ -83,42 +103,46 @@ const PATH_INACCESSIBLE = "firmware-path-inaccessible";
  * the verdict beside them says the requirement is not met, which is what
  * follows from a destination the emulator cannot open either.
  */
-function verdictNote(row: BiosNoteRow): string {
+function verdictNote(row: BiosNoteRow): BiosFileWords {
   const caveats = row.caveats ?? [];
   const has = (code: string) => caveats.includes(code);
+  const said = (note: string): BiosFileWords => ({ note, lines: [] });
   if (row.declared_kind !== "directory") {
-    if (has(PATH_OBSTRUCTED)) return "a folder is here, where the emulator opens a file";
-    return has(PATH_INACCESSIBLE) ? "its location could not be read" : "";
+    if (has(PATH_OBSTRUCTED)) return said("a folder is here, where the emulator opens a file");
+    return said(has(PATH_INACCESSIBLE) ? "its location could not be read" : "");
   }
   if (row.satisfied === true) {
+    // The images ARE the sentence here. "holds" above a list of three would be
+    // a heading for a list that needs none, and folding them into the row's own
+    // name is what pushed the dot onto a line of its own.
     const images = row.images ?? [];
-    return images.length > 0 ? `holds ${images.join(", ")}` : "holds a BIOS image";
+    return images.length > 0 ? { note: "", lines: [...images] } : said("holds a BIOS image");
   }
   if (row.satisfied === false) {
-    if (has(PATH_NOT_A_DIRECTORY)) return "a file is here, where the emulator opens a folder";
-    return HOLDS_NO_IMAGE.some(has) ? "holds no BIOS image" : "";
+    if (has(PATH_NOT_A_DIRECTORY)) return said("a file is here, where the emulator opens a folder");
+    return said(HOLDS_NO_IMAGE.some(has) ? "holds no BIOS image" : "");
   }
-  if (has(IMAGE_CONTRADICTED)) return "holds an image that could not be confirmed";
-  if (READ_INCOMPLETE.some(has)) return "its contents could not be read in full";
-  return row.satisfied === null ? "its contents could not be checked" : "";
+  if (has(IMAGE_CONTRADICTED)) return said("holds an image that could not be confirmed");
+  if (READ_INCOMPLETE.some(has)) return said("its contents could not be read in full");
+  return said(row.satisfied === null ? "its contents could not be checked" : "");
 }
 
 /**
- * The note for *row*, or `""` where the row's own state is the whole story.
+ * What *row* says about itself — an empty note where its own state is the whole story.
  *
- * Returns `""` for a plain library file, present or missing alike: what the
+ * The note is `""` for a plain library file, present or missing alike: what the
  * surfaces disagree about is how to say "missing", so that word is left to
  * them (the System page appends its own; the tab's dot already carries it).
  */
-export function biosFileNote(row: BiosNoteRow): string {
-  if (row.supplied_by) return `provided by ${row.supplied_by}`;
+export function biosFileNote(row: BiosNoteRow): BiosFileWords {
+  if (row.supplied_by) return { note: `provided by ${row.supplied_by}`, lines: [] };
   const verdict = verdictNote(row);
-  if (verdict) return verdict;
+  if (verdict.note || verdict.lines.length > 0) return verdict;
   // No RomM library holds a folder — the emulator lists that name — so the
   // library note would describe a download nobody can make.
-  if (row.declared_kind === "directory") return "";
+  if (row.declared_kind === "directory") return { note: "", lines: [] };
   if (row.on_server === false) {
-    return row.downloaded ? "not in your RomM library" : "missing, not in your RomM library";
+    return { note: row.downloaded ? "not in your RomM library" : "missing, not in your RomM library", lines: [] };
   }
-  return "";
+  return { note: "", lines: [] };
 }

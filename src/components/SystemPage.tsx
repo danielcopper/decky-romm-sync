@@ -1,4 +1,4 @@
-import { useState, useEffect, FC } from "react";
+import { useState, useEffect, FC, type ReactNode } from "react";
 import {
   PanelSection,
   PanelSectionRow,
@@ -114,6 +114,30 @@ function getUnknownSummary(requiredWithheld: number, total: number) {
         ? `${total} file(s) nothing installed could answer for`
         : "Nothing installed could answer for this system",
   };
+}
+
+/**
+ * A file row's description: its name and note, then one line per image found.
+ *
+ * The images are their own lines rather than a comma-joined run of text, which
+ * at three PS2 dumps was a 150-character sentence. `pre-wrap` keeps the column
+ * padding the emulator puts in its own option labels — that alignment is what
+ * makes a line matchable against PCSX2's picker — while still wrapping inside
+ * the panel instead of overflowing it.
+ */
+function fileDescription(fileName: string, note: string, lines: string[]): ReactNode {
+  const head = note ? `${fileName} — ${note}` : fileName;
+  if (lines.length === 0) return head;
+  return (
+    <span style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+      <span>{head}</span>
+      {lines.map((line) => (
+        <span key={line} style={{ whiteSpace: "pre-wrap" }}>
+          {line}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 /**
@@ -509,8 +533,11 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
               }
               // The provenance/kind note is shared with the BIOS tab so one row
               // cannot read two ways; plain absence is this page's own word,
-              // because the tab leaves that to its dot.
-              const note = biosFileNote(file) || (file.downloaded ? "" : "Missing");
+              // because the tab leaves that to its dot. The lines come over as
+              // a list and stay one: this page has no per-core block to put
+              // them in, so they go under the description they belong to.
+              const { note: said, lines } = biosFileNote(file);
+              const note = said || (file.downloaded ? "" : "Missing");
               return (
                 <PanelSectionRow key={file.file_name}>
                   <Field
@@ -529,7 +556,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
                         {`${file.description || file.file_name} (${WANTED_LABELS[file.wanted]})`}
                       </span>
                     }
-                    description={note ? `${file.file_name} — ${note}` : file.file_name}
+                    description={fileDescription(file.file_name, note, lines)}
                     bottomSeparator="none"
                   />
                 </PanelSectionRow>

@@ -1804,7 +1804,8 @@ it, the BIOS tab picks between "BIOS requirement unknown" and "BIOS readiness un
 it so a required file whose absence _was_ established still warns. What a withheld row SAYS comes from its caveat codes,
 because the verdict is the answer alone and carries none of its causes; the verdict decides only which family of codes
 can apply and what to say when none of them is recognised, which is the one sentence written off it —
-`src/utils/biosFileNote.ts` is the one place both surfaces derive that sentence from.
+`src/utils/biosFileNote.ts` is the one place both surfaces derive what a row says from — a sentence, and the lines under
+it, which is how a satisfied folder's images arrive as a list rather than folded into the row's own name.
 
 **A withdrawn download is a platform condition, and only one of the unknowns earns it.** Where _nothing_ could be
 established there is no answer to download against, so `SystemPage` withdraws both buttons and says so in words rather

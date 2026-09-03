@@ -154,16 +154,43 @@ function fileDotColor(file: BiosFileStatus): string {
 }
 
 /**
- * The note after a file's name, as an em-dash suffix.
+ * The lines under a file's name — what its read found, then who uses it.
  *
- * The wording is {@link biosFileNote}'s so this pane and the System page cannot
- * describe one row two ways; what stays here is the framing. Empty for every
- * plain library row this pane has always shown — downloaded state is the dot's
- * job, and repeating it in text would be a redesign rather than a fix.
+ * One indented block, because they are one column to the eye and two blocks
+ * would leave the images floating between the row and its cores. The row's own
+ * name stays short so the status dot beside it keeps its line: folding a
+ * folder's three image lines into that name is what wrapped the row and
+ * orphaned the dot above it.
+ *
+ * The image text is the resolver's verbatim string, and `pre-wrap` keeps the
+ * column padding PCSX2 puts in its own option labels — that alignment is what
+ * makes a line matchable against the emulator's picker, and it still wraps
+ * rather than overflowing the panel.
  */
-function fileNote(file: BiosFileStatus): string {
-  const note = biosFileNote(file);
-  return note ? ` — ${note}` : "";
+function fileLines(lines: string[], coreLines: ReactElement[]): ReactElement | null {
+  if (lines.length === 0 && coreLines.length === 0) return null;
+  return (
+    <div
+      key="lines"
+      style={{
+        flexBasis: "100%",
+        display: "flex",
+        flexDirection: "column" as const,
+        gap: "2px",
+        marginLeft: "18px",
+      }}
+    >
+      {lines.map((line) => (
+        <div
+          key={`image-${line}`}
+          style={{ color: "rgba(255, 255, 255, 0.5)", fontSize: "12px", whiteSpace: "pre-wrap" }}
+        >
+          {line}
+        </div>
+      ))}
+      {coreLines}
+    </div>
+  );
 }
 
 /**
@@ -190,27 +217,15 @@ function buildBiosFileList(bios: BiosStatus, coreInfo: CoreInfo | null): ReactEl
 
   const fileElements = wantedFiles.map((f) => {
     const coreLines = f.cores ? buildBiosCoreLines(f.cores, coreLabelMap, coreInfo?.active_core) : [];
+    const { note, lines } = biosFileNote(f);
 
     return (
       <div key={f.file_name} className="romm-panel-file-row">
         <span key="dot" className="romm-status-dot" style={{ backgroundColor: fileDotColor(f) }} />
         <span key="name" className="romm-panel-file-name">
-          {`${f.description || f.file_name}${fileNote(f)}`}
+          {`${f.description || f.file_name}${note ? ` — ${note}` : ""}`}
         </span>
-        {coreLines.length > 0 ? (
-          <div
-            key="cores"
-            style={{
-              flexBasis: "100%",
-              display: "flex",
-              flexDirection: "column" as const,
-              gap: "2px",
-              marginLeft: "18px",
-            }}
-          >
-            {coreLines}
-          </div>
-        ) : null}
+        {fileLines(lines, coreLines)}
       </div>
     );
   });

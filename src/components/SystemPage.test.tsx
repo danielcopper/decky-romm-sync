@@ -1390,16 +1390,22 @@ describe("SystemPage", () => {
       expect(text).not.toContain("not in your RomM library");
     });
 
-    it("lists what a satisfied folder holds, and gives it the green a met requirement gets", async () => {
+    it("lists what a satisfied folder holds one line each, and gives it the green a met requirement gets", async () => {
+      const images = ["Europe  v02.00(14/06/2004)", "Japan   v02.00(14/06/2004)"];
       const container = await expandedRow({
         file_name: "bios",
         declared_kind: "directory",
         satisfied: true,
         caveats: ["firmware-image-identified"],
-        images: ["Europe  v02.00(14/06/2004)"],
+        images,
       });
+      const rendered = [...container.querySelectorAll("span")].map((span) => span.textContent);
 
-      expect(container.textContent).toContain("bios — holds Europe  v02.00(14/06/2004)");
+      // Each image is an element of its own. Joined into one sentence they ran
+      // to ~150 characters, which wrapped the row and orphaned its status dot.
+      for (const image of images) expect(rendered).toContain(image);
+      expect(container.textContent).not.toContain(images.join(", "));
+      expect(container.textContent).toContain("bios");
       expect(container.innerHTML).toContain("#5ba32b");
     });
 

@@ -113,9 +113,9 @@ A row can also be a **folder** rather than a file — LRPS2 asks for `pcsx2/bios
 A folder is satisfied by what is **inside** it, never by the folder being there, so the plugin opens the files in it and
 reads them the way the core does:
 
-- A folder holding a PS2 BIOS image is green, and the row lists what it found — _holds Europe v02.00(14/06/2004) Console
-  20040614-100914_, in the emulator's own words. Several images are listed if you have several; the core needs exactly
-  one of them, so none of them is marked required, and which one your emulator loads is a core setting the plugin does
+- A folder holding a PS2 BIOS image is green, and the row lists what it found underneath itself, one image per line and
+  in the emulator's own words — _USA v02.00(14/06/2004) Console 20040614-100909_ and so on for each. The core needs
+  exactly one of them, so none is marked required, and which one your emulator loads is a core setting the plugin does
   not read.
 - A folder holding no image is red, exactly like a missing file: _holds no BIOS image_. That is the honest answer for a
   PS2 system that will not boot, and it is what the red **BIOS** badge beside Play appears for. The plugin does not
