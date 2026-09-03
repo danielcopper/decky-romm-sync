@@ -20,15 +20,18 @@ export interface WidePageTab {
   content: ReactNode;
 }
 
-/** A page has all three tab props or none of them. */
+/**
+ * A page has all three tab props or none of them, and `children` belongs to the
+ * second case alone: a tabbed page's body is the active tab's `content`, so
+ * children passed beside `tabs` would render nowhere.
+ */
 type TabProps =
-  | { tabs: WidePageTab[]; activeTab: string; onShowTab: (tabId: string) => void }
-  | { tabs?: undefined; activeTab?: undefined; onShowTab?: undefined };
+  | { tabs: WidePageTab[]; activeTab: string; onShowTab: (tabId: string) => void; children?: undefined }
+  | { tabs?: undefined; activeTab?: undefined; onShowTab?: undefined; children?: ReactNode };
 
 export type WidePageProps = {
   title: string;
   onBack: () => void;
-  children?: ReactNode;
 } & TabProps;
 
 // Floor under the measured body, so a viewport read taken before Steam has laid

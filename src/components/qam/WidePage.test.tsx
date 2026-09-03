@@ -1,16 +1,19 @@
 /**
  * WidePage tests — the frame's own contract: the Back row, the title, a body
- * with a definite measured height, and a tab bar that survives Steam's `Tabs`
- * probe coming back undefined.
+ * with a definite measured height, a tab bar that survives Steam's `Tabs` probe
+ * coming back undefined, and the two ends of the width the frame is for.
  *
  * `Tabs` is read at module scope, so each test loads a fresh copy of the
- * component through `loadWidePage` with the probe answer it wants. The width
- * levers the frame also holds are pinned in `src/utils/qamExpansion.test.tsx`.
+ * component through `loadWidePage` with the probe answer it wants. What the
+ * width levers themselves do once engaged is pinned in
+ * `src/utils/qamExpansion.test.tsx`, against its own fake page; what is pinned
+ * here is that this frame is what engages them.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { FC, ReactNode } from "react";
+import { WIDE_ROOT_CLASS } from "../../utils/qamExpansion";
 import type { WidePageProps, WidePageTab } from "./WidePage";
 
 interface StubTabsProps {
@@ -47,6 +50,10 @@ function body(): HTMLElement {
 }
 
 describe("WidePage", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("renders the Back row, the title and the page body", async () => {
     const WidePage = await loadWidePage(StubTabs);
     const onBack = vi.fn();
@@ -116,6 +123,52 @@ describe("WidePage", () => {
     expect(screen.queryByTestId("steam-tabs")).not.toBeInTheDocument();
     expect(screen.getByText("collection detail")).toBeInTheDocument();
     expect(screen.queryByText("platform detail")).not.toBeInTheDocument();
+  });
+
+  it("marks its root with the class the injected width rule matches", async () => {
+    const WidePage = await loadWidePage(StubTabs);
+
+    const { container } = render(
+      <WidePage title="Settings" onBack={vi.fn()}>
+        <div>page body</div>
+      </WidePage>,
+    );
+
+    // The injected `:has()` rule keys on this class: drop it and every wide page
+    // renders 300 px wide inside an 854 px panel, with nothing raised anywhere.
+    // It sits on the root because that is the element the width hook is handed —
+    // one decision, which this pins as one.
+    expect(container.firstElementChild).toHaveClass(WIDE_ROOT_CLASS);
+  });
+
+  it("engages the panel's width levers while it is mounted", async () => {
+    const WidePage = await loadWidePage(StubTabs);
+    const post = vi.spyOn(window, "postMessage").mockImplementation(() => {});
+
+    render(
+      <WidePage title="Settings" onBack={vi.fn()}>
+        <div>page body</div>
+      </WidePage>,
+    );
+
+    // The frame holding `useWideQamPanel` is the whole reason a page is wide.
+    // Dropping the hook while the module stays imported elsewhere leaves the
+    // rest of this file green.
+    expect(post).toHaveBeenCalledWith({ message: "QamFriendsExpanded" }, window.origin);
+  });
+
+  it("takes no children beside tabs, whose body is the active tab's content", async () => {
+    const WidePage = await loadWidePage(StubTabs);
+
+    render(
+      // @ts-expect-error `children` sits in the no-tabs branch of WidePageProps: passed here it would render nowhere.
+      <WidePage title="Library" onBack={vi.fn()} tabs={TAB_SET} activeTab="platforms" onShowTab={vi.fn()}>
+        <div>dropped</div>
+      </WidePage>,
+    );
+
+    expect(screen.getByText("platform detail")).toBeInTheDocument();
+    expect(screen.queryByText("dropped")).not.toBeInTheDocument();
   });
 
   it("still renders the frame when the active tab has no content", async () => {
