@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "spec": "DESIGN.md — the answer guarantee and its evidence levels; docs/how-to-use.md — what arrangement-unverified tells a client. The per-core marks in docs/research/coverage-matrix.md are a different record: which cores were checked where, not whether the arrangement itself was ever observed.",
+  "spec": "DESIGN.md — the answer guarantee and its evidence levels; docs/how-to-use.md — what arrangement-unverified tells a client. The per-core marks in docs/research/coverage-matrix.md are a different record: which cores were checked where, not whether the arrangement itself was ever observed. The 'label' here is a sentence fragment for caveat prose ('no live installation of an EmuDeck arrangement has been observed'), NOT the project's display name — that is the 'label' in distribution_labels.json, which a client renders on its own; the two coincide for retrodeck and for nothing else.",
   "description": "Which emulator arrangements atlas has observed on a live installation, keyed by installation kind. An arrangement's config reading is source-verified against pinned upstream either way — this file records only whether a real machine running that arrangement has confirmed the wiring end to end. An arrangement with no entry counts as unverified: nothing here is evidence by omission.",
   "arrangements": {
     "retrodeck": {

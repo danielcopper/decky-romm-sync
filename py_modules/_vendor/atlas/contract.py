@@ -18,6 +18,11 @@ data. The rule for what serializes:
   closed vocabulary naming *which rule* assigned the system (an override, the
   core's ``systemname``, a slug, or nothing), so it is data a client branches
   on and it serializes.
+- **A distribution's ``label`` is a third thing**: it serializes, and a port
+  must reproduce it, because it is packaged and versioned world knowledge
+  rather than a sentence someone wrote (:mod:`atlas.distribution_labels`) — and
+  it is still the one serialized field a consumer must never branch on. It is
+  how a project spells its own name, beside the identifier that stays the key.
 
 A port that reproduces these dicts for every vector reads the machine the way
 the reference does.
@@ -27,6 +32,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Mapping, Sequence, TypeVar
 
+from .distribution_labels import distribution_label
 from .every_installation import InstallationAnswer
 from .firmware import (
     FirmwareAlternatives,
@@ -328,9 +334,19 @@ def health_contract(health: Health) -> dict[str, Any]:
 
 
 def installation_contract(installation: Installation) -> dict[str, Any]:
-    """The stable identity/health form of an installation handle."""
+    """The stable identity/health form of an installation handle.
+
+    ``label`` is the one field here nothing may branch on: it is how the
+    distribution spells its own name (``RetroDECK`` for ``retrodeck``), packaged
+    and cited in :mod:`atlas.distribution_labels`, and it exists so a client
+    renders a name rather than title-casing an identifier into one the project
+    does not use. ``kind`` stays the key — the label may be re-spelled the day a
+    project re-spells itself, and a consumer that matched on it would break
+    while a consumer that renders it simply reads the new name.
+    """
     return {
         "kind": installation.kind,
+        "label": distribution_label(installation.kind),
         "kinds": list(installation.kinds),
         "root": installation.root(),
         "health": _findings_contract(installation.health()),
@@ -361,12 +377,15 @@ def _identity_contract(identity: FirmwareIdentity | None) -> dict[str, Any] | No
 def _supplied_by_contract(supplied: SuppliedBy | None) -> dict[str, Any] | None:
     """Whose file is at the destination — the distribution's own copy, or nothing stated.
 
-    All three fields are in, because all three are what a consumer acts on:
-    ``distribution`` says who would put it back, ``source`` is the shipped file
-    that was hashed (so the claim can be re-checked), and ``card_version`` says
-    which revision of the packaged copy list named the pair — the same
-    provenance an identity's table version carries, and the field that lets a
-    vendored older atlas be recognised as one.
+    Three of the four fields are what a consumer acts on: ``distribution`` says
+    who would put it back, ``source`` is the shipped file that was hashed (so
+    the claim can be re-checked), and ``card_version`` says which revision of
+    the packaged copy list named the pair — the same provenance an identity's
+    table version carries, and the field that lets a vendored older atlas be
+    recognised as one. The fourth is ``label``, the name that distribution
+    writes for itself, and it is the one a consumer only renders: "provided by
+    RetroDECK" is the sentence this field exists for, and ``distribution``
+    remains the word to branch on.
 
     ``null`` is the ordinary value and it claims nothing: not the distribution's
     copy, no copy list for this distribution, and a destination no entry covers
@@ -376,6 +395,7 @@ def _supplied_by_contract(supplied: SuppliedBy | None) -> dict[str, Any] | None:
         return None
     return {
         "distribution": supplied.distribution,
+        "label": supplied.label,
         "source": supplied.source,
         "card_version": supplied.card_version,
     }
@@ -390,6 +410,7 @@ def _requirement_contract(requirement: FirmwareRequirement) -> dict[str, Any]:
         "file_name": requirement.file_name,
         "path": requirement.path,
         "declared": requirement.declared,
+        "declared_kind": requirement.declared_kind,
         "identity": _identity_contract(requirement.identity),
         "found": requirement.found,
         "present": requirement.present,
@@ -462,7 +483,12 @@ def firmware_contract(answer: FirmwareAnswer) -> dict[str, Any]:
     so a dropped file can never make a core look complete. ``path`` is the
     **resolved** destination and ``declared`` the string the core spelled: two
     declarations that land on one file are one place, and the name the core
-    opens is still stated.
+    opens is still stated. ``declared_kind`` is the third of that group and
+    says what the core does with the name: opens it as a file, or lists it as a
+    folder. Like ``declared`` it is about the declaration rather than what was
+    found, so it stands over an empty destination — which is where it earns its
+    keep, because ``found: "missing"`` on a folder declaration is a folder to
+    create rather than a file to fetch.
 
     A core's ``requirements`` list is a conjunction, and one entry may be an
     ``alternatives`` group instead of a requirement — see
