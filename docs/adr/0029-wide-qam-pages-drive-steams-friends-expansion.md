@@ -60,7 +60,7 @@ change, no unmount), when the QAM closes (`useQuickAccessVisible`), and from the
   cap, so a wide page would render 806 px of content inside a 348 px panel and clip. No fallback switch is built for
   that case: the rebuild proceeds, and a switch or a width-dependent navigation is reconsidered only if updates keep
   breaking it. The expansion is measurable in the dev loop through the sliding container's geometry (`findSP()`); the
-  QAM browser view itself is 855 px wide in both states and proves nothing.
+  QAM browser view itself is 854 px wide in both states and proves nothing.
 - **On the Deck a wide page covers the whole screen.** The Big Picture viewport is 854 × 534 CSS px at
   `devicePixelRatio` 1.5 (1280 × 800 physical), so 854 px is not a wider panel over a visible library — it is the
   library gone. On a desktop Big Picture window, which is wider, the same page is a panel with the library beside it, so

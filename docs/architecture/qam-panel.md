@@ -16,20 +16,20 @@ without restating it. The width mechanism's decision record is
 
 ## Where the code lives
 
-| Module                                                        | Responsibility                                                                                                      |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `src/index.tsx` (`QAMPanel`)                                  | The router: one `Page` value, one mounted page, a module-level `currentPage` that survives a QAM remount            |
-| `src/types/navigation.ts`                                     | The `Page` union — every page the router can land on                                                                |
-| `src/components/MainPage.tsx`                                 | Main                                                                                                                |
-| `src/components/LibraryPage.tsx`                              | Library — Platforms and Collections                                                                                 |
-| `src/components/SettingsPage.tsx`, `src/components/settings/` | Settings and its sections                                                                                           |
-| `src/components/DangerZone.tsx`, `RemovedGamesCleanup.tsx`    | Data Management                                                                                                     |
-| `src/components/DownloadQueue.tsx`                            | Downloads                                                                                                           |
-| `src/components/SystemPage.tsx`                               | System — retires into Library › Platforms                                                                           |
-| `src/utils/deckyUiInternals.ts`                               | Honest typing for `@decky/ui` values that come from a webpack probe: the frame's class names, `Tabs`, scroll panels |
-| `src/utils/qamExpansion.ts`                                   | The panel's width: the expand and hide messages, the injected `max-width` rule, and the four paths that clear both  |
-| `src/components/qam/`                                         | The wide-page frame: `WidePage` (Back row, title, tabs, measured height), `ListDetail` and `ScrollRegion`           |
-| `src/utils/` module stores                                    | State that must outlive a page: sync progress, pending preview, downloads, prune, notices                           |
+| Module                                                        | Responsibility                                                                                                           |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `src/index.tsx` (`QAMPanel`)                                  | The router: one `Page` value, one mounted page, a module-level `currentPage` that survives a QAM remount                 |
+| `src/types/navigation.ts`                                     | The `Page` union — every page the router can land on                                                                     |
+| `src/components/MainPage.tsx`                                 | Main                                                                                                                     |
+| `src/components/LibraryPage.tsx`                              | Library — Platforms and Collections                                                                                      |
+| `src/components/SettingsPage.tsx`, `src/components/settings/` | Settings and its sections                                                                                                |
+| `src/components/DangerZone.tsx`, `RemovedGamesCleanup.tsx`    | Data Management                                                                                                          |
+| `src/components/DownloadQueue.tsx`                            | Downloads                                                                                                                |
+| `src/components/SystemPage.tsx`                               | System — retires into Library › Platforms                                                                                |
+| `src/utils/deckyUiInternals.ts`                               | Honest typing for `@decky/ui` values that come from a webpack probe: the frame's class names, `Tabs`, `ScrollPanelGroup` |
+| `src/utils/qamExpansion.ts`                                   | The panel's width: the expand and hide messages, the injected `max-width` rule, and the four paths that clear both       |
+| `src/components/qam/`                                         | The wide-page frame: `WidePage` (Back row, title, tabs, measured height), `ListDetail` and `ScrollRegion`                |
+| `src/utils/` module stores                                    | State that must outlive a page: sync progress, pending preview, downloads, prune, notices                                |
 
 ## Two widths
 
@@ -61,7 +61,7 @@ How a page gets wide, measured on the device rather than read from documentation
   `TabGroupPanel` sits on that same element, measured, which is why walking the DOM by id and writing the CSS against
   the class reach the same panel.
 - Result: the visible panel goes from 348 px to 854 px and the tab panel from 300 px to 806 px (854 minus the 48 px tab
-  rail). The QAM browser view itself is 855 px wide in both states, so only the sliding container's geometry, read
+  rail). The QAM browser view itself is 854 px wide in both states, so only the sliding container's geometry, read
   through `findSP()`, proves an expansion.
 
 The flag is Steam's and global, so the page that set it clears it: on unmount (navigation away, plugin closed), when the
@@ -83,10 +83,12 @@ leaves a body of roughly 260 px inside the 454 px view.
 
 A region's own scrolling is Steam's, not CSS. Steam's gamepad navigation scrolls by moving focus, so an `overflow: auto`
 box holding content nobody can focus — a detail pane of text — cannot be scrolled with a controller at all. Every
-scrolling region therefore goes through `ScrollRegion`, which renders Steam's scroll panel: the same component the QAM's
-own tab panel is built from, with gamepad direction bound to scrolling. Both of a list-and-detail page's regions are
-ones, and so is the frame's body when the page has no tabs; a tabbed page's body is not, because Steam's tabbed page
-brings a scroll panel per tab.
+scrolling region therefore goes through `ScrollRegion`, which renders `ScrollPanelGroup`, the one Steam scroll panel
+that binds gamepad direction to scrolling. Its plain sibling `ScrollPanel` does not, and that is the kind Steam uses for
+the QAM's own tab panel and for each tab's content — so neither of those solves this for us.
+
+Both of a list-and-detail page's regions are `ScrollRegion`s, and so is the frame's body when the page has no tabs. A
+tabbed body gets none from the frame: see "Building blocks → Tabs" for whose job it is instead.
 
 ## Pages
 
@@ -116,9 +118,15 @@ Steam's tabbed page, switched with L1/R1, for two to four peer views of one page
 glyphs overlap the labels, which is why the Library page's tab bar is hand-rolled today. Only Library has tabs.
 
 Entry focus lands in the content — the active tab's, so the list of a list-and-detail page — and the bumper glyphs
-follow, because Steam draws them only while gamepad focus is within the tabbed page. Back stays reachable by moving up
-and with B. A tabbed page therefore marks itself as placing its own entry focus, and the panel's router leaves it alone
-instead of focusing the page's first button, which is the Back row above the tabs.
+follow, because Steam draws them only while gamepad focus is within the tabbed page. Back stays reachable by moving up.
+A tabbed page therefore marks itself as placing its own entry focus, and the panel's router leaves it alone instead of
+focusing the page's first button, which is the Back row above the tabs.
+
+**A tab's content is the page's business, not the frame's.** The frame wraps an untabbed body in a `ScrollRegion` and a
+tabbed one in nothing, because it cannot know what a tab holds. Steam's per-tab scroller does not close the gap: it is
+the plain `ScrollPanel`, which binds no gamepad direction, so a tab holding content nobody can focus is as unscrollable
+as a bare div. A page with such a tab wraps that content in `ScrollRegion` itself. Library's tabs hold list-and-detail
+layouts, which carry their own regions, so nothing there needs it today.
 
 ### List and detail
 

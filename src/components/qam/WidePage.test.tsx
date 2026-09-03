@@ -189,13 +189,14 @@ describe("WidePage", () => {
     expect(screen.getByTestId("scroll-panel")).toContainElement(screen.getByText("page body"));
   });
 
-  it("leaves a tabbed body's scrolling to Steam's tabbed page", async () => {
+  it("gives a tabbed body no region, leaving its tabs' content to the page", async () => {
     const WidePage = await loadWidePage(StubTabs, StubScrollPanelGroup);
 
     render(<WidePage title="Library" onBack={vi.fn()} tabs={TAB_SET} activeTab="platforms" onShowTab={vi.fn()} />);
 
-    // Steam's tabbed page brings a scroll panel per tab. A second one wrapped
-    // around it would nest two scrollers on the same content.
+    // A tab's content is the page's business — a page whose tab holds
+    // unfocusable content wraps it in `ScrollRegion` itself, which it could not
+    // do if the frame had already wrapped the whole tabbed page in one.
     expect(screen.queryByTestId("scroll-panel")).not.toBeInTheDocument();
     expect(screen.getByTestId("steam-tabs")).toBeInTheDocument();
   });
