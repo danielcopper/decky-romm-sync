@@ -239,7 +239,10 @@ vi.mock("@decky/ui", () => {
           checked: p.checked ?? false,
           onChange: (e: { target: { checked: boolean } }) => p.onChange?.(e.target.checked),
         }),
-        typeof p.label === "string" ? p.label : null,
+        // Rendered whatever its type: the real ToggleField takes a ReactNode
+        // label, and a list row that lays its label out itself (a status dot, a
+        // name, a count) would otherwise render as an unlabelled checkbox.
+        p.label as never,
         // Mirrors the ButtonItem stub: a toggle's description carries real
         // user-facing copy, so it has to be assertable rather than dropped.
         p.description == null ? null : createElement("span", { "data-testid": "toggle-desc" }, p.description as never),

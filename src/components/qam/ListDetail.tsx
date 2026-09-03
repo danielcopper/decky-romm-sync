@@ -9,7 +9,9 @@
  *
  * Focus selects — moving through the list changes the detail at once, as Steam's
  * own settings do. The row's own control keeps A, so this component never
- * intercepts it; a row that carries a toggle still toggles on press.
+ * intercepts it; a row that carries a toggle still toggles on press. A control
+ * that acts on the whole list goes in `listHeader` rather than in a row, so
+ * reaching it reports no selection.
  *
  * Selection is controlled: the page owns `selectedId` and decides what a change
  * means for the rest of it.
@@ -29,15 +31,22 @@ export interface ListDetailProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   renderDetail: (selectedId: string | null) => ReactNode;
+  /**
+   * Controls that act on the whole list — Enable all, Disable all — rendered
+   * above the first row and scrolling with it. Outside every item, so focusing
+   * one reports no selection: these belong to the list, not to a row of it.
+   */
+  listHeader?: ReactNode;
 }
 
 // The list takes about a third of the 806 px a wide tab panel offers.
 const LIST_WIDTH = "264px";
 
-export const ListDetail: FC<ListDetailProps> = ({ items, selectedId, onSelect, renderDetail }) => (
+export const ListDetail: FC<ListDetailProps> = ({ items, selectedId, onSelect, renderDetail, listHeader }) => (
   <Focusable flow-children="horizontal" style={{ display: "flex", gap: "12px", height: "100%", minHeight: 0 }}>
     <ScrollRegion style={{ flex: `0 0 ${LIST_WIDTH}`, width: LIST_WIDTH }}>
       <Focusable flow-children="vertical">
+        {listHeader}
         {items.map((item) => (
           // React delivers onFocus through focusin, so this fires for focus
           // landing on whatever control the row itself renders — and again for

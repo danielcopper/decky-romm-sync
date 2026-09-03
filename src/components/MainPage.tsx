@@ -1720,11 +1720,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
-          <ButtonItem layout="below" bottomSeparator="none" onClick={() => onNavigate("system")}>
-            System
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
           <ButtonItem layout="below" bottomSeparator="none" onClick={() => onNavigate("settings")}>
             Settings
           </ButtonItem>

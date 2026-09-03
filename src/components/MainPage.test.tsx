@@ -4831,12 +4831,10 @@ describe("MainPage", () => {
       expect(onNavigate).toHaveBeenCalledWith("library");
     });
 
-    it("clicking System invokes onNavigate('system')", async () => {
-      const onNavigate = vi.fn();
-      const { container } = render(<MainPage onNavigate={onNavigate} />);
+    it("offers no System entry — its core and BIOS controls live in Library", async () => {
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      fireEvent.click(buttonByExactText(container, "System")!);
-      expect(onNavigate).toHaveBeenCalledWith("system");
+      expect(buttonByExactText(container, "System")).toBeNull();
     });
 
     it("clicking Settings invokes onNavigate('settings')", async () => {

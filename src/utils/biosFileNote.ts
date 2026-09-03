@@ -3,13 +3,13 @@
  * download nobody has started.
  *
  * Two surfaces render a firmware row (the game detail panel's BIOS tab and the
- * System page) and they used to word the same facts separately, so a fact
- * gained on one surface was a fact missing on the other. This is the one place
- * that decides; each surface still frames the result its own way, because the
- * BIOS tab leaves plain absence to its status dot while the System page spells
- * it out in the row's description. What it hands over is a sentence and a list
- * of lines ({@link BiosFileWords}); where those go on the page is each
- * surface's own business, what they SAY is decided only here.
+ * Library page's platform detail) and they used to word the same facts
+ * separately, so a fact gained on one surface was a fact missing on the other.
+ * This is the one place that decides; each surface still frames the result its
+ * own way, because the BIOS tab leaves plain absence to its status dot while the
+ * platform detail states it in the row's On-disk cell. What it hands over is a
+ * sentence and a list of lines ({@link BiosFileWords}); where those go on the
+ * page is each surface's own business, what they SAY is decided only here.
  *
  * Precedence is deliberate. A file the distribution itself put there is not a
  * gap in the RomM library — it is not the library's file at all, and telling
@@ -43,8 +43,8 @@ export type BiosNoteRow = Pick<
  * companions — a folder that lists what it holds needs no sentence saying it
  * holds something — and a surface taking one without the other would render a
  * satisfied folder as a bare name. What each surface still chooses is where the
- * lines go: the BIOS tab has an indented block under the row, the System page
- * puts them in the field's description.
+ * lines go: the BIOS tab has an indented block under the row, the platform
+ * detail puts them in its Contents column.
  */
 export interface BiosFileWords {
   /** The em-dash note after the row's name, or `""` where there is none. */
@@ -149,7 +149,7 @@ function folderWithheld(satisfied: boolean | null | undefined, has: (code: strin
  *
  * The note is `""` for a plain library file, present or missing alike: what the
  * surfaces disagree about is how to say "missing", so that word is left to
- * them (the System page appends its own; the tab's dot already carries it).
+ * them (the platform detail spells it out; the tab's dot already carries it).
  */
 export function biosFileNote(row: BiosNoteRow): BiosFileWords {
   if (row.supplied_by) return { note: `provided by ${row.supplied_by}`, lines: [] };

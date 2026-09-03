@@ -6,18 +6,16 @@
 // over keeping one with zero expects.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, fireEvent, act, waitFor, within } from "@testing-library/react";
-import { createElement, type ReactElement } from "react";
+import { render, fireEvent, act, waitFor } from "@testing-library/react";
 import { DangerZone } from "./DangerZone";
 import * as backend from "../api/backend";
-import { showModal } from "@decky/ui";
 import {
   removeShortcut,
   setLaunchOptionsConfirmed,
   getAllNonSteamShortcutAppIds,
   getLiveRomMShortcutAppIds,
 } from "../utils/steamShortcuts";
-import { clearPlatformCollection, clearAllRomMCollections } from "../utils/collections";
+import { clearAllRomMCollections } from "../utils/collections";
 import { formatUninstallStatus } from "../utils/formatters";
 import { setSyncProgress } from "../utils/syncProgress";
 import { stubCollectionStore, stubAppStore } from "../test-utils/steamStubs";
@@ -33,16 +31,15 @@ vi.mock("../utils/steamShortcuts", () => ({
   getLiveRomMShortcutAppIds: vi.fn(),
 }));
 vi.mock("../utils/collections", () => ({
-  clearPlatformCollection: vi.fn(),
   clearAllRomMCollections: vi.fn(),
 }));
 vi.mock("../utils/formatters", () => ({
   formatUninstallStatus: vi.fn((removed: number, errors: number) => `Removed ${removed}, ${errors} errors`),
 }));
 
-// flushAsync: drain the mount-time useEffect chain. DangerZone fires three
-// parallel async loads (refreshPlatforms, loadNonSteamApps, getWhitelistSettings)
-// — double-await pattern mirrors SettingsPage.test.tsx.
+// flushAsync: drain the mount-time useEffect chain. DangerZone fires two
+// parallel async loads (loadNonSteamApps, getWhitelistSettings) — double-await
+// pattern mirrors SettingsPage.test.tsx.
 const flushAsync = () =>
   act(async () => {
     await Promise.resolve();
@@ -55,37 +52,17 @@ function makeOverview(id: number, name: string, useDisplay = false) {
     : { strDisplayName: name, display_name: undefined, appid: id };
 }
 
-function lastShownModalProps<T = Record<string, unknown>>(): T | null {
-  const calls = vi.mocked(showModal).mock.calls;
-  if (calls.length === 0) return null;
-  const el = calls[calls.length - 1]?.[0] as ReactElement<T> | undefined;
-  return el?.props ?? null;
-}
-
-function shownModalPropsAt<T = Record<string, unknown>>(idx: number): T | null {
-  const calls = vi.mocked(showModal).mock.calls;
-  const el = calls[idx]?.[0] as ReactElement<T> | undefined;
-  return el?.props ?? null;
-}
-
 describe("DangerZone", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     // Defaults — tests override per case. These resolve fine; the catch paths
     // explicitly switch to mockRejectedValue.
-    vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({ platforms: [] });
     vi.mocked(backend.getWhitelistSettings).mockResolvedValue({
       disabled_defaults: [],
       custom_names: [],
     });
     vi.mocked(backend.updateWhitelistSettings).mockResolvedValue({
       success: true,
-    });
-    vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
-      success: true,
-      app_ids: [],
-      rom_ids: [],
-      platform_name: "",
     });
     vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
       success: true,
@@ -112,17 +89,6 @@ describe("DangerZone", () => {
       success: true,
       candidate_count: 0,
     });
-    vi.mocked(backend.deletePlatformSaves).mockResolvedValue({
-      success: true,
-      deleted_count: 0,
-      message: "",
-    });
-    vi.mocked(backend.deletePlatformBios).mockResolvedValue({
-      success: true,
-      deleted_count: 0,
-      message: "",
-    });
-    vi.mocked(clearPlatformCollection).mockResolvedValue(undefined);
     vi.mocked(clearAllRomMCollections).mockResolvedValue(undefined);
     // Default app store / collection store — empty.
     stubCollectionStore([]);
@@ -154,24 +120,13 @@ describe("DangerZone", () => {
       expect(onBack).toHaveBeenCalledTimes(1);
     });
 
-    it("calls getRegistryPlatforms + getWhitelistSettings on mount", async () => {
+    it("reads the whitelist settings on mount and no platform list", async () => {
       render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
-      expect(vi.mocked(backend.getRegistryPlatforms)).toHaveBeenCalledTimes(1);
       expect(vi.mocked(backend.getWhitelistSettings)).toHaveBeenCalledTimes(1);
-    });
-
-    it("applies the fetched platform list", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [
-          { slug: "snes", name: "Super Nintendo", count: 3 },
-          { slug: "nes", name: "NES", count: 1 },
-        ],
-      });
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      expect(getByText("Super Nintendo (3)")).toBeTruthy();
-      expect(getByText("NES (1)")).toBeTruthy();
+      // The per-platform actions left for Library › Platforms, and the registry
+      // read had no other consumer here.
+      expect(vi.mocked(backend.getRegistryPlatforms)).not.toHaveBeenCalled();
     });
 
     it("applies fetched whitelist settings (disabled defaults + custom names)", async () => {
@@ -190,29 +145,6 @@ describe("DangerZone", () => {
       await flushAsync();
       // 1 protected: MyCustomApp. Firefox excluded because firefox is disabled.
       expect(getByText("Configure Whitelist (1 protected)")).toBeTruthy();
-    });
-
-    it("falls back to empty platforms when getRegistryPlatforms rejects", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockRejectedValue(new Error("net"));
-      const { container } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      expect(container.textContent).toContain("No synced platforms");
-    });
-
-    it("shows the loading Spinner before refreshPlatforms resolves", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockImplementation(
-        () =>
-          new Promise(() => {
-            /* stall */
-          }),
-      );
-      const { queryAllByTestId } = render(<DangerZone onBack={vi.fn()} />);
-      // initial render runs before any effect — but useEffect fires before
-      // the assert below; loading state is still true while the promise stalls.
-      expect(queryAllByTestId("spinner").length).toBeGreaterThan(0);
-      // getRegistryPlatforms stalls by design, but the sibling mount effects do
-      // resolve — their state updates have to land inside act.
-      await flushAsync();
     });
 
     it("logs the failure when getWhitelistSettings rejects on mount", async () => {
@@ -333,421 +265,6 @@ describe("DangerZone", () => {
       // After catch, the list remains empty.
       expect(container.textContent).toContain("No non-steam games found");
       logSpy.mockRestore();
-    });
-  });
-
-  describe("ShortcutRemovalSection — empty / loading", () => {
-    it("renders 'No synced platforms' when platforms is empty and not loading", async () => {
-      const { container } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      expect(container.textContent).toContain("No synced platforms");
-    });
-  });
-
-  describe("ShortcutRemovalSection — handleRemoveShortcuts", () => {
-    function setupOnePlatform() {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "snes", name: "Super Nintendo", count: 2 }],
-      });
-    }
-
-    it("calls removePlatformShortcuts + removeShortcut per app + reportRemovalResults + clearPlatformCollection on happy path", async () => {
-      setupOnePlatform();
-      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
-        success: true,
-        app_ids: [11, 12],
-        rom_ids: [1, 2],
-        platform_name: "Super Nintendo",
-        prune_lease_token: "platform-removal-lease",
-      });
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      // Open the platform modal.
-      fireEvent.click(getByText("Super Nintendo (2)"));
-      const modalProps = lastShownModalProps<{
-        onRemoveShortcuts?: () => void;
-      }>();
-      await act(async () => {
-        modalProps?.onRemoveShortcuts?.();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(vi.mocked(backend.removePlatformShortcuts)).toHaveBeenCalledWith("snes");
-      expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(11);
-      expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(12);
-      expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2], "platform-removal-lease");
-      expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalledWith("Super Nintendo", expect.any(AbortSignal));
-      expect(vi.mocked(clearPlatformCollection).mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(backend.reportRemovalResults).mock.invocationCallOrder[0]!,
-      );
-    });
-
-    it("falls back to p.name for clearPlatformCollection when platform_name is empty", async () => {
-      setupOnePlatform();
-      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
-        success: true,
-        app_ids: [],
-        rom_ids: [],
-        platform_name: "",
-      });
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (2)"));
-      const modalProps = lastShownModalProps<{
-        onRemoveShortcuts?: () => void;
-      }>();
-      await act(async () => {
-        modalProps?.onRemoveShortcuts?.();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalledWith("Super Nintendo", expect.any(AbortSignal));
-    });
-
-    it("unmount aborts future removal work but retains the backend lease until the started Steam call settles", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "snes", name: "Super Nintendo", count: 1 }],
-      });
-      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
-        success: true,
-        app_ids: [11],
-        rom_ids: [1],
-        platform_name: "Super Nintendo",
-        prune_lease_token: "danger-zone-lease",
-      });
-      vi.mocked(backend.releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
-      let settle!: () => void;
-      const pendingCollection = new Promise<void>((resolve) => {
-        settle = resolve;
-      });
-      vi.mocked(clearPlatformCollection).mockReturnValueOnce(pendingCollection);
-      const view = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(view.getByText("Super Nintendo (1)"));
-      act(() => {
-        lastShownModalProps<{ onRemoveShortcuts?: () => void }>()?.onRemoveShortcuts?.();
-      });
-      await waitFor(() => expect(clearPlatformCollection).toHaveBeenCalled());
-
-      view.unmount();
-      await Promise.resolve();
-      expect(backend.releasePruneConflictLease).not.toHaveBeenCalledWith("danger-zone-lease");
-
-      settle();
-      await waitFor(() => expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("danger-zone-lease"));
-      expect(clearPlatformCollection).toHaveBeenCalledTimes(1);
-      expect(backend.reportRemovalResults).not.toHaveBeenCalled();
-    });
-
-    it("releases a late backend token without mutating Steam after unmount", async () => {
-      setupOnePlatform();
-      let resolveRemoval!: (value: {
-        success: true;
-        app_ids: number[];
-        rom_ids: number[];
-        platform_name: string;
-        prune_lease_token: string;
-      }) => void;
-      vi.mocked(backend.removePlatformShortcuts).mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            resolveRemoval = resolve;
-          }),
-      );
-      vi.mocked(backend.releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
-      const view = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(view.getByText("Super Nintendo (2)"));
-      act(() => {
-        lastShownModalProps<{ onRemoveShortcuts?: () => void }>()?.onRemoveShortcuts?.();
-      });
-      await waitFor(() => expect(backend.removePlatformShortcuts).toHaveBeenCalledWith("snes"));
-
-      view.unmount();
-      resolveRemoval({
-        success: true,
-        app_ids: [11],
-        rom_ids: [1],
-        platform_name: "Super Nintendo",
-        prune_lease_token: "late-danger-zone-lease",
-      });
-
-      await waitFor(() => expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("late-danger-zone-lease"));
-      expect(removeShortcut).not.toHaveBeenCalled();
-      expect(clearPlatformCollection).not.toHaveBeenCalled();
-      expect(backend.reportRemovalResults).not.toHaveBeenCalled();
-    });
-
-    it("skips reportRemovalResults when rom_ids is empty", async () => {
-      setupOnePlatform();
-      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
-        success: true,
-        app_ids: [],
-        rom_ids: [],
-        platform_name: "Super Nintendo",
-      });
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (2)"));
-      const modalProps = lastShownModalProps<{ onRemoveShortcuts?: () => void }>();
-      await act(async () => {
-        modalProps?.onRemoveShortcuts?.();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(vi.mocked(backend.reportRemovalResults)).not.toHaveBeenCalled();
-    });
-
-    it("surfaces 'Failed to remove shortcuts' via the actionStatus Field on rejection", async () => {
-      setupOnePlatform();
-      vi.mocked(backend.removePlatformShortcuts).mockRejectedValue(new Error("boom"));
-      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (2)"));
-      const modalProps = lastShownModalProps<{ onRemoveShortcuts?: () => void }>();
-      await act(async () => {
-        modalProps?.onRemoveShortcuts?.();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(container.textContent).toContain("Failed to remove shortcuts");
-    });
-
-    it("surfaces the migration-blocked message and skips removal when success is false", async () => {
-      setupOnePlatform();
-      // The @migration_blocked gate returns no app_ids/rom_ids — the handler
-      // must surface the message and not attempt any removal.
-      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
-        success: false,
-        message: "Blocked: RetroDECK migration pending",
-        blocked_by_migration: true,
-      });
-      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (2)"));
-      const modalProps = lastShownModalProps<{ onRemoveShortcuts?: () => void }>();
-      await act(async () => {
-        modalProps?.onRemoveShortcuts?.();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(container.textContent).toContain("Blocked: RetroDECK migration pending");
-      expect(vi.mocked(removeShortcut)).not.toHaveBeenCalled();
-      expect(vi.mocked(backend.reportRemovalResults)).not.toHaveBeenCalled();
-      expect(vi.mocked(clearPlatformCollection)).not.toHaveBeenCalled();
-    });
-
-    it("renders the singular form for a 1-game platform", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "snes", name: "Super Nintendo", count: 1 }],
-      });
-      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
-        success: true,
-        app_ids: [11],
-        rom_ids: [],
-        platform_name: "Super Nintendo",
-      });
-      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (1)"));
-      const modalProps = lastShownModalProps<{ onRemoveShortcuts?: () => void }>();
-      await act(async () => {
-        modalProps?.onRemoveShortcuts?.();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(container.textContent).toContain("Removed 1 Super Nintendo game");
-      // The singular form must NOT carry the trailing "s".
-      expect(container.textContent).not.toContain("Removed 1 Super Nintendo games");
-    });
-  });
-
-  describe("ShortcutRemovalSection — handleDeleteSaves", () => {
-    function setupOnePlatform() {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "snes", name: "Super Nintendo", count: 1 }],
-      });
-    }
-
-    it("opens a ConfirmModal with the correct title + description", async () => {
-      setupOnePlatform();
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (1)"));
-      const platformModal = lastShownModalProps<{ onDeleteSaves?: () => void }>();
-      act(() => {
-        platformModal?.onDeleteSaves?.();
-      });
-      const confirm = lastShownModalProps<{
-        strTitle?: string;
-        strDescription?: string;
-        strOKButtonText?: string;
-      }>();
-      expect(confirm?.strTitle).toBe("Delete all save files for Super Nintendo?");
-      expect(confirm?.strDescription).toContain("local save file");
-      expect(confirm?.strOKButtonText).toBe("Delete Save Files");
-    });
-
-    it("falls back to p.slug when p.name is empty", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "snes", name: "", count: 1 }],
-      });
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      // Button still uses p.name (empty) + " (1)"; click via the count.
-      fireEvent.click(getByText(/\(1\)/));
-      const platformModal = lastShownModalProps<{ onDeleteSaves?: () => void }>();
-      act(() => {
-        platformModal?.onDeleteSaves?.();
-      });
-      const confirm = lastShownModalProps<{ strTitle?: string }>();
-      expect(confirm?.strTitle).toBe("Delete all save files for snes?");
-    });
-
-    it("calls deletePlatformSaves + dispatches romm_data_changed on OK", async () => {
-      setupOnePlatform();
-      vi.mocked(backend.deletePlatformSaves).mockResolvedValue({
-        success: true,
-        deleted_count: 3,
-        message: "Deleted 3 save files",
-      });
-      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (1)"));
-      const platformModal = lastShownModalProps<{ onDeleteSaves?: () => void }>();
-      act(() => {
-        platformModal?.onDeleteSaves?.();
-      });
-      const confirm = lastShownModalProps<{ onOK?: () => void | Promise<void> }>();
-
-      const listener = vi.fn();
-      globalThis.addEventListener("romm_data_changed", listener);
-      try {
-        await act(async () => {
-          await confirm?.onOK?.();
-        });
-        expect(vi.mocked(backend.deletePlatformSaves)).toHaveBeenCalledWith("snes");
-        expect(container.textContent).toContain("Deleted 3 save files");
-        expect(listener).toHaveBeenCalledTimes(1);
-        const ev = listener.mock.calls[0]?.[0] as CustomEvent;
-        expect(ev.detail).toEqual({ type: "save_sync" });
-      } finally {
-        globalThis.removeEventListener("romm_data_changed", listener);
-      }
-    });
-
-    it("surfaces 'Failed to delete saves' on rejection", async () => {
-      setupOnePlatform();
-      vi.mocked(backend.deletePlatformSaves).mockRejectedValue(new Error("io"));
-      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (1)"));
-      const platformModal = lastShownModalProps<{ onDeleteSaves?: () => void }>();
-      act(() => {
-        platformModal?.onDeleteSaves?.();
-      });
-      const confirm = lastShownModalProps<{ onOK?: () => void | Promise<void> }>();
-      await act(async () => {
-        await confirm?.onOK?.();
-      });
-      expect(container.textContent).toContain("Failed to delete saves");
-    });
-  });
-
-  describe("ShortcutRemovalSection — handleDeleteBios", () => {
-    function setupOnePlatform() {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "snes", name: "Super Nintendo", count: 1 }],
-      });
-    }
-
-    it("calls deletePlatformBios and surfaces result.message", async () => {
-      setupOnePlatform();
-      vi.mocked(backend.deletePlatformBios).mockResolvedValue({
-        success: true,
-        deleted_count: 2,
-        message: "Deleted 2 BIOS files",
-      });
-      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (1)"));
-      const platformModal = lastShownModalProps<{ onDeleteBios?: () => void }>();
-      await act(async () => {
-        platformModal?.onDeleteBios?.();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(vi.mocked(backend.deletePlatformBios)).toHaveBeenCalledWith("snes");
-      expect(container.textContent).toContain("Deleted 2 BIOS files");
-    });
-
-    it("dispatches a romm_data_changed {type:'bios', platform_slug} event on success", async () => {
-      setupOnePlatform();
-      vi.mocked(backend.deletePlatformBios).mockResolvedValue({
-        success: true,
-        deleted_count: 2,
-        message: "Deleted 2 BIOS files",
-      });
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (1)"));
-      const platformModal = lastShownModalProps<{ onDeleteBios?: () => void }>();
-      const listener = vi.fn();
-      globalThis.addEventListener("romm_data_changed", listener);
-      try {
-        await act(async () => {
-          platformModal?.onDeleteBios?.();
-          await Promise.resolve();
-          await Promise.resolve();
-        });
-        expect(listener).toHaveBeenCalledTimes(1);
-        const ev = listener.mock.calls[0]?.[0] as CustomEvent;
-        expect(ev.detail).toEqual({ type: "bios", platform_slug: "snes" });
-      } finally {
-        globalThis.removeEventListener("romm_data_changed", listener);
-      }
-    });
-
-    it("does NOT dispatch romm_data_changed when deletePlatformBios reports success=false", async () => {
-      setupOnePlatform();
-      vi.mocked(backend.deletePlatformBios).mockResolvedValue({
-        success: false,
-        deleted_count: 0,
-        message: "Nothing to delete",
-      });
-      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (1)"));
-      const platformModal = lastShownModalProps<{ onDeleteBios?: () => void }>();
-      const listener = vi.fn();
-      globalThis.addEventListener("romm_data_changed", listener);
-      try {
-        await act(async () => {
-          platformModal?.onDeleteBios?.();
-          await Promise.resolve();
-          await Promise.resolve();
-        });
-        // Failure branch surfaces the message but emits no refresh event.
-        expect(container.textContent).toContain("Nothing to delete");
-        expect(listener).not.toHaveBeenCalled();
-      } finally {
-        globalThis.removeEventListener("romm_data_changed", listener);
-      }
-    });
-
-    it("surfaces 'Failed to delete BIOS files' on rejection", async () => {
-      setupOnePlatform();
-      vi.mocked(backend.deletePlatformBios).mockRejectedValue(new Error("io"));
-      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (1)"));
-      const platformModal = lastShownModalProps<{ onDeleteBios?: () => void }>();
-      await act(async () => {
-        platformModal?.onDeleteBios?.();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(container.textContent).toContain("Failed to delete BIOS files");
     });
   });
 
@@ -996,48 +513,6 @@ describe("DangerZone", () => {
     // breather must fall between the two chunks.
     const manyAppIds = Array.from({ length: 26 }, (_, i) => i + 1);
 
-    it("per-platform removal: 25 removals back-to-back, one 50ms breather, then the post-removal steps", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "snes", name: "Super Nintendo", count: 26 }],
-      });
-      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
-        success: true,
-        app_ids: manyAppIds,
-        rom_ids: [1, 2],
-        platform_name: "Super Nintendo",
-      });
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (26)"));
-      const modalProps = lastShownModalProps<{ onRemoveShortcuts?: () => void }>();
-
-      vi.useFakeTimers();
-      try {
-        await act(async () => {
-          modalProps?.onRemoveShortcuts?.();
-          // Drain: removePlatformShortcuts resolves, then the paced loop runs the
-          // first 25-item chunk back-to-back and blocks on the breather.
-          for (let i = 0; i < 40; i++) await Promise.resolve();
-        });
-        // First chunk done; the 26th removal + the post-removal steps are gated
-        // behind the not-yet-elapsed breather.
-        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(25);
-        expect(vi.mocked(backend.reportRemovalResults)).not.toHaveBeenCalled();
-        expect(vi.mocked(clearPlatformCollection)).not.toHaveBeenCalled();
-
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(50);
-          for (let i = 0; i < 20; i++) await Promise.resolve();
-        });
-        // The breather elapsed → the last removal ran, THEN the post-removal steps.
-        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(26);
-        expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2], null);
-        expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
     it("remove-all: the backend list is chunk-paced before the orphan sweep and reporting run", async () => {
       vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
         success: true,
@@ -1139,12 +614,13 @@ describe("DangerZone", () => {
       expect(container.textContent).toContain("Removed 7, 0 errors");
     });
 
-    it("surfaces 'Failed to uninstall ROMs' on rejection and still refreshes", async () => {
+    it("surfaces 'Failed to uninstall ROMs' on rejection and re-counts the non-Steam apps", async () => {
       vi.mocked(backend.uninstallAllRoms).mockRejectedValue(new Error("io"));
+      stubCollectionStore([1]);
+      stubAppStore({ 1: { strDisplayName: "Kept Game" } });
       const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(getByText("Uninstall All Installed ROMs"));
-      const refreshBefore = vi.mocked(backend.getRegistryPlatforms).mock.calls.length;
       await act(async () => {
         fireEvent.click(getByText("Confirm: delete all ROM files?"));
         await Promise.resolve();
@@ -1153,8 +629,8 @@ describe("DangerZone", () => {
       expect(container.textContent).toContain("Failed to uninstall ROMs");
       // confirmUninstall reset → button label returns to original.
       expect(container.textContent).toContain("Uninstall All Installed ROMs");
-      // refreshPlatforms still ran after catch.
-      expect(vi.mocked(backend.getRegistryPlatforms).mock.calls.length).toBeGreaterThan(refreshBefore);
+      // The post-catch re-count still ran: the app list is back on the page.
+      expect(container.textContent).toContain("Remove 1 Non-Steam Game");
     });
 
     it("counts errors via formatUninstallStatus when errors.length > 0", async () => {
@@ -1391,56 +867,6 @@ describe("DangerZone", () => {
     });
   });
 
-  describe("PlatformActionModal", () => {
-    it("renders 'game' (singular) for count=1 and 'games' (plural) for count>1", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [
-          { slug: "a", name: "PlatA", count: 1 },
-          { slug: "b", name: "PlatB", count: 2 },
-        ],
-      });
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-
-      fireEvent.click(getByText("PlatA (1)"));
-      const firstModal = vi.mocked(showModal).mock.calls.length - 1;
-      // The modal renders inline DialogButton children including the label.
-      // We can't easily assert on the inner text via showModal capture without
-      // rendering the modal — instead, render the modal element directly.
-      const platformAModalEl = vi.mocked(showModal).mock.calls[firstModal]?.[0];
-      // Use textContent by rendering the modal in its own tree.
-      const { container: containerA } = render(platformAModalEl as ReactElement);
-      expect(containerA.textContent).toContain("Remove Shortcuts (1 game)");
-      expect(containerA.textContent).not.toContain("Remove Shortcuts (1 games)");
-
-      fireEvent.click(getByText("PlatB (2)"));
-      const secondIdx = vi.mocked(showModal).mock.calls.length - 1;
-      const platformBModalEl = vi.mocked(showModal).mock.calls[secondIdx]?.[0];
-      const { container: containerB } = render(platformBModalEl as ReactElement);
-      expect(containerB.textContent).toContain("Remove Shortcuts (2 games)");
-    });
-
-    it("Cancel closeModal does not trigger any backend call", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "a", name: "PlatA", count: 1 }],
-      });
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("PlatA (1)"));
-      const modalEl = vi.mocked(showModal).mock.calls[0]?.[0];
-      const closeModal = vi.fn();
-      // Render the modal with our own closeModal so we can assert it fired.
-      const cloned = createElement((modalEl as ReactElement).type, {
-        ...(modalEl as ReactElement<Record<string, unknown>>).props,
-        closeModal,
-      });
-      const { getByText: getByTextModal } = render(cloned);
-      fireEvent.click(getByTextModal("Cancel"));
-      expect(closeModal).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(backend.removePlatformShortcuts)).not.toHaveBeenCalled();
-    });
-  });
-
   describe("RetroDeckSection — empty / populated", () => {
     it("renders 'No non-steam games found' when there are no apps", async () => {
       const { container } = render(<DangerZone onBack={vi.fn()} />);
@@ -1612,16 +1038,12 @@ describe("DangerZone", () => {
       const ids = Array.from({ length: 26 }, (_, i) => i + 1);
       stubCollectionStore(ids);
       stubAppStore(Object.fromEntries(ids.map((id) => [id, { strDisplayName: `Game ${id}` }])));
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "snes", name: "Super Nintendo", count: 2 }],
-      });
       const { getByText, queryAllByTestId, container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
 
       // Before the removal: no busy spinner, every removal button enabled.
       expect(queryAllByTestId("spinner").length).toBe(0);
       expect(getByText("Remove All RomM Shortcuts")).not.toBeDisabled();
-      expect(getByText("Super Nintendo (2)")).not.toBeDisabled();
 
       fireEvent.click(getByText("Remove 26 Non-Steam Games"));
       vi.useFakeTimers();
@@ -1640,7 +1062,6 @@ describe("DangerZone", () => {
         expect(getByText("Remove 26 Non-Steam Games")).toBeDisabled();
         expect(getByText("Remove All RomM Shortcuts")).toBeDisabled();
         expect(getByText("Uninstall All Installed ROMs")).toBeDisabled();
-        expect(getByText("Super Nintendo (2)")).toBeDisabled();
 
         await act(async () => {
           await vi.advanceTimersByTimeAsync(50);
@@ -1653,7 +1074,6 @@ describe("DangerZone", () => {
         expect(queryAllByTestId("spinner").length).toBe(0);
         expect(getByText("Remove 26 Non-Steam Games")).not.toBeDisabled();
         expect(getByText("Remove All RomM Shortcuts")).not.toBeDisabled();
-        expect(getByText("Super Nintendo (2)")).not.toBeDisabled();
         expect(container.textContent).toContain("Removed 26 non-steam games");
       } finally {
         vi.useRealTimers();
@@ -1923,27 +1343,6 @@ describe("DangerZone", () => {
       expect(queryByText(HINT)).toBeNull();
     });
 
-    it("disables only the modal's Remove Shortcuts button while a sync runs", async () => {
-      setSyncProgress({ running: true, stage: "applying", current: 1, total: 5, message: "", runId: "run-1" });
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "snes", name: "Super Nintendo", count: 1 }],
-      });
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (1)"));
-      const modalEl = vi.mocked(showModal).mock.calls[0]?.[0];
-      // Scope queries to the modal's own container — the panel render in the
-      // same document also shows the hint on its two disabled bulk buttons.
-      const { container: modalContainer } = render(modalEl as ReactElement);
-      const modal = within(modalContainer as HTMLElement);
-
-      expect(modal.getByText("Remove Shortcuts (1 game)")).toBeDisabled();
-      expect(modal.getByText(HINT)).toBeTruthy();
-      // The save/BIOS deletions are not sync-gated — they stay pressable.
-      expect(modal.getByText("Delete Save Files")).not.toBeDisabled();
-      expect(modal.getByText("Delete BIOS Files")).not.toBeDisabled();
-    });
-
     it("surfaces the sync_active refusal and removes nothing on Remove All (raced past the disable)", async () => {
       // The backend gate is the authority: a sync that starts between render
       // and click still refuses. The handler must surface the message and
@@ -1986,112 +1385,6 @@ describe("DangerZone", () => {
       expect(container.textContent).toContain(REFUSAL_MESSAGE);
       expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
       expect(vi.mocked(formatUninstallStatus)).not.toHaveBeenCalled();
-    });
-
-    it("surfaces the sync_active refusal on a per-platform removal", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "snes", name: "Super Nintendo", count: 2 }],
-      });
-      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
-        success: false,
-        reason: "sync_active",
-        message: REFUSAL_MESSAGE,
-      });
-      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("Super Nintendo (2)"));
-      const modalProps = lastShownModalProps<{ onRemoveShortcuts?: () => void }>();
-      await act(async () => {
-        modalProps?.onRemoveShortcuts?.();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(container.textContent).toContain(REFUSAL_MESSAGE);
-      expect(vi.mocked(removeShortcut)).not.toHaveBeenCalled();
-      expect(vi.mocked(clearPlatformCollection)).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("PlatformActionModal action wiring", () => {
-    it("Delete Save Files DialogButton fires closeModal + opens the saves ConfirmModal", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "a", name: "PlatA", count: 1 }],
-      });
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("PlatA (1)"));
-      const modalEl = vi.mocked(showModal).mock.calls[0]?.[0];
-      const closeModal = vi.fn();
-      const cloned = createElement((modalEl as ReactElement).type, {
-        ...(modalEl as ReactElement<Record<string, unknown>>).props,
-        closeModal,
-      });
-      const { getByText: getByTextModal } = render(cloned);
-      // Click delete saves — fires closeModal + opens the ConfirmModal.
-      fireEvent.click(getByTextModal("Delete Save Files"));
-      expect(closeModal).toHaveBeenCalled();
-      // showModal has been called once for the platform-action modal and now
-      // once more for the ConfirmModal.
-      expect(vi.mocked(showModal).mock.calls.length).toBeGreaterThan(1);
-      const props = shownModalPropsAt<{ strTitle?: string }>(1);
-      expect(props?.strTitle).toContain("Delete all save files");
-    });
-
-    it("Remove Shortcuts DialogButton fires closeModal + triggers handleRemoveShortcuts", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "a", name: "PlatA", count: 1 }],
-      });
-      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
-        success: true,
-        app_ids: [],
-        rom_ids: [],
-        platform_name: "PlatA",
-      });
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("PlatA (1)"));
-      const modalEl = vi.mocked(showModal).mock.calls[0]?.[0];
-      const closeModal = vi.fn();
-      const cloned = createElement((modalEl as ReactElement).type, {
-        ...(modalEl as ReactElement<Record<string, unknown>>).props,
-        closeModal,
-      });
-      const { getByText: getByTextModal } = render(cloned);
-      await act(async () => {
-        fireEvent.click(getByTextModal("Remove Shortcuts (1 game)"));
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(closeModal).toHaveBeenCalled();
-      expect(vi.mocked(backend.removePlatformShortcuts)).toHaveBeenCalledWith("a");
-    });
-
-    it("Delete BIOS Files DialogButton fires closeModal + triggers handleDeleteBios", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
-        platforms: [{ slug: "a", name: "PlatA", count: 1 }],
-      });
-      vi.mocked(backend.deletePlatformBios).mockResolvedValue({
-        success: true,
-        deleted_count: 0,
-        message: "ok",
-      });
-      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
-      await flushAsync();
-      fireEvent.click(getByText("PlatA (1)"));
-      const modalEl = vi.mocked(showModal).mock.calls[0]?.[0];
-      const closeModal = vi.fn();
-      const cloned = createElement((modalEl as ReactElement).type, {
-        ...(modalEl as ReactElement<Record<string, unknown>>).props,
-        closeModal,
-      });
-      const { getByText: getByTextModal } = render(cloned);
-      await act(async () => {
-        fireEvent.click(getByTextModal("Delete BIOS Files"));
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(closeModal).toHaveBeenCalled();
-      expect(vi.mocked(backend.deletePlatformBios)).toHaveBeenCalledWith("a");
     });
   });
 });

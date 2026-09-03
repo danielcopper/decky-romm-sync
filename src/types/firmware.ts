@@ -146,10 +146,11 @@ export interface FirmwarePlatformExt extends FirmwarePlatform {
   emulators?: EmulatorOption[];
   emulator_data_available?: boolean;
   // Per-platform BIOS aggregates computed by the backend from the same
-  // core-aware classified files (`compute_bios_level`), so the System page reads
-  // the unknown/ok/partial/missing decision and display counts off the payload
-  // instead of re-deriving the threshold logic. The optional-missing breakdown
-  // stays a local file-level computation (a richer axis the level doesn't model).
+  // core-aware classified files (`compute_bios_level`), so the platform detail
+  // reads the unknown/ok/partial/missing decision and display counts off the
+  // payload instead of re-deriving the threshold logic. The optional-missing
+  // breakdown stays a local file-level computation (a richer axis the level
+  // doesn't model).
   bios_level?: BiosLevel | null;
   required_count?: number;
   required_downloaded?: number;

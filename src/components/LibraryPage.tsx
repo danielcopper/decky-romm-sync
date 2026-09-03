@@ -1,8 +1,21 @@
+/**
+ * The Library page: what of RomM is synced into Steam, in two L1/R1 tabs.
+ *
+ * **Platforms** is list and detail — the platform list on the left with its sync
+ * toggle in the row, everything else about the focused platform on the right.
+ * **Collections** is one list with its filters above it.
+ *
+ * Both tabs' state lives here rather than in the tab components. Steam's tabbed
+ * page renders only the active tab and keys it by tab id, so a tab component
+ * owning its own reads would re-issue every one of them on each switch back.
+ *
+ * Structure and vocabulary: `docs/architecture/qam-panel.md`, section Library.
+ */
+
 import { useState, useEffect, useMemo, useRef, FC } from "react";
 import {
   PanelSection,
   PanelSectionRow,
-  ButtonItem,
   ToggleField,
   DialogButton,
   Field,
@@ -12,9 +25,6 @@ import {
   showModal,
 } from "@decky/ui";
 import {
-  getPlatforms,
-  savePlatformSync,
-  setAllPlatformsSync,
   getCollections,
   saveCollectionSync,
   saveCollectionsSync,
@@ -23,17 +33,19 @@ import {
   getSettings,
 } from "../api/backend";
 import type {
-  PlatformSyncSetting,
   CollectionSyncSetting,
   CollectionKind,
   CollectionScope,
   CollectionOwnerScope,
   VirtualCollectionType,
 } from "../types";
-import { scrollToTop, scrollElementToTop } from "../utils/scrollHelpers";
+import { scrollElementToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
 import { fuzzyMatch } from "../utils/fuzzyMatch";
 import { LoadingRow } from "./LoadingRow";
+import { WidePage, type WidePageTab } from "./qam/WidePage";
+import { PlatformsTab } from "./library/PlatformsTab";
+import { usePlatformsPage } from "./library/usePlatformsPage";
 
 type CollectionSubTab = "standard" | "smart" | "virtual";
 
@@ -133,11 +145,7 @@ interface LibraryPageProps {
 
 export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   const [activeTab, setActiveTab] = useState<"platforms" | "collections">("platforms");
-
-  // --- Platforms tab state ---
-  const [syncPlatforms, setSyncPlatforms] = useState<PlatformSyncSetting[]>([]);
-  const [syncLoading, setSyncLoading] = useState(true);
-  const [syncError, setSyncError] = useState(false);
+  const platformsState = usePlatformsPage();
 
   // --- Collections tab state ---
   const [collections, setCollections] = useState<CollectionSyncSetting[]>([]);
@@ -179,20 +187,6 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     }
     return favs[0] ?? null;
   }, [collections]);
-
-  // Load sync platforms on mount
-  useEffect(() => {
-    getPlatforms()
-      .then((result) => {
-        if (result.success) {
-          setSyncPlatforms(result.platforms);
-        } else {
-          setSyncError(true);
-        }
-      })
-      .catch(() => setSyncError(true))
-      .finally(() => setSyncLoading(false));
-  }, []);
 
   // Load collections data lazily on first switch to collections tab.
   // Sub-tab is reset to "standard" in the tab-click handler (not here);
@@ -244,26 +238,6 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     setActiveSubTab(sub);
     setSearch("");
     setVirtualTypeFilter("all");
-  };
-
-  // --- Platforms tab handlers ---
-  const handleToggle = async (id: number, enabled: boolean) => {
-    setSyncPlatforms((prev) => prev.map((p) => (p.id === id ? { ...p, sync_enabled: enabled } : p)));
-    try {
-      await savePlatformSync(id, enabled);
-    } catch {
-      setSyncPlatforms((prev) => prev.map((p) => (p.id === id ? { ...p, sync_enabled: !enabled } : p)));
-    }
-  };
-
-  const handleSetAll = async (enabled: boolean) => {
-    const previous = syncPlatforms.map((p) => ({ ...p }));
-    setSyncPlatforms((prev) => prev.map((p) => ({ ...p, sync_enabled: enabled })));
-    try {
-      await setAllPlatformsSync(enabled);
-    } catch {
-      setSyncPlatforms(previous);
-    }
   };
 
   // --- Collections tab handlers ---
@@ -348,61 +322,6 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     } catch {
       setOwnerScope(previous);
     }
-  };
-
-  // --- Platforms tab content ---
-  const renderPlatformsContent = () => {
-    if (syncLoading) {
-      return <LoadingRow />;
-    }
-    if (syncError) {
-      return (
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={onBack}>
-            Failed to load platforms
-          </ButtonItem>
-        </PanelSectionRow>
-      );
-    }
-    return (
-      <>
-        <PanelSectionRow>
-          <ButtonItem
-            layout="below"
-            onClick={() => {
-              detach(handleSetAll(true));
-            }}
-          >
-            Enable All
-          </ButtonItem>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem
-            layout="below"
-            onClick={() => {
-              detach(handleSetAll(false));
-            }}
-          >
-            Disable All
-          </ButtonItem>
-        </PanelSectionRow>
-        {syncPlatforms.map((platform) => (
-          <PanelSectionRow key={platform.id}>
-            <ToggleField
-              label={platform.name}
-              // Prefer the persisted post-collapse shortcut count (#1382) — the
-              // number of games the platform actually syncs into Steam — over
-              // the raw server file count; raw is the never-synced fallback.
-              description={`${platform.collapsed_count ?? platform.rom_count} ROMs`}
-              checked={platform.sync_enabled}
-              onChange={(value: boolean) => {
-                detach(handleToggle(platform.id, value));
-              }}
-            />
-          </PanelSectionRow>
-        ))}
-      </>
-    );
   };
 
   // --- Collections tab content ---
@@ -680,51 +599,26 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     );
   };
 
-  // --- Render ---
+  const tabs: WidePageTab[] = [
+    { id: "platforms", title: "Platforms", content: <PlatformsTab state={platformsState} /> },
+    // The Collections tab keeps the narrow page's controls and list until its
+    // own rebuild (#1815, part two) turns it into one wide table.
+    { id: "collections", title: "Collections", content: <>{renderCollectionsContent()}</> },
+  ];
+
   return (
-    <>
-      <PanelSection>
-        <PanelSectionRow>
-          <ButtonItem
-            layout="below"
-            onClick={onBack}
-            // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
-            onFocus={scrollToTop}
-          >
-            Back
-          </ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
-      <Focusable flow-children="horizontal" style={{ display: "flex", gap: "4px", padding: "0 16px 12px" }}>
-        <DialogButton
-          style={{
-            flex: 1,
-            minWidth: 0,
-            padding: "10px 0",
-            opacity: activeTab === "platforms" ? 1 : 0.5,
-            borderBottom: activeTab === "platforms" ? "2px solid #1a9fff" : "2px solid transparent",
-          }}
-          onClick={() => setActiveTab("platforms")}
-        >
-          Platforms
-        </DialogButton>
-        <DialogButton
-          style={{
-            flex: 1,
-            minWidth: 0,
-            padding: "10px 0",
-            opacity: activeTab === "collections" ? 1 : 0.5,
-            borderBottom: activeTab === "collections" ? "2px solid #1a9fff" : "2px solid transparent",
-          }}
-          onClick={handleCollectionsTabClick}
-        >
-          Collections
-        </DialogButton>
-      </Focusable>
-
-      {activeTab === "platforms" && <PanelSection title="Platforms">{renderPlatformsContent()}</PanelSection>}
-
-      {activeTab === "collections" && <>{renderCollectionsContent()}</>}
-    </>
+    <WidePage
+      title="Library"
+      onBack={onBack}
+      tabs={tabs}
+      activeTab={activeTab}
+      onShowTab={(tabId) => {
+        if (tabId === "collections") {
+          handleCollectionsTabClick();
+          return;
+        }
+        setActiveTab("platforms");
+      }}
+    />
   );
 };

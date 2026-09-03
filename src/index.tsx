@@ -5,7 +5,6 @@ import { FaGamepad } from "react-icons/fa";
 import { MainPage } from "./components/MainPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { LibraryPage } from "./components/LibraryPage";
-import { SystemPage } from "./components/SystemPage";
 import { DangerZone } from "./components/DangerZone";
 import { DownloadQueue } from "./components/DownloadQueue";
 import { OWNS_ENTRY_FOCUS_ATTR } from "./components/qam/WidePage";
@@ -152,9 +151,6 @@ const QAMPanel: FC = () => {
       break;
     case "downloads":
       content = <DownloadQueue onBack={() => setPage("main")} />;
-      break;
-    case "system":
-      content = <SystemPage onBack={() => setPage("main")} />;
       break;
     default:
       content = <MainPage onNavigate={(p) => setPage(p)} />;
