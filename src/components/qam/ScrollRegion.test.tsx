@@ -89,8 +89,10 @@ describe("ScrollRegion", () => {
 
     expect(screen.queryByTestId("scroll-panel")).not.toBeInTheDocument();
     // A Focusable rather than a div: it is the base panel Steam's scroll panel
-    // itself renders, so the region stays one level of the focus tree and a
-    // missed probe costs Steam's scroll padding, not the structure.
+    // itself renders, so the region stays one level of the focus tree. What a
+    // missed probe costs is what the panel adds on top — its scroll padding, its
+    // own focus-ring root, and the ref that scrolls the focused element back
+    // into view after a resize — not the structure.
     const region = screen.getByTestId("focusable");
     expect(region).toContainElement(screen.getByText("region content"));
     expectBounds(region);

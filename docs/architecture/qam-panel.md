@@ -86,10 +86,12 @@ A region scrolls the way the rest of the QAM scrolls: by moving focus. Every scr
 one Steam's tabbed page wraps each tab's content in. It is an `overflow-y: auto` box that takes no focus of its own, so
 the rows inside it take focus directly and Steam scrolls the focused row into view.
 
-**Every row a reader must be able to reach is a focusable row.** A toggle, a button, a `Focusable`-wrapped table row —
-including a table row that carries no action, so the reader can walk the table. Plain text that only accompanies a row,
-a hint under a group, scrolls with its neighbours and need not be reachable itself. This is what focus-driven scrolling
-costs: content nobody can focus cannot be scrolled to.
+**Every row a reader must be able to reach is a focusable row.** A toggle, a button, or — where a table row carries no
+action of its own, so the reader can still walk the table — a `Focusable` with an `onActivate` handler. The handler is
+what makes it a stop: `FocusableProps` exposes no `focusable` prop, an activate handler is what sets one, and a bare
+`Focusable` is a container that passes focus on to its children rather than taking it. Plain text that only accompanies
+a row, a hint under a group, scrolls with its neighbours and need not be reachable itself. This is what focus-driven
+scrolling costs: content nobody can focus cannot be scrolled to.
 
 `ScrollPanelGroup` — the sibling that binds gamepad direction to scrolling, and would carry unfocusable content — was
 tried on the device and rejected. It is focusable and its OK button focuses its first visible child, so each region

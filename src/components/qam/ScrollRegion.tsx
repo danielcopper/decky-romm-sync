@@ -9,9 +9,10 @@
  * only accompanies one scrolls along with it.
  *
  * The panel comes from a webpack probe that can miss, and a page whose regions
- * silently vanish would be worse than one whose regions scroll without Steam's
- * own scroll padding — so the fallback keeps the region, its bounds and its
- * place in the focus tree.
+ * silently vanish would be worse than one that scrolls without what the panel
+ * adds on top — so the fallback keeps the region, its bounds and its place in
+ * the focus tree, and gives up Steam's scroll padding, its own focus-ring root
+ * and the ref that scrolls the focused element back into view after a resize.
  *
  * Structure and vocabulary: `docs/architecture/qam-panel.md`.
  */
