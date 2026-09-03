@@ -202,7 +202,7 @@ def _seed_bios(uow, *, platform_slug, file_name, file_path, firmware_id=None):
     """Seed a ``BiosFile`` into the shared fake UoW the way FirmwareService writes it.
 
     ``bios_files`` has no FK onto ``roms``, so no parent row is required (unlike
-    ``_seed_install``). Mirrors ``FirmwareService._download_firmware_post_io``'s
+    ``_seed_install``). Mirrors ``FirmwareDownloader._download_firmware_post_io``'s
     ``uow.bios_files.save(BiosFile.mark_downloaded(...))`` write.
     """
     from domain.bios_file import BiosFile
