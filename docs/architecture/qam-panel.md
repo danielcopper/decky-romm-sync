@@ -43,8 +43,9 @@ How a page gets wide, measured on the device (Big Picture, CEF Chrome 126) rathe
   `transform: translateX(506px)`, so 348 px stay visible. Steam's `Expanded` class sets `translateX(0)`. The class
   follows one MobX observable on the FriendsUI store, which listens for `message` events on the SharedJSContext window —
   the window plugin code runs in. A wide page posts `{ message: "QamFriendsExpanded" }` to `window` on mount and
-  `{ message: "QamFriendsHidden" }` when it lets go. The target origin is always `window.origin`: `postMessage` throws
-  on a mismatch, and one caller is `onDismount`, where a throw abandons the rest of the plugin's teardown.
+  `{ message: "QamFriendsHidden" }` when it lets go. The target origin is always `window.origin`, which addresses the
+  message to that window and always matches it. A well-formed target origin that does not match is checked at delivery
+  and the message is discarded in silence, so a literal one would leave the panel simply never widening.
 - Every tab's content panel carries `max-width: 300px`; only Steam's Friends panel lifts it. A wide page injects one
   stylesheet whose `:has()` rule lifts the cap for a marker class on the plugin's own subtree. Class names come from
   `quickAccessMenuClasses`, which can be `undefined`; `[id^="quickaccess_content_"]` is the fallback selector. Decky

@@ -54,9 +54,11 @@ let injectedStyle: HTMLStyleElement | null = null;
  * events on the window plugin code runs in and flips one MobX observable, which
  * carries the `Expanded` class that un-shifts the QAM's placeholder.
  *
- * The target origin is always `window.origin`, never a literal: `postMessage`
- * throws on a mismatch, and one caller is `onDismount`, where a throw abandons
- * the rest of the plugin's teardown.
+ * The target origin is `window.origin`: it addresses the message to the one
+ * window meant to receive it, and always matches, so the message is always
+ * delivered. Neither alternative is wanted — a literal that ever stops matching
+ * is checked at delivery and discarded in silence, leaving a panel that simply
+ * never widens, and `"*"` is delivered to any document in the window.
  */
 export function setQamExpanded(expanded: boolean): void {
   window.postMessage({ message: expanded ? "QamFriendsExpanded" : "QamFriendsHidden" }, window.origin);

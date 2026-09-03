@@ -111,12 +111,13 @@ describe("setQamExpanded", () => {
     ]);
   });
 
-  it("posts to window.origin, the only target origin that does not throw", async () => {
+  it("passes the window's own origin rather than the literal the spike shipped first", async () => {
     const { setQamExpanded } = await loadQamExpansion(PROBE_CLASSES);
 
-    // A literal origin is what the spike shipped first: postMessage rejects a
-    // target origin that is not the window's own, and one caller is onDismount,
-    // where the throw abandons the rest of the plugin's teardown.
+    // The throw below is happy-dom's, not the browser's: Chrome parses a
+    // well-formed target origin and then discards the message at delivery when
+    // it does not match. So this pins the module against a literal only HERE —
+    // on the device the same mistake is silent, and the panel just never widens.
     expect(() => window.postMessage({ message: "QamFriendsExpanded" }, "https://steamloopback.host")).toThrow();
     expect(() => setQamExpanded(true)).not.toThrow();
     expect(() => setQamExpanded(false)).not.toThrow();

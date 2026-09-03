@@ -1012,9 +1012,6 @@ export default definePlugin(() => {
       // Ahead of every step below that can throw: the panel width is a global
       // Steam flag with no React cleanup left to clear it here, so a teardown
       // that dies halfway must not be what leaves Steam's own QAM expanded.
-      // Safe in that position because this call cannot throw itself — the width
-      // message goes to `window.origin`, the one target origin postMessage
-      // accepts.
       collapseQamOnDismount();
       syncContinuationController.abort();
       destroySessionManager();
