@@ -167,21 +167,35 @@ class FirmwareDownloader:
         self._logger.info(f"Firmware downloaded: {file_name} -> {dest}")
         return {"success": True, "file_path": dest, "md5_match": md5_match}
 
-    async def download_all_firmware(self, platform_slug) -> dict[str, Any]:
-        """Download all firmware for a given platform slug."""
+    async def _platform_firmware_rows(self, platform_slug) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        """The library rows filed under *platform_slug*, or the failure to return instead.
+
+        The three download entry points ask the same two questions first — what
+        does the library hold, and which of it is this platform's — and the
+        second is not a plain slug match: ``psx`` is filed under ``psx`` and
+        ``ps`` both. Answering it in one place is what keeps a button from
+        fetching a set the button beside it would not.
+
+        The second element is a ready-made failure response when the listing
+        could not be read; a caller returns it as it stands.
+        """
         try:
             firmware_list = await self._loop.run_in_executor(None, self._listing.get_firmware_list)
         except Exception as e:
             self._logger.error(f"Failed to fetch firmware: {e}")
             resp = error_response(e)
             resp["downloaded"] = 0
-            return resp
+            return [], resp
 
-        # Filter by platform slug (use mapped slugs, e.g. "psx" -> ["psx", "ps"])
         fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        platform_firmware = [
-            fw for fw in firmware_list if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
-        ]
+        rows = [fw for fw in firmware_list if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs]
+        return rows, None
+
+    async def download_all_firmware(self, platform_slug) -> dict[str, Any]:
+        """Download all firmware for a given platform slug."""
+        platform_firmware, failure = await self._platform_firmware_rows(platform_slug)
+        if failure is not None:
+            return failure
 
         placements = await self._loop.run_in_executor(None, self._demand.placement_index)
         downloaded, errors = await self._download_firmware_batch(platform_firmware, placements)
@@ -243,21 +257,11 @@ class FirmwareDownloader:
         one file failed, so the single fetch's own failure response is returned
         as it stands rather than collapsed into a name in a list.
         """
-        try:
-            firmware_list = await self._loop.run_in_executor(None, self._listing.get_firmware_list)
-        except Exception as e:
-            self._logger.error(f"Failed to fetch firmware: {e}")
-            resp = error_response(e)
-            resp["downloaded"] = 0
-            return resp
+        rows, failure = await self._platform_firmware_rows(platform_slug)
+        if failure is not None:
+            return failure
 
-        fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        wanted = [
-            fw
-            for fw in firmware_list
-            if fw.get("file_name") == file_name
-            and firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
-        ]
+        wanted = [fw for fw in rows if fw.get("file_name") == file_name]
         if not wanted:
             return {
                 "success": False,
@@ -283,25 +287,13 @@ class FirmwareDownloader:
 
     async def download_required_firmware(self, platform_slug) -> dict[str, Any]:
         """Download only the firmware the platform's launching core will not run without."""
-        try:
-            firmware_list = await self._loop.run_in_executor(None, self._listing.get_firmware_list)
-        except Exception as e:
-            self._logger.error(f"Failed to fetch firmware: {e}")
-            resp = error_response(e)
-            resp["downloaded"] = 0
-            return resp
+        rows, failure = await self._platform_firmware_rows(platform_slug)
+        if failure is not None:
+            return failure
 
-        system = self._resolve_system(platform_slug)
-        fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        core_so, _ = self._core_info.get_active_core(system)
+        core_so, _ = self._core_info.get_active_core(self._resolve_system(platform_slug))
         placements = await self._loop.run_in_executor(None, self._demand.placement_index)
-
-        platform_firmware = [
-            fw
-            for fw in firmware_list
-            if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
-            and _required_by(placements.get(fw.get("file_name", "")), core_so)
-        ]
+        platform_firmware = [fw for fw in rows if _required_by(placements.get(fw.get("file_name", "")), core_so)]
 
         downloaded, errors = await self._download_firmware_batch(platform_firmware, placements)
 
