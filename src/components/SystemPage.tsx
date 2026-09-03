@@ -86,6 +86,37 @@ function getBiosSummary(
 }
 
 /**
+ * The summary for a platform making no readiness claim. Two shapes reach it and
+ * they are different sentences.
+ *
+ * `requiredWithheld` above zero is a platform whose emulators DID answer and one
+ * of whose required rows nothing could judge — a folder, whose contents the
+ * reading does not inspect. Zero is the older shape: no installed emulator's
+ * answer could be established for the platform at all, which splits again on
+ * whether there are rows to point at, because a platform whose emulators are all
+ * standalone has none and "0 file(s) nothing installed could answer for" would
+ * read as a finished count of nothing rather than as silence.
+ */
+function getUnknownSummary(requiredWithheld: number, total: number) {
+  if (requiredWithheld > 0) {
+    return {
+      summaryLabel: "BIOS readiness unknown",
+      summaryDescription:
+        requiredWithheld === 1
+          ? "A required folder is here and its contents cannot be checked"
+          : `${requiredWithheld} required folders are here and their contents cannot be checked`,
+    };
+  }
+  return {
+    summaryLabel: "BIOS requirement unknown",
+    summaryDescription:
+      total > 0
+        ? `${total} file(s) nothing installed could answer for`
+        : "Nothing installed could answer for this system",
+  };
+}
+
+/**
  * Tell an open game-detail page that this platform's firmware changed, so it
  * re-reads its BIOS requirement instead of leaving the pre-change one standing
  * (#939). Every download and delete on this page is such a change; nothing else
@@ -345,27 +376,9 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     const nothingEstablished = isUnknown && requiredWithheld === 0;
 
     const needsAttention = platform.has_games && !isUnknown && requiredCount > 0 && !requiredReady;
-    let summary: { summaryLabel: string; summaryDescription: string };
-    if (nothingEstablished) {
-      summary = {
-        summaryLabel: "BIOS requirement unknown",
-        summaryDescription:
-          total > 0
-            ? `${total} file(s) nothing installed could answer for`
-            : "Nothing installed could answer for this system",
-      };
-    } else if (isUnknown) {
-      summary = {
-        summaryLabel: "BIOS readiness unknown",
-        summaryDescription:
-          requiredWithheld === 1
-            ? "A required folder is here and its contents cannot be checked"
-            : `${requiredWithheld} required folders are here and their contents cannot be checked`,
-      };
-    } else {
-      summary = getBiosSummary(requiredCount, requiredDone, requiredReady, optionalMissing, done, total);
-    }
-    const { summaryLabel, summaryDescription } = summary;
+    const { summaryLabel, summaryDescription } = isUnknown
+      ? getUnknownSummary(requiredWithheld, total)
+      : getBiosSummary(requiredCount, requiredDone, requiredReady, optionalMissing, done, total);
     // The download affordances key off what is missing AND fetchable, never off
     // readiness: a required file the RomM library does not hold leaves the
     // platform not ready and still gives the user nothing to press here.
