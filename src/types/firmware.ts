@@ -89,11 +89,10 @@ export interface EmulatorOption {
  * Response shape of the `get_platform_core_info` callable — the dedicated
  * single-platform emulator-info path, decoupled from the per-game BIOS payload
  * (#923). The per-game detail page (`RomMPlaySection` / `RomMGameInfoPanel`)
- * reads emulator data from here. The System page's multi-platform overview
- * instead reads it off the `get_firmware_status` payload (`FirmwarePlatformExt`),
- * which enumerates every platform in one call — see that interface below.
- * `emulator_data_available` is false when `es_systems.xml` cannot be read
- * (RetroDECK not detected), so the picker can say so instead of an empty list.
+ * reads emulator data from here; the platform-keyed twin for a caller with no
+ * ROM to layer is {@link SystemCoreInfo}. `emulator_data_available` is false
+ * when `es_systems.xml` cannot be read (RetroDECK not detected), so the picker
+ * can say so instead of an empty list.
  */
 export interface CoreInfo {
   emulators: EmulatorOption[];
@@ -105,11 +104,35 @@ export interface CoreInfo {
 }
 
 /**
- * Per-platform entry in the `get_firmware_status` overview. Carries the
- * platform's active/available cores alongside its BIOS file state so the System
- * page can render the combined core+BIOS overview for every platform from one
- * call. This is the system-wide overview path — distinct from the per-game
- * `check_platform_bios` payload, which no longer carries any core fields (#923).
+ * Response shape of the `get_system_core_info` callable — the platform-keyed
+ * core read the Library page's Platforms detail issues once per selected
+ * platform (#1815). Carries what the core picker needs and nothing else: no
+ * per-game layer (there is no ROM), and no BIOS data (the detail's table reads
+ * that off `get_firmware_status`).
+ *
+ * `active_core_label` is the platform-layer resolution — the per-platform
+ * override when it still resolves to a bakeable emulator, else the es_systems
+ * default — and is `null` when the platform has no bakeable emulator at all,
+ * which renders as "Default".
+ */
+export interface SystemCoreInfo {
+  success: boolean;
+  emulators: EmulatorOption[];
+  emulator_data_available: boolean;
+  active_core_label: string | null;
+  reason?: string;
+  message?: string;
+}
+
+/**
+ * Per-platform entry in the `get_firmware_status` overview: the BIOS file state
+ * of every platform the payload can speak for, in one call. This is the
+ * library-wide overview path — distinct from the per-game `check_platform_bios`
+ * payload, which no longer carries any core fields (#923). Its core fields are
+ * a second answer to {@link SystemCoreInfo}'s question, kept because they cost
+ * nothing extra here; a platform this payload has nothing to say about carries
+ * no entry at all, which is why the Platforms detail asks the core read
+ * directly rather than joining onto this one.
  *
  * `files` is the union of what the RomM library offers for the platform and what
  * the platform's emulators ask for, so a row can be present with `on_server`

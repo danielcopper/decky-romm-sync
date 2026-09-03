@@ -161,6 +161,10 @@ class FirmwareService:
         """Download all firmware the library holds for a platform."""
         return await self._downloads.download_all_firmware(platform_slug)
 
+    async def download_platform_firmware_file(self, platform_slug, file_name) -> dict[str, Any]:
+        """Download the one firmware file the library holds for a platform under that name."""
+        return await self._downloads.download_platform_firmware_file(platform_slug, file_name)
+
     async def download_required_firmware(self, platform_slug) -> dict[str, Any]:
         """Download only the firmware the platform's launching core will not run without."""
         return await self._downloads.download_required_firmware(platform_slug)

@@ -339,6 +339,7 @@ class TestTheFacadeOnlyDelegates:
             "check_platform_bios",
             "download_firmware",
             "download_all_firmware",
+            "download_platform_firmware_file",
             "download_required_firmware",
             "delete_platform_bios",
         }
@@ -2009,6 +2010,136 @@ class TestDownloadAllFirmware:
 
         assert download_called_ids == []
         assert result["downloaded"] == 0
+
+
+class TestDownloadPlatformFirmwareFile:
+    """The per-row Download button (#164): one named file, scoped to its platform."""
+
+    @staticmethod
+    def _listing() -> list[dict[str, Any]]:
+        return [
+            {
+                "id": 1,
+                "file_name": "existing.bin",
+                "file_path": "bios/dc/existing.bin",
+                "file_size_bytes": 50,
+                "md5_hash": "",
+            },
+            {
+                "id": 2,
+                "file_name": "missing.bin",
+                "file_path": "bios/dc/missing.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+            {
+                "id": 3,
+                "file_name": "missing.bin",
+                "file_path": "bios/n64/missing.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_downloads_the_named_file_of_that_platform(self, plugin, fw, tmp_path):
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        _set_loop(fw, asyncio.get_event_loop())
+        fetched = []
+
+        async def fake_download_one(fw_id, _placements):
+            fetched.append(fw_id)
+            return {"success": True, "file_path": "/bios/dc/missing.bin", "md5_match": None}
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=self._listing()),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("dc", "missing.bin")
+
+        assert result["success"] is True
+        assert result["downloaded"] == 1
+        # id 3 carries the same file name under another platform's folder.
+        assert fetched == [2]
+
+    @pytest.mark.asyncio
+    async def test_a_file_already_at_its_destination_is_not_refetched(self, plugin, fw, tmp_path):
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        (bios_dir / "existing.bin").write_bytes(b"\x00" * 50)
+        _set_loop(fw, asyncio.get_event_loop())
+
+        async def fake_download_one(fw_id, _placements):
+            raise AssertionError(f"nothing to fetch, but firmware {fw_id} was requested")
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=self._listing()),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("dc", "existing.bin")
+
+        assert result["success"] is True
+        assert result["downloaded"] == 0
+        assert "already here" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_a_name_the_platform_does_not_hold_is_refused(self, plugin, fw, tmp_path):
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        _set_loop(fw, asyncio.get_event_loop())
+
+        async def fake_download_one(fw_id, _placements):
+            raise AssertionError(f"nothing to fetch, but firmware {fw_id} was requested")
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=self._listing()),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("dc", "nowhere.bin")
+
+        assert result["success"] is False
+        assert result["reason"] == "not_in_library"
+        assert result["downloaded"] == 0
+
+    @pytest.mark.asyncio
+    async def test_the_one_fetch_s_own_failure_is_surfaced(self, plugin, fw, tmp_path):
+        # One press wants the reason: the single fetch's failure shape reaches
+        # the caller intact rather than folded into a count of errors.
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        _set_loop(fw, asyncio.get_event_loop())
+
+        async def fake_download_one(_fw_id, _placements):
+            return {"success": False, "reason": "server_unreachable", "message": "RomM is unreachable"}
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=self._listing()),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("dc", "missing.bin")
+
+        assert result["success"] is False
+        assert result["reason"] == "server_unreachable"
+        assert result["message"] == "RomM is unreachable"
+        assert result["downloaded"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_failed_listing_fetch_answers_with_zero(self, plugin, fw):
+        _set_loop(fw, asyncio.get_event_loop())
+        fw._listing._firmware_cache = None
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=OSError("Connection reset")):
+            result = await fw.download_platform_firmware_file("dc", "missing.bin")
+
+        assert result["success"] is False
+        assert result["reason"] == "unknown"
+        assert "Connection reset" in result["message"]
+        assert result["downloaded"] == 0
+        assert fw._listing._firmware_cache is None
 
 
 class TestDeletePlatformBios:

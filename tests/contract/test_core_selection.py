@@ -18,9 +18,10 @@ POST-clear core, never the just-cleared pin (#1047).
 
 The resolution reads the live ``es_systems.xml`` the harness seeds under
 ``tmp_path`` (#1210) — there is no ``core_defaults`` snapshot. The last block
-pins the SHAPE of the two emulator-picker payloads (game-detail
-``get_platform_core_info`` + System-page ``get_firmware_status``) with the
-emulator list present (happy) and absent (emulator data unavailable).
+pins the SHAPE of the three emulator-picker payloads — the game-detail
+``get_platform_core_info``, the platform-keyed ``get_system_core_info`` the
+Library page's Platforms detail asks, and the ``get_firmware_status`` overview —
+with the emulator list present (happy) and absent (emulator data unavailable).
 """
 
 from __future__ import annotations
@@ -162,8 +163,56 @@ async def test_get_platform_core_info_unavailable_when_no_es_systems(harness):
     assert result["emulators"] == []
 
 
+async def test_get_system_core_info_payload_shape(harness):
+    """The platform-keyed picker payload pins its keys and the resolved label."""
+    seed_es_systems(harness)
+
+    result = await harness.plugin.get_system_core_info("gba")
+
+    assert set(result) == {"success", "emulators", "emulator_data_available", "active_core_label"}
+    assert result["success"] is True
+    assert result["emulator_data_available"] is True
+    assert result["emulators"] == [_MGBA_ENTRY, _VBA_NEXT_ENTRY]
+    assert result["active_core_label"] == "mGBA"
+
+
+async def test_get_system_core_info_answers_without_a_rom(harness):
+    """No ROM of the platform is synced — the platform-keyed read still answers.
+
+    This is what separates it from ``get_platform_core_info``: the Platforms
+    detail selects a platform the user has never synced and must still be able
+    to show and change its core.
+    """
+    seed_es_systems(harness)
+
+    result = await harness.plugin.get_system_core_info("gba")
+
+    with harness.uow_factory() as uow:
+        assert list(uow.roms.iter_all()) == []
+    assert result["emulators"] == [_MGBA_ENTRY, _VBA_NEXT_ENTRY]
+
+
+async def test_get_system_core_info_reflects_a_landed_platform_core(harness):
+    """After ``set_system_core`` the read answers with the new label, not the default."""
+    seed_es_systems(harness)
+
+    assert (await harness.plugin.set_system_core("gba", "VBA Next"))["success"] is True
+    result = await harness.plugin.get_system_core_info("gba")
+
+    assert result["active_core_label"] == "VBA Next"
+
+
+async def test_get_system_core_info_unavailable_when_no_es_systems(harness):
+    """No es_systems (RetroDECK not detected) → emulator data flagged unavailable."""
+    result = await harness.plugin.get_system_core_info("gba")
+
+    assert result["emulator_data_available"] is False
+    assert result["emulators"] == []
+    assert result["active_core_label"] is None
+
+
 async def test_get_firmware_status_carries_emulators_per_platform(harness):
-    """The System-page overview carries the classified emulator list per platform."""
+    """The firmware overview carries the classified emulator list per platform."""
     seed_es_systems(harness)
     seed_rom(harness, 7, platform_slug="gba")  # bound → has_games
     harness.romm.firmware_files = list(_GBA_FIRMWARE)

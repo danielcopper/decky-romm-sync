@@ -225,6 +225,62 @@ class FirmwareDownloader:
                 errors.append(fw.get("file_name", str(fw["id"])))
         return downloaded, errors
 
+    async def download_platform_firmware_file(self, platform_slug, file_name) -> dict[str, Any]:
+        """Download the one firmware file *file_name* the library holds for *platform_slug*.
+
+        The per-row Download button's backend. Addressed by name within the
+        platform rather than by RomM's firmware id: the id is the server's, and
+        the row it would come from is a status row the page may have been holding
+        for a while — resolving the name against the current listing here keeps
+        the platform scoping identical to :meth:`download_all_firmware` and the
+        two buttons beside it. A name the platform's listing does not hold is a
+        ``not_found`` refusal, never a silent no-op.
+
+        Answers in the batch shape (``downloaded`` 0 or 1) because the file may
+        already be at its destination, which the batch skips — the same outcome
+        as pressing Download all with nothing left to fetch. What it does not
+        borrow from the batch is the error fold: one press wants the reason the
+        one file failed, so the single fetch's own failure response is returned
+        as it stands rather than collapsed into a name in a list.
+        """
+        try:
+            firmware_list = await self._loop.run_in_executor(None, self._listing.get_firmware_list)
+        except Exception as e:
+            self._logger.error(f"Failed to fetch firmware: {e}")
+            resp = error_response(e)
+            resp["downloaded"] = 0
+            return resp
+
+        fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
+        wanted = [
+            fw
+            for fw in firmware_list
+            if fw.get("file_name") == file_name
+            and firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
+        ]
+        if not wanted:
+            return {
+                "success": False,
+                "reason": "not_in_library",
+                "message": f"{file_name} is not in your RomM library for {platform_slug}",
+                "downloaded": 0,
+            }
+
+        placements = await self._loop.run_in_executor(None, self._demand.placement_index)
+        fw = wanted[0]
+        # The already-there skip probes the disk rather than reading the
+        # catalogue, for the reason the batch states: the catalogue's answer
+        # predates every download since it was read.
+        dest = self._demand.safe_dest_path(fw, placements.get(file_name))
+        if dest is not None and self._firmware_file_store.exists(dest):
+            return {"success": True, "message": f"{file_name} is already here", "downloaded": 0}
+
+        result = await self._download_one(fw["id"], placements)
+        if not result.get("success"):
+            result["downloaded"] = 0
+            return result
+        return {**result, "message": f"Downloaded {file_name}", "downloaded": 1}
+
     async def download_required_firmware(self, platform_slug) -> dict[str, Any]:
         """Download only the firmware the platform's launching core will not run without."""
         try:

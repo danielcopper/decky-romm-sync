@@ -2,9 +2,10 @@
 
 Owns the plugin's two core-selection deviations: the per-platform core (the
 ``settings.json`` ``platform_cores`` map) and the per-game emulator override (the
-``roms.emulator_override`` pin). Enumerating the cores available for a ROM's
-platform, toggling the per-platform default (with the fan-out that re-bakes every
-affected shortcut), and pinning/clearing a per-game core all live here; the
+``roms.emulator_override`` pin). Enumerating the cores available for a platform —
+by slug, or for a ROM with its per-game pin layered on top — toggling the
+per-platform default (with the fan-out that re-bakes every affected shortcut),
+and pinning/clearing a per-game core all live here; the
 cross-service BIOS recheck that follows a per-platform core write is also
 scheduled from this service.
 
@@ -21,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from domain.emulator_commands import label_to_invocation, options_to_payload
+from domain.emulator_commands import label_to_invocation, options_to_payload, resolve_platform_label
 from domain.shortcut_data import (
     EmulatorInvocation,
     build_launch_options,
@@ -132,6 +133,37 @@ class CoreService:
             "active_core_label": active_label,
             "platform_core_label": self._settings.get("platform_cores", {}).get(rom.platform_slug),
             "has_game_override": rom.emulator_override is not None,
+        }
+
+    async def get_system_core_info(self, platform_slug: str) -> dict[str, Any]:
+        """Return the emulators available for *platform_slug* + the active one.
+
+        The read half of :meth:`set_system_core`, keyed by platform rather than
+        by ROM: the Library page's Platforms detail asks it once per selected
+        platform. ``emulators`` is the full classified picker payload for the
+        platform's ES-DE system, ``emulator_data_available`` is ``False`` when
+        ``es_systems.xml`` cannot be read (RetroDECK not detected), and
+        ``active_core_label`` is the platform-layer resolution — the per-platform
+        override when it still resolves, else the es_systems default — so the
+        label and a launch from this platform agree.
+
+        Distinct from :meth:`get_platform_core_info`, which answers the same
+        question for one ROM and layers that ROM's ``emulator_override`` on top;
+        a platform-keyed caller has no ROM to layer and must be answerable for a
+        platform holding no synced ROM at all.
+        """
+        return await self._loop.run_in_executor(None, self._system_core_info_io, platform_slug)
+
+    def _system_core_info_io(self, platform_slug: str) -> dict[str, Any]:
+        system = self._resolve_system(platform_slug)
+        options = self._core_info.get_emulator_options(system)
+        return {
+            "success": True,
+            "emulators": options_to_payload(options["options"]),
+            "emulator_data_available": options["available"],
+            "active_core_label": resolve_platform_label(
+                options["options"], self._settings.get("platform_cores", {}).get(platform_slug)
+            ),
         }
 
     def _set_system_core_io(self, platform_slug: str, core_label: str) -> list[dict[str, Any]]:

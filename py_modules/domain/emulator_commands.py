@@ -207,6 +207,25 @@ def label_to_invocation(options: list[EmulatorOption], label: str) -> EmulatorIn
     return None
 
 
+def resolve_platform_label(options: list[EmulatorOption], override: str | None) -> str | None:
+    """Return the platform-layer active-emulator display label, or ``None``.
+
+    The platform-level projection of the read-path precedence
+    (``ActiveCoreResolver`` without the per-game layer): the per-platform
+    override label (``settings.json`` ``platform_cores``) when it is set and
+    still resolves to a bakeable emulator, else the es_systems default emulator
+    label (the first bakeable command). A stale / no-longer-installed override
+    degrades to the default — never fatal — mirroring the launch-bake resolver so
+    the label a surface shows and the actual launch agree. ``None`` when the
+    platform has no bakeable emulator at all (empty menu, or ``es_systems.xml``
+    unreadable), which the frontend renders as "Default".
+    """
+    if override is not None and label_to_invocation(options, override) is not None:
+        return override
+    default = select_default_option(options)
+    return default.label if default is not None else None
+
+
 def options_to_payload(options: list[EmulatorOption]) -> list[dict[str, Any]]:
     """Project options into the frontend emulator-picker payload.
 

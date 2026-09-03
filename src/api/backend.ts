@@ -18,6 +18,7 @@ import type {
   BiosStatus,
   BiosFileStatus,
   CoreInfo,
+  SystemCoreInfo,
   RomMetadata,
   SaveSyncSettings,
   SaveStatus,
@@ -529,6 +530,12 @@ export const applySteamInputSetting = callable<[], { success: boolean; message: 
 export const getFirmwareStatus = callable<[], FirmwareStatus>("get_firmware_status");
 export const downloadAllFirmware = callable<[string], FirmwareDownloadResult>("download_all_firmware");
 export const downloadRequiredFirmware = callable<[string], FirmwareDownloadResult>("download_required_firmware");
+// One row's Download button (#164). Addressed by file name within the platform,
+// like the two bulk buttons beside it — never by RomM's firmware id, which the
+// status row may have been holding since before the listing moved on.
+export const downloadPlatformFirmwareFile = callable<[string, string], FirmwareDownloadResult>(
+  "download_platform_firmware_file",
+);
 export const checkPlatformBios = callable<[string], BiosStatus>("check_platform_bios");
 export const getBiosStatus = callable<[number], BiosAnswer>("get_bios_status");
 /**
@@ -582,6 +589,12 @@ export const clearGameCore = callable<[number], GameCoreApplyResult>("clear_game
 // core reflects the per-game DB override when one is pinned, else the platform
 // default.
 export const getPlatformCoreInfo = callable<[number], CoreInfo>("get_platform_core_info");
+// The platform-keyed twin (#1815): the Library page's Platforms detail asks it
+// once per selected platform. Distinct from getPlatformCoreInfo, which layers a
+// ROM's own pin on top and so cannot answer for a platform with no synced ROM;
+// distinct from the emulator fields on getFirmwareStatus, which cover only the
+// platforms that payload has something to say about.
+export const getSystemCoreInfo = callable<[string], SystemCoreInfo>("get_system_core_info");
 
 /** One launchable disc image within a multi-disc ROM's install directory. */
 export interface Disc {
