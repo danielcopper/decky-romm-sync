@@ -6,7 +6,7 @@
  * focusin event rather than Steam's gamepad engine.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { useState, type CSSProperties, type FC, type ReactNode } from "react";
 import { ListDetail, type ListDetailItem, type ListDetailProps } from "./ListDetail";
@@ -48,6 +48,14 @@ const ControlledHost: FC<{ onSelect?: (id: string) => void; onToggle?: (id: stri
 };
 
 describe("ListDetail", () => {
+  // The scroll-panel test swaps deckyUiInternals for a stub in the module
+  // registry, where a `vi.doMock` otherwise stands for the rest of the file and
+  // would reach any later test that imports dynamically.
+  afterEach(() => {
+    vi.doUnmock("../../utils/deckyUiInternals");
+    vi.resetModules();
+  });
+
   it("selects the row that takes focus and swaps the detail with it", () => {
     const onSelect = vi.fn();
     render(<ControlledHost onSelect={onSelect} />);

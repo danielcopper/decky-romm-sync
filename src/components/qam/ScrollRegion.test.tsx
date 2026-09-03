@@ -82,7 +82,7 @@ describe("ScrollRegion", () => {
   it("lets the caller place the region without losing its bounds", async () => {
     const ScrollRegion = await loadScrollRegion(StubScrollPanelGroup);
 
-    render(<ScrollRegion style={{ flex: "0 0 264px", width: "264px" }}>{null}</ScrollRegion>);
+    render(<ScrollRegion style={{ flex: "0 0 264px", width: "264px" }} />);
 
     const panel = screen.getByTestId("scroll-panel");
     expect(panel.style.flex).toBe("0 0 264px");
