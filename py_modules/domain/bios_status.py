@@ -311,9 +311,13 @@ def count_required(files: tuple[BiosFileEntry, ...]) -> tuple[int, int]:
     The badge's two numbers, derived in one place so the platform detail and
     the game-detail page can never disagree about which files count. A file the
     library does not hold counts here — it is genuinely required and genuinely
-    absent, and excluding it would make the badge read ready for a game that
-    cannot launch. What it must never do is imply a download; whether anything
-    is fetchable is a separate question, asked where the buttons are.
+    absent, and excluding it would make the badge read ready over a file the
+    core declares and does not have. What the count must never do is imply a
+    download (whether anything is fetchable is a separate question, asked where
+    the buttons are) — nor a LAUNCH outcome: at the RetroArch revision RetroDECK
+    ships, the ``.info`` firmware list is read only by display surfaces
+    (``menu_displaylist.c``), and neither ``task_content.c`` nor ``runloop.c``
+    consults it, so a declaration cannot say whether a game starts.
 
     The second number is the row VERDICT, not ``downloaded``: for a folder
     declaration the two come apart, since RetroDECK links LRPS2's ``pcsx2/bios``

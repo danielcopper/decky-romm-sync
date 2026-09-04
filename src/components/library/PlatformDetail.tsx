@@ -148,7 +148,7 @@ function getBiosSummary(
   if (requiredCount > 0) {
     return {
       summaryLabel: `${requiredDone} / ${requiredCount} required`,
-      summaryDescription: `${requiredCount - requiredDone} required missing — games may not launch`,
+      summaryDescription: `${requiredCount - requiredDone} required missing`,
     };
   }
   return {
@@ -627,8 +627,24 @@ function coreOffer(row: PlatformRow, core: CoreAnswer): CoreOffer {
   // standalone emulator this RetroDECK has not installed lands here with one
   // option, and one with two uninstalled ones lands here with two — where a
   // count-shaped branch would have said "offers one emulator" or nothing at all.
-  // Here the fallback DOES work: RetroDECK resolves the emulator itself.
+  //
+  // What the fallback then DOES splits the state in two, and the payload can
+  // tell them apart. `run_game.sh` takes `command[1]` for the system when no
+  // alternate emulator is set, and `options` keeps ES-DE's document order, so
+  // `emulators[0]` IS that command. If its emulator is the one RetroDECK has
+  // not installed, the fallback names a binary that is not there and the games
+  // do not start — Apple I on this machine is exactly that: five commands, the
+  // first `LinApple (Standalone)`, none installed and the two MAME forms
+  // unbakeable for their quoting. Any other reason (`inject`, and the rest)
+  // leaves an emulator RetroDECK can actually run.
   if (core.active_core_label === null) {
+    const fallback = core.emulators[0];
+    if (fallback?.reason === "not_installed") {
+      return {
+        kind: "say",
+        text: `RetroDECK would launch these with ${fallback.label}, which is not installed — and nothing here can pin a different one.`,
+      };
+    }
     return {
       kind: "say",
       text: "None of this platform's emulators can be pinned from here, so RetroDECK picks one when a game launches.",
@@ -677,6 +693,14 @@ function downloadState(row: PlatformRow, state: PlatformsPageState, id: string):
 }
 
 const FAILED_LABEL = <span style={{ color: RED }}>Failed</span>;
+
+/** What the header's core clause reads where no option can be pinned: which of
+ *  the three unpinnable states the platform is in, said in the fewest words the
+ *  state supports. */
+function fallbackLabel(noEmulator: boolean, fallbackMissing: boolean): string {
+  if (noEmulator) return "no emulator";
+  return fallbackMissing ? "no emulator installed" : "RetroDECK decides";
+}
 
 /** The label a download button carries right now — its own word unless its run
  *  is speaking. */
@@ -1032,6 +1056,10 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
   // once, so the two readings below cannot drift apart.
   const emulatorsKnown = core != null && core.emulator_data_available;
   const noEmulator = emulatorsKnown && core.emulators.length === 0;
+  // The fallback RetroDECK would use is missing, so the clause says that rather
+  // than naming a core nothing can run. Same shape as the empty menu: a state
+  // the games do not start in, in red.
+  const fallbackMissing = emulatorsKnown && activeLabel === null && core.emulators[0]?.reason === "not_installed";
   // The platform-level twin of the game page's `activeCoreIsDefault`, read off
   // the payload's own `is_default`, which marks the single option
   // `select_default_option` picks. One expression feeds the clause AND the
@@ -1039,12 +1067,12 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
   // gold, because `find` on a null label returns nothing and "not the default"
   // is not the same statement as "an override".
   const activeIsDefault = core?.emulators.find((option) => option.label === activeLabel)?.is_default ?? false;
-  const coreColor = noEmulator ? RED : activeLabel === null || activeIsDefault ? MUTED : AMBER;
+  const coreColor = noEmulator || fallbackMissing ? RED : activeLabel === null || activeIsDefault ? MUTED : AMBER;
   // No clause at all where the list could not be read — the same silence a
   // failed or in-flight core read gets, and for the same reason.
   const coreClause = !emulatorsKnown
     ? null
-    : { text: activeLabel ?? (noEmulator ? "no emulator" : "RetroDECK decides"), color: coreColor };
+    : { text: activeLabel ?? fallbackLabel(noEmulator, fallbackMissing), color: coreColor };
 
   return (
     <>

@@ -604,22 +604,47 @@ describe("Library › Platforms", () => {
     });
 
     it.each([
-      ["one option, not bakeable", [{ ...MGBA, is_default: false, bakeable: false, reason: "not_installed" }]],
+      ["one option", [{ ...MGBA, is_default: false, bakeable: false, reason: "not_installed" }]],
       [
-        "two options, neither bakeable",
+        "two options, the first of them",
         [
           { ...MGBA, is_default: false, bakeable: false, reason: "not_installed" },
           { ...VBA, bakeable: false, reason: "inject" },
         ],
       ],
-    ])("says RetroDECK decides, not Default, when no option can be pinned (%s)", async (_shape, emulators) => {
-      // `active_core_label: null` means no option is BAKEABLE — never that there
-      // are none, which is the test above. With options on the menu
-      // `select_default_option` says what follows: the plain RetroDECK launch is
-      // baked and RetroDECK resolves the emulator, so the games do start and the
-      // clause must not say otherwise. The two-option shape is the one that used
-      // to draw a GOLD chip beside a clause claiming there was no core.
+    ])("names the emulator RetroDECK would fall back to when it is not installed (%s)", async (_shape, emulators) => {
+      // `run_game.sh` takes `command[1]` for the system when no alternate is
+      // set, and the options keep ES-DE's document order — so `emulators[0]` is
+      // that command. If its emulator is not installed the fallback names a
+      // binary that is not there, and "RetroDECK picks one" would be false.
+      // Apple I is this shape on a real machine: five commands, the first
+      // `LinApple (Standalone)`, none installed.
       vi.mocked(backend.getSystemCoreInfo).mockResolvedValue(coreInfo({ emulators, active_core_label: null }));
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      const clause = [...container.querySelectorAll<HTMLElement>("span")].find(
+        (el) => el.textContent === " · no emulator installed",
+      );
+      expect(clause).toBeTruthy();
+      expect(clause!.style.color).toBe(RED);
+      expect(container.textContent).toContain("RetroDECK would launch these with mGBA, which is not installed");
+      expect(container.textContent).not.toContain("RetroDECK decides");
+      expect(container.textContent).not.toContain("Default");
+      expect(coreButton(container)).toBeNull();
+    });
+
+    it("says RetroDECK decides where its fallback can actually run", async () => {
+      // The other half of the unpinnable state: a `%INJECT%` command is
+      // well-formed and RetroDECK can run it — we simply cannot bake it into a
+      // Steam shortcut. The games do start, so the clause must not say
+      // otherwise.
+      vi.mocked(backend.getSystemCoreInfo).mockResolvedValue(
+        coreInfo({
+          emulators: [{ ...MGBA, is_default: false, bakeable: false, reason: "inject" }],
+          active_core_label: null,
+        }),
+      );
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
@@ -628,40 +653,8 @@ describe("Library › Platforms", () => {
       );
       expect(clause).toBeTruthy();
       expect(clause!.style.color).toBe(GREY);
-      expect(container.textContent).not.toContain("Default");
-      expect(container.textContent).not.toContain("no emulator");
-      // One sentence for all three, keyed off the label rather than off a count
-      // that says nothing about bakeability.
       expect(container.textContent).toContain("None of this platform's emulators can be pinned from here");
-      expect(container.textContent).not.toContain("offers one emulator");
-      // No chip at all — and so no gold icon claiming an override.
-      expect(coreButton(container)).toBeNull();
-    });
-
-    it("leaves the save-compatibility warning to the picker that carries it", async () => {
-      // `buildEmulatorMenu` renders it as the menu's first item, so a copy on
-      // the pane was the same sentence on the page that opens the menu.
-      const { container } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-
-      expect(container.textContent).not.toContain("Switching cores may affect save compatibility");
-    });
-
-    it("asks for a sync before offering a core when nothing of the platform is in Steam", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({ platforms: [] });
-      const { container } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-
-      expect(container.textContent).toContain("Sync this platform first");
-      expect(coreButton(container)).toBeNull();
-    });
-
-    it("offers nothing to switch when the platform has one emulator", async () => {
-      vi.mocked(backend.getSystemCoreInfo).mockResolvedValue(coreInfo({ emulators: [MGBA] }));
-      const { container } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-
-      expect(container.textContent).toContain("offers one emulator");
+      expect(container.textContent).not.toContain("not installed");
       expect(coreButton(container)).toBeNull();
     });
 

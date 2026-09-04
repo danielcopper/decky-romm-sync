@@ -58,8 +58,10 @@ has not shown anything to be absent. Those cases are worth reading, but not wort
 in the tab.
 
 The badge is always **red**. It is a warning, not a status: the four-colour dot above belongs to the tab's readiness
-line, and every state that raises the badge is one the game will not launch in. Having one of three required files is
-not a milder version of the problem, so it does not get a milder colour.
+line, and every state that raises the badge is one where a file the emulator asks for is not there. Having one of three
+required files is not a milder version of the problem, so it does not get a milder colour. The badge does not predict
+whether a game starts — that is between the emulator and the file, and the declaration the badge counts is not what
+decides it.
 
 A BIOS warning only ever disappears on an **answer**. When a check cannot be run at all — most often right after a BIOS
 download or delete, before the state has been read again — the plugin keeps showing the last status it knew rather than
