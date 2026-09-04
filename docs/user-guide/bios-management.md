@@ -130,8 +130,8 @@ reads them the way the core does:
 A folder that is **absent** is red like any other requirement that is not there, with no note beside it: there is
 nothing to have found, so there is nothing to say. It is never offered as a download either — what the emulator opens
 there is a folder, so there is no file to fetch into it. On a stock RetroDECK that will not happen for `pcsx2/bios`,
-which RetroDECK links onto the BIOS folder itself. (The **System** page words that row _Missing_, because that page
-spells absence out where this tab leaves it to the dot.)
+which RetroDECK links onto the BIOS folder itself. (The Library page's platform detail words that row _Missing_, because
+it spells absence out where this tab leaves it to the dot.)
 
 <!-- Screenshot: Game detail page showing orange BIOS status with "2/5 required files ready" -->
 
@@ -154,8 +154,8 @@ and the row you focus is the one the right-hand pane describes.
    none, a sentence asks you to sync it first
 6. **BIOS files** states how many required files are ready (e.g. "1 / 2 required") when the system needs any, and
    otherwise reads "Nothing required" with the inventory of your library's files beside it (e.g. "3 / 5 files held"). A
-   system with a required **folder** on its list reads "BIOS readiness unknown" instead — see
-   [When readiness cannot be stated](#when-readiness-cannot-be-stated)
+   system with a required row the plugin could not judge — a declared folder it could not read, say — reads "BIOS
+   readiness unknown" instead — see [When readiness cannot be stated](#when-readiness-cannot-be-stated)
 7. Below it, a table lists the files themselves: what is **wanted** (each row says whether it is _needed_, _optional_,
    _not needed_ or _unknown_), whether it is **on disk**, and its **contents**. The contents column is reserved for a
    check that does not exist yet, so every row reads an em dash for now

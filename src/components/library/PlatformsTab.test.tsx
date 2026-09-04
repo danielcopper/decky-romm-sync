@@ -577,6 +577,28 @@ describe("Library › Platforms", () => {
       expect(buttonByText(container, "Download")).toBeUndefined();
     });
 
+    it("offers no Download for a folder declaration, absent or not", async () => {
+      // The emulator LISTS that name, so there is no file to fetch into it —
+      // what would satisfy the row is a BIOS image inside the folder, which is a
+      // row of its own. Absent is the case a presence check would let through.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({ file_name: "bios", declared_kind: "directory", downloaded: false, satisfied: false }),
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("bios");
+      expect(buttonByText(container, "Download")).toBeUndefined();
+      expect(buttonByText(container, "Download all")).toBeUndefined();
+    });
+
     it("withdraws every download while RomM is unreachable", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
@@ -712,7 +734,7 @@ describe("Library › Platforms", () => {
       await flushAsync();
 
       expect(container.textContent).toContain("BIOS readiness unknown");
-      expect(container.textContent).toContain("A required folder is here");
+      expect(container.textContent).toContain("A required file could not be judged");
       expect(buttonByText(container, "Download required")).toBeTruthy();
     });
   });

@@ -87,8 +87,8 @@ function getBiosSummary(
  * they are different sentences.
  *
  * `requiredWithheld` above zero is a platform whose emulators DID answer and one
- * of whose required rows nothing could judge — a folder, whose contents the
- * reading does not inspect. Zero is the older shape: no installed emulator's
+ * of whose required rows nothing could judge — a declared folder the resolver
+ * could not read, say. Zero is the older shape: no installed emulator's
  * answer could be established for the platform at all, which splits again on
  * whether there are rows to point at, because a platform whose emulators are all
  * standalone has none and "0 file(s) nothing installed could answer for" would
@@ -100,8 +100,8 @@ function getUnknownSummary(requiredWithheld: number, total: number) {
       summaryLabel: "BIOS readiness unknown",
       summaryDescription:
         requiredWithheld === 1
-          ? "A required folder is here and its contents cannot be checked"
-          : `${requiredWithheld} required folders are here and their contents cannot be checked`,
+          ? "A required file could not be judged — see the file list"
+          : `${requiredWithheld} required files could not be judged — see the file list`,
     };
   }
   return {
@@ -329,7 +329,13 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
   // that state and keeps its buttons: its rows were answered, and downloading
   // the files the library holds is the one thing that can still move the
   // platform along.
-  const fetchableMissing = nothingEstablished ? [] : files.filter((f) => f.on_server && !f.downloaded);
+  //
+  // A folder declaration is out whatever its state: the emulator lists that
+  // name, so there is no file to fetch into it — what would satisfy it is a
+  // BIOS image inside the folder, which is a different row.
+  const fetchableMissing = nothingEstablished
+    ? []
+    : files.filter((f) => f.on_server && !f.downloaded && f.declared_kind !== "directory");
   const hasRequiredMissing = fetchableMissing.some((f) => f.required_by_active);
   const hasOptionalMissing = fetchableMissing.some((f) => !f.required_by_active);
   const fetchable = new Set(fetchableMissing.map((f) => f.file_name));
