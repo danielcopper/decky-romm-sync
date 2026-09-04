@@ -156,8 +156,13 @@ export function useWideQamPanel(rootRef: RefObject<HTMLElement | null>): void {
     // Switching QAM tabs changes the parent's class and unmounts nothing, so the
     // observer is the only thing that sees it.
     let observer: MutationObserver | null = null;
-    if (activeTabClass && panelParent) {
-      observer = new MutationObserver(syncPanelWidth);
+    const panelView = panelParent?.ownerDocument.defaultView;
+    if (activeTabClass && panelParent && panelView) {
+      // The view's own constructor, not this module's. Whether a cross-realm
+      // observer would deliver here is not established either way — unlike an
+      // `instanceof`, which is measurably false — and taking it from the node
+      // costs a property read, so the question does not need answering.
+      observer = new panelView.MutationObserver(syncPanelWidth);
       observer.observe(panelParent, { attributes: true, attributeFilter: ["class"] });
     }
 
