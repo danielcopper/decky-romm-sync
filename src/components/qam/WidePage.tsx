@@ -61,6 +61,17 @@ const MIN_BODY_HEIGHT = 240;
 
 // Breathing room under the body, kept off the measurement so the page never
 // ends flush against the panel's bottom edge.
+//
+// **Not a knob for absorbing leftover scroll.** With a correctly measured body
+// the panel still reports ~38 px of overflow on the reference machine, and the
+// arithmetic localises it: the body is `clientHeight - offset - GAP`, so a
+// panel whose content runs to `clientHeight - GAP + T` puts T at about 50 px —
+// a box below the plugin's root, inside Steam's own, since the panel's padding
+// measures 0 top and bottom and no child of ours accounts for it. Growing this
+// to swallow T would pin every wide page's height to a box we do not render,
+// cannot watch change, and would not notice moving; the wheel is contained at
+// the region instead (`ScrollRegion`). Learning what T is takes one read of
+// `panel.scrollHeight - (root.offsetTop + root.offsetHeight)`.
 const BODY_BOTTOM_GAP = 12;
 
 /**
@@ -151,13 +162,21 @@ export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, on
     // SharedJSContext window and these nodes are the QAM's.
     const observer = new view.ResizeObserver(measure);
     observer.observe(body.ownerDocument.documentElement);
-    // And the panel itself, which is what actually changes size here. The first
-    // measurement runs before Steam has settled the panel — the QAM starts
-    // narrow and the wide class lands after — so a page measured at mount alone
-    // keeps whatever the unsettled panel implied. Observed on device at a body
-    // of 1245 px inside a 750 px panel, where the formula answers 694: not a
-    // wrong formula but a stale answer, and the document element never resizes
-    // to correct it because the viewport did not change.
+    // And the panel itself, which is what actually changes size here.
+    //
+    // **The first measurement provably runs before the panel is widened**, and
+    // that follows from the effect kinds rather than from timing: this is a
+    // LAYOUT effect, while `useWideQamPanel` widens the panel from a passive
+    // one, and React runs every layout effect of a commit before any passive
+    // effect of it. So on every mount the page is measured against the panel
+    // Steam has not expanded yet. The device figure is the other half — a body
+    // of 1245 px where the settled geometry answers 694 implies a mount-time
+    // `clientHeight` near 1257, not 750 — so the panel's box really does differ
+    // between mount and settle, and nothing else would have corrected it: the
+    // document element never resizes, because the viewport does not change.
+    //
+    // Only the TRIGGER is pinned to the mount-time scroller; the answer
+    // re-resolves it on every `measure()`.
     const scroller = scrollingAncestor(body, view);
     if (scroller) observer.observe(scroller);
     return () => observer.disconnect();

@@ -120,15 +120,14 @@ locally with `mise run docs`.
   state); we own the game detail UI. Do not reintroduce a bypass.
 - **`instanceof` against a DOM global is false in QAM code**: plugin code runs in the **SharedJSContext** window while
   the QAM panel's nodes belong to the QAM view's own document — two realms, confirmed live (the two documents do not
-  share a URL, and neither can see the other's elements). What is **measured** is the `instanceof`:
-  `node instanceof
-  HTMLElement` is false for **every** node such code will ever see, so a guard written that way
-  rejects everything and the feature is simply inert. Whether a constructor that takes the node as an argument —
-  `new ResizeObserver(...)`, `new MutationObserver(...)` — also misbehaves across realms is **not** established here in
-  either direction; those are named because taking the constructor from the node costs a property read, so the question
-  need not be answered. Take the constructor from the node — `el.ownerDocument.defaultView` — as `WidePage` and
-  `ScrollRegion` do. **The frontend suite cannot see this**: happy-dom has one realm, so the wrong global and the right
-  one are the same object and every test passes.
+  share a URL, and neither can see the other's elements). What is **measured** is the `instanceof`: such a test is false
+  for **every** node such code will ever see, so a guard written that way rejects everything and the feature is simply
+  inert. Whether a constructor that takes the node as an argument — `new ResizeObserver(...)`,
+  `new MutationObserver(...)` — also misbehaves across realms is **not** established here in either direction; those are
+  named because taking the constructor from the node costs a property read, so the question need not be answered. Take
+  the constructor from the node — `el.ownerDocument.defaultView` — as `WidePage` and `ScrollRegion` do. **The frontend
+  suite cannot see this**: happy-dom has one realm, so the wrong global and the right one are the same object and every
+  test passes.
 
 ## Current State
 
