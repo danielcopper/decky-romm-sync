@@ -391,6 +391,53 @@ describe("Library › Platforms", () => {
       expect(within(container).getByTestId("status-bios").textContent).toBe("Downloaded 1 required firmware files");
     });
 
+    it("says which platform is working while another pane's buttons are disabled", async () => {
+      // Every platform's actions disable while one runs, and the line that would
+      // explain the wait is bound to the platform acting — so the pane the
+      // reader walks to has to say why its own buttons are dead.
+      vi.mocked(backend.getPlatforms).mockResolvedValue({
+        success: true,
+        platforms: [
+          platform({ id: 1, slug: "gba", name: "Game Boy Advance" }),
+          platform({ id: 2, slug: "n64", name: "Nintendo 64" }),
+        ],
+      });
+      // The other pane needs buttons of its own to be shown disabled, so both
+      // platforms carry a firmware entry and a shortcut count.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [firmwarePlatform(), firmwarePlatform({ platform_slug: "n64" })],
+      });
+      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
+        platforms: [
+          { slug: "gba", name: "GBA", count: 9 },
+          { slug: "n64", name: "N64", count: 4 },
+        ],
+      });
+      let finish: (v: { success: boolean; message: string; downloaded: number }) => void = () => {};
+      vi.mocked(backend.downloadRequiredFirmware).mockReturnValue(
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      );
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Download required")!);
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+
+      await focusRow(container, "Nintendo 64");
+      expect(container.textContent).toContain("Working on Game Boy Advance");
+      expect(buttonByText(container, "Download required")?.disabled).toBe(true);
+
+      await act(async () => {
+        finish({ success: true, message: "Downloaded 1 required firmware files", downloaded: 1 });
+        for (let i = 0; i < 8; i++) await Promise.resolve();
+      });
+      expect(container.textContent).not.toContain("Working on Game Boy Advance");
+    });
+
     it("says the read failed rather than reading forever", async () => {
       vi.mocked(backend.getSystemCoreInfo).mockRejectedValue(new Error("net"));
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
@@ -847,6 +894,47 @@ describe("Library › Platforms", () => {
       expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(2);
       expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalledWith("Game Boy Advance", expect.any(AbortSignal));
       expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2], null);
+    });
+
+    it("keeps the removal progress on the platform it is removing", async () => {
+      vi.mocked(backend.getPlatforms).mockResolvedValue({
+        success: true,
+        platforms: [
+          platform({ id: 1, slug: "gba", name: "Game Boy Advance" }),
+          platform({ id: 2, slug: "n64", name: "Nintendo 64" }),
+        ],
+      });
+      // `removeShortcut` is synchronous, so the removals cannot be paused; the
+      // collection clear that follows them can, and the progress line is still
+      // up at that point — it is cleared in the continuation's `finally`.
+      let releaseClear: () => void = () => {};
+      vi.mocked(clearPlatformCollection).mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseClear = resolve;
+          }),
+      );
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Remove 9 shortcuts")!);
+        await Promise.resolve();
+      });
+      await confirmLastModal();
+      await flushAsync();
+
+      expect(container.textContent).toContain("Removing 2 of 2…");
+
+      await focusRow(container, "Nintendo 64");
+      expect(container.textContent).not.toContain("Removing 2 of 2…");
+
+      await focusRow(container, "Game Boy Advance");
+      expect(container.textContent).toContain("Removing 2 of 2…");
+
+      await act(async () => {
+        releaseClear();
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+      });
     });
 
     it("surfaces the sync_active refusal and removes nothing", async () => {

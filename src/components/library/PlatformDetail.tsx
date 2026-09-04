@@ -155,6 +155,21 @@ const GroupStatus: FC<{ state: PlatformsPageState; slug: string; scope: StatusSc
     </div>
   ) : null;
 
+/**
+ * Why this pane's buttons are dead while nothing on it is running.
+ *
+ * An action disables every platform's actions, not just its own: the prune
+ * lease and the firmware re-read are page-wide, so two at once would contend.
+ * The line that would explain the wait — {@link GroupStatus} — is bound to the
+ * platform the action belongs to, so walking away from a running removal leaves
+ * a pane full of disabled buttons and nothing said. This is what it says.
+ */
+const BusyElsewhere: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ row, state }) => {
+  if (state.busySlug === null || state.busySlug === row.slug) return null;
+  const other = state.rows.get(state.busySlug)?.name ?? "another platform";
+  return <Muted>{`Working on ${other} — actions here are paused until it finishes.`}</Muted>;
+};
+
 const TABLE_COLUMNS = "1fr 104px 92px 116px";
 
 const BiosTableHeader: FC = () => (
@@ -305,7 +320,7 @@ const CoreSection: FC<{ row: PlatformRow; state: PlatformsPageState; core: CoreA
       <ButtonItem
         layout="below"
         bottomSeparator="none"
-        disabled={state.busy}
+        disabled={state.busySlug !== null}
         onClick={(e: Event) =>
           showContextMenu(
             buildEmulatorMenu({
@@ -420,7 +435,7 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
             fetchable.has(file.file_name) && !state.serverOffline ? (
               <DialogButton
                 style={{ padding: "4px 0", minWidth: 0, fontSize: "12px" }}
-                disabled={state.busy}
+                disabled={state.busySlug !== null}
                 onClick={() => state.downloadOne(row.slug, file.file_name)}
               >
                 Download
@@ -439,7 +454,7 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
         <ButtonItem
           layout="below"
           bottomSeparator="none"
-          disabled={state.busy}
+          disabled={state.busySlug !== null}
           onClick={() => state.downloadRequired(row.slug)}
         >
           Download required
@@ -449,7 +464,7 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
         <ButtonItem
           layout="below"
           bottomSeparator="none"
-          disabled={state.busy}
+          disabled={state.busySlug !== null}
           onClick={() => state.downloadAll(row.slug)}
         >
           Download all
@@ -462,7 +477,12 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
           counts a different set and was wrong here in both directions,
           including hiding the button over downloads RomM had stopped listing. */}
       {deletable > 0 && (
-        <ButtonItem layout="below" bottomSeparator="none" disabled={state.busy} onClick={confirmDeleteBios}>
+        <ButtonItem
+          layout="below"
+          bottomSeparator="none"
+          disabled={state.busySlug !== null}
+          onClick={confirmDeleteBios}
+        >
           <span style={{ color: "#d94126" }}>{`Delete BIOS (${deletable})`}</span>
         </ButtonItem>
       )}
@@ -499,7 +519,7 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
       <ButtonItem
         layout="below"
         bottomSeparator="none"
-        disabled={state.busy || syncRunning}
+        disabled={state.busySlug !== null || syncRunning}
         description={syncRunning ? SYNC_RUNNING_HINT : undefined}
         onClick={confirmRemoveShortcuts}
       >
@@ -507,7 +527,7 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
           {`Remove ${row.shortcutCount} shortcut${row.shortcutCount === 1 ? "" : "s"}`}
         </span>
       </ButtonItem>
-      <ButtonItem layout="below" bottomSeparator="none" disabled={state.busy} onClick={confirmDeleteSaves}>
+      <ButtonItem layout="below" bottomSeparator="none" disabled={state.busySlug !== null} onClick={confirmDeleteSaves}>
         <span style={{ color: "#d94126" }}>Delete save files</span>
       </ButtonItem>
       <GroupStatus state={state} slug={row.slug} scope="remove" />
@@ -537,9 +557,10 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
           <span style={{ fontSize: "12px", color: biosColorForLevel(firmware?.bios_level ?? null) }}>{biosBadge}</span>
         )}
       </div>
-      {state.removalProgress && (
+      {state.removalProgress?.slug === row.slug && (
         <Muted>{`Removing ${state.removalProgress.removed} of ${state.removalProgress.total}…`}</Muted>
       )}
+      <BusyElsewhere row={row} state={state} />
       <CoreSection row={row} state={state} core={core} />
       {firmware ? (
         <BiosSection row={row} state={state} firmware={firmware} />

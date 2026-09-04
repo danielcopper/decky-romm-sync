@@ -109,9 +109,17 @@ export interface PlatformsPageState {
   select: (slug: string) => void;
   coreFor: (slug: string) => CoreAnswer;
   status: DetailStatus | null;
-  /** A removal is in flight — every action disables for its duration. */
-  busy: boolean;
-  removalProgress: { removed: number; total: number } | null;
+  /**
+   * The platform whose action is in flight, or `null`. Every action on every
+   * platform disables while one is running — the prune lease and the firmware
+   * re-read are page-wide, so two at once would contend — and the slug is what
+   * lets a pane that is not the one acting say why its buttons are dead.
+   */
+  busySlug: string | null;
+  /** Bound to its platform for the reason {@link DetailStatus} is: walking the
+   *  list under a running removal must not show its progress on another
+   *  platform's pane. */
+  removalProgress: { slug: string; removed: number; total: number } | null;
   toggleSync: (row: PlatformRow, enabled: boolean) => void;
   setAllSync: (enabled: boolean) => void;
   changeCore: (slug: string, pickedLabel: string) => void;
@@ -160,8 +168,8 @@ export function usePlatformsPage(): PlatformsPageState {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [cores, setCores] = useState<Record<string, SystemCoreInfo | null>>({});
   const [status, setStatus] = useState<DetailStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [removalProgress, setRemovalProgress] = useState<{ removed: number; total: number } | null>(null);
+  const [busySlug, setBusySlug] = useState<string | null>(null);
+  const [removalProgress, setRemovalProgress] = useState<{ slug: string; removed: number; total: number } | null>(null);
 
   // Which slugs a core read has already been issued for. A ref, not state:
   // walking the list issues one read per row and the guard must hold within a
@@ -350,7 +358,7 @@ export function usePlatformsPage(): PlatformsPageState {
 
   const runDownload = useCallback(
     (slug: string, work: () => Promise<{ success: boolean; message?: string; downloaded?: number }>) => {
-      setBusy(true);
+      setBusySlug(slug);
       setStatus({ slug, scope: "bios", text: "Downloading…" });
       detach(
         (async () => {
@@ -364,7 +372,7 @@ export function usePlatformsPage(): PlatformsPageState {
           } catch (e) {
             setStatus({ slug, scope: "bios", text: `Download failed: ${e}` });
           } finally {
-            setBusy(false);
+            setBusySlug(null);
           }
         })(),
       );
@@ -384,7 +392,7 @@ export function usePlatformsPage(): PlatformsPageState {
 
   const deleteBios = useCallback(
     (slug: string) => {
-      setBusy(true);
+      setBusySlug(slug);
       detach(
         (async () => {
           try {
@@ -397,7 +405,7 @@ export function usePlatformsPage(): PlatformsPageState {
           } catch (e) {
             setStatus({ slug, scope: "bios", text: `Failed to delete BIOS files: ${e}` });
           } finally {
-            setBusy(false);
+            setBusySlug(null);
           }
         })(),
       );
@@ -407,7 +415,7 @@ export function usePlatformsPage(): PlatformsPageState {
 
   const removeShortcuts = useCallback(
     (row: PlatformRow) => {
-      setBusy(true);
+      setBusySlug(row.slug);
       setStatus({ slug: row.slug, scope: "remove", text: `Removing ${row.name} shortcuts…` });
       const admission = capturePruneLeaseAdmission(LEASE_OWNER);
       detach(
@@ -427,7 +435,7 @@ export function usePlatformsPage(): PlatformsPageState {
               async (signal) => {
                 await removeShortcutsPaced(
                   result.app_ids ?? [],
-                  (removed, total) => setRemovalProgress({ removed, total }),
+                  (removed, total) => setRemovalProgress({ slug: row.slug, removed, total }),
                   signal,
                 );
                 if (isPruneLeaseCancelled(signal)) return;
@@ -458,7 +466,7 @@ export function usePlatformsPage(): PlatformsPageState {
             }
             setStatus({ slug: row.slug, scope: "remove", text: "Failed to remove shortcuts" });
           } finally {
-            setBusy(false);
+            setBusySlug(null);
             setRemovalProgress(null);
           }
         })(),
@@ -468,7 +476,7 @@ export function usePlatformsPage(): PlatformsPageState {
   );
 
   const deleteSaves = useCallback((row: PlatformRow) => {
-    setBusy(true);
+    setBusySlug(row.slug);
     setStatus({ slug: row.slug, scope: "remove", text: `Deleting ${row.name} saves…` });
     detach(
       (async () => {
@@ -479,7 +487,7 @@ export function usePlatformsPage(): PlatformsPageState {
         } catch {
           setStatus({ slug: row.slug, scope: "remove", text: "Failed to delete saves" });
         } finally {
-          setBusy(false);
+          setBusySlug(null);
         }
       })(),
     );
@@ -495,7 +503,7 @@ export function usePlatformsPage(): PlatformsPageState {
     select,
     coreFor,
     status,
-    busy,
+    busySlug,
     removalProgress,
     toggleSync,
     setAllSync,
