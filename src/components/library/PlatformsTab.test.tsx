@@ -697,6 +697,33 @@ describe("Library › Platforms", () => {
       expect(coreButton(container)).toBeNull();
     });
 
+    it("leaves the save-compatibility warning to the picker that carries it", async () => {
+      // `buildEmulatorMenu` renders it as the menu's first item, so a copy on
+      // the pane was the same sentence on the page that opens the menu.
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).not.toContain("Switching cores may affect save compatibility");
+    });
+
+    it("asks for a sync before offering a core when nothing of the platform is in Steam", async () => {
+      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({ platforms: [] });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("Sync this platform first");
+      expect(coreButton(container)).toBeNull();
+    });
+
+    it("offers nothing to switch when the platform has one emulator", async () => {
+      vi.mocked(backend.getSystemCoreInfo).mockResolvedValue(coreInfo({ emulators: [MGBA] }));
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("offers one emulator");
+      expect(coreButton(container)).toBeNull();
+    });
+
     it("says RetroDECK was not found rather than showing an empty picker", async () => {
       vi.mocked(backend.getSystemCoreInfo).mockResolvedValue(
         coreInfo({ emulators: [], emulator_data_available: false, active_core_label: null }),
