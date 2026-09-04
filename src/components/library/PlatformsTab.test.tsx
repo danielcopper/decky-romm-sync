@@ -868,19 +868,40 @@ describe("Library › Platforms", () => {
       expect(diskMarks(container)).toEqual([{ glyph: "?", color: AMBER }]);
     });
 
-    it("says a file name once", async () => {
-      // RomM answers an entry with no description of its own by repeating the
-      // file name, and the row used to print both.
+    it("says a file name once, in each shape the .info corpus actually has", async () => {
+      // The description is the core's own firmwareN_desc, not RomM's, and every
+      // one of these is a verbatim pair from the 291 .info files a stock
+      // RetroDECK ships. Only the first was caught before, which is why a
+      // PlayStation row read "scph5500.bin scph5500.bin (PS1 JP BIOS)".
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
-          firmwarePlatform({ files: [firmwareFile({ file_name: "scph7003.bin", description: "scph7003.bin" })] }),
+          firmwarePlatform({
+            files: [
+              // 35% of the corpus: the description IS the name.
+              firmwareFile({ file_name: "macventure.dat", description: "macventure.dat" }),
+              // 47%: the name, then prose.
+              firmwareFile({ file_name: "scph5500.bin", description: "scph5500.bin (PS1 JP BIOS)" }),
+              // 17%: the same, with the name carrying its directory.
+              firmwareFile({ file_name: "dc_boot.bin", description: "dc/dc_boot.bin (Dreamcast BIOS)" }),
+              // 1%: no mention of the name — printed whole, it says something real.
+              firmwareFile({ file_name: "codehandler.bin", description: "Dolphin 'Sys' folder" }),
+            ],
+          }),
         ],
       });
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
-      expect(container.textContent.split("scph7003.bin").length - 1).toBe(1);
+      const text = container.textContent;
+      for (const name of ["macventure.dat", "scph5500.bin", "dc_boot.bin", "codehandler.bin"]) {
+        expect(text.split(name).length - 1).toBe(1);
+      }
+      // The prose survives verbatim, parentheses and all; only the name is taken out.
+      expect(text).toContain("(PS1 JP BIOS)");
+      expect(text).toContain("(Dreamcast BIOS)");
+      expect(text).not.toContain("dc/dc_boot.bin");
+      expect(text).toContain("Dolphin 'Sys' folder");
     });
 
     it("counts a satisfied folder's images in Contents and lists them under the row", async () => {

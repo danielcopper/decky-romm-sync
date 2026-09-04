@@ -279,15 +279,39 @@ const BiosFileLines: FC<{ lines: string[] }> = ({ lines }) =>
     </div>
   );
 
-/** The description beside a file's name, or nothing.
+/**
+ * The description beside a file's name, with the name itself taken back out.
  *
- *  RomM answers a firmware entry with no description of its own by repeating the
- *  file name, and a row reading `scph7003.bin` over `scph7003.bin` says one
- *  thing twice while spending two lines to do it. */
+ * **It is not RomM's description** — `_group_server_firmware` builds no
+ * `description` key at all, and `_wanted_fields` overwrites whatever came in.
+ * What arrives is the core's own `firmwareN_desc` out of its `.info` file, or,
+ * for a row no placement covers, the file name itself (`build_file_entry`'s
+ * `else file_name`). Both spell the name into the words.
+ *
+ * Measured over the 291 `.info` files a stock RetroDECK ships — 695 declared
+ * firmware entries — the description's relation to the row's own `file_name`
+ * (which is `os.path.basename` of the declared path) falls into four shapes:
+ *
+ * | 245 | 35% | it IS the name — `"macventure.dat"`                          |
+ * | 329 | 47% | the name, a space, then prose — `"scph5500.bin (PS1 JP BIOS)"` |
+ * | 116 | 17% | the same, but the name carries its directory — `"dc/dc_boot.bin (Dreamcast BIOS)"` |
+ * |   5 |  1% | no mention of the name at all — `"Dolphin 'Sys' folder"`, and two upstream typos |
+ *
+ * So the rule is: if the description's first token names this file — as itself
+ * or at the end of a path — drop that token and keep the rest. That covers 690
+ * of the 695 and the no-placement case; the remaining five say something real
+ * and are printed whole. The prose is kept verbatim, parentheses and all,
+ * because it is the packager's own words and re-punctuating it is a second way
+ * to be wrong.
+ */
 function fileDescription(file: FirmwareRow): string | null {
   const description = file.description.trim();
-  if (!description || description === file.file_name) return null;
-  return description;
+  if (!description) return null;
+  const [head, ...tail] = description.split(" ");
+  const names = head === undefined ? "" : (head.split("/").pop() ?? "");
+  if (names !== file.file_name) return description;
+  const rest = tail.join(" ").trim();
+  return rest || null;
 }
 
 /**

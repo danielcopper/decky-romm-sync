@@ -276,14 +276,19 @@ on the right. Under it, for the focused platform:
   Two states have no place in that four-way scheme and are **not** folded into it: a verdict nothing could establish and
   a row no installed emulator could be asked about are both amber `?`, because calling either missing would claim an
   absence nothing established. `optional` and `not_needed` do share the muted branch: for the core about to launch,
-  neither is a gap. The file name is printed once — RomM answers an entry with no description of its own by repeating
-  the name, and the row used to show both. Contents is answered for a folder declaration only: the count of images it
-  holds (the resolver's verbatim strings are listed full-width under the row, `pre-wrap`, because the padding in them is
-  what makes a line matchable against the emulator's own picker), or that it holds none, or that nothing could establish
-  its contents. A file row reads an em dash, and that em dash means the question was never asked — the machine-wide
-  reading is deliberately unverified, #1803 is what will ask it, and until then the dash must not come to mean "asked,
-  and nothing found". The section appears whenever the firmware read speaks for the platform, synced or not — there is
-  nothing to say about one it does not cover.
+  neither is a gap. The file name is printed once. The description beside it is **not RomM's** —
+  `_group_server_firmware` builds no description at all and `_wanted_fields` overwrites what came in, so what arrives is
+  the core's own `firmwareN_desc`, or the file name itself for a row no placement covers. Both spell the name into the
+  words, and across the 291 `.info` files a stock RetroDECK ships (695 declared entries) they do it in three shapes: the
+  description IS the name (35%), the name then prose (47%), or the name with its directory then prose (17%). The rule is
+  to drop a leading token that names this file — as itself or at the end of a path — and keep the rest verbatim; the
+  remaining 1% names the file nowhere and is printed whole. Contents is answered for a folder declaration only: the
+  count of images it holds (the resolver's verbatim strings are listed full-width under the row, `pre-wrap`, because the
+  padding in them is what makes a line matchable against the emulator's own picker), or that it holds none, or that
+  nothing could establish its contents. A file row reads an em dash, and that em dash means the question was never asked
+  — the machine-wide reading is deliberately unverified, #1803 is what will ask it, and until then the dash must not
+  come to mean "asked, and nothing found". The section appears whenever the firmware read speaks for the platform,
+  synced or not — there is nothing to say about one it does not cover.
 - **Remove** — Remove _N_ shortcuts and Delete _N_ save files on one row, the actions the Data Management platform modal
   used to offer, without Delete BIOS (it is one group up). Red, last, each behind a confirmation, and with **no heading
   over them**: both buttons name what they remove and are drawn in red, so a title says nothing they do not. **Both
