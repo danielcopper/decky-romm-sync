@@ -38,9 +38,23 @@ const TAB_PANEL_SELECTOR = quickAccessMenuClasses?.TabGroupPanel
 // line covers a child carrying a cap of its own, which was never separately
 // measured and costs one selector to keep. `:has()` scopes the lift to a panel
 // holding a wide page of ours.
+//
+// The second rule is about focus rather than width, and rides along because it
+// needs the same sheet in the same document. A DISABLED button is still a focus
+// stop — the device pass walked one with the stick — but Steam's own disabled
+// treatment (`opacity: .4` over `rgba(61,67,77,.35)`, `library.css`) leaves
+// almost nothing for a focus fill to change, so the reader loses their place on
+// a row of buttons where one is disabled. Steam answers this for its own
+// variants with `background: #000` on `.DialogButton[disabled].gpfocus`, but
+// those rules are scoped to hashed class names ours does not carry. The outline
+// is Steam's other focus form, taken verbatim from the one it uses where a fill
+// will not read (`outline: outset #fff 2px`, `chunk~2dcc5aaf7.css`), and it is
+// scoped to a wide page of ours.
 const WIDE_PANEL_CSS = `
 ${TAB_PANEL_SELECTOR}:has(.${WIDE_ROOT_CLASS}) { max-width: none; }
 ${TAB_PANEL_SELECTOR}:has(.${WIDE_ROOT_CLASS}) > * { max-width: none; }
+.${WIDE_ROOT_CLASS} button.DialogButton[disabled].gpfocus,
+.${WIDE_ROOT_CLASS} button.DialogButton.Disabled.gpfocus { outline: outset #fff 2px; }
 `;
 
 // The stylesheet a wide page has up, held by reference rather than looked up by

@@ -42,6 +42,12 @@ Settings and Data Management are wide.
 beside a wide page. A desktop Big Picture window is wider and shows one, which is why width judgements are made under
 `mise run dev:ui-scale deck` and nowhere else.
 
+**That 534 is the internal display and nothing more — do not size against it.** The dev loop's windowed Big Picture is a
+different viewport on the same machine: measured through CEF during the third device round, the QAM view reported
+`innerHeight` **764** at `devicePixelRatio` 1.71 on a 1496 × 842 screen, where the width still came out at 855. Both
+numbers are real measurements of different configurations, and code that assumes either is wrong on the other — which is
+why the frame measures the space it is actually given rather than deriving it from a recorded viewport.
+
 How a page gets wide, measured on the device rather than read from documentation:
 
 - Steam's main window holds the QAM in a sliding container: an absolutely positioned element as wide as the viewport and
