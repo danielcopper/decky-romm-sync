@@ -380,10 +380,10 @@ Format: **invariant** — tier — enforced by.
   declining with a real answer, so the same field access brings it straight back. The same holds for the third value: a
   required row answered `None` takes the level to `unknown`, and folding it into `False` claims an absence nothing
   established. `declared_kind` carries a second rule with **no check at all**: a folder declaration is never offered as
-  a download — the emulator lists that name, so there is no file to fetch into it. Two places refuse it today
-  (`SystemPage.tsx`'s fetchable filter and `FirmwareDownloader._download_firmware_batch`);
-  `FirmwareDownloader.download_firmware(firmware_id)` does not, and is unreachable only because no callable exposes it
-  (`main.py` offers the two batch entry points and `src/api/backend.ts` names no single-file download). It is the
+  a download — the emulator lists that name, so there is no file to fetch into it. Three places refuse it today
+  (`PlatformDetail.tsx`'s fetchable filter, `FirmwareDownloader._download_firmware_batch`, and
+  `FirmwareDownloader.download_platform_firmware_file`, which answers one named file and so refuses with a reason where
+  the batch simply passes the row over); `FirmwareDownloader.download_firmware(firmware_id)` still does not. It is the
   DECLARATION's kind, so it survives an absent folder, which is exactly the case a presence check would let through
 - **The whole-machine firmware inventory is never asked with content verification** — prompt-only —
   `firmware_inventory()` is asked unverified and the verified question goes through `FirmwareFolderVerdictFn`, one core

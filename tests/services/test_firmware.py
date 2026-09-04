@@ -2129,6 +2129,45 @@ class TestDownloadPlatformFirmwareFile:
         assert result["downloaded"] == 0
 
     @pytest.mark.asyncio
+    async def test_a_folder_declaration_is_refused_rather_than_fetched(self, plugin, fw, tmp_path):
+        """The emulator opens that name as a directory, so there is no file to fetch.
+
+        The folder is ABSENT here, which is the case the already-there skip would
+        let through: a download would write a file where the core opens a
+        directory, and stage its ``.tmp`` beside the BIOS root. Where the batch
+        passes over such a row, one press asks for one named file, so this
+        answers why instead of reporting a success nothing happened in.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        firmware_list = [
+            {"id": 3, "file_name": "bios", "file_path": "bios/ps2/bios", "file_size_bytes": 0, "md5_hash": ""}
+        ]
+        _resolver(fw).declare(
+            "bios",
+            required_by=["pcsx2_libretro"],
+            relative_path="pcsx2/bios",
+            present=False,
+            declares_directory=True,
+            folder=FolderVerdict(satisfied=False),
+        )
+        _set_loop(fw, asyncio.get_event_loop())
+
+        async def fake_download_one(fw_id, _placements):
+            raise AssertionError(f"a folder declaration must not be fetched, but firmware {fw_id} was requested")
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("ps2", "bios")
+
+        assert result["success"] is False
+        assert result["reason"] == "declares_directory"
+        assert result["downloaded"] == 0
+
+    @pytest.mark.asyncio
     async def test_a_failed_listing_fetch_answers_with_zero(self, plugin, fw):
         _set_loop(fw, asyncio.get_event_loop())
         fw._listing._firmware_cache = None

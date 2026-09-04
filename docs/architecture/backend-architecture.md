@@ -1777,8 +1777,11 @@ words below sets out, and collapsed on the code within one destination, because 
 carries statements and requirements resolving to one place share them) — so both surfaces can say what a row IS instead
 of describing every one of them as a gap in the library. All of it goes silent with the location, for the same reason.
 `declared_kind` does not: it is what the emulator OPENS the destination at, a property of the declaration rather than of
-the destination, so it survives an empty one — a folder that is not there is still a folder to create, and both the
-platform detail's download filter and `_download_firmware_batch` key off it so such a row is never offered as a fetch.
+the destination, so it survives an empty one — a folder that is not there is still a folder to create, and the platform
+detail's download filter, `_download_firmware_batch` and `download_platform_firmware_file` all key off it so such a row
+is never offered as a fetch. The per-file entry point refuses with a `declares_directory` reason rather than passing the
+row over: it answers one file the user named, so a silent success would leave the row unchanged with nothing to explain
+it.
 
 **A folder requirement is answered by what is inside it.** LRPS2 declares `pcsx2/bios` — a folder, required, and always
 present because RetroDECK links it onto the BIOS root. Reading presence as the verdict said "All required ready (2/2)"

@@ -252,6 +252,13 @@ class FirmwareDownloader:
         rather than ``NOT_FOUND``, which is RomM's entity layer answering and
         carries deletion authority downstream.
 
+        A folder declaration is refused on the same condition the batch skips it
+        on, and for the same reason: the emulator opens that name as a directory,
+        so there is no file to fetch into it. Where the batch is sweeping a set
+        and simply passes over the row, this answers one file the user named, so
+        it says why — a silent success over a download that never happened would
+        leave the row unchanged with nothing to explain it.
+
         Answers in the batch shape (``downloaded`` 0 or 1) because the file may
         already be at its destination, which the batch skips — the same outcome
         as pressing Download all with nothing left to fetch. What it does not
@@ -274,10 +281,19 @@ class FirmwareDownloader:
 
         placements = await self._loop.run_in_executor(None, self._demand.placement_index)
         fw = wanted[0]
+        placement = placements.get(file_name)
+        if placement is not None and placement.declares_directory:
+            return {
+                "success": False,
+                "reason": "declares_directory",
+                "message": f"{file_name} is a folder the emulator opens, not a file to download",
+                "downloaded": 0,
+            }
+
         # The already-there skip probes the disk rather than reading the
         # catalogue, for the reason the batch states: the catalogue's answer
         # predates every download since it was read.
-        dest = self._demand.safe_dest_path(fw, placements.get(file_name))
+        dest = self._demand.safe_dest_path(fw, placement)
         if dest is not None and self._firmware_file_store.exists(dest):
             return {"success": True, "message": f"{file_name} is already here", "downloaded": 0}
 
