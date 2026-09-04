@@ -81,7 +81,15 @@ const AFTER_STEAMS_OWN_SCROLL_MS = 50;
 function revealTop(event: FocusEvent<HTMLElement>): void {
   const region = event.currentTarget;
   const focused = event.target;
-  if (!(focused instanceof HTMLElement) || region.scrollHeight <= region.clientHeight) return;
+  // Asked of the node's OWN view, never the module's global. Plugin code runs
+  // in the SharedJSContext window and these nodes belong to the QAM's separate
+  // document, so a bare `focused instanceof HTMLElement` names a different
+  // realm's constructor and is false for every node this handler will ever
+  // see — measured in the running client, where the two documents do not even
+  // share a URL. `WidePage` takes its view from `ownerDocument` for the same
+  // reason.
+  const view = region.ownerDocument.defaultView;
+  if (!view || !(focused instanceof view.HTMLElement) || region.scrollHeight <= region.clientHeight) return;
 
   const stops = [...region.querySelectorAll(FOCUS_STOPS)];
   const reached = stops.indexOf(focused);

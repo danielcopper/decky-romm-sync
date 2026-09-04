@@ -118,6 +118,13 @@ locally with `mise run docs`.
   callables, and chunk bulk lists (the library apply emits shortcuts in batches; the metadata cache loads page-by-page).
 - **No `BIsModOrShortcut` bypass**: the bypass counter was removed deliberately. Shortcuts return `true` (natural
   state); we own the game detail UI. Do not reintroduce a bypass.
+- **`instanceof` against a DOM global is false in QAM code**: plugin code runs in the **SharedJSContext** window while
+  the QAM panel's nodes belong to the QAM view's own document — two realms, confirmed live (the two documents do not
+  share a URL, and neither can see the other's elements). So `node instanceof HTMLElement`, `new ResizeObserver(...)`
+  and every other realm-bound global silently answer for the wrong window: the `instanceof` is false for **every** node
+  such code will ever see, so the guard rejects everything and the feature is simply inert. Take the constructor from
+  the node — `el.ownerDocument.defaultView` — as `WidePage` and `ScrollRegion` do. **The frontend suite cannot see
+  this**: happy-dom has one realm, so the wrong global and the right one are the same object and every test passes.
 
 ## Current State
 

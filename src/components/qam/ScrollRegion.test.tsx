@@ -241,6 +241,53 @@ describe("ScrollRegion", () => {
       expect(scrollTo).not.toHaveBeenCalled();
     });
 
+    it("asks the node's own view what an element is, not this module's global", async () => {
+      // Plugin code runs in the SharedJSContext window while these nodes belong
+      // to the QAM's own document, so a bare `instanceof HTMLElement` names a
+      // constructor from the wrong realm and rejects every node. Standing in
+      // for that here: a view whose HTMLElement nothing is an instance of. The
+      // module-global form would still scroll, because in one realm every node
+      // passes.
+      const { scrollTo } = await renderRegion(
+        <button data-testid="first" data-top="90">
+          first
+        </button>,
+      );
+      const foreign = { HTMLElement: class Foreign {} } as unknown as Window;
+      const owner = screen.getByTestId("scroll-panel").ownerDocument;
+      const real = Object.getOwnPropertyDescriptor(Document.prototype, "defaultView");
+      Object.defineProperty(owner, "defaultView", { configurable: true, get: () => foreign });
+      try {
+        // Dispatched directly: `fireEvent` reads `defaultView` to build the
+        // event, which is the very thing this test replaces.
+        screen.getByTestId("first").dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+        vi.advanceTimersByTime(50);
+        expect(scrollTo).not.toHaveBeenCalled();
+      } finally {
+        if (real) Object.defineProperty(owner, "defaultView", real);
+        else delete (owner as unknown as Record<string, unknown>).defaultView;
+      }
+    });
+
+    it("does nothing when the node has no view at all", async () => {
+      const { scrollTo } = await renderRegion(
+        <button data-testid="first" data-top="90">
+          first
+        </button>,
+      );
+      const owner = screen.getByTestId("scroll-panel").ownerDocument;
+      const real = Object.getOwnPropertyDescriptor(Document.prototype, "defaultView");
+      Object.defineProperty(owner, "defaultView", { configurable: true, get: () => null });
+      try {
+        screen.getByTestId("first").dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+        vi.advanceTimersByTime(50);
+        expect(scrollTo).not.toHaveBeenCalled();
+      } finally {
+        if (real) Object.defineProperty(owner, "defaultView", real);
+        else delete (owner as unknown as Record<string, unknown>).defaultView;
+      }
+    });
+
     it("reveals the top on the fallback branch too", async () => {
       const ScrollRegion = await loadScrollRegion(undefined);
       mockGeometry();
