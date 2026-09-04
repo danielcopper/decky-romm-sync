@@ -1559,6 +1559,20 @@ class TestGetFirmwareStatusDeletableCount:
 
         assert plat["local_count"] == 2
         assert plat["deletable_count"] == 1
+        # And per row, which is what a row's own Delete button reads. `IPL.bin`
+        # is the shape that matters: in the library, on disk, `downloaded: True`
+        # — and not ours, so it must offer nothing. Deriving the field from
+        # `downloaded` instead of from the records flips exactly this row, and
+        # it is the shape that destroyed `codehandler.bin` on a real device.
+        rows = {f["file_name"]: f for f in plat["files"]}
+        assert rows["IPL.bin"]["downloaded"] is True
+        assert rows["IPL.bin"]["deletable_count"] == 0
+        assert rows["card.bin"]["deletable_count"] == 0
+        # `retired.bin` has no row at all: nothing declares it and the library no
+        # longer offers it. So the platform count and the rows legitimately
+        # differ — the count is over records, the rows are what the pane has to
+        # show, and only the platform-wide button can reach this one.
+        assert "retired.bin" not in rows
         # And the count means the delete: it removes ours, leaves theirs.
         deleted = await fw.delete_platform_bios("gc")
         assert deleted["deleted_count"] == 1

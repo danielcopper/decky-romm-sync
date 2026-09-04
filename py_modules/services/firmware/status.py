@@ -258,8 +258,12 @@ class FirmwareStatusReader:
         """Stamp what a delete would take — per row, and for the platform.
 
         One pass over the download records and one probe each, so every answer
-        on the pane comes from the same set: a row's own Delete button and the
-        platform's ``Delete BIOS (N)`` cannot disagree about what would go.
+        on the pane comes from the same set. The platform count and the rows are
+        not the same NUMBER, and are not meant to be: the count is over records,
+        while a row exists only where something declares the file or the library
+        offers it — a download RomM has since dropped and no core declares
+        raises the count with no row to show it, and only the platform-wide
+        button can reach it.
 
         The delete is authorised by the record and unlinks the path that record
         holds, so this is exactly that set: recorded paths under one of the
