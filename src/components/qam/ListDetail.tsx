@@ -64,7 +64,13 @@ export const ListDetail: FC<ListDetailProps> = ({ items, selectedId, onSelect, r
         ))}
       </Focusable>
     </ScrollRegion>
-    <ScrollRegion style={{ flex: "1 1 auto", minWidth: 0 }}>
+    {/* Keyed on the selection so a new entry's detail opens at its own top.
+        The region is remounted rather than scrolled back by a ref, because
+        Steam's scroll panel is reached through a webpack probe and nothing
+        establishes that it forwards one; a key needs no handle on the element.
+        Focus is in the list when this changes — that is what changed the
+        selection — so nothing focused is unmounted. */}
+    <ScrollRegion key={selectedId ?? ""} style={{ flex: "1 1 auto", minWidth: 0 }}>
       <Focusable flow-children="vertical">{renderDetail(selectedId)}</Focusable>
     </ScrollRegion>
   </Focusable>

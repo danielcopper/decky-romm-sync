@@ -81,6 +81,22 @@ describe("ScrollRegion", () => {
     expect(screen.getByTestId("scroll-panel").style.overflow).toBe("");
   });
 
+  it("keeps the wheel inside a region that has reached its end", async () => {
+    const ScrollRegion = await loadScrollRegion(StubScrollPanel);
+
+    render(
+      <ScrollRegion>
+        <div>region content</div>
+      </ScrollRegion>,
+    );
+
+    // Measured on device: all three nested scrollers compute `auto`, so a mouse
+    // at the bottom of one went on to scroll Steam's tab panel and took the
+    // frame's Back row off the top. A controller never showed it — Steam scrolls
+    // a region by moving focus, not by wheel events.
+    expect(screen.getByTestId("scroll-panel").style.overscrollBehavior).toBe("contain");
+  });
+
   it("keeps the region, its bounds and its place in the focus tree when the probe missed", async () => {
     const ScrollRegion = await loadScrollRegion(undefined);
 

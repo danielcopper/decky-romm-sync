@@ -147,6 +147,35 @@ describe("ListDetail", () => {
     expect(detail?.style.height).toBe("100%");
   });
 
+  it("opens a newly selected entry's detail at its own top", () => {
+    // The pane is remounted on selection, so its scroll position cannot carry
+    // over from the platform before it — a new pane opening part-way down its
+    // own BIOS table is what this prevents. happy-dom lays nothing out, so what
+    // is pinned is the remount; that the scroll actually returns to the top is
+    // the browser's own behaviour for a fresh element.
+    const { rerender } = render(
+      <ListDetail
+        items={platformItems(() => {})}
+        selectedId="n64"
+        onSelect={vi.fn()}
+        renderDetail={(id) => <div>detail for {id ?? "nothing"}</div>}
+      />,
+    );
+    const before = screen.getByText("detail for n64").closest("[style]");
+
+    rerender(
+      <ListDetail
+        items={platformItems(() => {})}
+        selectedId="psx"
+        onSelect={vi.fn()}
+        renderDetail={(id) => <div>detail for {id ?? "nothing"}</div>}
+      />,
+    );
+
+    expect(screen.getByText("detail for psx")).toBeInTheDocument();
+    expect(before).not.toBeInTheDocument();
+  });
+
   it("puts a whole-list control above the rows without making it a selection", () => {
     const onSelect = vi.fn();
     const onEnableAll = vi.fn();

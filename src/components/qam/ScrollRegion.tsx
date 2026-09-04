@@ -13,7 +13,10 @@
  * element, so a heading, a counts line or a column header sitting over the
  * topmost row stays off the top once the reader has scrolled past it. That is
  * this component's own job, and it is here rather than on a page so that every
- * wide page inherits it — see `revealTop`.
+ * region built with `ScrollRegion` inherits it — see `revealTop`. That is not
+ * every region on every wide page: a TABBED page's content sits in Steam's own
+ * `ScrollingTab`, which the frame does not wrap, so a tab that does not build
+ * its own regions does not get this.
  *
  * The panel comes from a webpack probe that can miss, and a page whose regions
  * silently vanish would be worse than one that scrolls without what the panel
@@ -45,7 +48,15 @@ export interface ScrollRegionProps {
 // `overflow` shorthand beats both of those axes. The sideways scroll it would
 // restore is one Steam clips on purpose: one over-wide row and every focus step
 // inside the region would drag the whole pane left and right under the reader.
-const BOUNDS: CSSProperties = { height: "100%", minHeight: 0 };
+//
+// `overscroll-behavior` is a different property and safe to set: it does not
+// name an axis of `overflow`, so it cannot undo Steam's sideways clipping. It
+// stops the WHEEL from chaining out of a region that has reached its end —
+// measured on device, all three nested scrollers here compute `auto`, so a
+// mouse at the bottom of the detail pane went on to scroll Steam's tab panel
+// and took the Back row off the top with it. A controller never showed it,
+// because Steam scrolls a region by moving focus rather than by wheel events.
+const BOUNDS: CSSProperties = { height: "100%", minHeight: 0, overscrollBehavior: "contain" };
 
 // Every shape Steam gives a focus stop inside a region, measured in the running
 // QAM rather than assumed: its own components render `div[tabindex="0"]`
