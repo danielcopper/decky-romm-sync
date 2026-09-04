@@ -222,7 +222,10 @@ export interface RegistryPlatform {
    * where every group that HOLDS a binding is a single version — a group with no
    * binding contributes to neither number, which is exactly a partly-synced
    * platform. A version the platform's last completed fetch did not return is
-   * excluded: the picker disables such a row, so no reader reaches it.
+   * excluded: the picker refuses a switch to it, so no reader reaches it. It is
+   * therefore not bounded by `count` either — a BOUND row the fetch did not
+   * return raises `count` without raising this, so a pane can read fewer here
+   * than it has shortcuts.
    *
    * Absent on older backends; a reader falls back to `count`, which is the
    * pre-#1815 wording and understates rather than inventing a number.

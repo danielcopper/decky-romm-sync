@@ -380,15 +380,34 @@ class TestRegistryPlatformsReachableCount:
         """RomM dropped a version; its row stays and stops counting.
 
         Nothing deletes it — ADR-0007 keeps the row as an identity anchor and
-        only the cleanup flow removes one — but the version picker lists such a
-        row dimmed and disables it, so no reader can reach it through the
-        group's shortcut. Counting it was the header claiming a version is in
-        Steam that nothing can select.
+        only the cleanup flow removes one — but the picker refuses a switch to
+        it, so no reader can reach it through the group's shortcut. Counting it
+        was the header claiming a version is in Steam that nothing can select.
         """
         uow = plugin._uow
         _seed_rom(uow, 10, app_id=1001, platform_slug="dc", group_key="igdb:1:2")
         _seed_rom(uow, 11, app_id=None, platform_slug="dc", group_key="igdb:1:2")
         _stamp_fetch(uow, "dc", rom_count=1, fetch_id="fetch-2", seen=[10])
+
+        entry = (await plugin.get_registry_platforms())["platforms"][0]
+        assert entry["count"] == 1
+        assert entry["reachable_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_group_still_reaches_its_survivors_when_the_binding_vanished(self, plugin):
+        """The exclusion is from the COUNT, never from the grouping.
+
+        The shortcut exists whether or not the version it binds is still on the
+        server, so the group's other versions are still reached through it.
+        Filtering the dropped row out before grouping would leave a group with
+        no binding at all and report nothing reachable, which is a shortcut the
+        reader can plainly see.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="dc", group_key="igdb:1:2")
+        _seed_rom(uow, 11, app_id=None, platform_slug="dc", group_key="igdb:1:2")
+        # The BOUND row is the one the fetch did not return.
+        _stamp_fetch(uow, "dc", rom_count=1, fetch_id="fetch-2", seen=[11])
 
         entry = (await plugin.get_registry_platforms())["platforms"][0]
         assert entry["count"] == 1

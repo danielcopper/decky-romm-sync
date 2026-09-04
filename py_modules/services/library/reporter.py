@@ -1028,11 +1028,10 @@ def _reachable_row_count(rows: list[Rom], dropped: set[int]) -> int:
     Steam, which is what the header line used to do.
 
     *dropped* is the rows the last completed fetch of their platform did not
-    return, and they are not reachable by any route: the version picker lists
-    such a row dimmed and **disables** it, so no reader can select it
-    (:meth:`services.version_switch.VersionSwitchService._version_entries` —
-    "retained rows keep their switchable verdict but are excluded from default
-    ranking and disabled by the frontend"). They are excluded from the count
+    return, and they are not reachable: **the picker refuses a switch to one**
+    (``VersionPicker``'s ``handleSwitch``). It is a refusal rather than a
+    disabling — such a row still renders enabled, so it can open the cleanup
+    that removes it. They are excluded from the count
     and not from the GROUPING, because the group's membership and its binding
     are facts about every row: a group whose binding sits on a dropped row
     still reaches its surviving versions through that shortcut.

@@ -110,7 +110,7 @@ export interface PlatformRow {
    *  half of the line rather than printing a zero nothing established.
    *
    *  A version RomM no longer serves keeps its row, and is excluded: the picker
-   *  disables such a row, so nothing reaches it. What the backend can establish
+   *  refuses a switch to it, so nothing reaches it. What the backend can establish
    *  is what the platform's last completed fetch returned, which leaves one
    *  window open — a version dropped from RomM since that fetch is already gone
    *  from `romCount` while still counted here, so the line can read right >

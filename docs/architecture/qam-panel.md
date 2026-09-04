@@ -328,16 +328,24 @@ Two things the line does not claim. The halves count **different populations** �
 right is what our own rows say — so ROMs added on RomM since the last sync widen the gap, and equality means "nothing
 outstanding as of the last sync" rather than a fresh server-side proof. And **a version RomM no longer serves is not
 reachable and is not counted**: nothing deletes such a row — ADR-0007 keeps it as an identity anchor and only the
-removed-game cleanup removes one — but the version picker lists it dimmed and disables it, so no reader can select it
-through the group's shortcut. `reachable_count` excludes the rows the platform's last completed fetch did not return,
-which `domain/fetch_generation.py::prune_candidate_ids` already answers for the cleanup's own discovery; where no usable
-stamp exists it names nothing and every row counts, so the exclusion's worst case is the number printed before it.
+removed-game cleanup removes one — but the picker refuses a switch to it, so no reader can reach it through the group's
+shortcut. (A refusal rather than a disabling: the row still renders enabled, which is how it opens the cleanup.)
+`reachable_count` excludes the rows the platform's last completed fetch did not return, which
+`domain/fetch_generation.py::prune_candidate_ids` already answers for the cleanup's own discovery; where no usable stamp
+exists it names nothing and every row counts, so the exclusion's worst case is the number printed before it.
 
-**That leaves one window, and it is the only way the line can read right > left.** Between a ROM's deletion on RomM and
-the next completed fetch of its platform, the left number has already dropped while our rows still carry the previous
-generation, so the right can exceed it until that platform syncs again. Closing it would need a live server call, which
-this read deliberately does not make — `get_registry_platforms` answers offline, and that is what keeps the pane useful
-with RomM unreachable.
+**That leaves one window in which the line can read right > left.** Between a ROM's deletion on RomM and the next
+completed fetch of its platform, the left number has already dropped while our rows still carry the previous generation,
+so the right can exceed it until that platform syncs again. Closing it would need a live server call, which this read
+deliberately does not make — `get_registry_platforms` answers offline, and that is what keeps the pane useful with RomM
+unreachable.
+
+The exclusion also means **`reachable_count` is not bounded below by `count`**: a _bound_ row the last fetch did not
+return raises the shortcut count without raising the header, so a pane can read `2 on RomM · 3 in Steam` beside
+`Remove 4 shortcuts`. Two shapes reach it — a bound version deleted on RomM, in the gap before that run's stale-removal
+scan, and a collection-added row on an already-stamped platform, which commits with no generation — and both heal on
+that platform's next complete sync. The direction is a conservative under-count, which is why it is recorded rather than
+guarded.
 
 **The BIOS ratio is not on that line** — it was, and its width is what wrapped the line three times on a platform with a
 long name and a long core label. It is stated once instead, beside `BIOS FILES` eight pixels below, in the colour
@@ -358,8 +366,9 @@ it, for the focused platform:
   none, and the two are different sentences:
 
   - **Options exist, none bakeable, and the fallback can run** — the plain RetroDECK launch is baked and RetroDECK
-    resolves the emulator itself, so the games start. The clause reads `RetroDECK decides` in the muted colour and the
-    line under it says the plugin cannot pin one.
+    resolves the emulator itself. The clause reads `RetroDECK decides` in the muted colour and the line under it says
+    the plugin cannot pin one; neither promises a launch, because what the fallback then finds is between RetroDECK and
+    the machine.
   - **Options exist, none bakeable, and the fallback is not installed** — the same unpinnable state, with the opposite
     outcome. `run_game.sh` takes `command[1]` for the system when no alternate emulator is set and `options_to_payload`
     keeps ES-DE's document order, so `emulators[0]` **is** that command; when its own `reason` is `not_installed`, the
