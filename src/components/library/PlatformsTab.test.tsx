@@ -897,6 +897,55 @@ describe("Library › Platforms", () => {
       expect(within(container).getByTestId("status-bios").textContent).toBe("Deleted 2 BIOS files");
     });
 
+    it("surfaces a BIOS delete that threw", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [firmwarePlatform({ deletable_count: 2 })],
+      });
+      vi.mocked(backend.deletePlatformBios).mockRejectedValue(new Error("io"));
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Delete BIOS (2)")!);
+        await Promise.resolve();
+      });
+      await confirmLastModal();
+
+      expect(within(container).getByTestId("status-bios").textContent).toContain("Failed to delete BIOS files");
+    });
+
+    it("announces nothing when the BIOS delete refuses", async () => {
+      // The event fans out to every open game page and each match pays a live
+      // check_platform_bios for it, so a delete that moved no file must stay
+      // silent rather than send one nothing can act on.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [firmwarePlatform({ deletable_count: 2 })],
+      });
+      vi.mocked(backend.deletePlatformBios).mockResolvedValue({
+        success: false,
+        deleted_count: 0,
+        message: "Nothing to delete",
+      });
+      const events: CustomEvent[] = [];
+      const listener = ((e: Event) => events.push(e as CustomEvent)) as EventListener;
+      globalThis.addEventListener("romm_data_changed", listener);
+      try {
+        const { container } = render(<LibraryPage onBack={vi.fn()} />);
+        await flushAsync();
+        await act(async () => {
+          fireEvent.click(buttonByText(container, "Delete BIOS (2)")!);
+          await Promise.resolve();
+        });
+        await confirmLastModal();
+
+        expect(within(container).getByTestId("status-bios").textContent).toBe("Nothing to delete");
+        expect(events).toHaveLength(0);
+      } finally {
+        globalThis.removeEventListener("romm_data_changed", listener);
+      }
+    });
+
     it("withdraws the downloads and says why when nothing could be established", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
@@ -964,6 +1013,84 @@ describe("Library › Platforms", () => {
       expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(2);
       expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalledWith("Game Boy Advance", expect.any(AbortSignal));
       expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2], null);
+    });
+
+    it("surfaces a shortcut removal that threw", async () => {
+      vi.mocked(backend.removePlatformShortcuts).mockRejectedValue(new Error("net"));
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Remove 9 shortcuts")!);
+        await Promise.resolve();
+      });
+      await confirmLastModal();
+
+      expect(within(container).getByTestId("status-remove").textContent).toBe("Failed to remove shortcuts");
+    });
+
+    it("clears the collection under the name the backend answered with", async () => {
+      // The backend knows the Steam collection's real name; the row's name is
+      // RomM's and can differ, so it is only the fallback — which is why the two
+      // names here are deliberately not the same string.
+      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
+        success: true,
+        app_ids: [11, 12],
+        rom_ids: [1, 2],
+        platform_name: "Nintendo - Game Boy Advance",
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Remove 9 shortcuts")!);
+        await Promise.resolve();
+      });
+      await confirmLastModal();
+      await flushAsync();
+
+      expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalledWith(
+        "Nintendo - Game Boy Advance",
+        expect.any(AbortSignal),
+      );
+    });
+
+    it("falls back to the row's name when the backend names no collection", async () => {
+      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
+        success: true,
+        app_ids: [11],
+        rom_ids: [1],
+        platform_name: "",
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Remove 9 shortcuts")!);
+        await Promise.resolve();
+      });
+      await confirmLastModal();
+      await flushAsync();
+
+      expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalledWith("Game Boy Advance", expect.any(AbortSignal));
+    });
+
+    it("reports nothing back when the removal freed no rows and holds no lease", async () => {
+      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
+        success: true,
+        app_ids: [11],
+        rom_ids: [],
+        platform_name: "Game Boy Advance",
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Remove 9 shortcuts")!);
+        await Promise.resolve();
+      });
+      await confirmLastModal();
+      await flushAsync();
+
+      expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(backend.reportRemovalResults)).not.toHaveBeenCalled();
+      expect(within(container).getByTestId("status-remove").textContent).toBe("Removed 1 Game Boy Advance game");
     });
 
     it("keeps the removal progress on the platform it is removing", async () => {
