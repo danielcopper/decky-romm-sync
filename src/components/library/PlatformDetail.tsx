@@ -177,29 +177,74 @@ const BiosTableHeader: FC = () => (
   </div>
 );
 
-const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, download }) => {
-  const { note } = biosFileNote(file);
-  const cells = (
-    <div style={{ display: "grid", gridTemplateColumns: TABLE_COLUMNS, gap: "8px", alignItems: "center" }}>
-      <span style={{ minWidth: 0 }}>
-        <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {file.file_name}
-        </span>
-        <span style={{ fontSize: "11px", color: MUTED }}>
-          {file.description ? `${file.description} · ` : ""}
-          {WANTED_LABELS[file.wanted]}
-        </span>
-      </span>
-      <span style={{ color: fileColor(file) }}>
-        {file.downloaded ? "Yes" : "Missing"}
-        {note && <span style={{ display: "block", fontSize: "11px", color: MUTED }}>{note}</span>}
-      </span>
-      {/* #1803's column. The vendored resolver can verify a file's contents;
-          nothing asks it to yet and the answer carries no content field, so
-          every row reads an em dash until that backend half lands. */}
-      <span style={{ color: MUTED }}>—</span>
-      <span>{download}</span>
+/**
+ * The Contents cell — what a read of the row's destination found inside it.
+ *
+ * The em dash means **nothing was asked**, and must never come to mean "asked
+ * and found nothing": the whole-machine inventory is deliberately unverified, so
+ * a plain file row carries no content answer at all and #1803 is the work that
+ * will give it one. A declared folder does carry one, because the resolver lists
+ * that folder the way the core does, and the row's `satisfied` verdict is what
+ * came back.
+ *
+ * "no image" covers both ways a folder fails its core — one holding nothing the
+ * core would boot, and a plain file sitting where the core opens a folder —
+ * because the core's listing reaches no image either way. Which of the two it is
+ * belongs to the row's On-disk note, whose wording is {@link biosFileNote}'s.
+ */
+function contentsCell(file: FirmwareRow): string {
+  if (file.declared_kind !== "directory") return "—";
+  if (file.satisfied === true) {
+    const held = file.images?.length ?? 0;
+    if (held === 0) return "an image";
+    return held === 1 ? "1 image" : `${held} images`;
+  }
+  return file.satisfied === false ? "no image" : "unknown";
+}
+
+/**
+ * The images a folder holds, one per line under the row they belong to.
+ *
+ * Each string is the resolver's verbatim, and `pre-wrap` keeps the column
+ * padding PCSX2 puts in its own option labels — that alignment is what makes a
+ * line matchable against the emulator's own picker. They sit under the row
+ * rather than in the Contents cell because the cell is 92px and one of these
+ * labels is not; the cell counts them instead.
+ */
+const BiosFileLines: FC<{ lines: string[] }> = ({ lines }) =>
+  lines.length === 0 ? null : (
+    <div style={{ display: "flex", flexDirection: "column", gap: "2px", marginLeft: "18px", marginTop: "2px" }}>
+      {lines.map((line) => (
+        <div key={line} style={{ fontSize: "11px", color: MUTED, whiteSpace: "pre-wrap" }}>
+          {line}
+        </div>
+      ))}
     </div>
+  );
+
+const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, download }) => {
+  const { note, lines } = biosFileNote(file);
+  const cells = (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: TABLE_COLUMNS, gap: "8px", alignItems: "center" }}>
+        <span style={{ minWidth: 0 }}>
+          <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {file.file_name}
+          </span>
+          <span style={{ fontSize: "11px", color: MUTED }}>
+            {file.description ? `${file.description} · ` : ""}
+            {WANTED_LABELS[file.wanted]}
+          </span>
+        </span>
+        <span style={{ color: fileColor(file) }}>
+          {file.downloaded ? "Yes" : "Missing"}
+          {note && <span style={{ display: "block", fontSize: "11px", color: MUTED }}>{note}</span>}
+        </span>
+        <span style={{ color: MUTED }}>{contentsCell(file)}</span>
+        <span>{download}</span>
+      </div>
+      <BiosFileLines lines={lines} />
+    </>
   );
   if (download) return <div style={{ padding: "4px 16px" }}>{cells}</div>;
   // A row with nothing to press still has to be reachable, or the reader cannot

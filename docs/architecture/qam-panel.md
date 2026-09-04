@@ -248,10 +248,15 @@ on the right. Under it, for the focused platform:
   that could not answer. The frontend half of #1016 lands here: a switch the backend refuses is reported under the
   button, and the header keeps naming the core that is actually active.
 - **BIOS files** — the summary (required, or files, and the two unknown states), then a table: Wanted, On disk,
-  Contents, and a **Download** button on every row that is missing and in the RomM library (#164). Below it Download
-  required, Download all, Delete BIOS behind a `ConfirmModal`. Contents is #1803's column and reads an em dash on every
-  row until that issue's backend half exists. The section appears whenever the firmware read speaks for the platform,
-  synced or not — there is nothing to say about one it does not cover.
+  Contents, and a **Download** button on every row that is missing and in the RomM library (#164) — never on a folder
+  declaration, whatever its state, because the emulator opens that name as a directory. Below it Download required,
+  Download all, Delete BIOS behind a `ConfirmModal`. Contents is answered for a folder declaration only: the count of
+  images it holds (the resolver's verbatim strings are listed full-width under the row, `pre-wrap`, because the padding
+  in them is what makes a line matchable against the emulator's own picker), or that it holds none, or that nothing
+  could establish its contents. A file row reads an em dash, and that em dash means the question was never asked — the
+  machine-wide reading is deliberately unverified, #1803 is what will ask it, and until then the dash must not come to
+  mean "asked, and nothing found". The section appears whenever the firmware read speaks for the platform, synced or not
+  — there is nothing to say about one it does not cover.
 - **Remove** — Remove _N_ shortcuts and Delete save files, the actions the Data Management platform modal used to offer,
   without Delete BIOS (it is one group up). Only when the platform has shortcuts in Steam; that count is the only "has
   anything" signal the panel can read, so a platform holding save files and no shortcut shows no group. Red, last, each

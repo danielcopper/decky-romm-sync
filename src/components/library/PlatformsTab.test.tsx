@@ -124,6 +124,15 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement |
   return [...container.querySelectorAll("button")].find((b) => b.textContent === text);
 }
 
+/** The BIOS table's Contents cells, by their exact text.
+ *  Exact rather than a substring of the pane: "unknown" is also a word in the
+ *  readiness summary above the table, so a substring match would pass on a cell
+ *  that says nothing of the kind. */
+function contentsCells(container: HTMLElement): string[] {
+  const cells = [...container.querySelectorAll("span")].map((s) => s.textContent);
+  return cells.filter((text) => /^(—|an image|\d+ images?|no image|unknown)$/.test(text));
+}
+
 function lastModalProps<T = Record<string, unknown>>(): T | null {
   const calls = vi.mocked(showModal).mock.calls;
   const el = calls[calls.length - 1]?.[0] as ReactElement<T> | undefined;
@@ -529,7 +538,10 @@ describe("Library › Platforms", () => {
   // The BIOS table and its buttons
   // ------------------------------------------------------------------
   describe("the BIOS files", () => {
-    it("renders the three columns with Contents still empty (#1803)", async () => {
+    it("renders the three columns, and a file row's Contents is the em dash (#1803)", async () => {
+      // Nothing ASKED about a plain file's contents — the machine-wide reading
+      // is deliberately unverified — so the em dash stands for the absence of a
+      // question, never for a question answered "nothing".
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
@@ -537,6 +549,71 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("On disk");
       expect(container.textContent).toContain("Contents");
       expect(container.textContent).toContain("gba_bios.bin");
+      expect(contentsCells(container)).toContain("—");
+    });
+
+    it("counts a satisfied folder's images in Contents and lists them under the row", async () => {
+      const images = ["Japan    v1.00  ROM1", "USA      v2.20  ROM1"];
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({
+                file_name: "bios",
+                declared_kind: "directory",
+                downloaded: true,
+                satisfied: true,
+                images,
+              }),
+            ],
+            required_downloaded: 1,
+            bios_level: "ok",
+            local_count: 1,
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(contentsCells(container)).toContain("2 images");
+      // Verbatim, padding and all — that alignment is what makes a line
+      // matchable against the emulator's own picker.
+      for (const image of images) expect(container.textContent).toContain(image);
+    });
+
+    it("says a folder holds no image where the read established that", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({ file_name: "bios", declared_kind: "directory", downloaded: true, satisfied: false }),
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(contentsCells(container)).toContain("no image");
+    });
+
+    it("says a folder's contents are unknown where nothing could establish them", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [firmwareFile({ file_name: "bios", declared_kind: "directory", downloaded: true, satisfied: null })],
+            bios_level: "unknown",
+            required_withheld: 1,
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(contentsCells(container)).toContain("unknown");
     });
 
     it("offers a Download on a missing row the library holds (#164)", async () => {

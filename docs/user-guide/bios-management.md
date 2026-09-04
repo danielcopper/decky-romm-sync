@@ -157,8 +157,11 @@ and the row you focus is the one the right-hand pane describes.
    system with a required row the plugin could not judge — a declared folder it could not read, say — reads "BIOS
    readiness unknown" instead — see [When readiness cannot be stated](#when-readiness-cannot-be-stated)
 7. Below it, a table lists the files themselves: what is **wanted** (each row says whether it is _needed_, _optional_,
-   _not needed_ or _unknown_), whether it is **on disk**, and its **contents**. The contents column is reserved for a
-   check that does not exist yet, so every row reads an em dash for now
+   _not needed_ or _unknown_), whether it is **on disk**, and its **contents**. Contents answers for a required
+   **folder**: how many BIOS images it holds — and the images themselves are listed under the row, in the emulator's own
+   words so you can match one against its picker — or that it holds none, or that its contents could not be established.
+   A plain file reads an em dash, which means the question was never asked: checking a file's contents is still to come,
+   and until it lands the em dash must not be read as "checked, and nothing there"
 8. A **Download** button sits on every row that is missing and in your RomM library. **Download required** and
    **Download all** fetch several at once. A system nothing installed could answer for has no download buttons at all —
    see [When the requirement is unknown](#when-the-requirement-is-unknown)
