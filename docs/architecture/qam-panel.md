@@ -302,7 +302,15 @@ on the right. Under it, for the focused platform:
 
   A legend under the table names the marks it actually contains, **one entry per line** — an entry for a state no row is
   in explains nothing and costs a row, and mark 2 is inside that filter with one line of its own rather than one per
-  verdict it can stand beside.
+  verdict it can stand beside. The legend is the only one of the three wordings a controller user can reach (the others
+  are `title` attributes), so it words the amber rows as what they are — nothing could say whether the file is wanted —
+  and never as "nothing asked for it", which is the `not_needed` claim and a synonym of the grey "missing, not required"
+  two lines below it.
+
+  On a platform nothing could answer for, the rows nothing could be asked about are **counted once**, in the line under
+  the table that also says where to report the gap; the summary above it states the condition without a number, because
+  the count up there was the same sentence twice on one screen. Counts on this pane are pluralised (`1 file`,
+  `2 files`), never written as `file(s)`.
 
   Everything a row says in words goes **under the row, full width** — `biosFileNote`'s note first, then a folder's
   images — because a 68px cell wraps one sentence across three lines. The one note that does not appear there is the

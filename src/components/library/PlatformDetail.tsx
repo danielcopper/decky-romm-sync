@@ -120,13 +120,15 @@ function getBiosSummary(
  *
  * `requiredWithheld` above zero is a platform whose emulators DID answer and one
  * of whose required rows nothing could judge — a declared folder the resolver
- * could not read, say. Zero is the older shape: no installed emulator's
- * answer could be established for the platform at all, which splits again on
- * whether there are rows to point at, because a platform whose emulators are all
- * standalone has none and "0 file(s) nothing installed could answer for" would
- * read as a finished count of nothing rather than as silence.
+ * could not read, say. Zero is no installed emulator's answer being established
+ * for the platform at all.
+ *
+ * The second states no count. The rows nothing could answer for are counted
+ * once, under the table where the line that carries them also says where to
+ * report the gap — and on this platform they are every row, so a count up here
+ * as well is the same sentence twice on one screen.
  */
-function getUnknownSummary(requiredWithheld: number, total: number) {
+function getUnknownSummary(requiredWithheld: number) {
   if (requiredWithheld > 0) {
     return {
       summaryLabel: "BIOS readiness unknown",
@@ -138,10 +140,7 @@ function getUnknownSummary(requiredWithheld: number, total: number) {
   }
   return {
     summaryLabel: "BIOS requirement unknown",
-    summaryDescription:
-      total > 0
-        ? `${total} file(s) nothing installed could answer for`
-        : "Nothing installed could answer for this system",
+    summaryDescription: "Nothing installed could answer for this system",
   };
 }
 
@@ -384,8 +383,8 @@ const BiosLegend: FC<{ files: FirmwareRow[] }> = ({ files }) => {
   const shown = [
     { glyph: "✗", color: RED, text: "required, missing" },
     { glyph: "✓", color: GREEN, text: "required, here" },
-    { glyph: "✗", color: AMBER, text: "missing; nothing asked for it" },
-    { glyph: "✓", color: AMBER, text: "here; nothing asked for it" },
+    { glyph: "✗", color: AMBER, text: "missing; nothing could say whether this is wanted" },
+    { glyph: "✓", color: AMBER, text: "here; nothing could say whether this is wanted" },
     { glyph: "?", color: AMBER, text: "could not be checked" },
     { glyph: "✓", color: PALE_GREEN, text: "here, not required" },
     { glyph: "✗", color: MUTED, text: "missing, not required" },
@@ -545,7 +544,7 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
   const requiredWithheld = firmware.required_withheld ?? 0;
   const nothingEstablished = isUnknown && requiredWithheld === 0;
   const { summaryLabel, summaryDescription } = isUnknown
-    ? getUnknownSummary(requiredWithheld, total)
+    ? getUnknownSummary(requiredWithheld)
     : getBiosSummary(requiredCount, requiredDone, requiredReady, optionalMissing, done, total);
 
   // The download affordances key off what is missing AND fetchable, never off
@@ -622,8 +621,8 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
       {files.length > 0 && <BiosLegend files={files} />}
       {unanswered > 0 && (
         <Muted>
-          {unanswered} file(s) nothing installed could answer for. Report at github.com/danielcopper/romm-tender/issues
-          if needed.
+          {unanswered === 1 ? "1 file" : `${unanswered} files`} nothing installed could answer for. Report at
+          github.com/danielcopper/romm-tender/issues if needed.
         </Muted>
       )}
       {/* One row of buttons rather than three stacked full-width ones. Each

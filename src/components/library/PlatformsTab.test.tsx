@@ -913,10 +913,41 @@ describe("Library › Platforms", () => {
         { glyph: "✓", color: AMBER },
         { glyph: "✗", color: AMBER },
       ]);
-      // The legend must not call these unchecked — they were checked.
-      expect(container.textContent).toContain("here; nothing asked for it");
-      expect(container.textContent).toContain("missing; nothing asked for it");
+      // The legend must not call these unchecked — they were checked. Nor may it
+      // say nothing asked for them, which is the `not_needed` claim: what these
+      // rows carry is that no installed emulator could be ASKED, and the pane's
+      // own summary says exactly that two lines above.
+      expect(container.textContent).toContain("here; nothing could say whether this is wanted");
+      expect(container.textContent).toContain("missing; nothing could say whether this is wanted");
       expect(container.textContent).not.toContain("could not be checked");
+      expect(container.textContent).not.toContain("nothing asked for it");
+      // …and the sentence the table's own line carries is not repeated up in the
+      // summary, where it would be the same words twice on one screen.
+      expect(container.textContent.match(/nothing installed could answer for/g)).toHaveLength(1);
+      // Two rows, so "2 files" — the pane never writes "file(s)" at the reader.
+      expect(container.textContent).toContain("2 files nothing installed could answer for");
+      expect(container.textContent).not.toContain("file(s)");
+    });
+
+    it("counts one unanswerable row as a file, not as file(s)", async () => {
+      // The game page's BIOS tab already pluralises; this surface was the one
+      // writing the parenthesis at the reader.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [firmwareFile({ file_name: "one.bin", wanted: "unknown", required_by_active: false })],
+            bios_level: "unknown",
+            required_count: 0,
+            required_withheld: 0,
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("1 file nothing installed could answer for");
+      expect(container.textContent).not.toContain("file(s)");
     });
 
     it("never reads a folder's presence as its verdict, even with no verdict at all", async () => {
