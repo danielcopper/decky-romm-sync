@@ -968,15 +968,10 @@ weights + planned totals, via `sync_plan`) and the applying frames.
   estimate read long or short, never mis-apply. A Force Full Sync needs no special case: `clear_sync_cache` deletes
   every stamp before the run, so a forced plan predicts no skips and drops every `collapsed_count` — the unit is then
   weighed at the full pre-collapse `rom_count`, but `bound_count` and `new_shortcut_count` both survive the clear (they
-  read the rows, not the stamp) and keep the forced re-apply priced by composition (#1517). The same collapsed counts
-  also garnish `get_platforms` (an optional per-platform `collapsed_count`), so the platform toggles show the number of
-  games a synced platform actually produces rather than the raw server file count. That garnish is **gated on the
-  platform's completion stamp** (`_read_collapsed_counts`, #1412): the count is emitted only for slugs that currently
-  carry a `PlatformSyncState` stamp — the stamp exists iff the local mirror is complete, which is exactly when a
-  post-collapse count is meaningful. A never-synced platform legitimately holds only PARTIAL rows (cross-platform
-  collection siblings persist per ADR-0021), so an ungated count would shadow the true server total; with no stamp the
-  field is absent and the toggle label falls back to the raw `rom_count`. Clearing the stamp (local removal / Force Full
-  Sync) reverts the label to the server total until the next completed sync re-stamps.
+  read the rows, not the stamp) and keep the forced re-apply priced by composition (#1517). `get_platforms` carried the
+  same count as a per-platform garnish for the old toggle label; the Library page's list shows RomM's own `rom_count`,
+  so the garnish had no reader and the whole-table scan it cost — inside a `BEGIN IMMEDIATE`, on the read that gates the
+  page's first paint — went with it (#1815).
 - **Static walk-cost ceiling (pre-run seed).** Before a run — in the preview, and again as the initial "up to X min" the
   instant a skip-preview run starts — the estimate is a pure cost model over **three independent terms** (#1511),
   because a run is three independent phases and one blended per-item rate cannot describe a mix of them:

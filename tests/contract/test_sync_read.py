@@ -189,34 +189,28 @@ async def test_get_platforms_happy_shape(harness):
     # rom_count==0 platform is filtered out
     assert [p["slug"] for p in result["platforms"]] == ["snes"]
     p = result["platforms"][0]
-    # collapsed_count is conditionally-present (#1382): a never-synced platform
-    # (no persisted rows) omits it — absent, not null.
+    # The payload is these five keys and nothing else: `rom_count` is RomM's
+    # own, which is what the Library page's list shows.
     assert set(p.keys()) == {"id", "name", "slug", "rom_count", "sync_enabled"}
     assert p["id"] == 1
     assert isinstance(p["sync_enabled"], bool)
 
 
-async def test_get_platforms_collapsed_count_after_sync(harness):
-    """A synced platform (completion stamp + persisted rows) carries the optional
-    collapsed_count (#1382); the count is gated on the stamp (#1412)."""
+async def test_get_platforms_reports_romms_count_for_a_synced_platform(harness):
+    """A synced platform reports the SERVER's rom_count, not a local derivation.
+
+    The payload used to garnish a post-collapse shortcut count here for the old
+    toggle label; the list shows RomM's own number, so nothing derived from the
+    persisted rows rides along — and the whole-table scan it cost is gone with it
+    (#1815).
+    """
     harness.romm.platforms = [{"id": 1, "name": "Super Nintendo", "slug": "snes", "rom_count": 3}]
     seed_rom(harness, 11, platform_slug="snes")
     seed_platform_stamp(harness, "snes", rom_count=3)
     result = await harness.plugin.get_platforms()
     p = result["platforms"][0]
-    assert p["collapsed_count"] == 1
     assert p["rom_count"] == 3
-
-
-async def test_get_platforms_collapsed_count_omitted_without_stamp(harness):
-    """#1412: a never-synced platform carrying only partial local rows (no
-    completion stamp) omits collapsed_count so the label shows the server total."""
-    harness.romm.platforms = [{"id": 1, "name": "Super Nintendo", "slug": "snes", "rom_count": 3344}]
-    seed_rom(harness, 11, platform_slug="snes")
-    result = await harness.plugin.get_platforms()
-    p = result["platforms"][0]
-    assert "collapsed_count" not in p
-    assert p["rom_count"] == 3344
+    assert set(p.keys()) == {"id", "name", "slug", "rom_count", "sync_enabled"}
 
 
 async def test_get_platforms_server_failure_shape(harness):

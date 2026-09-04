@@ -9,13 +9,6 @@ export interface PlatformSyncSetting {
   name: string;
   slug: string;
   rom_count: number;
-  /**
-   * Persisted post-collapse shortcut count — how many Steam shortcuts this
-   * platform's ROMs collapse into (one per sibling group, ADR-0021). Absent
-   * when the platform was never synced (no persisted rows); the toggle label
-   * then falls back to the raw `rom_count`.
-   */
-  collapsed_count?: number;
   sync_enabled: boolean;
 }
 

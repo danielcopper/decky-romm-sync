@@ -174,15 +174,6 @@ class LibraryFetcher:
             self._settings_persister.save_settings()
             enabled = materialized
 
-        # Persisted post-collapse shortcut counts for the toggle labels
-        # (#1382). Display garnish only, so a failed read degrades to the raw
-        # server counts instead of failing the platform list.
-        try:
-            collapsed_counts = await self._loop.run_in_executor(None, self._read_collapsed_counts)
-        except Exception as e:
-            self._logger.warning(f"Collapsed-count read failed, falling back to raw ROM counts: {e}")
-            collapsed_counts = {}
-
         result = []
         for p in platforms:
             rom_count = p.get("rom_count", 0)
@@ -196,9 +187,6 @@ class LibraryFetcher:
                 "rom_count": rom_count,
                 "sync_enabled": resolve_sync_enabled(enabled, pid),
             }
-            collapsed = collapsed_counts.get(entry["slug"])
-            if collapsed is not None:
-                entry["collapsed_count"] = collapsed
             result.append(entry)
         return {"success": True, "platforms": result}
 
@@ -687,9 +675,9 @@ class LibraryFetcher:
         derive the persisted post-collapse shortcut count
         (``collapsed_shortcut_count`` over the rows' sibling-group keys +
         bound flags). The collapsed count is emitted ONLY for slugs that carry
-        a ``PlatformSyncState`` completion stamp (#1412) — the same gate as
-        ``_read_collapsed_counts``: the stamp exists iff the local mirror is
-        complete, so without it a never-synced platform's PARTIAL rows
+        a ``PlatformSyncState`` completion stamp (#1412): the stamp exists iff
+        the local mirror is complete, so without it a never-synced platform's
+        PARTIAL rows
         (cross-platform collection siblings, ADR-0021) would mis-weight the ETA
         below the true work. ``None`` (no stamp, or no persisted rows) rides the
         payload absent, so the frontend weights the unit at its raw ``rom_count``
@@ -756,33 +744,6 @@ class LibraryFetcher:
                 )
                 estimates[unit.slug] = _PlanEstimate(predicted, collapsed, bound_count, new_shortcuts)
         return estimates
-
-    def _read_collapsed_counts(self) -> dict[str, int]:
-        """Persisted post-collapse shortcut count per platform slug, gated on the
-        platform's completion stamp (#1382 / #1412).
-
-        Groups every persisted ``roms`` row by ``platform_slug`` and collapses
-        each platform's sibling-group keys + bound flags
-        (``collapsed_shortcut_count``), but emits a count ONLY for slugs that
-        currently carry a ``PlatformSyncState`` completion stamp (ADR-0023). The
-        stamp exists iff the platform's local mirror is complete, which is
-        exactly the condition under which a post-collapse count is meaningful:
-        a never-synced platform legitimately holds PARTIAL rows — cross-platform
-        collection siblings persist per ADR-0021 (e.g. favorited games leave
-        their platform's rows behind without the platform ever being fetched) —
-        so an ungated count would shadow the true server total (#1412). A slug
-        with no stamp (or no persisted rows) is absent, so the caller leaves the
-        field off and the frontend falls back to the raw server count. The stamp
-        lookup shares the one short read UoW.
-        """
-        rows_by_slug: dict[str, list[tuple[str | None, bool]]] = {}
-        with self._uow_factory() as uow:
-            for rom in uow.roms.iter_all():
-                rows_by_slug.setdefault(rom.platform_slug, []).append(
-                    (rom.sibling_group_key, rom.shortcut_app_id is not None)
-                )
-            stamped = {slug for slug in rows_by_slug if uow.platform_sync_state.get(slug) is not None}
-        return {slug: collapsed_shortcut_count(rows) for slug, rows in rows_by_slug.items() if slug in stamped}
 
     def _read_incremental_baseline(self, platform_slug: str) -> _SkipBaseline:
         """Read the incremental-skip baseline for *platform_slug* from SQLite.
