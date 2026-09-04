@@ -249,26 +249,40 @@ header line instead of a Sync section: the platform's name, `N on RomM · M in S
 on the right. Under it, for the focused platform:
 
 - **Emulator core** — a Change core button opening the same context menu the game page uses (`buildEmulatorMenu`), with
-  the save-compatibility caveat under it. Only when the platform has games in Steam; otherwise one sentence says to sync
-  it first. Where the platform offers one emulator, or RetroDECK was not found, a sentence says that instead of a picker
-  that could not answer. The frontend half of #1016 lands here: a switch the backend refuses is reported under the
-  button, and the header keeps naming the core that is actually active.
-- **BIOS files** — the summary (required, or files, and the two unknown states), then a table: Wanted, On disk,
-  Contents, and a **Download** button on every row that is missing and in the RomM library (#164) — never on a folder
-  declaration, whatever its state, because the emulator opens that name as a directory. Below it Download required,
-  Download all, Delete BIOS behind a `ConfirmModal`. Contents is answered for a folder declaration only: the count of
-  images it holds (the resolver's verbatim strings are listed full-width under the row, `pre-wrap`, because the padding
-  in them is what makes a line matchable against the emulator's own picker), or that it holds none, or that nothing
-  could establish its contents. A file row reads an em dash, and that em dash means the question was never asked — the
-  machine-wide reading is deliberately unverified, #1803 is what will ask it, and until then the dash must not come to
-  mean "asked, and nothing found". The section appears whenever the firmware read speaks for the platform, synced or not
-  — there is nothing to say about one it does not cover.
-- **Remove** — Remove _N_ shortcuts and Delete _N_ save files, the actions the Data Management platform modal used to
-  offer, without Delete BIOS (it is one group up). Red, last, each behind a confirmation. **Both buttons are always
-  rendered and disable when there is nothing to delete; neither is ever hidden.** Hiding the group on the shortcut count
-  alone strands a platform whose shortcuts were removed and whose saves remain — those saves are then unreachable, and
-  this is the only page that offers them. A count still being read is not a zero: the saves button says only what it
-  does and stays pressable until the answer lands.
+  the save-compatibility caveat under it, and **no section heading of its own**: the header line above already names the
+  active core, so a title over one button restates it and costs the pane a row. Only when the platform has games in
+  Steam; otherwise one sentence says to sync it first. Where the platform offers one emulator, or RetroDECK was not
+  found, a sentence says that instead of a picker that could not answer. The frontend half of #1016 lands here: a switch
+  the backend refuses is reported under the button, and the header keeps naming the core that is actually active.
+- **BIOS files** — the summary (required, or files, and the two unknown states), then a table: File, On disk, Contents,
+  and a **Download** button on every row that is missing and in the RomM library (#164) — never on a folder declaration,
+  whatever its state, because the emulator opens that name as a directory. Below it one row of buttons: Download
+  required (_N_), Download all, Delete BIOS behind a `ConfirmModal`.
+
+  **`On disk` is one mark carrying two facts, and it is the only place presence is stated.** The **glyph is the
+  verdict** — `✓` met, `✗` not met, `?` nothing could establish it — read off `BiosFileEntry.satisfied` and never off
+  presence, because for a folder declaration the two come apart entirely. The **colour is the need**: strong where the
+  launching core requires the file (green `✓`, red `✗`), muted where it does not (pale green `✓`, grey `✗`), keyed on
+  `required_by_active` so the table and the summary above it cannot mean different things by "required". A legend under
+  the table names the marks it actually contains — an entry for a state no row is in explains nothing and costs a row.
+  Two states have no place in that four-way scheme and are **not** folded into it: a verdict nothing could establish and
+  a row no installed emulator could be asked about are both amber `?`, because calling either missing would claim an
+  absence nothing established. `optional` and `not_needed` do share the muted branch: for the core about to launch,
+  neither is a gap. The file name is printed once — RomM answers an entry with no description of its own by repeating
+  the name, and the row used to show both. Contents is answered for a folder declaration only: the count of images it
+  holds (the resolver's verbatim strings are listed full-width under the row, `pre-wrap`, because the padding in them is
+  what makes a line matchable against the emulator's own picker), or that it holds none, or that nothing could establish
+  its contents. A file row reads an em dash, and that em dash means the question was never asked — the machine-wide
+  reading is deliberately unverified, #1803 is what will ask it, and until then the dash must not come to mean "asked,
+  and nothing found". The section appears whenever the firmware read speaks for the platform, synced or not — there is
+  nothing to say about one it does not cover.
+- **Remove** — Remove _N_ shortcuts and Delete _N_ save files on one row, the actions the Data Management platform modal
+  used to offer, without Delete BIOS (it is one group up). Red, last, each behind a confirmation, and with **no heading
+  over them**: both buttons name what they remove and are drawn in red, so a title says nothing they do not. **Both
+  buttons are always rendered and disable when there is nothing to delete; neither is ever hidden.** Hiding the group on
+  the shortcut count alone strands a platform whose shortcuts were removed and whose saves remain — those saves are then
+  unreachable, and this is the only page that offers them. A count still being read is not a zero: the saves button says
+  only what it does and stays pressable until the answer lands.
 
 Five reads feed the tab. Three are list-shaped and run once per page mount: `get_platforms` (RomM's platforms with ROMs,
 the list itself), `get_firmware_status` (BIOS state for the platforms it can speak for) and `get_registry_platforms`

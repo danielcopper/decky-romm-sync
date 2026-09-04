@@ -14,8 +14,8 @@
  */
 
 import type { FC, ReactNode } from "react";
-import { ButtonItem, ConfirmModal, DialogButton, Focusable, showContextMenu, showModal } from "@decky/ui";
-import type { FirmwarePlatformExt, FirmwareWanted } from "../../types";
+import { ConfirmModal, DialogButton, Focusable, showContextMenu, showModal } from "@decky/ui";
+import type { FirmwarePlatformExt } from "../../types";
 import { biosColorForLevel } from "../../utils/biosColor";
 import { biosFileNote } from "../../utils/biosFileNote";
 import { buildEmulatorMenu } from "../../utils/emulatorMenu";
@@ -23,20 +23,24 @@ import { getEventTarget } from "../../utils/events";
 import { SYNC_RUNNING_HINT, useSyncRunning } from "../../utils/syncRunning";
 import type { CoreAnswer, PlatformRow, PlatformsPageState, StatusScope } from "./usePlatformsPage";
 
-/**
- * How each of the four `wanted` values reads on a file row. `not_needed` is
- * spelled out rather than shortened: "not needed" is a statement about every
- * installed emulator, and the row beside it saying "unknown" is the absence of
- * one, so the two must not look like near-synonyms.
- */
-const WANTED_LABELS: Record<FirmwareWanted, string> = {
-  needed: "needed",
-  optional: "optional",
-  not_needed: "not needed",
-  unknown: "unknown",
-};
-
 const MUTED = "#8f98a0";
+const RED = "#d94126";
+const GREEN = "#5ba32b";
+const AMBER = "#d4a72c";
+/** A satisfied row nothing is waiting on — present, and not this core's problem.
+ *  Green's quieter twin, so "there and needed" and "there and spare" are one
+ *  glance apart rather than one reading apart. */
+const PALE_GREEN = "#8fc46b";
+
+/**
+ * The padding a `DialogButton` is given wherever this pane puts buttons in a
+ * row. `ButtonItem` — the full-width control most of the panel uses — takes no
+ * style or class of its own (`ItemProps` has neither), so its height is Steam's
+ * and cannot be argued with; a `DialogButton` takes `style`, and IS the button
+ * `ButtonItem` renders inside its own `Field` row. Using it directly is Steam's
+ * button without Steam's row, not a lookalike.
+ */
+const FLAT_BUTTON = { flex: "1 1 auto", minWidth: 0, padding: "6px 10px", fontSize: "13px" } as const;
 
 /** One row of the firmware overview's per-platform file list. Named off the
  *  payload rather than restated, so a field added to it reaches here. */
@@ -114,22 +118,45 @@ function getUnknownSummary(requiredWithheld: number, total: number) {
 }
 
 /**
- * The colour a file row's on-disk state is drawn in. NOT
- * {@link biosColorForLevel}: that maps the platform's four-valued readiness
- * verdict, and this is a per-file state with its own rules — it reads the row's
- * VERDICT rather than `downloaded`, because for a declared folder the two come
- * apart: the folder is there on every RetroDECK install and what satisfies the
- * core is a file inside it. A payload with no verdict falls back to
- * `downloaded`, which is what the verdict is for a plain file.
+ * What one row's `On disk` cell says, as a glyph and a colour.
+ *
+ * Two facts, two channels, so neither has to be read off the other:
+ *
+ * - **the glyph is the VERDICT** — `✓` met, `✗` not met, `?` nothing could
+ *   establish it. It is `BiosFileEntry.satisfied`, never presence: for a
+ *   declared folder the two come apart completely, since RetroDECK links
+ *   LRPS2's `pcsx2/bios` onto the BIOS root, so the folder is always there and
+ *   what satisfies the core is a file inside it. A payload carrying no verdict
+ *   at all falls back to `downloaded`, which is what the verdict is for a plain
+ *   file.
+ * - **the colour is the NEED** — strong where the core the platform launches
+ *   with requires the file, muted where it does not. `required_by_active`, not
+ *   `wanted`, because the summary above the table counts the same way and the
+ *   two must not disagree about what "required" means.
+ *
+ * So the four states the device pass asked for come out as: required + met
+ * green ✓, required + unmet red ✗, spare + met pale green ✓, spare + unmet grey
+ * ✗. Two states have no counterpart in that list and are **not** folded into
+ * one of the four: a verdict nothing could establish, and a row no installed
+ * emulator could be asked about (`wanted: "unknown"`). Both are amber, because
+ * calling either of them missing would claim an absence nothing established —
+ * and amber is the colour this panel already gives a row it cannot call settled.
+ *
+ * `not_needed` and `optional` share the muted branch on purpose: for the core
+ * about to launch, a file it does not require is not a gap either way, and
+ * splitting them would need a fifth colour to say something the row's own
+ * description already says.
+ *
+ * The `Contents` cell reads the same `satisfied`, so the two columns are two
+ * renderings of one field and cannot contradict each other.
  */
-function fileColor(file: FirmwareRow): string {
+function diskMark(file: FirmwareRow): { glyph: string; color: string; title: string } {
   const verdict = file.satisfied === undefined ? file.downloaded : file.satisfied;
-  // A row nothing could judge is amber for the same reason a row nothing could
-  // be asked about is.
-  if (file.wanted === "unknown" || verdict === null) return "#d4a72c";
-  if (verdict) return "#5ba32b";
-  if (file.required_by_active) return "#d94126";
-  return MUTED;
+  if (file.wanted === "unknown") return { glyph: "?", color: AMBER, title: "nothing could say whether this is wanted" };
+  if (verdict === null) return { glyph: "?", color: AMBER, title: "nothing could check this" };
+  const required = file.required_by_active;
+  if (verdict) return { glyph: "✓", color: required ? GREEN : PALE_GREEN, title: required ? "required, here" : "here" };
+  return { glyph: "✗", color: required ? RED : MUTED, title: required ? "required, missing" : "missing" };
 }
 
 const SectionTitle: FC<{ title: string; note?: string }> = ({ title, note }) => (
@@ -185,7 +212,7 @@ const BiosTableHeader: FC = () => (
       color: MUTED,
     }}
   >
-    <span>Wanted</span>
+    <span>File</span>
     <span>On disk</span>
     <span>Contents</span>
     <span />
@@ -237,22 +264,58 @@ const BiosFileLines: FC<{ lines: string[] }> = ({ lines }) =>
     </div>
   );
 
+/** The description beside a file's name, or nothing.
+ *
+ *  RomM answers a firmware entry with no description of its own by repeating the
+ *  file name, and a row reading `scph7003.bin` over `scph7003.bin` says one
+ *  thing twice while spending two lines to do it. */
+function fileDescription(file: FirmwareRow): string | null {
+  const description = file.description.trim();
+  if (!description || description === file.file_name) return null;
+  return description;
+}
+
+/**
+ * What the marks in `On disk` mean, under the table that uses them.
+ *
+ * Only the entries the table actually contains: a legend line for a state no row
+ * is in explains nothing and costs a row, which on this pane is the scarce
+ * thing. The order is the order a reader cares about — what is wrong first.
+ */
+const BiosLegend: FC<{ files: FirmwareRow[] }> = ({ files }) => {
+  const marks = files.map(diskMark);
+  const shown = [
+    { glyph: "✗", color: RED, text: "required, missing" },
+    { glyph: "✓", color: GREEN, text: "required, here" },
+    { glyph: "?", color: AMBER, text: "could not be checked" },
+    { glyph: "✓", color: PALE_GREEN, text: "here, not required" },
+    { glyph: "✗", color: MUTED, text: "missing, not required" },
+  ].filter((entry) => marks.some((mark) => mark.glyph === entry.glyph && mark.color === entry.color));
+  if (shown.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", padding: "2px 16px 6px", fontSize: "11px" }}>
+      {shown.map((entry) => (
+        <span key={`${entry.glyph}${entry.color}`} style={{ color: MUTED }}>
+          <span style={{ color: entry.color }}>{entry.glyph}</span> {entry.text}
+        </span>
+      ))}
+    </div>
+  );
+};
+
 const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, download }) => {
   const { note, lines } = biosFileNote(file);
+  const mark = diskMark(file);
+  const description = fileDescription(file);
   const cells = (
     <>
       <div style={{ display: "grid", gridTemplateColumns: TABLE_COLUMNS, gap: "8px", alignItems: "center" }}>
-        <span style={{ minWidth: 0 }}>
-          <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {file.file_name}
-          </span>
-          <span style={{ fontSize: "11px", color: MUTED }}>
-            {file.description ? `${file.description} · ` : ""}
-            {WANTED_LABELS[file.wanted]}
-          </span>
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {file.file_name}
+          {description && <span style={{ fontSize: "11px", color: MUTED }}>{` ${description}`}</span>}
         </span>
-        <span style={{ color: fileColor(file) }}>
-          {file.downloaded ? "Yes" : "Missing"}
+        <span style={{ color: mark.color }} title={mark.title}>
+          <span style={{ fontSize: "14px" }}>{mark.glyph}</span>
           {note && <span style={{ display: "block", fontSize: "11px", color: MUTED }}>{note}</span>}
         </span>
         <span style={{ color: MUTED }}>{contentsCell(file)}</span>
@@ -272,75 +335,60 @@ const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, dow
   );
 };
 
+/**
+ * The core row: one button under the header, or one sentence saying why there is
+ * nothing to press.
+ *
+ * **No section heading.** The header line above already names the active core,
+ * so a title over a single button would restate it — and on the Deck's body a
+ * heading is a row the pane cannot pay for.
+ */
 const CoreSection: FC<{ row: PlatformRow; state: PlatformsPageState; core: CoreAnswer }> = ({ row, state, core }) => {
   // Strictly zero, so an unread shortcut count does not withdraw the picker:
   // "sync this first" would be a claim about a platform nothing was learned
   // about, and the core read is independent of the count anyway.
   if (row.shortcutCount === 0) {
-    return (
-      <>
-        <SectionTitle title="Emulator core" />
-        <Muted>Sync this platform first — the core applies to the games it puts in Steam.</Muted>
-      </>
-    );
+    return <Muted>Sync this platform first — the core applies to the games it puts in Steam.</Muted>;
   }
-  if (core === undefined) {
-    return (
-      <>
-        <SectionTitle title="Emulator core" />
-        <Muted>Reading the emulators for this platform…</Muted>
-      </>
-    );
-  }
+  if (core === undefined) return <Muted>Reading the emulators for this platform…</Muted>;
   if (core === null) {
     return (
       <>
-        <SectionTitle title="Emulator core" />
         <Muted>Could not read the emulators for this platform. Reopen the page to try again.</Muted>
         <GroupStatus state={state} slug={row.slug} scope="core" />
       </>
     );
   }
   if (!core.emulator_data_available) {
-    return (
-      <>
-        <SectionTitle title="Emulator core" />
-        <Muted>RetroDECK was not found, so there is no emulator list to choose from.</Muted>
-      </>
-    );
+    return <Muted>RetroDECK was not found, so there is no emulator list to choose from.</Muted>;
   }
   if (core.emulators.length < 2) {
-    return (
-      <>
-        <SectionTitle title="Emulator core" />
-        <Muted>This platform offers one emulator, so there is nothing to switch.</Muted>
-      </>
-    );
+    return <Muted>This platform offers one emulator, so there is nothing to switch.</Muted>;
   }
   return (
     <>
-      <SectionTitle title="Emulator core" />
-      <ButtonItem
-        layout="below"
-        bottomSeparator="none"
-        disabled={state.busySlug !== null}
-        onClick={(e: Event) =>
-          showContextMenu(
-            buildEmulatorMenu({
-              emulators: core.emulators,
-              emulatorDataAvailable: core.emulator_data_available,
-              activeLabel: core.active_core_label,
-              // Null on purpose: this pane IS the platform level, so marking
-              // an entry "(system)" would restate where the reader already is.
-              platformCoreLabel: null,
-              onPick: (label) => state.changeCore(row.slug, label),
-            }),
-            getEventTarget(e),
-          )
-        }
-      >
-        Change core
-      </ButtonItem>
+      <Focusable flow-children="horizontal" style={{ display: "flex", padding: "0 16px 4px" }}>
+        <DialogButton
+          style={FLAT_BUTTON}
+          disabled={state.busySlug !== null}
+          onClick={(e: MouseEvent) =>
+            showContextMenu(
+              buildEmulatorMenu({
+                emulators: core.emulators,
+                emulatorDataAvailable: core.emulator_data_available,
+                activeLabel: core.active_core_label,
+                // Null on purpose: this pane IS the platform level, so marking
+                // an entry "(system)" would restate where the reader already is.
+                platformCoreLabel: null,
+                onPick: (label) => state.changeCore(row.slug, label),
+              }),
+              getEventTarget(e),
+            )
+          }
+        >
+          Change core ›
+        </DialogButton>
+      </Focusable>
       <Muted>Switching cores may affect save compatibility.</Muted>
       <GroupStatus state={state} slug={row.slug} scope="core" />
     </>
@@ -399,8 +447,10 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
   const fetchableMissing = nothingEstablished
     ? []
     : files.filter((f) => f.on_server && !f.downloaded && f.declared_kind !== "directory");
-  const hasRequiredMissing = fetchableMissing.some((f) => f.required_by_active);
+  const requiredMissing = fetchableMissing.filter((f) => f.required_by_active).length;
   const hasOptionalMissing = fetchableMissing.some((f) => !f.required_by_active);
+  const showRequired = requiredMissing > 0 && !state.serverOffline;
+  const showAll = !allDone && (hasOptionalMissing || requiredMissing > 0) && !state.serverOffline;
   const fetchable = new Set(fetchableMissing.map((f) => f.file_name));
   // What Delete BIOS would remove — a record count, not a library one. There is
   // no local fallback: the rows say nothing about who downloaded a file, so a
@@ -447,47 +497,49 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
           }
         />
       ))}
+      {files.length > 0 && <BiosLegend files={files} />}
       {unanswered > 0 && (
         <Muted>
           {unanswered} file(s) nothing installed could answer for. Report at github.com/danielcopper/romm-tender/issues
           if needed.
         </Muted>
       )}
-      {hasRequiredMissing && !state.serverOffline && (
-        <ButtonItem
-          layout="below"
-          bottomSeparator="none"
-          disabled={state.busySlug !== null}
-          onClick={() => state.downloadRequired(row.slug)}
-        >
-          Download required
-        </ButtonItem>
-      )}
-      {!allDone && (hasOptionalMissing || hasRequiredMissing) && !state.serverOffline && (
-        <ButtonItem
-          layout="below"
-          bottomSeparator="none"
-          disabled={state.busySlug !== null}
-          onClick={() => state.downloadAll(row.slug)}
-        >
-          Download all
-        </ButtonItem>
-      )}
-      {/* Delete is local-only (no server needed) and shown only when there is at
+      {/* One row of buttons rather than three stacked full-width ones. Each
+          `ButtonItem` is a `Field` row around a button and costs the pane a row
+          of its own; the three here fit on one.
+
+          Delete is local-only (no server needed) and shown only when there is at
           least one file it would actually remove. That number is the backend's
           `deletable_count` — the plugin's own download records that are still on
           disk, which is exactly what the delete unlinks. The library ratio
           counts a different set and was wrong here in both directions,
           including hiding the button over downloads RomM had stopped listing. */}
-      {deletable > 0 && (
-        <ButtonItem
-          layout="below"
-          bottomSeparator="none"
-          disabled={state.busySlug !== null}
-          onClick={confirmDeleteBios}
-        >
-          <span style={{ color: "#d94126" }}>{`Delete BIOS (${deletable})`}</span>
-        </ButtonItem>
+      {(showRequired || showAll || deletable > 0) && (
+        <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px", padding: "2px 16px 6px" }}>
+          {showRequired && (
+            <DialogButton
+              style={FLAT_BUTTON}
+              disabled={state.busySlug !== null}
+              onClick={() => state.downloadRequired(row.slug)}
+            >
+              {`Download required (${requiredMissing})`}
+            </DialogButton>
+          )}
+          {showAll && (
+            <DialogButton
+              style={FLAT_BUTTON}
+              disabled={state.busySlug !== null}
+              onClick={() => state.downloadAll(row.slug)}
+            >
+              Download all
+            </DialogButton>
+          )}
+          {deletable > 0 && (
+            <DialogButton style={FLAT_BUTTON} disabled={state.busySlug !== null} onClick={confirmDeleteBios}>
+              <span style={{ color: RED }}>{`Delete BIOS (${deletable})`}</span>
+            </DialogButton>
+          )}
+        </Focusable>
       )}
       <GroupStatus state={state} slug={row.slug} scope="bios" />
     </>
@@ -535,32 +587,37 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
     );
   return (
     <>
-      <SectionTitle title="Remove" />
-      <ButtonItem
-        layout="below"
-        bottomSeparator="none"
-        disabled={state.busySlug !== null || syncRunning || row.shortcutCount === 0}
-        description={syncRunning ? SYNC_RUNNING_HINT : undefined}
-        onClick={confirmRemoveShortcuts}
-      >
-        <span style={{ color: "#d94126" }}>
-          {row.shortcutCount === null
-            ? "Remove shortcuts"
-            : `Remove ${row.shortcutCount} shortcut${row.shortcutCount === 1 ? "" : "s"}`}
-        </span>
-      </ButtonItem>
-      <ButtonItem
-        layout="below"
-        bottomSeparator="none"
-        disabled={state.busySlug !== null || saveCount === 0}
-        onClick={confirmDeleteSaves}
-      >
-        <span style={{ color: "#d94126" }}>
-          {typeof saveCount === "number"
-            ? `Delete ${saveCount} save file${saveCount === 1 ? "" : "s"}`
-            : "Delete save files"}
-        </span>
-      </ButtonItem>
+      {/* One row, and no REMOVE heading over it: both buttons say what they
+          remove and are drawn in red, so a title above them names nothing the
+          buttons do not — and it would cost the pane a row. */}
+      <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px", padding: "6px 16px 4px" }}>
+        <DialogButton
+          style={FLAT_BUTTON}
+          disabled={state.busySlug !== null || syncRunning || row.shortcutCount === 0}
+          onClick={confirmRemoveShortcuts}
+        >
+          <span style={{ color: RED }}>
+            {row.shortcutCount === null
+              ? "Remove shortcuts"
+              : `Remove ${row.shortcutCount} shortcut${row.shortcutCount === 1 ? "" : "s"}`}
+          </span>
+        </DialogButton>
+        <DialogButton
+          style={FLAT_BUTTON}
+          disabled={state.busySlug !== null || saveCount === 0}
+          onClick={confirmDeleteSaves}
+        >
+          <span style={{ color: RED }}>
+            {typeof saveCount === "number"
+              ? `Delete ${saveCount} save file${saveCount === 1 ? "" : "s"}`
+              : "Delete save files"}
+          </span>
+        </DialogButton>
+      </Focusable>
+      {/* The sync hint was a ButtonItem `description`; with the button in a row
+          it has nowhere to hang, so it stands under the pair — and only while
+          the reason is live. */}
+      {syncRunning && <Muted>{SYNC_RUNNING_HINT}</Muted>}
       <GroupStatus state={state} slug={row.slug} scope="remove" />
     </>
   );

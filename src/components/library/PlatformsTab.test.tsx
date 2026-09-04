@@ -124,6 +124,23 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement |
   return [...container.querySelectorAll("button")].find((b) => b.textContent === text);
 }
 
+/** The pane's own On-disk palette, spelled out here so a silent change to one of
+ *  the four states the device pass asked for fails rather than passes. */
+const GREEN = "#5ba32b";
+const RED = "#d94126";
+const PALE_GREEN = "#8fc46b";
+const GREY = "#8f98a0";
+const AMBER = "#d4a72c";
+
+/** The BIOS table's On-disk marks, in row order: the glyph and the colour it is
+ *  drawn in. The glyph carries the verdict and the colour carries the need, so a
+ *  test that read only one of them would pass on half the encoding. */
+function diskMarks(container: HTMLElement): { glyph: string; color: string }[] {
+  return [...container.querySelectorAll<HTMLElement>("span[title]")]
+    .filter((el) => /^[✓✗?]$/.test(el.textContent.trim().charAt(0)))
+    .map((el) => ({ glyph: el.textContent.trim().charAt(0), color: el.style.color }));
+}
+
 /** The BIOS table's Contents cells, by their exact text.
  *  Exact rather than a substring of the pane: "unknown" is also a word in the
  *  readiness summary above the table, so a substring match would pass on a cell
@@ -403,7 +420,7 @@ describe("Library › Platforms", () => {
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(buttonByText(container, "Download required")!);
+        fireEvent.click(buttonByText(container, "Download required (1)")!);
         for (let i = 0; i < 8; i++) await Promise.resolve();
       });
       expect(within(container).getByTestId("status-bios").textContent).toBe("Downloaded 1 required firmware files");
@@ -447,13 +464,13 @@ describe("Library › Platforms", () => {
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(buttonByText(container, "Download required")!);
+        fireEvent.click(buttonByText(container, "Download required (1)")!);
         for (let i = 0; i < 4; i++) await Promise.resolve();
       });
 
       await focusRow(container, "Nintendo 64");
       expect(container.textContent).toContain("Working on Game Boy Advance");
-      expect(buttonByText(container, "Download required")?.disabled).toBe(true);
+      expect(buttonByText(container, "Download required (1)")?.disabled).toBe(true);
 
       await act(async () => {
         finish({ success: true, message: "Downloaded 1 required firmware files", downloaded: 1 });
@@ -488,7 +505,7 @@ describe("Library › Platforms", () => {
       await flushAsync();
 
       expect(container.textContent).toContain("Sync this platform first");
-      expect(buttonByText(container, "Change core")).toBeUndefined();
+      expect(buttonByText(container, "Change core ›")).toBeUndefined();
     });
 
     it("offers nothing to switch when the platform has one emulator", async () => {
@@ -497,7 +514,7 @@ describe("Library › Platforms", () => {
       await flushAsync();
 
       expect(container.textContent).toContain("offers one emulator");
-      expect(buttonByText(container, "Change core")).toBeUndefined();
+      expect(buttonByText(container, "Change core ›")).toBeUndefined();
     });
 
     it("says RetroDECK was not found rather than showing an empty picker", async () => {
@@ -520,7 +537,7 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("Could not read how many of these games are in Steam");
       expect(container.textContent).not.toContain("in Steam ·");
       expect(container.textContent).not.toContain("Sync this platform first");
-      expect(buttonByText(container, "Change core")).toBeTruthy();
+      expect(buttonByText(container, "Change core ›")).toBeTruthy();
       expect(buttonByText(container, "Remove shortcuts")).not.toBeDisabled();
     });
 
@@ -598,7 +615,7 @@ describe("Library › Platforms", () => {
 
     async function openCoreMenu(container: HTMLElement): Promise<void> {
       await act(async () => {
-        fireEvent.click(buttonByText(container, "Change core")!);
+        fireEvent.click(buttonByText(container, "Change core ›")!);
         await Promise.resolve();
       });
     }
@@ -684,11 +701,99 @@ describe("Library › Platforms", () => {
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
-      expect(container.textContent).toContain("Wanted");
+      // "File", not "Wanted": the wanted word left the row when colour took over,
+      // so a column header naming it would label nothing.
+      expect(container.textContent).toContain("File");
       expect(container.textContent).toContain("On disk");
       expect(container.textContent).toContain("Contents");
       expect(container.textContent).toContain("gba_bios.bin");
       expect(contentsCells(container)).toContain("—");
+    });
+
+    it("marks the four need-and-verdict states apart, and says so in a legend", async () => {
+      // The glyph is the VERDICT, the colour is the NEED — two facts, two
+      // channels, so neither has to be read off the other. `satisfied` is the
+      // verdict, never presence.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({ file_name: "a.bin", required_by_active: true, downloaded: true, satisfied: true }),
+              firmwareFile({ file_name: "b.bin", required_by_active: true, downloaded: false, satisfied: false }),
+              firmwareFile({
+                file_name: "c.bin",
+                wanted: "optional",
+                required_by_active: false,
+                downloaded: true,
+                satisfied: true,
+              }),
+              firmwareFile({
+                file_name: "d.bin",
+                wanted: "optional",
+                required_by_active: false,
+                downloaded: false,
+                satisfied: false,
+              }),
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(diskMarks(container)).toEqual([
+        { glyph: "✓", color: GREEN },
+        { glyph: "✗", color: RED },
+        { glyph: "✓", color: PALE_GREEN },
+        { glyph: "✗", color: GREY },
+      ]);
+      for (const line of ["required, here", "required, missing", "here, not required", "missing, not required"]) {
+        expect(container.textContent).toContain(line);
+      }
+    });
+
+    it("marks a row nothing could judge apart from one shown to be missing", async () => {
+      // Amber, not red: calling it missing would claim an absence nothing
+      // established, and the row's own verdict is what the register forbids
+      // guessing at.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({ file_name: "folder", declared_kind: "directory", downloaded: true, satisfied: null }),
+              firmwareFile({ file_name: "e.bin", wanted: "unknown", required_by_active: false, downloaded: false }),
+            ],
+            bios_level: "unknown",
+            required_withheld: 1,
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(diskMarks(container)).toEqual([
+        { glyph: "?", color: AMBER },
+        { glyph: "?", color: AMBER },
+      ]);
+      expect(container.textContent).toContain("could not be checked");
+      expect(container.textContent).not.toContain("required, missing");
+    });
+
+    it("says a file name once", async () => {
+      // RomM answers an entry with no description of its own by repeating the
+      // file name, and the row used to print both.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({ files: [firmwareFile({ file_name: "scph7003.bin", description: "scph7003.bin" })] }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent.split("scph7003.bin").length - 1).toBe(1);
     });
 
     it("counts a satisfied folder's images in Contents and lists them under the row", async () => {
@@ -825,7 +930,7 @@ describe("Library › Platforms", () => {
       await flushAsync();
 
       expect(buttonByText(container, "Download")).toBeUndefined();
-      expect(buttonByText(container, "Download required")).toBeUndefined();
+      expect(buttonByText(container, "Download required (1)")).toBeUndefined();
       expect(buttonByText(container, "Download all")).toBeUndefined();
     });
 
@@ -842,7 +947,7 @@ describe("Library › Platforms", () => {
         const { container } = render(<LibraryPage onBack={vi.fn()} />);
         await flushAsync();
         await act(async () => {
-          fireEvent.click(buttonByText(container, "Download required")!);
+          fireEvent.click(buttonByText(container, "Download required (1)")!);
           for (let i = 0; i < 8; i++) await Promise.resolve();
         });
 
@@ -881,7 +986,7 @@ describe("Library › Platforms", () => {
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(buttonByText(container, "Download required")!);
+        fireEvent.click(buttonByText(container, "Download required (1)")!);
         for (let i = 0; i < 8; i++) await Promise.resolve();
       });
 
@@ -1000,7 +1105,7 @@ describe("Library › Platforms", () => {
 
       expect(container.textContent).toContain("BIOS readiness unknown");
       expect(container.textContent).toContain("A required file could not be judged");
-      expect(buttonByText(container, "Download required")).toBeTruthy();
+      expect(buttonByText(container, "Download required (1)")).toBeTruthy();
     });
   });
 
