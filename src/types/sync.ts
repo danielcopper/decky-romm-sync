@@ -221,7 +221,8 @@ export interface RegistryPlatform {
    * group and the game's page switches versions across it. Equal to `count` only
    * where every group that HOLDS a binding is a single version — a group with no
    * binding contributes to neither number, which is exactly a partly-synced
-   * platform.
+   * platform. A version the platform's last completed fetch did not return is
+   * excluded: the picker disables such a row, so no reader reaches it.
    *
    * Absent on older backends; a reader falls back to `count`, which is the
    * pre-#1815 wording and understates rather than inventing a number.

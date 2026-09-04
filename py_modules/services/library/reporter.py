@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.collection_label import collection_label
+from domain.fetch_generation import prune_candidate_ids
 from domain.platform_names import decode_platform_names
 from domain.rom import Rom
 from domain.rom_metadata_mapping import build_rom_metadata
@@ -827,21 +828,28 @@ class SyncReporter:
             names = self._read_platform_name_cache(uow)
             platforms: dict[str, dict[str, Any]] = {}
             rows: dict[str, list[Rom]] = {}
+            by_slug: dict[str, list[Rom]] = {}
             for rom in uow.roms.iter_all():
                 slug = rom.platform_slug
                 display = names.get(slug, slug)
                 rows.setdefault(display, []).append(rom)
+                by_slug.setdefault(slug, []).append(rom)
                 if rom.shortcut_app_id is None:
                     continue
                 platforms.setdefault(display, {"count": 0, "slug": slug})
                 platforms[display]["count"] += 1
+            dropped = {
+                rom_id
+                for slug, slug_rows in by_slug.items()
+                for rom_id in prune_candidate_ids(slug_rows, uow.platform_sync_state.get(slug))
+            }
         return {
             "platforms": [
                 {
                     "name": k,
                     "slug": v["slug"],
                     "count": v["count"],
-                    "reachable_count": _reachable_row_count(rows[k]),
+                    "reachable_count": _reachable_row_count(rows[k], dropped),
                 }
                 for k, v in sorted(platforms.items())
             ],
@@ -1010,7 +1018,7 @@ class SyncReporter:
         }
 
 
-def _reachable_row_count(rows: list[Rom]) -> int:
+def _reachable_row_count(rows: list[Rom], dropped: set[int]) -> int:
     """How many of *rows* a reader can reach from Steam.
 
     A sibling group is one game and gets one shortcut (ADR-0021 §2), so the
@@ -1019,10 +1027,24 @@ def _reachable_row_count(rows: list[Rom]) -> int:
     Counting bindings instead would report those versions as absent from
     Steam, which is what the header line used to do.
 
+    *dropped* is the rows the last completed fetch of their platform did not
+    return, and they are not reachable by any route: the version picker lists
+    such a row dimmed and **disables** it, so no reader can select it
+    (:meth:`services.version_switch.VersionSwitchService._version_entries` —
+    "retained rows keep their switchable verdict but are excluded from default
+    ranking and disabled by the frontend"). They are excluded from the count
+    and not from the GROUPING, because the group's membership and its binding
+    are facts about every row: a group whose binding sits on a dropped row
+    still reaches its surviving versions through that shortcut.
+
     Grouping is :func:`domain.sibling_resolution.group_rows`, so the
     convention that a NULL ``sibling_group_key`` is its own group is stated
     once rather than re-derived here: such a key was never computed, so it
     relates no rows, and folding those rows together would make one binding
     among them speak for all the others.
     """
-    return sum(len(group) for group in group_rows(rows) if any(rom.shortcut_app_id is not None for rom in group))
+    return sum(
+        sum(1 for rom in group if rom.rom_id not in dropped)
+        for group in group_rows(rows)
+        if any(rom.shortcut_app_id is not None for rom in group)
+    )

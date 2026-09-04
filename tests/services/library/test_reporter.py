@@ -33,6 +33,28 @@ def _seed_rom(
         uow.roms.save(rom)
 
 
+def _stamp_fetch(uow, slug: str, *, rom_count: int, fetch_id: str | None, seen: list[int]) -> None:
+    """Record a completed fetch of *slug* and mark which of its rows it returned.
+
+    ``seen`` is the rom_ids that fetch came back with; every other row of the
+    platform keeps whatever generation it had, which is how a dropped id is told
+    apart from a current one without deleting anything.
+    """
+    from domain.platform_sync_state import PlatformSyncState
+
+    with uow:
+        for rom_id in seen:
+            rom = uow.roms.get(rom_id)
+            if fetch_id is not None:
+                rom.record_fetch_generation(fetch_id)
+            uow.roms.save(rom)
+        uow.platform_sync_state.save(
+            PlatformSyncState.stamp(
+                platform_slug=slug, at="2026-01-01T00:00:00", rom_count=rom_count, fetch_id=fetch_id
+            )
+        )
+
+
 def _seed_platform_names(uow, names: dict[str, str]) -> None:
     """Seed the offline ``platform_slug → display_name`` cache."""
     with uow:
@@ -352,6 +374,53 @@ class TestRegistryPlatformsReachableCount:
         entry = (await plugin.get_registry_platforms())["platforms"][0]
         assert entry["count"] == 1
         assert entry["reachable_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_version_the_last_fetch_did_not_return_is_not_reachable(self, plugin):
+        """RomM dropped a version; its row stays and stops counting.
+
+        Nothing deletes it — ADR-0007 keeps the row as an identity anchor and
+        only the cleanup flow removes one — but the version picker lists such a
+        row dimmed and disables it, so no reader can reach it through the
+        group's shortcut. Counting it was the header claiming a version is in
+        Steam that nothing can select.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="dc", group_key="igdb:1:2")
+        _seed_rom(uow, 11, app_id=None, platform_slug="dc", group_key="igdb:1:2")
+        _stamp_fetch(uow, "dc", rom_count=1, fetch_id="fetch-2", seen=[10])
+
+        entry = (await plugin.get_registry_platforms())["platforms"][0]
+        assert entry["count"] == 1
+        assert entry["reachable_count"] == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stamp_args",
+        [
+            None,
+            {"rom_count": 1, "fetch_id": None},
+            {"rom_count": 0, "fetch_id": "fetch-2"},
+        ],
+        ids=["no stamp", "no generation", "empty fetch"],
+    )
+    async def test_a_platform_with_no_usable_stamp_keeps_every_row(self, plugin, stamp_args):
+        """Discovery only, never deletion authority — and never a silent drop.
+
+        A stamp that is missing, carries no generation, or recorded an empty
+        fetch cannot establish what the server returned, so nothing is ruled out
+        and the count is what it was before the exclusion existed. That fallback
+        is what makes the exclusion safe: its worst case is the number already
+        printed.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="dc", group_key="igdb:1:2")
+        _seed_rom(uow, 11, app_id=None, platform_slug="dc", group_key="igdb:1:2")
+        if stamp_args is not None:
+            _stamp_fetch(uow, "dc", seen=[10], **stamp_args)
+
+        entry = (await plugin.get_registry_platforms())["platforms"][0]
+        assert entry["reachable_count"] == 2
 
 
 class TestGetRomBySteamAppId:

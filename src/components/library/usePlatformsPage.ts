@@ -109,11 +109,13 @@ export interface PlatformRow {
    *  line states; `null` (the same read failure as `shortcutCount`) drops that
    *  half of the line rather than printing a zero nothing established.
    *
-   *  One shape can overstate it: a version RomM no longer serves keeps its row
-   *  and its place in the group, so it counts here while being absent from
-   *  `romCount`. Nothing detects it — the row carries no vanished flag, that
-   *  being derived per read — and it is not observable on any library seen so
-   *  far; it is the one way the two halves can disagree with nothing wrong. */
+   *  A version RomM no longer serves keeps its row, and is excluded: the picker
+   *  disables such a row, so nothing reaches it. What the backend can establish
+   *  is what the platform's last completed fetch returned, which leaves one
+   *  window open — a version dropped from RomM since that fetch is already gone
+   *  from `romCount` while still counted here, so the line can read right >
+   *  left until the next sync of that platform. Closing it would need a server
+   *  call this read deliberately does not make. */
   reachableCount: number | null;
 }
 

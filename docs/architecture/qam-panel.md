@@ -326,10 +326,18 @@ job.
 
 Two things the line does not claim. The halves count **different populations** — the left is what RomM holds now, the
 right is what our own rows say — so ROMs added on RomM since the last sync widen the gap, and equality means "nothing
-outstanding as of the last sync" rather than a fresh server-side proof. And a version RomM no longer serves keeps its
-row and its place in its group, so it would count on the right while being absent from the left; the row carries no
-vanished flag (that is derived per read), nothing detects it, and it has not been observed on any library so far. It is
-the one way the two numbers can disagree with nothing wrong.
+outstanding as of the last sync" rather than a fresh server-side proof. And **a version RomM no longer serves is not
+reachable and is not counted**: nothing deletes such a row — ADR-0007 keeps it as an identity anchor and only the
+removed-game cleanup removes one — but the version picker lists it dimmed and disables it, so no reader can select it
+through the group's shortcut. `reachable_count` excludes the rows the platform's last completed fetch did not return,
+which `domain/fetch_generation.py::prune_candidate_ids` already answers for the cleanup's own discovery; where no usable
+stamp exists it names nothing and every row counts, so the exclusion's worst case is the number printed before it.
+
+**That leaves one window, and it is the only way the line can read right > left.** Between a ROM's deletion on RomM and
+the next completed fetch of its platform, the left number has already dropped while our rows still carry the previous
+generation, so the right can exceed it until that platform syncs again. Closing it would need a live server call, which
+this read deliberately does not make — `get_registry_platforms` answers offline, and that is what keeps the pane useful
+with RomM unreachable.
 
 **The BIOS ratio is not on that line** — it was, and its width is what wrapped the line three times on a platform with a
 long name and a long core label. It is stated once instead, beside `BIOS FILES` eight pixels below, in the colour
