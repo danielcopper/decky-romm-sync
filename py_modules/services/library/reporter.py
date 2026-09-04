@@ -24,9 +24,9 @@ from typing import TYPE_CHECKING, Any
 
 from domain.collection_label import collection_label
 from domain.platform_names import decode_platform_names
-from domain.prune import group_rows
 from domain.rom import Rom
 from domain.rom_metadata_mapping import build_rom_metadata
+from domain.sibling_resolution import group_rows
 from domain.sync_diff import BIND_ROM_ID_KEY, should_include_in_platform_collection
 from domain.sync_stage import SyncStage
 from domain.version_metadata import VersionMetadata
@@ -1019,10 +1019,10 @@ def _reachable_row_count(rows: list[Rom]) -> int:
     Counting bindings instead would report those versions as absent from
     Steam, which is what the header line used to do.
 
-    Grouping is :func:`domain.prune.group_rows`, so the convention that a
-    NULL ``sibling_group_key`` is its own group is stated once rather than
-    re-derived here: such a key was never computed, so it relates no rows,
-    and folding those rows together would make one binding among them speak
-    for all the others.
+    Grouping is :func:`domain.sibling_resolution.group_rows`, so the
+    convention that a NULL ``sibling_group_key`` is its own group is stated
+    once rather than re-derived here: such a key was never computed, so it
+    relates no rows, and folding those rows together would make one binding
+    among them speak for all the others.
     """
     return sum(len(group) for group in group_rows(rows) if any(rom.shortcut_app_id is not None for rom in group))

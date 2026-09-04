@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from domain.sibling_resolution import canonical_group_name, resolve_group_representative
+from domain.rom import Rom
+from domain.sibling_resolution import canonical_group_name, group_rows, resolve_group_representative
+from domain.version_metadata import VersionMetadata
 
 
 def _m(rom_id, *, fs_name_no_ext="", is_main_sibling=False, regions=(), name="", revision="", tags=()):
@@ -437,3 +439,28 @@ class TestCanonicalGroupName:
     def test_empty_members_raises_value_error(self):
         with pytest.raises(ValueError, match="empty sibling group"):
             canonical_group_name([])
+
+
+def _grouped_row(rom_id: int, group: str | None) -> Rom:
+    return Rom.synced(
+        rom_id=rom_id,
+        platform_slug="dc",
+        name=str(rom_id),
+        fs_name=f"{rom_id}.gdi",
+        shortcut_app_id=None,
+        synced_at="now",
+        version=VersionMetadata(sibling_group_key=group),
+    )
+
+
+def test_null_group_keys_are_independent_singletons():
+    """A key that was never computed relates the row to nothing.
+
+    Two NULL-keyed rows share an absence, not a game, so folding them together
+    would make one binding among them speak for the other — which is what every
+    consumer of this partition then reports.
+    """
+    groups = group_rows(
+        [_grouped_row(3, None), _grouped_row(2, "same"), _grouped_row(1, None), _grouped_row(4, "same")]
+    )
+    assert [[row.rom_id for row in group] for group in groups] == [[1], [2, 4], [3]]

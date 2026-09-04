@@ -168,20 +168,6 @@ def _human_size(size: object) -> str:
     return f"{value:.1f} PiB"
 
 
-def group_rows(rows: Iterable[Rom]) -> list[list[Rom]]:
-    """Group sibling rows; a NULL group key is always a singleton."""
-    grouped: dict[str, list[Rom]] = {}
-    singletons: list[list[Rom]] = []
-    for row in rows:
-        if row.sibling_group_key is None:
-            singletons.append([row])
-        else:
-            grouped.setdefault(row.sibling_group_key, []).append(row)
-    groups = [sorted(group, key=lambda row: row.rom_id) for group in grouped.values()]
-    groups.extend(singletons)
-    return sorted(groups, key=lambda group: group[0].rom_id)
-
-
 def selected_prune_ids(
     *,
     group_ids: Sequence[int],

@@ -6,7 +6,6 @@ import pytest
 
 from domain.prune import (
     _READABLE_KINDS,
-    group_rows,
     recovery_bundle_id,
     render_bundle_readme,
     sanitize_package_name,
@@ -117,11 +116,6 @@ def test_readme_names_every_artifact_kind_in_plain_words():
     for kind in sorted(_PRODUCED_KINDS):
         assert _READABLE_KINDS[kind] in readme
         assert kind not in readme
-
-
-def test_null_group_keys_are_independent_singletons():
-    groups = group_rows([_rom(3, None), _rom(2, "same"), _rom(1, None), _rom(4, "same")])
-    assert [[row.rom_id for row in group] for group in groups] == [[1], [2, 4], [3]]
 
 
 @pytest.mark.parametrize("remove_fully_vanished", [False, True])

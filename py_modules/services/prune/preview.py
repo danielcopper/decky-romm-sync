@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from domain.fetch_generation import prune_candidate_ids
-from domain.prune import group_rows
+from domain.sibling_resolution import group_rows
 from lib.url_host import romm_namespace
 from services.prune._models import PrunePreview
 
