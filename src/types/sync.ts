@@ -212,7 +212,19 @@ export interface SyncStats {
 export interface RegistryPlatform {
   name: string;
   slug: string;
+  /** Bound ROMs — how many Steam shortcuts this platform has. What the Remove
+   *  group acts on, and never what the header line states. */
   count: number;
+  /**
+   * How many of the platform's ROMs are reachable from Steam: every member of a
+   * sibling group that holds a binding, because one shortcut serves the whole
+   * group and the game's page switches versions across it. Equal to `count` only
+   * where every group is a single version.
+   *
+   * Absent on older backends; a reader falls back to `count`, which is the
+   * pre-#1815 wording and understates rather than inventing a number.
+   */
+  reachable_count?: number;
 }
 
 export interface SyncAddItem {

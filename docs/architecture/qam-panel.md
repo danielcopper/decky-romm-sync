@@ -288,10 +288,29 @@ outside every row, so reaching them reports no selection. The order freezes whil
 
 The row is the page's only sync control — focus is already there and A works the toggle — so the detail opens with one
 header line instead of a Sync section: the platform's name, `N on RomM · M in Steam · <core name>`, and the core
-picker's icon button, right-aligned. **The BIOS ratio is not on that line** — it was, and its width is what wrapped the
-line three times on a platform with a long name and a long core label. It is stated once instead, beside `BIOS FILES`
-eight pixels below, in the colour `biosColor.ts` gives the list's dot, so the two places that state a platform's BIOS
-state agree by construction. Under it, for the focused platform:
+picker's icon button, right-aligned.
+
+**Both counts on that line are ROM files.** `N` is RomM's own `rom_count` for the platform; `M` is `reachable_count` —
+how many of the platform's ROMs a reader can get to through a shortcut, which is every member of a sibling group that
+holds a binding, because one shortcut serves the group (ADR-0021 §2) and the game's page switches versions across it.
+`M` is **not** the number of shortcuts: a fully-synced 665-ROM platform behind 458 shortcuts reads `665 · 665`, where
+counting bindings read `665 · 458` and so reported 207 games as missing when none was. The number of shortcuts is
+`count` on the same payload, and it is what the Remove group says and acts on — the two must not be folded, or the
+button offers to remove more shortcuts than exist. Where a whole game never reached Steam the two halves genuinely
+differ (`3084 on RomM · 8 in Steam` for a platform with one applied game), and that difference is the line doing its
+job.
+
+Two things the line does not claim. The halves count **different populations** — the left is what RomM holds now, the
+right is what our own rows say — so ROMs added on RomM since the last sync widen the gap, and equality means "nothing
+outstanding as of the last sync" rather than a fresh server-side proof. And a version RomM no longer serves keeps its
+row and its place in its group, so it would count on the right while being absent from the left; the row carries no
+vanished flag (that is derived per read), nothing detects it, and it has not been observed on any library so far. It is
+the one way the two numbers can disagree with nothing wrong.
+
+**The BIOS ratio is not on that line** — it was, and its width is what wrapped the line three times on a platform with a
+long name and a long core label. It is stated once instead, beside `BIOS FILES` eight pixels below, in the colour
+`biosColor.ts` gives the list's dot, so the two places that state a platform's BIOS state agree by construction. Under
+it, for the focused platform:
 
 - **Emulator core** — a **microchip icon button in the header line**, opening the same context menu the game page uses
   (`buildEmulatorMenu`). It is the game page's own button and its own colour coding: grey `#8f98a0` when the active core

@@ -83,8 +83,13 @@ export interface PlatformRow {
   id: number;
   slug: string;
   name: string;
-  /** RomM's own ROM count for the platform. Distinct from `shortcutCount`,
-   *  which is what reached Steam; the header line shows both. */
+  /** RomM's own ROM count for the platform, read from the server. Distinct from
+   *  `reachableCount`, which is what reached Steam; the header line shows both.
+   *
+   *  The two count different populations on purpose: this one is what RomM holds
+   *  *now*, its partner is what our own rows say. So ROMs added on RomM since the
+   *  last sync widen the gap, which is the gap being useful — but equality means
+   *  "nothing outstanding as of the last sync", not a fresh server-side proof. */
   romCount: number;
   syncEnabled: boolean;
   /** `null` while the firmware read is in flight, and for a platform that read
@@ -92,9 +97,24 @@ export interface PlatformRow {
   firmware: FirmwarePlatformExt | null;
   /** How many of the platform's ROMs are bound to a Steam shortcut, or `null`
    *  when that read failed. `null` is not zero: read as zero it withdraws the
-   *  core picker, empties the header and disables the shortcut removal — three
-   *  claims about a platform nothing was learned about. */
+   *  core picker and disables the shortcut removal — two claims about a platform
+   *  nothing was learned about.
+   *
+   *  This is the count of SHORTCUTS, so it is what the Remove group says and acts
+   *  on. The header line states `reachableCount` instead. */
   shortcutCount: number | null;
+  /** How many of the platform's ROMs are reachable from Steam — every version in
+   *  a sibling group that holds a binding, since one shortcut serves the group
+   *  and the game's page switches versions across it. This is what the header
+   *  line states; `null` (the same read failure as `shortcutCount`) drops that
+   *  half of the line rather than printing a zero nothing established.
+   *
+   *  One shape can overstate it: a version RomM no longer serves keeps its row
+   *  and its place in the group, so it counts here while being absent from
+   *  `romCount`. Nothing detects it — the row carries no vanished flag, that
+   *  being derived per read — and it is not observable on any library seen so
+   *  far; it is the one way the two halves can disagree with nothing wrong. */
+  reachableCount: number | null;
 }
 
 /** The list's two groups, computed once and kept while the page is open, so
@@ -249,7 +269,10 @@ export function usePlatformsPage(): PlatformsPageState {
   // set, and counting the map's keys would call it "never read" and take back
   // the "nothing is known" wording on every pane after a failed refresh.
   const [firmwareRead, setFirmwareRead] = useState(false);
-  const [shortcutCounts, setShortcutCounts] = useState<Record<string, number>>({});
+  // Both counts in one entry rather than two parallel maps: they come from one
+  // answer about one platform, and split across two states a failed write to
+  // either would leave the header disagreeing with the Remove button.
+  const [shortcutCounts, setShortcutCounts] = useState<Record<string, { bound: number; reachable: number }>>({});
   const [shortcutCountsFailed, setShortcutCountsFailed] = useState(false);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [cores, setCores] = useState<Record<string, SystemCoreInfo | null>>({});
@@ -288,7 +311,11 @@ export function usePlatformsPage(): PlatformsPageState {
   const refreshShortcutCounts = useCallback(async () => {
     try {
       const result = await getRegistryPlatforms();
-      setShortcutCounts(Object.fromEntries(result.platforms.map((p) => [p.slug, p.count])));
+      setShortcutCounts(
+        Object.fromEntries(
+          result.platforms.map((p) => [p.slug, { bound: p.count, reachable: p.reachable_count ?? p.count }]),
+        ),
+      );
       setShortcutCountsFailed(false);
     } catch (e) {
       logWarn(`Failed to read platform shortcut counts: ${e}`);
@@ -399,7 +426,8 @@ export function usePlatformsPage(): PlatformsPageState {
         romCount: p.rom_count,
         syncEnabled: p.sync_enabled,
         firmware: firmware[p.slug] ?? null,
-        shortcutCount: shortcutCountsFailed ? null : (shortcutCounts[p.slug] ?? 0),
+        shortcutCount: shortcutCountsFailed ? null : (shortcutCounts[p.slug]?.bound ?? 0),
+        reachableCount: shortcutCountsFailed ? null : (shortcutCounts[p.slug]?.reachable ?? 0),
       },
     ]),
   );

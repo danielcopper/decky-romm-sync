@@ -1087,8 +1087,15 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
       >
         <span style={{ fontSize: "16px", fontWeight: 600, color: "#dcdedf", minWidth: 0 }}>{row.name}</span>
         <span style={{ flex: "1 1 auto", fontSize: SECONDARY_FONT, color: MUTED }}>
+          {/* Both halves count ROM FILES, which is what makes the pair readable:
+              one shortcut serves a whole sibling group and the game's page
+              switches versions across it, so a version that did not win the
+              binding is still reachable and still belongs on the right. Counting
+              shortcuts there instead read as "207 are missing" on a platform
+              where nothing was. The Remove button below keeps the shortcut
+              count — that one really is about Steam entries. */}
           {`${row.romCount} on RomM`}
-          {row.shortcutCount === null ? "" : ` · ${row.shortcutCount} in Steam`}
+          {row.reachableCount === null ? "" : ` · ${row.reachableCount} in Steam`}
           {coreClause && <span style={{ color: coreClause.color }}>{` · ${coreClause.text}`}</span>}
         </span>
         {offer.kind === "pick" && (

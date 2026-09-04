@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.collection_label import collection_label
 from domain.platform_names import decode_platform_names
+from domain.prune import group_rows
 from domain.rom import Rom
 from domain.rom_metadata_mapping import build_rom_metadata
 from domain.sync_diff import BIND_ROM_ID_KEY, should_include_in_platform_collection
@@ -805,10 +806,19 @@ class SyncReporter:
     def get_registry_platforms(self):
         """Return synced platforms from ``uow.roms`` (works offline, no RomM API call).
 
-        Counts bound ROMs per ``platform_slug`` and resolves display
-        names from the ``platform_names`` cache refreshed each sync,
-        degrading to the slug when a name is absent (RomM never seen for
-        that slug). Unbound (stale) rows are excluded.
+        Two counts per platform, and they answer different questions.
+        ``count`` is bound ROMs — how many Steam shortcuts exist, which is
+        what the Remove group acts on. ``reachable_count`` is how many of
+        the platform's ROMs a reader can get to through one of those
+        shortcuts (:func:`_reachable_row_count`), which is what the header
+        line states beside RomM's own total. Display names come from the
+        ``platform_names`` cache refreshed each sync, degrading to the slug
+        when a name is absent (RomM never seen for that slug).
+
+        A platform with no bound row is omitted entirely, as it always has
+        been. Nothing is lost with it: no group there holds a binding, so
+        its ``reachable_count`` is 0 by construction, and the frontend
+        reads an absent platform as zero on both counts.
         """
         return self._read_registry_platforms_io()
 
@@ -816,15 +826,25 @@ class SyncReporter:
         with self._uow_factory() as uow:
             names = self._read_platform_name_cache(uow)
             platforms: dict[str, dict[str, Any]] = {}
+            rows: dict[str, list[Rom]] = {}
             for rom in uow.roms.iter_all():
-                if rom.shortcut_app_id is None:
-                    continue
                 slug = rom.platform_slug
                 display = names.get(slug, slug)
+                rows.setdefault(display, []).append(rom)
+                if rom.shortcut_app_id is None:
+                    continue
                 platforms.setdefault(display, {"count": 0, "slug": slug})
                 platforms[display]["count"] += 1
         return {
-            "platforms": [{"name": k, "slug": v["slug"], "count": v["count"]} for k, v in sorted(platforms.items())],
+            "platforms": [
+                {
+                    "name": k,
+                    "slug": v["slug"],
+                    "count": v["count"],
+                    "reachable_count": _reachable_row_count(rows[k]),
+                }
+                for k, v in sorted(platforms.items())
+            ],
         }
 
     # ── Cache / stats ────────────────────────────────────────────
@@ -988,3 +1008,21 @@ class SyncReporter:
             "platform_slug": rom.platform_slug,
             "installed": installed,
         }
+
+
+def _reachable_row_count(rows: list[Rom]) -> int:
+    """How many of *rows* a reader can reach from Steam.
+
+    A sibling group is one game and gets one shortcut (ADR-0021 §2), so the
+    versions that did not win the binding are reached through the one that
+    did — the game's page offers **Switch version** across the whole group.
+    Counting bindings instead would report those versions as absent from
+    Steam, which is what the header line used to do.
+
+    Grouping is :func:`domain.prune.group_rows`, so the convention that a
+    NULL ``sibling_group_key`` is its own group is stated once rather than
+    re-derived here: such a key was never computed, so it relates no rows,
+    and folding those rows together would make one binding among them speak
+    for all the others.
+    """
+    return sum(len(group) for group in group_rows(rows) if any(rom.shortcut_app_id is not None for rom in group))

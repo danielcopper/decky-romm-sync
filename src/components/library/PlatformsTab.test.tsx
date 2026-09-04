@@ -555,6 +555,45 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("12 on RomM · 9 in Steam · mGBA");
     });
 
+    it("counts ROM files on both sides of the header while Remove keeps counting shortcuts", async () => {
+      // Twelve versions behind nine shortcuts: three of them share a game with
+      // another, and are reached by switching version on its shortcut. The
+      // header is about ROMs and reads 12; the button is about Steam entries
+      // and still reads 9.
+      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
+        platforms: [{ slug: "gba", name: "GBA", count: 9, reachable_count: 12 }],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("12 on RomM · 12 in Steam");
+      expect(buttonByText(container, "Remove 9 shortcuts")).toBeTruthy();
+    });
+
+    it("shows the gap where whole games never reached Steam", async () => {
+      // One applied game of four, and the three unapplied ones are behind no
+      // shortcut by any route — so the difference is real and must show.
+      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
+        platforms: [{ slug: "gba", name: "GBA", count: 1, reachable_count: 3 }],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("12 on RomM · 3 in Steam");
+    });
+
+    it("reads an older backend's answer as its shortcut count rather than inventing one", async () => {
+      // No `reachable_count` on the wire: the pre-#1815 number understates the
+      // reachable set, which is the safe direction to be wrong in.
+      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
+        platforms: [{ slug: "gba", name: "GBA", count: 7 }],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("12 on RomM · 7 in Steam");
+    });
+
     it("names the active core in the header and greys it when it is the default", async () => {
       // "Default" is not one of the names this clause can take: the backend
       // answers with the real label in both ordinary cases and answers null for

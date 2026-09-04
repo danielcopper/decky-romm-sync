@@ -299,6 +299,61 @@ class TestGetRegistryPlatforms:
         assert result["platforms"][0]["slug"] == "n64"
 
 
+class TestRegistryPlatformsReachableCount:
+    """``reachable_count`` counts ROMs a shortcut can reach, never shortcuts."""
+
+    @pytest.mark.asyncio
+    async def test_a_groups_unbound_versions_count_with_its_binding(self, plugin):
+        """One game, three versions, one shortcut — all three are reachable.
+
+        The two the binding did not go to are reached by switching version on
+        the one it did, so counting bindings here would report them as absent
+        from Steam.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="sms", group_key="igdb:1:2")
+        _seed_rom(uow, 11, app_id=None, platform_slug="sms", group_key="igdb:1:2")
+        _seed_rom(uow, 12, app_id=None, platform_slug="sms", group_key="igdb:1:2")
+
+        entry = (await plugin.get_registry_platforms())["platforms"][0]
+        assert entry["count"] == 1
+        assert entry["reachable_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_a_group_with_no_binding_reaches_nothing(self, plugin):
+        """A partly-applied platform: the two numbers differ and the gap is real.
+
+        The second game was fetched and never applied, so no shortcut anywhere
+        leads to either of its versions.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="gba", group_key="igdb:1:2")
+        _seed_rom(uow, 11, app_id=None, platform_slug="gba", group_key="igdb:1:2")
+        _seed_rom(uow, 20, app_id=None, platform_slug="gba", group_key="igdb:9:2")
+        _seed_rom(uow, 21, app_id=None, platform_slug="gba", group_key="igdb:9:2")
+
+        entry = (await plugin.get_registry_platforms())["platforms"][0]
+        assert entry["count"] == 1
+        assert entry["reachable_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_a_null_group_key_is_its_own_group(self, plugin):
+        """A NULL key relates no rows, so one binding speaks only for its own row.
+
+        The key was never computed for either row. Folding them together on
+        that shared absence would let the bound one carry the unbound one into
+        the count, which is the whole platform reading reachable off one
+        applied game.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="nes", group_key=None)
+        _seed_rom(uow, 11, app_id=None, platform_slug="nes", group_key=None)
+
+        entry = (await plugin.get_registry_platforms())["platforms"][0]
+        assert entry["count"] == 1
+        assert entry["reachable_count"] == 1
+
+
 class TestGetRomBySteamAppId:
     @pytest.mark.asyncio
     async def test_finds_rom_by_app_id_installed(self, plugin):
