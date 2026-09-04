@@ -147,8 +147,19 @@ export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, on
 
     const measure = () => setBodyHeight(remainingBodyHeight(body, view));
     measure();
-    const observer = new ResizeObserver(measure);
+    // The view's own constructor, not the module's: plugin code runs in the
+    // SharedJSContext window and these nodes are the QAM's.
+    const observer = new view.ResizeObserver(measure);
     observer.observe(body.ownerDocument.documentElement);
+    // And the panel itself, which is what actually changes size here. The first
+    // measurement runs before Steam has settled the panel — the QAM starts
+    // narrow and the wide class lands after — so a page measured at mount alone
+    // keeps whatever the unsettled panel implied. Observed on device at a body
+    // of 1245 px inside a 750 px panel, where the formula answers 694: not a
+    // wrong formula but a stale answer, and the document element never resizes
+    // to correct it because the viewport did not change.
+    const scroller = scrollingAncestor(body, view);
+    if (scroller) observer.observe(scroller);
     return () => observer.disconnect();
   }, []);
 
