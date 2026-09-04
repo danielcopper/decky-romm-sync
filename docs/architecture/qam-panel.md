@@ -173,6 +173,13 @@ A control that acts on the whole list — Enable all, Disable all — goes in th
 and inside the same scrolling region. It sits outside every row on purpose: focus moving onto it must not report a
 selection, because a page may do real work on one.
 
+It spans exactly what a row spans, and that span is **not symmetric**: a row is inset on the left by its own selection
+marker (a 3 px bar and a 5 px gap) and runs flush to the column's right edge. Steam's `Field`, which every row is built
+from, adds nothing horizontally inside the QAM — it renders in its `Classic` mode there, whose only padding is 10 px top
+and bottom — so there is no Steam inset to match and a symmetric padding on the header is simply narrower than the rows.
+Measured on the device through CEF at the Deck's 854 px: rows run 79.6 → 335.9 in a 264 px list column, and the header's
+pair now runs 79.9 → 335.9.
+
 ### Tables
 
 Anything with more than two facts per row is a table with a header row: BIOS files (File, On disk, Contents), the

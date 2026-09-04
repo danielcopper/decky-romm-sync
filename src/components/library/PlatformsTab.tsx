@@ -149,9 +149,15 @@ export const PlatformsTab: FC<{ state: PlatformsPageState }> = ({ state }) => {
   pushGroup(groups.available, "Available");
 
   const listHeader: ReactNode = (
-    // Padded to the list column's own edges, so the pair spans exactly the
-    // width of the rows beneath it rather than sitting inset from them.
-    <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px", padding: "4px 8px 8px" }}>
+    // The pair spans exactly what a row below it spans, which is NOT symmetric:
+    // a row is inset 8px on the left by its own marker bar (3px) and the gap
+    // after it (5px), and runs flush to the column's right edge. Steam's `Field`
+    // contributes nothing horizontally to that — inside the QAM it renders in
+    // its `Classic` mode, whose only padding is 10px top and bottom — so there
+    // is no Field inset to match, and an 8px right padding here is 8px of the
+    // rows' width the buttons do not have. Measured on the device through CEF:
+    // rows 79.6 → 335.9, buttons 79.9 → 335.9.
+    <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px", padding: "4px 0 8px 8px" }}>
       <DialogButton style={{ flex: 1, minWidth: 0, padding: "8px 0" }} onClick={() => state.setAllSync(true)}>
         Enable all
       </DialogButton>
