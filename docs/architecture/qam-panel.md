@@ -267,8 +267,13 @@ on the right. Under it, for the focused platform:
 Five reads feed the tab. Three are list-shaped and run once per page mount: `get_platforms` (RomM's platforms with ROMs,
 the list itself), `get_firmware_status` (BIOS state for the platforms it can speak for) and `get_registry_platforms`
 (ROMs bound to a Steam shortcut per platform — the shortcut counts, and what "has synced games" means here). Only the
-first gates the list; the other two fill in beside it, and each says so on the pane when it fails rather than letting
-its absence read as an answer.
+first gates the list; the other two fill in beside it, and **each says so on the pane when it fails**, because for both
+of them a failure and an answer arrive the same way — as an absence. A failed `get_registry_platforms` read as zero
+shortcuts would empty the header, withdraw the core picker behind "sync this platform first" and disable the removal,
+three claims about a platform nothing was learned about; the counts go to `null` instead, which is not zero, and a line
+under the header says the number is missing while the removal stays live (it needs only the slug). A failed
+`get_firmware_status` is worded apart from a platform the overview genuinely has no entry for, which is a finished
+answer.
 
 The other two are **per-platform-slug reads issued once per selection** and cached for the life of the page.
 `get_system_core_info` exists because neither list read can answer for the focused platform: `get_platform_core_info` is

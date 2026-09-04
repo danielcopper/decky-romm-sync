@@ -81,7 +81,11 @@ export interface PlatformRow {
   /** `null` while the firmware read is in flight, and for a platform that read
    *  has nothing to say about — the list then shows no dot and no number. */
   firmware: FirmwarePlatformExt | null;
-  shortcutCount: number;
+  /** How many of the platform's ROMs are bound to a Steam shortcut, or `null`
+   *  when that read failed. `null` is not zero: read as zero it withdraws the
+   *  core picker, empties the header and disables the shortcut removal — three
+   *  claims about a platform nothing was learned about. */
+  shortcutCount: number | null;
 }
 
 /** The list's two groups, computed once and kept while the page is open, so
@@ -114,6 +118,12 @@ export interface PlatformsPageState {
   failed: boolean;
   /** RomM is unreachable: the BIOS downloads are withdrawn, everything else stands. */
   serverOffline: boolean;
+  /** The BIOS overview could not be read. Distinct from a platform the read
+   *  simply has nothing to say about, which is a finished answer. */
+  firmwareFailed: boolean;
+  /** The Steam shortcut counts could not be read — every row's `shortcutCount`
+   *  is `null` and the detail says so where the number would have been. */
+  shortcutCountsFailed: boolean;
   selectedSlug: string | null;
   select: (slug: string) => void;
   coreFor: (slug: string) => CoreAnswer;
@@ -174,7 +184,9 @@ export function usePlatformsPage(): PlatformsPageState {
   const [failed, setFailed] = useState(false);
   const [firmware, setFirmware] = useState<Record<string, FirmwarePlatformExt>>({});
   const [serverOffline, setServerOffline] = useState(false);
+  const [firmwareFailed, setFirmwareFailed] = useState(false);
   const [shortcutCounts, setShortcutCounts] = useState<Record<string, number>>({});
+  const [shortcutCountsFailed, setShortcutCountsFailed] = useState(false);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [cores, setCores] = useState<Record<string, SystemCoreInfo | null>>({});
   const [saveCounts, setSaveCounts] = useState<Record<string, number | null>>({});
@@ -191,11 +203,20 @@ export function usePlatformsPage(): PlatformsPageState {
   const refreshFirmware = useCallback(async () => {
     try {
       const result = await getFirmwareStatus();
-      if (!result.success) return;
+      if (!result.success) {
+        // Unreachable today — the callable always answers success — but a
+        // dropped failure is indistinguishable from a platform the overview has
+        // nothing to say about, which is a finished answer and reads green.
+        logWarn(`Firmware status answered a failure: ${result.message ?? "no message"}`);
+        setFirmwareFailed(true);
+        return;
+      }
       setServerOffline(result.server_offline ?? false);
       setFirmware(Object.fromEntries(result.platforms.map((p) => [p.platform_slug, p])));
+      setFirmwareFailed(false);
     } catch (e) {
       logWarn(`Failed to read firmware status: ${e}`);
+      setFirmwareFailed(true);
     }
   }, []);
 
@@ -203,8 +224,10 @@ export function usePlatformsPage(): PlatformsPageState {
     try {
       const result = await getRegistryPlatforms();
       setShortcutCounts(Object.fromEntries(result.platforms.map((p) => [p.slug, p.count])));
+      setShortcutCountsFailed(false);
     } catch (e) {
       logWarn(`Failed to read platform shortcut counts: ${e}`);
+      setShortcutCountsFailed(true);
     }
   }, []);
 
@@ -294,7 +317,7 @@ export function usePlatformsPage(): PlatformsPageState {
         romCount: p.rom_count,
         syncEnabled: p.sync_enabled,
         firmware: firmware[p.slug] ?? null,
-        shortcutCount: shortcutCounts[p.slug] ?? 0,
+        shortcutCount: shortcutCountsFailed ? null : (shortcutCounts[p.slug] ?? 0),
       },
     ]),
   );
@@ -488,10 +511,13 @@ export function usePlatformsPage(): PlatformsPageState {
               LEASE_OWNER,
               admission,
             );
+            // What was actually removed, not what the pane thought was there:
+            // the shortcut count is a read of its own and may not have landed.
+            const removed = result.app_ids?.length ?? 0;
             setStatus({
               slug: row.slug,
               scope: "remove",
-              text: `Removed ${row.shortcutCount} ${row.name} game${row.shortcutCount === 1 ? "" : "s"}`,
+              text: `Removed ${removed} ${row.name} game${removed === 1 ? "" : "s"}`,
             });
             await refreshShortcutCounts();
           } catch (e) {
@@ -540,6 +566,8 @@ export function usePlatformsPage(): PlatformsPageState {
     loading,
     failed,
     serverOffline,
+    firmwareFailed,
+    shortcutCountsFailed,
     selectedSlug,
     select,
     coreFor,

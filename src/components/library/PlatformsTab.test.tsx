@@ -487,6 +487,50 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("RetroDECK was not found");
     });
 
+    it("says the shortcut count failed instead of stating three things that are not true", async () => {
+      // Read as zero, a failed count withdraws the core picker, empties the
+      // header and disables the removal — none of which was established.
+      vi.mocked(backend.getRegistryPlatforms).mockRejectedValue(new Error("net"));
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("Could not read how many of these games are in Steam");
+      expect(container.textContent).not.toContain("in Steam ·");
+      expect(container.textContent).not.toContain("Sync this platform first");
+      expect(buttonByText(container, "Change core")).toBeTruthy();
+      expect(buttonByText(container, "Remove shortcuts")).not.toBeDisabled();
+    });
+
+    it("tells a failed BIOS read apart from a platform the overview cannot speak for", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockRejectedValue(new Error("net"));
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("Could not read the BIOS state");
+      expect(container.textContent).not.toContain("Nothing is known about this platform");
+    });
+
+    it("reads a platform the overview simply has no entry for as an answer", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({ success: true, platforms: [] });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("Nothing is known about this platform");
+      expect(container.textContent).not.toContain("Could not read the BIOS state");
+    });
+
+    it("surfaces a BIOS read that answered a failure rather than dropping it", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: false,
+        platforms: [],
+        message: "backend said no",
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("Could not read the BIOS state");
+    });
+
     it("keeps the removal group and disables what there is nothing to delete", async () => {
       // Never hidden: a platform whose shortcuts are gone but whose saves remain
       // must still offer the button that reaches them, and this is the only page

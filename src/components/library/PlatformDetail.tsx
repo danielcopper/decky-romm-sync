@@ -273,6 +273,9 @@ const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, dow
 };
 
 const CoreSection: FC<{ row: PlatformRow; state: PlatformsPageState; core: CoreAnswer }> = ({ row, state, core }) => {
+  // Strictly zero, so an unread shortcut count does not withdraw the picker:
+  // "sync this first" would be a claim about a platform nothing was learned
+  // about, and the core read is independent of the count anyway.
   if (row.shortcutCount === 0) {
     return (
       <>
@@ -519,7 +522,11 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
   const confirmRemoveShortcuts = () =>
     showModal(
       <ConfirmModal
-        strTitle={`Remove ${row.shortcutCount} ${row.name} shortcut${row.shortcutCount === 1 ? "" : "s"}?`}
+        strTitle={
+          row.shortcutCount === null
+            ? `Remove ${row.name} shortcuts?`
+            : `Remove ${row.shortcutCount} ${row.name} shortcut${row.shortcutCount === 1 ? "" : "s"}?`
+        }
         strDescription="This takes this platform's games out of your Steam library. Downloaded ROM files and save files are left where they are, and the games come back on the next sync while the platform stays enabled."
         strOKButtonText="Remove Shortcuts"
         strCancelButtonText="Cancel"
@@ -537,7 +544,9 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
         onClick={confirmRemoveShortcuts}
       >
         <span style={{ color: "#d94126" }}>
-          {`Remove ${row.shortcutCount} shortcut${row.shortcutCount === 1 ? "" : "s"}`}
+          {row.shortcutCount === null
+            ? "Remove shortcuts"
+            : `Remove ${row.shortcutCount} shortcut${row.shortcutCount === 1 ? "" : "s"}`}
         </span>
       </ButtonItem>
       <ButtonItem
@@ -572,13 +581,23 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
       <div style={{ display: "flex", alignItems: "baseline", gap: "10px", padding: "8px 16px 0" }}>
         <span style={{ fontSize: "16px", fontWeight: 600, color: "#dcdedf", minWidth: 0 }}>{row.name}</span>
         <span style={{ flex: "1 1 auto", fontSize: "11px", color: MUTED }}>
-          {`${row.romCount} on RomM · ${row.shortcutCount} in Steam`}
+          {`${row.romCount} on RomM`}
+          {row.shortcutCount === null ? "" : ` · ${row.shortcutCount} in Steam`}
           {coreLabel ? ` · ${coreLabel}` : ""}
         </span>
         {biosBadge && (
           <span style={{ fontSize: "12px", color: biosColorForLevel(firmware?.bios_level ?? null) }}>{biosBadge}</span>
         )}
       </div>
+      {/* The count is what failed, not the removal: taking the platform's games
+          out of Steam needs only the slug. So the line says the number is
+          missing and stops there — the buttons below stay live. */}
+      {state.shortcutCountsFailed && (
+        <Muted>
+          Could not read how many of these games are in Steam. Removing them still works, it just cannot say how many.
+          Reopen the page to try again.
+        </Muted>
+      )}
       {state.removalProgress?.slug === row.slug && (
         <Muted>{`Removing ${state.removalProgress.removed} of ${state.removalProgress.total}…`}</Muted>
       )}
@@ -589,7 +608,15 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
       ) : (
         <>
           <SectionTitle title="BIOS files" />
-          <Muted>Nothing is known about this platform&apos;s BIOS files.</Muted>
+          {/* A failed read and a platform the overview has nothing to say about
+              arrive the same way — an absent entry — and they are different
+              sentences: one is a question that could not be asked, the other a
+              finished answer. */}
+          <Muted>
+            {state.firmwareFailed
+              ? "Could not read the BIOS state. Reopen the page to try again."
+              : "Nothing is known about this platform's BIOS files."}
+          </Muted>
         </>
       )}
       <RemoveSection row={row} state={state} />
