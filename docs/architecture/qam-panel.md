@@ -324,12 +324,15 @@ state agree by construction. Under it, for the focused platform:
   **A running download is said by the button that started it.** The pressed button — bulk or per-row — becomes a
   spinner, every other download button on the pane disables, and when it finishes the rows re-read. There is no
   "Downloaded _X_" notice any more: a success says itself. A **failure** still gets words, in the same status line under
-  the section, carrying the backend's own message; that line is now failure-only. The spinner is keyed on the run's slug
-  as well as the button's identity, so walking to another platform mid-download shows disabled buttons and the "Working
-  on _X_" line rather than a spinner that belongs elsewhere.
+  the section, carrying the backend's own message; for a DOWNLOAD that line is failure-only, and the pressed button
+  itself says `Failed` in red for two seconds before everything returns. The platform-wide Delete BIOS still writes its
+  result there on success too ("Deleted 3 BIOS file(s)"), which is the one outcome on this pane no row can show; a row's
+  own Delete says it by the row changing. The spinner is keyed on the run's slug as well as the button's identity, so
+  walking to another platform mid-download shows disabled buttons and the "Working on _X_" line rather than a spinner
+  that belongs elsewhere.
 
   **The per-row Delete is authorised by the download record and nothing else** — the row carries `deletable`, which the
-  backend derives from the same records `deletable_count` counts (`_deletable_names`), and the unlink re-reads the
+  backend derives from the same records the platform count comes from (`_stamp_deletable`), and the unlink re-reads the
   record and takes the path it holds. `downloaded` is `os.path.exists` and is equally true of firmware RetroDECK ships:
   `dolphin-emu/Sys/codehandler.bin` sits one row above a real download on a GameCube pane, no RomM library can hand it
   back, and authorising on presence destroyed exactly that file on a real device. All three buttons — the platform's, a
