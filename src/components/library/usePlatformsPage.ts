@@ -131,9 +131,18 @@ export interface PlatformsPageState {
   status: DetailStatus | null;
   /**
    * The platform whose action is in flight, or `null`. Every action on every
-   * platform disables while one is running — the prune lease and the firmware
-   * re-read are page-wide, so two at once would contend — and the slug is what
-   * lets a pane that is not the one acting say why its buttons are dead.
+   * platform disables while one is running, and the slug is what lets a pane
+   * that is not the one acting say why its buttons are dead.
+   *
+   * **What forbids running two at once is this page's own state, not a lock
+   * anywhere else.** `status`, `removalProgress` and `busySlug` are each
+   * singular, so a second action would overwrite the first's line and the first
+   * `finally` would clear the busy state out from under the second. The prune
+   * lease is no obstacle and must not be cited as one: leases are keyed by
+   * token on both sides, and `@prune_active_blocked` refuses on a prune *run*
+   * reservation rather than on a sibling lease, so two platform removals would
+   * both be admitted. Making these three per-slug is what a per-platform
+   * disable would take.
    */
   busySlug: string | null;
   /** Bound to its platform for the reason {@link DetailStatus} is: walking the

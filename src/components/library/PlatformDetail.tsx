@@ -185,11 +185,13 @@ const GroupStatus: FC<{ state: PlatformsPageState; slug: string; scope: StatusSc
 /**
  * Why this pane's buttons are dead while nothing on it is running.
  *
- * An action disables every platform's actions, not just its own: the prune
- * lease and the firmware re-read are page-wide, so two at once would contend.
- * The line that would explain the wait — {@link GroupStatus} — is bound to the
- * platform the action belongs to, so walking away from a running removal leaves
- * a pane full of disabled buttons and nothing said. This is what it says.
+ * An action disables every platform's actions, not just its own, because the
+ * page holds one `status`, one `removalProgress` and one `busySlug` — a second
+ * action would clobber the first's line and the first `finally` would clear the
+ * busy state under the second. The line that would explain the wait —
+ * {@link GroupStatus} — is bound to the platform the action belongs to, so
+ * walking away from a running removal leaves a pane full of disabled buttons and
+ * nothing said. This is what it says.
  */
 const BusyElsewhere: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ row, state }) => {
   if (state.busySlug === null || state.busySlug === row.slug) return null;
