@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import type { FC, ReactNode } from "react";
 import { WIDE_ROOT_CLASS } from "../../utils/qamExpansion";
 import { OWNS_ENTRY_FOCUS_ATTR, type WidePageProps, type WidePageTab } from "./WidePage";
@@ -183,6 +183,41 @@ describe("WidePage", () => {
     // Steam's tabbed page fills its parent instead of growing: a min-height
     // leaves the body with no height at all and the page clips.
     expect(body().style.minHeight).toBe("");
+  });
+
+  it("measures the same height however far the panel is scrolled", async () => {
+    // The defect this pins is self-amplifying, which is why it reached a device
+    // as a page that scrolled as one piece: a body measured part-way down the
+    // panel came out that much too tall, the panel then scrolled because the
+    // body no longer fit, and the next measurement read a negative top and grew
+    // it again. Measured on the device at 1245px of body inside a 750px panel.
+    //
+    // The two mounts below are the same DOM at two scroll offsets: a panel
+    // 600px tall with the body 100px down it, and everything shifted up by 500.
+    const measure = async (bodyTop: number, panelBottom: number) => {
+      const WidePage = await loadWidePage(StubTabs);
+      vi.spyOn(window, "getComputedStyle").mockReturnValue({ overflowY: "auto" } as CSSStyleDeclaration);
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+        const top = this.dataset.testid === "wide-page-body" ? bodyTop : 0;
+        return { top, bottom: this.dataset.testid === "wide-page-body" ? 0 : panelBottom } as DOMRect;
+      });
+      try {
+        render(
+          <WidePage title="Settings" onBack={vi.fn()}>
+            <div>page body</div>
+          </WidePage>,
+        );
+        return Number.parseFloat(body().style.height);
+      } finally {
+        vi.restoreAllMocks();
+        cleanup();
+      }
+    };
+
+    // 600 − 100 − 12 both times: a difference of two viewport-relative edges
+    // does not move when the thing they sit in is scrolled.
+    expect(await measure(100, 600)).toBe(488);
+    expect(await measure(-400, 100)).toBe(488);
   });
 
   it("never measures the body below its floor", async () => {

@@ -77,9 +77,18 @@ sets `m_bQamFriendsExpanded` from exactly the two messages the plugin sends, and
 literal `"https://steamloopback.host"` — which is what `window.origin` is in the SharedJSContext.
 
 Steam's tabbed page fills its parent instead of growing, and nothing in the QAM chain provides a height. A wide page
-therefore measures the viewport left below its header and takes that as its height; its regions scroll inside it. A
+therefore measures the space left below its header and takes that as its height; its regions scroll inside it. A
 `min-height` is not enough — it clips. Under Decky's title bar, the frame's Back row, its title and a tab bar, that
 leaves a body of roughly 260 px inside the 454 px view.
+
+**That measurement is the distance between two viewport-relative edges — the bottom of the nearest scrolling ancestor
+and the top of the body — and it has to be, because a difference of two such edges does not move when the thing they sit
+in is scrolled.** `window.innerHeight - top` is a different quantity: it equals the space below only at scroll offset
+zero, and it grows as the panel scrolls. That made the measurement feed itself, and the loop has no fixed point — a body
+measured part-way down the panel comes out that much too tall, the panel then scrolls because the body no longer fits,
+and the next measurement reads a negative `top` and grows it again. It reached a device as a page that scrolled as one
+piece, tab row and all: 1245 px of body inside a 750 px panel, where the same DOM at offset zero answers 648 px. The
+state is sticky rather than transient, because the inflated height is what keeps the panel scrollable.
 
 A region scrolls the way the rest of the QAM scrolls: by moving focus. Every scrolling region goes through
 `ScrollRegion`, which renders Steam's plain `ScrollPanel` — the container the QAM's own tab panel is built from, and the

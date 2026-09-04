@@ -82,12 +82,41 @@ const BackChipLabel: FC = () =>
   );
 
 /**
- * The remaining viewport below `body`, which is the height a wide page gets to
- * work with: Steam's tabbed page fills its parent rather than growing, and
- * nothing in the QAM chain hands the plugin's panel a height.
+ * The nearest ancestor that scrolls `body`, or `null` when nothing does.
+ *
+ * The QAM's own tab panel is one (`#quickaccess_content_999` computes
+ * `overflow-y: auto`), and it is the element whose bottom edge bounds the page.
  */
-function remainingViewportHeight(body: HTMLElement, view: Window): number {
-  return Math.max(MIN_BODY_HEIGHT, view.innerHeight - body.getBoundingClientRect().top - BODY_BOTTOM_GAP);
+function scrollingAncestor(body: HTMLElement, view: Window): HTMLElement | null {
+  for (let el = body.parentElement; el; el = el.parentElement) {
+    const overflowY = view.getComputedStyle(el).overflowY;
+    if (overflowY === "auto" || overflowY === "scroll") return el;
+  }
+  return null;
+}
+
+/**
+ * The space left below `body` inside whatever scrolls it — the height a wide
+ * page gets to work with, because Steam's tabbed page fills its parent rather
+ * than growing and nothing in the QAM chain hands the plugin's panel a height.
+ *
+ * **Both ends are viewport-relative, so their difference does not move when
+ * anything scrolls.** `innerHeight - top` is not the same quantity: it equals
+ * the space below only at scroll offset zero, and it grows as the page scrolls
+ * — which made the measurement feed itself. A body measured a few hundred
+ * pixels down the panel came out that much too tall, the panel then scrolled
+ * because the body no longer fit, and the next measurement read a negative
+ * `top` and grew it again. Measured on the device at 1245px of body inside a
+ * 750px panel, with the tab row pushed off the top; the same DOM at scroll
+ * offset zero answers 648px both ways.
+ *
+ * With nothing scrolling above it there is no offset to be wrong about, so the
+ * viewport is the honest bound in that case.
+ */
+function remainingBodyHeight(body: HTMLElement, view: Window): number {
+  const scroller = scrollingAncestor(body, view);
+  const bottom = scroller ? scroller.getBoundingClientRect().bottom : view.innerHeight;
+  return Math.max(MIN_BODY_HEIGHT, bottom - body.getBoundingClientRect().top - BODY_BOTTOM_GAP);
 }
 
 export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, onShowTab, children }) => {
@@ -102,7 +131,7 @@ export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, on
     const view = body?.ownerDocument.defaultView;
     if (!body || !view) return;
 
-    const measure = () => setBodyHeight(remainingViewportHeight(body, view));
+    const measure = () => setBodyHeight(remainingBodyHeight(body, view));
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(body.ownerDocument.documentElement);
