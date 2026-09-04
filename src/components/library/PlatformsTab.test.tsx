@@ -673,6 +673,16 @@ describe("Library › Platforms", () => {
       await flushAsync();
 
       expect(container.textContent).toContain("RetroDECK was not found");
+      // And the header states no core at all. An unreadable es_systems.xml
+      // arrives as `available: false` with an EMPTY list, so a clause keyed on
+      // the list's length alone printed a red "no emulator" over a state where
+      // nothing was established — beside a sentence saying the opposite. The
+      // sentence keeps its own words ("no emulator list to choose from"), so
+      // the assertion is on the clause span rather than on the pane's text.
+      const clauses = [...container.querySelectorAll<HTMLElement>("span")].filter((el) =>
+        el.textContent.startsWith(" · "),
+      );
+      expect(clauses).toEqual([]);
     });
 
     it("says the shortcut count failed instead of stating three things that are not true", async () => {

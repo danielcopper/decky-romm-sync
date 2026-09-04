@@ -24,11 +24,12 @@ import { getEventTarget } from "../../utils/events";
 import { SYNC_RUNNING_HINT, useSyncRunning } from "../../utils/syncRunning";
 import type { CoreAnswer, PlatformRow, PlatformsPageState, StatusScope } from "./usePlatformsPage";
 
-/** The size every secondary LINE on this pane is set in: the under-row
- *  description and note lines, the Contents cell beside them, the muted
- *  sentences, the table header and the legend. One constant, because the device
- *  pass asked for the cell to match those lines and a second literal is how they
- *  drift apart again. Button labels are not lines and keep their own sizes. */
+/** The size every secondary LINE on this pane is set in: the header's counts
+ *  clause, the under-row description and note lines, the Contents cell beside
+ *  them, the muted sentences, the table header and the legend. One constant,
+ *  because the device pass asked for the cell to match those lines and a second
+ *  literal is how they drift apart again. Button labels are not lines and keep
+ *  their own sizes. */
 const SECONDARY_FONT = "11px";
 
 const MUTED = "#8f98a0";
@@ -1022,7 +1023,15 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
   // choosing. With NO options there is nothing for RetroDECK to resolve either
   // — its own launch exits 1 — and the clause says so, in red.
   const activeLabel = core ? core.active_core_label : null;
-  const noEmulator = core != null && core.emulators.length === 0;
+  // Everything the clause says rests on the emulator list having been READ.
+  // `get_emulator_options` answers `available: false` with an EMPTY list when
+  // `es_systems.xml` cannot be read at all, so a clause keyed on the list's
+  // length alone said "no emulator" in red over a state where nothing was
+  // established — the definite failure claim this pane keeps having to remove,
+  // and beside a sentence saying RetroDECK was not found. One premise, named
+  // once, so the two readings below cannot drift apart.
+  const emulatorsKnown = core != null && core.emulator_data_available;
+  const noEmulator = emulatorsKnown && core.emulators.length === 0;
   // The platform-level twin of the game page's `activeCoreIsDefault`, read off
   // the payload's own `is_default`, which marks the single option
   // `select_default_option` picks. One expression feeds the clause AND the
@@ -1031,8 +1040,11 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
   // is not the same statement as "an override".
   const activeIsDefault = core?.emulators.find((option) => option.label === activeLabel)?.is_default ?? false;
   const coreColor = noEmulator ? RED : activeLabel === null || activeIsDefault ? MUTED : AMBER;
-  const coreClause =
-    core == null ? null : { text: activeLabel ?? (noEmulator ? "no emulator" : "RetroDECK decides"), color: coreColor };
+  // No clause at all where the list could not be read — the same silence a
+  // failed or in-flight core read gets, and for the same reason.
+  const coreClause = !emulatorsKnown
+    ? null
+    : { text: activeLabel ?? (noEmulator ? "no emulator" : "RetroDECK decides"), color: coreColor };
 
   return (
     <>
