@@ -69,6 +69,16 @@ interface FirmwareFile extends FirmwareVerdict {
   required_by_active: boolean;
   on_server: boolean;
   supplied_by?: string | null;
+  /** The plugin holds a download record for this file name AND the file that
+   *  record points at is still on disk — which is the whole authority to delete
+   *  it, because having placed the file is what licenses removing it.
+   *
+   *  **Never substitute `downloaded` for this.** That is `os.path.exists` at the
+   *  row's recomputed destination, equally true of firmware the emulator shipped
+   *  with (`dolphin-emu/Sys/codehandler.bin`) and of a file the user placed by
+   *  hand — neither of which any RomM library can hand back. Absent means the
+   *  payload never spoke about it, which offers no delete rather than guessing. */
+  deletable?: boolean;
 }
 
 interface FirmwarePlatform {

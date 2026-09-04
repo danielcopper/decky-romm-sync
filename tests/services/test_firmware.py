@@ -342,6 +342,7 @@ class TestTheFacadeOnlyDelegates:
             "download_platform_firmware_file",
             "download_required_firmware",
             "delete_platform_bios",
+            "delete_bios_file",
         }
 
     def test_the_facade_holds_only_its_sub_services(self, fw):
@@ -2179,6 +2180,113 @@ class TestDownloadPlatformFirmwareFile:
         assert "Connection reset" in result["message"]
         assert result["downloaded"] == 0
         assert fw._listing._firmware_cache is None
+
+
+class TestDeleteOneBiosFile:
+    """The per-row Delete button's backend half — one file, the same authority."""
+
+    @pytest.mark.asyncio
+    async def test_deletes_our_own_download_at_the_recorded_path(self, plugin, fw, tmp_path):
+        """The record names the file and the path, and both are what is used."""
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        ours = bios_dir / "gc-pal-12.bin"
+        ours.write_bytes(b"\x00" * 512)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="gc",
+                file_name="gc-pal-12.bin",
+                file_path=str(ours),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=7,
+            )
+        )
+
+        result = await fw.delete_bios_file("gc", "gc-pal-12.bin")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert not ours.exists()
+        assert plugin._uow.bios_files.get("gc", "gc-pal-12.bin") is None
+
+    @pytest.mark.asyncio
+    async def test_takes_only_the_named_record_of_several(self, plugin, fw, tmp_path):
+        """One row's button removes one file, not the platform's other downloads.
+
+        The platform-wide delete is the one that takes them all; this is the
+        per-row twin and the name is the whole of the difference between them.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        for name in ("gc-pal-12.bin", "gc-ntsc-12.bin"):
+            path = bios_dir / name
+            path.write_bytes(b"\x00" * 32)
+            plugin._uow.bios_files.save(
+                BiosFile.mark_downloaded(
+                    platform_slug="gc",
+                    file_name=name,
+                    file_path=str(path),
+                    downloaded_at="2026-01-01T00:00:00+00:00",
+                    firmware_id=1,
+                )
+            )
+
+        result = await fw.delete_bios_file("gc", "gc-pal-12.bin")
+
+        assert result["deleted_count"] == 1
+        assert not (bios_dir / "gc-pal-12.bin").exists()
+        assert (bios_dir / "gc-ntsc-12.bin").exists()
+        assert plugin._uow.bios_files.get("gc", "gc-ntsc-12.bin") is not None
+
+    @pytest.mark.asyncio
+    async def test_a_file_with_no_record_is_never_touched(self, plugin, fw, tmp_path):
+        """The GameCube pane's other row: RetroDECK's own copy, present on disk.
+
+        It sits one row above a real download, it is `downloaded: True`, and no
+        RomM library can hand it back — authorising on presence deleted exactly
+        this file on a real device. With no record naming it, the delete must
+        remove nothing and report nothing removed.
+        """
+        sys_dir = tmp_path / "retrodeck" / "bios" / "dolphin-emu" / "Sys"
+        sys_dir.mkdir(parents=True)
+        theirs = sys_dir / "codehandler.bin"
+        theirs.write_bytes(b"\x01" * 64)
+
+        result = await fw.delete_bios_file("gc", "codehandler.bin")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 0
+        assert theirs.exists()
+
+    @pytest.mark.asyncio
+    async def test_unlinks_where_the_record_points_not_where_the_row_would(self, plugin, fw, tmp_path):
+        """A placement that moved after the download: the record still rules.
+
+        The row's ``local_path`` is recomputed from today's placement, so for a
+        file fetched before an emu-atlas bump it names whatever now occupies the
+        new destination. Only the recorded path may be unlinked.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        (bios_dir / "dc").mkdir(parents=True)
+        written = bios_dir / "dc_boot.bin"
+        written.write_bytes(b"\x02" * 16)
+        elsewhere = bios_dir / "dc" / "dc_boot.bin"
+        elsewhere.write_bytes(b"\x03" * 16)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="dc",
+                file_name="dc_boot.bin",
+                file_path=str(written),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=9,
+            )
+        )
+
+        result = await fw.delete_bios_file("dc", "dc_boot.bin")
+
+        assert result["deleted_count"] == 1
+        assert not written.exists()
+        assert elsewhere.exists()
 
 
 class TestDeletePlatformBios:

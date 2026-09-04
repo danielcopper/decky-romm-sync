@@ -136,6 +136,67 @@ class PlatformBiosDeleter:
             for slug, file_name in keys:
                 uow.bios_files.delete(slug, file_name)
 
+    def _delete_bios_file_io(self, platform_slug, file_name) -> tuple[int, list[str]]:
+        """Sync worker for :meth:`delete_bios_file` — one file, same authority.
+
+        Narrows :meth:`_delete_platform_bios_io`'s input to the records naming
+        *file_name* and is otherwise the identical loop: the record authorises
+        the removal, the record's ``file_path`` is what is unlinked, and the row
+        is pruned whether the file was there or already gone. Every reason the
+        platform-wide worker gives for reading the records rather than a status
+        row applies here unchanged, and applies harder — a per-row button sits
+        next to files the plugin never placed (``dolphin-emu/Sys/codehandler.bin``
+        is one row above ``gc-pal-12.bin`` on a GameCube pane), so a name that
+        matches no record must remove nothing.
+
+        Two records can name one file under different firmware slugs; they name
+        one path, so the first unlink takes it and the second prunes its row over
+        an absence, exactly as in the platform-wide case.
+        """
+        deleted = 0
+        errors: list[str] = []
+        pruned: list[tuple[str, str]] = []
+        for record in self._recorded_bios_files(platform_slug):
+            if record.file_name != file_name:
+                continue
+            if self._firmware_file_store.exists(record.file_path):
+                try:
+                    self._firmware_file_store.remove_file(record.file_path)
+                except OSError as e:
+                    self._logger.warning(f"Failed to remove BIOS file {record.file_name}: {e}")
+                    errors.append(f"{record.file_name}: {e}")
+                    continue
+                deleted += 1
+            pruned.append((record.platform_slug, record.file_name))
+
+        if pruned:
+            self._prune_bios_records(pruned)
+
+        return deleted, errors
+
+    async def delete_bios_file(self, platform_slug, file_name) -> dict[str, Any]:
+        """Delete one BIOS file the plugin downloaded, by name.
+
+        The per-row twin of :meth:`delete_platform_bios`, sharing its
+        authorisation rather than restating it: a ``downloaded_bios`` record is
+        the only evidence the plugin placed the file, and a row with no record
+        removes nothing and says so. A caller cannot widen this into a
+        presence-based delete by passing a different name.
+        """
+        deleted, errors = await self._loop.run_in_executor(None, self._delete_bios_file_io, platform_slug, file_name)
+        self._listing.invalidate()
+
+        if errors:
+            return {
+                "success": False,
+                "reason": ErrorCode.UNKNOWN.value,
+                "deleted_count": deleted,
+                "message": f"Could not delete {file_name}: {errors[0]}",
+            }
+        if deleted == 0:
+            return {"success": True, "deleted_count": 0, "message": f"Nothing to delete for {file_name}"}
+        return {"success": True, "deleted_count": deleted, "message": f"Deleted {file_name}"}
+
     async def delete_platform_bios(self, platform_slug) -> dict[str, Any]:
         """Delete the BIOS files the plugin downloaded for a platform.
 

@@ -1152,6 +1152,14 @@ export const countPlatformSaves = callable<[string], { count: number }>("count_p
 export const deletePlatformBios = callable<[string], { success: boolean; deleted_count: number; message: string }>(
   "delete_platform_bios",
 );
+/** One row's Delete button — the per-file twin of `deletePlatformBios`, sharing
+ *  its authorisation rather than restating it. Addressed by file name, and a
+ *  name the plugin holds no download record for removes nothing: the record is
+ *  the only evidence we placed the file, and it is the record's own path that is
+ *  unlinked. Offer it only where the row says `deletable`. */
+export const deleteBiosFile = callable<[string, string], { success: boolean; deleted_count: number; message: string }>(
+  "delete_bios_file",
+);
 
 // Save version history callables
 export const savesListFileVersions = callable<[number, string, string], ListFileVersionsResult>(
