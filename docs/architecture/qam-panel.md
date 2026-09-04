@@ -332,8 +332,9 @@ state agree by construction. Under it, for the focused platform:
   backend derives from the same records `deletable_count` counts (`_deletable_names`), and the unlink re-reads the
   record and takes the path it holds. `downloaded` is `os.path.exists` and is equally true of firmware RetroDECK ships:
   `dolphin-emu/Sys/codehandler.bin` sits one row above a real download on a GameCube pane, no RomM library can hand it
-  back, and authorising on presence destroyed exactly that file on a real device. The callable (`delete_bios_file`)
-  reuses `delete_platform_bios`'s worker shape rather than growing a second delete path.
+  back, and authorising on presence destroyed exactly that file on a real device. All three buttons — the platform's, a
+  file row's and a folder row's — run **one** removal loop (`_delete_recorded_io`) under different record predicates,
+  because a second copy of that loop is exactly what the register's BIOS-delete rule warns about.
 
   **`On disk` holds marks and never text**, and it is the only place presence is stated. A cell carries **one or two**
   of them.

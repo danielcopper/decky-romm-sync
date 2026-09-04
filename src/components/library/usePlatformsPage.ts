@@ -587,7 +587,7 @@ export function usePlatformsPage(): PlatformsPageState {
    *  handling for a file and for a folder's recorded contents. A success is
    *  said by the rows coming back re-read; only a failure gets a line. */
   const runRowDelete = useCallback(
-    (slug: string, work: () => Promise<{ success: boolean; message: string }>, what: string) => {
+    (slug: string, work: () => Promise<{ success: boolean; message: string; deleted_count: number }>, what: string) => {
       setBusySlug(slug);
       setStatus(null);
       detach(
@@ -596,7 +596,12 @@ export function usePlatformsPage(): PlatformsPageState {
             const result = await work();
             if (result.success) {
               await refreshFirmware();
-              announceBiosChange(slug);
+              // Only when something actually went. The event fans out to every
+              // mounted panel and each matching one pays a live
+              // `check_platform_bios` for it, so a run that moved no files must
+              // stay silent — the same rule the download path four lines up
+              // keeps.
+              if (result.deleted_count > 0) announceBiosChange(slug);
             } else {
               setStatus({ slug, scope: "bios", text: result.message });
             }

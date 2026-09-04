@@ -202,14 +202,20 @@ in both places at once. There is one copy, not two.
 
 ### Deleting BIOS Files
 
-You can remove a platform's downloaded BIOS files from its pane in **Library › Platforms**. The **Delete BIOS** button
-appears only when there is at least one file it would actually remove — a file the plugin downloaded that is still on
-disk — and its label shows how many (e.g. "Delete BIOS (3)"). Because deletion is local, the button works even when your
-RomM server is offline.
+You can remove BIOS files from a platform's pane in **Library › Platforms**, one at a time or all at once. Both only
+ever remove what this plugin downloaded and still has on disk; because deletion is local, both work with your RomM
+server offline.
+
+The **Delete BIOS** button under the table takes all of them, and its label shows how many (e.g. "Delete BIOS (3)"). It
+is always there and greys out when there is nothing to remove.
+
+Each row also carries its own **Delete** where the plugin downloaded that file — so a file your emulator came with never
+offers one. A row that is a **folder** the emulator reads (PS2's `pcsx2/bios`) offers `Delete (N)` for the files we
+downloaded into it; the folder itself stays.
 
 1. In **Library › Platforms**, pick the platform whose BIOS files you want to remove
-2. Tap **Delete BIOS**
-3. Confirm the action in the dialog that appears
+2. Tap **Delete BIOS**, or the **Delete** on a single row
+3. Confirm the action in the dialog that appears — every one of them asks first
 
 This is a destructive action, so a confirmation dialog asks you to confirm before anything is deleted. Once confirmed,
 the plugin removes the BIOS files **it downloaded** for that system from your RetroDECK bios directory and reports the
