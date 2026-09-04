@@ -571,6 +571,30 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("Could not read the BIOS state");
     });
 
+    it("says a failed re-read on the pane that still shows the old rows", async () => {
+      // A failed refresh does not clear the map, so this pane keeps its
+      // pre-change rows. That is where a reader needs telling — the notice used
+      // to appear only where there were no rows to be wrong about.
+      vi.mocked(backend.downloadRequiredFirmware).mockResolvedValue({
+        success: true,
+        message: "Downloaded 1 required firmware files",
+        downloaded: 1,
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(container.textContent).toContain("gba_bios.bin");
+
+      vi.mocked(backend.getFirmwareStatus).mockRejectedValue(new Error("net"));
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Download required (1)")!);
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+      });
+
+      // The rows are still there, and now so is the warning that they are stale.
+      expect(container.textContent).toContain("gba_bios.bin");
+      expect(container.textContent).toContain("what is below may be out of date");
+    });
+
     it("keeps the removal group and disables what there is nothing to delete", async () => {
       // Never hidden: a platform whose shortcuts are gone but whose saves remain
       // must still offer the button that reaches them, and this is the only page

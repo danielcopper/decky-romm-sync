@@ -672,6 +672,20 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
       )}
       <BusyElsewhere row={row} state={state} />
       <CoreSection row={row} state={state} core={core} />
+      {/* A failed read is said on EVERY pane, not only the ones with no entry.
+          A failed refresh does not clear the map, so a platform that has an
+          entry keeps showing pre-change rows — which is exactly where a reader
+          needs telling, and where the notice used to be silent while appearing
+          on the panes that had least to be wrong about. The two panes need
+          different sentences because only one of them has stale rows to warn
+          about. */}
+      {state.firmwareFailed && (
+        <Muted>
+          {firmware
+            ? "Could not re-read the BIOS state, so what is below may be out of date. Reopen the page to try again."
+            : "Could not read the BIOS state. Reopen the page to try again."}
+        </Muted>
+      )}
       {firmware ? (
         <BiosSection row={row} state={state} firmware={firmware} />
       ) : (
@@ -680,12 +694,8 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
           {/* A failed read and a platform the overview has nothing to say about
               arrive the same way — an absent entry — and they are different
               sentences: one is a question that could not be asked, the other a
-              finished answer. */}
-          <Muted>
-            {state.firmwareFailed
-              ? "Could not read the BIOS state. Reopen the page to try again."
-              : "Nothing is known about this platform's BIOS files."}
-          </Muted>
+              finished answer, which is why only the second is said here. */}
+          {!state.firmwareFailed && <Muted>Nothing is known about this platform&apos;s BIOS files.</Muted>}
         </>
       )}
       <RemoveSection row={row} state={state} />
