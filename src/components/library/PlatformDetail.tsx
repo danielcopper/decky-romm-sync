@@ -14,7 +14,7 @@
  */
 
 import type { FC, ReactNode } from "react";
-import { ConfirmModal, DialogButton, Focusable, showContextMenu, showModal } from "@decky/ui";
+import { ConfirmModal, DialogButton, Focusable, showContextMenu, showModal, Spinner } from "@decky/ui";
 import type { FirmwarePlatformExt } from "../../types";
 import { biosColorForLevel } from "../../utils/biosColor";
 import { biosFileNote } from "../../utils/biosFileNote";
@@ -602,18 +602,28 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
               : `Remove ${row.shortcutCount} shortcut${row.shortcutCount === 1 ? "" : "s"}`}
           </span>
         </DialogButton>
+        {/* Unread is not zero and is not a failure either, and the button must
+            not look like either: while the count is still coming it is disabled
+            and spins, which claims nothing. A pressable plain label would invite
+            a press over an unknown set; a `0` would state an emptiness nobody
+            established. A failed read is the third case and says so below. */}
         <DialogButton
           style={FLAT_BUTTON}
-          disabled={state.busySlug !== null || saveCount === 0}
+          disabled={state.busySlug !== null || saveCount === undefined || saveCount === 0}
           onClick={confirmDeleteSaves}
         >
-          <span style={{ color: RED }}>
+          <span style={{ color: RED, display: "inline-flex", alignItems: "center", gap: "6px" }}>
+            {saveCount === undefined && <Spinner width={12} height={12} />}
             {typeof saveCount === "number"
               ? `Delete ${saveCount} save file${saveCount === 1 ? "" : "s"}`
               : "Delete save files"}
           </span>
         </DialogButton>
       </Focusable>
+      {/* The one read of the five whose failure had nothing to say. With the
+          spinner above it that became worse rather than better — a spinner that
+          never stops — so the two land together. */}
+      {saveCount === null && <Muted>Could not read how many save files this platform holds.</Muted>}
       {/* The sync hint was a ButtonItem `description`; with the button in a row
           it has nowhere to hang, so it stands under the pair — and only while
           the reason is live. */}

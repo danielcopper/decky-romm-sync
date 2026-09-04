@@ -583,7 +583,10 @@ describe("Library › Platforms", () => {
       expect(buttonByText(container, "Delete 3 save files")).not.toBeDisabled();
     });
 
-    it("disables the saves button on a real zero, and never on an unread count", async () => {
+    it("spins while the count is unread and disables on a real zero", async () => {
+      // Three states, three appearances: unread claims nothing (disabled, a
+      // spinner), zero states an emptiness the read established (disabled, the
+      // number), and a failure says so rather than showing either.
       let answer: (v: { count: number }) => void = () => {};
       vi.mocked(backend.countPlatformSaves).mockReturnValue(
         new Promise((resolve) => {
@@ -593,15 +596,28 @@ describe("Library › Platforms", () => {
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
-      // Unread is not zero: the count is still coming, so the button says only
-      // what it does and stays pressable.
-      expect(buttonByText(container, "Delete save files")).not.toBeDisabled();
+      const pending = buttonByText(container, "Delete save files");
+      expect(pending).toBeDisabled();
+      expect(pending!.querySelector('[data-testid="spinner"]')).toBeTruthy();
 
       await act(async () => {
         answer({ count: 0 });
         for (let i = 0; i < 6; i++) await Promise.resolve();
       });
       expect(buttonByText(container, "Delete 0 save files")).toBeDisabled();
+      expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
+    });
+
+    it("says the saves count could not be read instead of spinning forever", async () => {
+      vi.mocked(backend.countPlatformSaves).mockRejectedValue(new Error("db"));
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("Could not read how many save files this platform holds");
+      expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
+      // Not a zero either: the button is pressable, because a failed count is
+      // not evidence that there is nothing to delete.
+      expect(buttonByText(container, "Delete save files")).not.toBeDisabled();
     });
   });
 
