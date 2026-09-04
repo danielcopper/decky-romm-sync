@@ -216,7 +216,7 @@ describe("LibraryPage", () => {
       const { getByText } = render(<LibraryPage onBack={onBack} />);
       await flushAsync();
       expect(getByText("Library")).toBeTruthy();
-      fireEvent.click(getByText("Back"));
+      fireEvent.click(getByText("‹ Back"));
       expect(onBack).toHaveBeenCalledTimes(1);
     });
 
@@ -1570,7 +1570,7 @@ describe("LibraryPage", () => {
       const onBack = vi.fn();
       const { getByText } = render(<LibraryPage onBack={onBack} />);
       await flushAsync();
-      fireEvent.click(getByText("Back"));
+      fireEvent.click(getByText("‹ Back"));
       expect(onBack).toHaveBeenCalledTimes(1);
     });
   });

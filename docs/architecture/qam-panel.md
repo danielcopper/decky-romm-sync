@@ -28,7 +28,7 @@ without restating it. The width mechanism's decision record is
 | `src/components/library/`                                     | The Library page's tabs: `usePlatformsPage` (its reads and actions), `PlatformsTab`, `PlatformDetail`               |
 | `src/utils/deckyUiInternals.ts`                               | Honest typing for `@decky/ui` values that come from a webpack probe: the frame's class names, `Tabs`, `ScrollPanel` |
 | `src/utils/qamExpansion.ts`                                   | The panel's width: the expand and hide messages, the injected `max-width` rule, and the four paths that clear both  |
-| `src/components/qam/`                                         | The wide-page frame: `WidePage` (Back row, title, tabs, measured height), `ListDetail` and `ScrollRegion`           |
+| `src/components/qam/`                                         | The wide-page frame: `WidePage` (the Back/title line, tabs, measured height), `ListDetail` and `ScrollRegion`       |
 | `src/utils/` module stores                                    | State that must outlive a page: sync progress, pending preview, downloads, prune, notices                           |
 
 ## Two widths
@@ -118,9 +118,15 @@ core picker and BIOS files are in Library › Platforms, and the value, the rout
 
 Main's menu opens Library, Settings and Data Management. The Sync page opens from the Sync button and from the **Last
 sync** status row; Downloads opens from **View All** in the download summary, which is shown only while the queue is not
-empty. Every page but Main opens with a **Back** row, which returns to Main. After a navigation the router scrolls to
-the top and places gamepad focus on the page's first button, as it does today. The module-level `currentPage` survives a
-QAM remount, so reopening the QAM lands on the page that was open, and a wide page re-expands on mount.
+empty. Every page but Main opens with a **Back** chip, which returns to Main. The chip shares its line with the page
+title — one row, not the three a full-width button plus a title line used to cost, which on the Deck's body is most of
+what a detail pane has to spend. Back is also on **Y**: the frame's header is a `Focusable` carrying `onSecondaryButton`
+with an `onSecondaryActionDescription`, so Steam draws it in the footer legend beside its own entries and it works
+wherever focus is. **B is deliberately left alone** — that is Decky's own back, and it leaves the plugin entirely. The
+chip stays as the discoverable half: the legend says a shortcut exists, the chip says the page has a way out at all.
+After a navigation the router scrolls to the top and places gamepad focus on the page's first button, as it does today.
+The module-level `currentPage` survives a QAM remount, so reopening the QAM lands on the page that was open, and a wide
+page re-expands on mount.
 
 ## Building blocks
 

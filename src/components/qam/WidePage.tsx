@@ -1,7 +1,15 @@
 /**
  * The shell every wide QAM page renders inside: the marker class that lets the
- * injected rule lift Steam's 300 px tab-panel cap, the Back row and title, an
- * optional L1/R1 tab bar, and a body of a definite, measured height.
+ * injected rule lift Steam's 300 px tab-panel cap, one header line carrying Back
+ * and the title, an optional L1/R1 tab bar, and a body of a definite, measured
+ * height.
+ *
+ * Back is on **Y** as well as on the chip, through `FooterLegendProps` on the
+ * frame's own `Focusable` — so Steam draws it in the footer legend beside its
+ * own A/B entries and it works wherever focus is. B is deliberately untouched:
+ * that is Decky's back, and it leaves the plugin altogether. The chip stays
+ * because it is the discoverable half — the legend says the shortcut exists, the
+ * chip says the page has a way out at all.
  *
  * The page's own content is `children`, or — when the page has tabs — the
  * `content` of each tab, which Steam's `Tabs` renders itself. A tabbed page
@@ -11,7 +19,7 @@
  */
 
 import { useLayoutEffect, useRef, useState, type FC, type ReactNode } from "react";
-import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
+import { DialogButton, Focusable } from "@decky/ui";
 import { Tabs } from "../../utils/deckyUiInternals";
 import { WIDE_ROOT_CLASS, useWideQamPanel } from "../../utils/qamExpansion";
 import { ScrollRegion } from "./ScrollRegion";
@@ -111,14 +119,21 @@ export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, on
 
   return (
     <div className={WIDE_ROOT_CLASS} ref={rootRef} {...(ownsEntryFocus ? { [OWNS_ENTRY_FOCUS_ATTR]: "" } : {})}>
-      <PanelSection>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={onBack}>
-            Back
-          </ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
-      <div style={{ padding: "0 16px 8px", fontSize: "16px", fontWeight: 600, color: "#dcdedf" }}>{title}</div>
+      {/* One line, not three: the full-width Back row and the title on its own
+          line cost two of the four rows the Deck's body has to spend. */}
+      <Focusable
+        style={{ display: "flex", alignItems: "center", gap: "10px", padding: "4px 16px 6px" }}
+        onSecondaryButton={onBack}
+        onSecondaryActionDescription="Back"
+      >
+        <DialogButton
+          style={{ flex: "0 0 auto", minWidth: 0, width: "auto", padding: "4px 10px", fontSize: "13px" }}
+          onClick={onBack}
+        >
+          ‹ Back
+        </DialogButton>
+        <span style={{ fontSize: "16px", fontWeight: 600, color: "#dcdedf" }}>{title}</span>
+      </Focusable>
       <div ref={bodyRef} style={bodyStyle} data-testid="wide-page-body">
         {body}
       </div>

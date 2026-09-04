@@ -74,7 +74,7 @@ describe("WidePage", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the Back row, the title and the page body", async () => {
+  it("puts Back and the title on one line, above the page body", async () => {
     const WidePage = await loadWidePage(StubTabs);
     const onBack = vi.fn();
 
@@ -83,10 +83,33 @@ describe("WidePage", () => {
         <div>page body</div>
       </WidePage>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    const chip = screen.getByRole("button", { name: "‹ Back" });
+    fireEvent.click(chip);
 
     expect(screen.getByText("Settings")).toBeInTheDocument();
     expect(screen.getByText("page body")).toBeInTheDocument();
+    expect(onBack).toHaveBeenCalledTimes(1);
+    // One line: the title is the chip's own sibling, not a row under it.
+    expect(chip.parentElement).toBe(screen.getByText("Settings").parentElement);
+  });
+
+  it("takes Back on Y as well, leaving B to Decky", async () => {
+    const WidePage = await loadWidePage(StubTabs);
+    const onBack = vi.fn();
+
+    render(
+      <WidePage title="Settings" onBack={onBack}>
+        <div>page body</div>
+      </WidePage>,
+    );
+    const header = screen.getByRole("button", { name: "‹ Back" }).parentElement!;
+
+    // CANCEL is B — Decky's own back, which leaves the plugin. The frame must
+    // not answer it.
+    fireEvent(header, new CustomEvent("decky-button-down", { detail: { button: 2 } }));
+    expect(onBack).not.toHaveBeenCalled();
+
+    fireEvent(header, new CustomEvent("decky-button-down", { detail: { button: 3 } }));
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
