@@ -1,6 +1,6 @@
 """FirmwareService façade.
 
-Owns the public callable surface exposed via ``main.py`` (the System-page
+Owns the public callable surface exposed via ``main.py`` (the whole-library
 overview, the per-platform BIOS check, the download entry points, the delete)
 and composes the four sub-services behind it. Implementation lives in those
 modules: :class:`FirmwareListing` for what the RomM library holds and its

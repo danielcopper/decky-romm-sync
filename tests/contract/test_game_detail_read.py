@@ -125,7 +125,7 @@ async def test_cached_game_detail_never_carries_a_bios_answer(harness):
     not-knowing and the live ``get_bios_status`` fills it in a moment later.
     """
     app_id = _seed_versioned_rom(harness, platform_slug="psvita")
-    # The System-page read fills every cache the game-detail path could draw on.
+    # The overview read fills every cache the game-detail path could draw on.
     await harness.plugin.get_firmware_status()
 
     result = await harness.plugin.get_cached_game_detail(app_id)

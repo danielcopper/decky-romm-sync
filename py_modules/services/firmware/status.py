@@ -69,7 +69,7 @@ class FirmwareStatusReaderConfig:
 
 
 class FirmwareStatusReader:
-    """Every status-bearing BIOS query the panel runs — the System page and the per-game check."""
+    """Every status-bearing BIOS query the panel runs — the overview and the per-game check."""
 
     def __init__(self, *, config: FirmwareStatusReaderConfig) -> None:
         self._demand = config.demand
@@ -127,7 +127,7 @@ class FirmwareStatusReader:
     def _bios_aggregates(self, files, platform_slug: str, complete: bool) -> dict[str, Any]:
         """The counts, level and label every surface reads off one classified file list.
 
-        One derivation for the per-game paths and the System page, so a platform
+        One derivation for the per-game paths and the overview, so a platform
         and its games can never show a different level for the same files.
 
         Three axes, and each counts a different set on purpose.
@@ -189,7 +189,7 @@ class FirmwareStatusReader:
         """The aggregates plus the per-file rows — what the per-game surfaces read."""
         return {**self._bios_aggregates(files, platform_slug, complete), "files": [asdict(f) for f in files]}
 
-    # ── The System page ──────────────────────────────────────
+    # ── The whole-library overview ───────────────────────────
 
     def _group_server_firmware(self, firmware_list, placements: Mapping[str, FirmwarePlacement]):
         """Group server firmware list by platform slug."""
@@ -352,8 +352,8 @@ class FirmwareStatusReader:
         Adds ``server_count`` / ``local_count`` / ``required_count`` /
         ``required_downloaded`` / ``required_withheld`` and the ``bios_level``
         state (``"unknown"`` / ``"ok"`` / ``"partial"`` / ``"missing"``) so the
-        System page reads the decision and the display counts straight off this
-        payload instead of re-deriving the threshold logic in the frontend. The
+        platform detail reads the decision and the display counts straight off
+        this payload instead of re-deriving the threshold logic in the frontend. The
         whole payload comes from the same builder the per-game path uses, so the
         level a platform shows and the level its games show cannot diverge.
 
@@ -516,7 +516,7 @@ def _core_scope(options: dict[str, Any]) -> list[str] | None:
 
 
 def _has_something_to_say(plat: dict[str, Any]) -> bool:
-    """Is a seeded platform worth a block on the System page?
+    """Is a seeded platform worth an entry in the overview?
 
     A seeded platform is one the listing never named — it is here because the
     user syncs games for it, not because anything is known to be wanted. With a
@@ -531,10 +531,11 @@ def _has_something_to_say(plat: dict[str, Any]) -> bool:
 
 
 def _overview_row(item: dict[str, Any]) -> dict[str, Any]:
-    """The System-page row for a file the library does not hold.
+    """The overview row for a file the library does not hold.
 
-    ``on_server: False`` is the load-bearing field: both download buttons filter
-    on it (``SystemPage.tsx``), and so do the page's own progress totals. ``id``
+    ``on_server: False`` is the load-bearing field: every download affordance
+    filters on it (``src/components/library/PlatformDetail.tsx``), and so do the
+    platform detail's own progress totals. ``id``
     is ``None`` as an honest absence — there is no server record to name — and
     no consumer reads it, so filling it in with a placeholder would withhold
     nothing but would make a row that cannot be fetched look fetchable to the
@@ -552,7 +553,7 @@ def _overview_row(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _wanted_fields(entry) -> dict[str, Any]:
-    """The System-page projection of one classified file.
+    """The overview projection of one classified file.
 
     The overview's rows keep the server's own fields (id, size, md5) and gain
     only what the machine answered, so the two vocabularies stay separable.

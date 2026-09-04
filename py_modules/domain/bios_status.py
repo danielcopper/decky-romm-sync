@@ -296,8 +296,8 @@ def collect_firmware_status(
 def count_required(files: tuple[BiosFileEntry, ...]) -> tuple[int, int]:
     """``(required, of those downloaded)`` for the core the game will launch with.
 
-    The badge's two numbers, derived in one place so the System page and the
-    game-detail page can never disagree about which files count. A file the
+    The badge's two numbers, derived in one place so the platform detail and
+    the game-detail page can never disagree about which files count. A file the
     library does not hold counts here — it is genuinely required and genuinely
     absent, and excluding it would make the badge read ready for a game that
     cannot launch. What it must never do is imply a download; whether anything
@@ -338,8 +338,8 @@ def _nothing_established(status: BiosStatus) -> bool:
     the finished answer "no emulator here wants anything", while under an
     incomplete one it is silence, and silence read as an answer is a claim about
     a question nothing finished asking. Which surface that claim reaches depends
-    on the caller: the System page renders this level whether or not there are
-    rows, so it is where an empty list would read green.
+    on the caller: the platform detail renders this level whether or not there
+    are rows, so it is where an empty list would read green.
 
     ``reading_complete`` is False whenever ANY core in the platform's scope went
     unread, not only when nothing could be asked at all; the two are the same

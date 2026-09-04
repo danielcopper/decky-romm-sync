@@ -124,7 +124,7 @@ class FirmwareDemand:
     def safe_dest_path(self, firmware, placement: FirmwarePlacement | None) -> str | None:
         """Read-path wrapper for ``dest_path`` — ``None`` on a poisoned entry.
 
-        The status queries (``check_platform_bios``, the System-page group)
+        The status queries (``check_platform_bios``, the overview)
         only need to know whether a firmware file is downloaded; a server
         entry whose ``file_name`` attempts path traversal cannot be on
         disk, so it is logged and dropped from the listing instead of

@@ -159,7 +159,7 @@ describe("buildEmulatorMenu", () => {
     expect(items(menu).find((i) => i.text.startsWith("Use System Override"))!.text).toContain("✓");
   });
 
-  it("omits the follow-system item on the System page (no followSystem)", () => {
+  it("omits the follow-system item on the platform detail (no followSystem)", () => {
     const menu = buildEmulatorMenu(baseConfig());
     expect(items(menu).some((i) => i.text.startsWith("Use System Override"))).toBe(false);
   });

@@ -539,7 +539,7 @@ class TestPresenceComesFromTheReading:
 
 
 class TestDestinationReadingsReachBothSurfaces:
-    """``supplied_by`` and ``declared_kind`` travel to the game page and the System page."""
+    """``supplied_by`` and ``declared_kind`` travel to the game page and the platform detail."""
 
     _CORE = "flycast_libretro"
 
@@ -926,8 +926,8 @@ class TestGetFirmwareStatus:
 
         Seeds a standalone-first options list (the PPSSPP flip) so the *default*
         emulator label ("PPSSPP (Standalone)") differs from the libretro
-        ``active_core`` label ("PPSSPP") — the exact case the System-page label
-        must reflect. Returns the resolved ``active_core_label``.
+        ``active_core`` label ("PPSSPP") — the exact case the platform detail's
+        label must reflect. Returns the resolved ``active_core_label``.
         """
         from tests.fakes.fake_core_info_provider import libretro_option, standalone_option
 
@@ -967,7 +967,7 @@ class TestGetFirmwareStatus:
 
     @pytest.mark.asyncio
     async def test_active_core_label_reflects_per_platform_override(self):
-        """A per-platform pin surfaces on the System-page label immediately (#1305)."""
+        """A per-platform pin surfaces on the platform detail's label immediately (#1305)."""
         label = await self._psp_active_core_label(FakePlatformCoreReader({"psp": "PPSSPP"}))
         assert label == "PPSSPP"
 
@@ -1070,7 +1070,7 @@ def _dc_core_info() -> FakeCoreInfoProvider:
 class TestGetFirmwareStatusBiosAggregates:
     """``get_firmware_status`` ships per-platform BIOS aggregates + ``bios_level``.
 
-    The System page reads the unknown/ok/partial/missing decision and display
+    The platform detail reads the unknown/ok/partial/missing decision and display
     counts off this payload instead of re-deriving the threshold logic in the
     frontend (#461). The level is computed by the same
     ``domain.bios_status.compute_bios_level`` the game-detail path uses, from the
@@ -1165,7 +1165,7 @@ class TestGetFirmwareStatusBiosAggregates:
 
     @pytest.mark.asyncio
     async def test_unanswerable_platform_projects_unknown_level(self, tmp_path):
-        """System-page projection: server files nothing could answer for → 'unknown'.
+        """Overview projection: server files nothing could answer for → 'unknown'.
 
         A platform one of whose emulators could not be read classifies every
         unmatched file ``unknown`` (known_count 0), so the aggregate stamps

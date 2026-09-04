@@ -442,8 +442,8 @@ next download/sync.
 
 ### Per-platform (`CoreService.set_system_core`)
 
-The System-page **Emulator Core** picker — a menu button (`ButtonItem`) that opens the same context menu as the
-game-detail picker, so standalone emulators and disabled un-bakeable entries render identically (#1210) — calls
+The platform detail's **Change core** button — a `ButtonItem` opening the same context menu as the game-detail picker,
+so standalone emulators and disabled un-bakeable entries render identically (#1210) — calls
 **`set_system_core(platform_slug, core_label)`**:
 
 1. It writes the choice into `settings["platform_cores"]` — storing the LABEL under the slug, or popping the slug when
@@ -511,7 +511,7 @@ imported (per
 and a per-platform core previously set as a system-level `<alternativeEmulator>` is **not** imported into
 `platform_cores` either — `platform_cores` starts empty. This is by design: a gamelist-import path would revive the
 multi-root-XML parse failures and folder-collapse ambiguity the plugin-owned model was chosen to avoid. Re-apply any
-per-platform core once through the System-page Emulator Core picker (the menu button) and it sticks from then on.
+per-platform core once through the platform detail's Change core button and it sticks from then on.
 
 ### A frozen default needs a Force Full Sync
 

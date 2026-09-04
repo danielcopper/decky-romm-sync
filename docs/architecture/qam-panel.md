@@ -340,7 +340,7 @@ The pages land in this order under #1808, each with the open work that already s
 2. **Library** ([#1815](https://github.com/danielcopper/romm-tender/issues/1815)) — Platforms and Collections; System
    and the Data Management platform modal retire. Carries #164, #1803's column, #1016's frontend half, #1020's
    collections fix. Lands as two PRs, Platforms then Collections. Second on purpose: the emu-atlas work under #1735
-   renders its BIOS and core changes into the new Platforms detail instead of the retiring System page. **Platforms has
+   renders its BIOS and core changes into the new Platforms detail instead of the retired System page. **Platforms has
    landed**; Collections keeps the narrow page's controls and list until its own PR.
 3. **Sync** ([#1814](https://github.com/danielcopper/romm-tender/issues/1814)) — the new page, Main's four-state button
    and the Last sync row, Skip preview persisted, the run-list read, the per-platform preview breakdown. Carries #886's

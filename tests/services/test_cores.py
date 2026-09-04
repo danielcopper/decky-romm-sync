@@ -235,7 +235,7 @@ class TestGetPlatformCoreInfo:
         assert result["emulators"] == []
 
     def test_platform_core_label_surfaces_per_platform_override(self, event_loop, service, uow, settings):
-        # A per-platform override set on the System page (settings.json
+        # A per-platform override set on the platform detail (settings.json
         # platform_cores) surfaces as platform_core_label so the menu can mark
         # the system-level selection distinctly from the active core (#954).
         _seed_rom(uow, rom_id=42, platform_slug="snes")
