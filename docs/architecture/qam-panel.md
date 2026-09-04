@@ -289,19 +289,29 @@ state agree by construction. Under it, for the focused platform:
 
   **The clause names the core; "Default" is not one of the names it can take.** `resolve_platform_label` answers with
   the real label in both ordinary cases. `null` means no option is **bakeable**, which is not the same as there being
-  none — a platform whose only ES-DE entry is a standalone emulator this RetroDECK has not installed answers `null` with
-  one option on the wire — and it is not a failure: `select_default_option` says what follows, which is that the plain
-  RetroDECK launch is baked and RetroDECK resolves the emulator itself. So the clause reads `RetroDECK decides` in the
-  muted colour, the line under it says the plugin cannot pin one, and the chip is withheld. Printing "Default" for that
-  state said the plugin had chosen; printing `no emulator` in red said the games would not start. Both were wrong, in
-  opposite directions.
+  none, and the two are different sentences:
+
+  - **Options exist, none bakeable** — a platform whose only ES-DE entry is a standalone emulator this RetroDECK has not
+    installed. Not a failure: `select_default_option` says what follows, which is that the plain RetroDECK launch is
+    baked and RetroDECK resolves the emulator itself, so the games start. The clause reads `RetroDECK decides` in the
+    muted colour and the line under it says the plugin cannot pin one.
+  - **No options at all** — `_resolve_system` falls through to the raw RomM slug for a platform its map does not name,
+    and `get_emulator_options` answers `available: true` with an empty list for a system `es_systems.xml` does not list;
+    `vic-20`, `acorn-electron`, `nintendo-dsi`, `ps5`, `browser` and `win` are in neither. RetroDECK's own launch then
+    reads `command[1]` for the system, finds nothing, and exits 1 (`libexec/run_game.sh`). The clause reads
+    `no emulator` in **red** and the line says the games will not launch, because they will not.
+
+  The chip is withheld for both. Printing "Default" for either said the plugin had chosen; printing `no emulator` for
+  both said the games would not start where they do. Both were wrong, in opposite directions.
 
   The button appears only when there is something to pick: the platform has games in Steam, the core read landed,
-  RetroDECK was found, and at least two emulators exist. Each of the other cases is a sentence under the header instead
-  — sync this first, the read is in flight, the read failed, RetroDECK was not found, the platform offers one emulator,
-  or ES-DE offers none at all (a different sentence from "one", because a count of something that is not there is not an
-  answer). The frontend half of #1016 lands in the same place: a switch the backend refuses is reported there, and the
-  header keeps naming the core that is actually active.
+  RetroDECK was found, at least one option is bakeable, and there are at least two. Each of the other cases is a
+  sentence under the header instead — sync this first, the read is in flight, the read failed, RetroDECK was not found,
+  **ES-DE lists no emulator at all**, nothing on its menu is bakeable, or the platform offers one emulator. The first
+  two of those three are the split above and they are checked in that order: an empty menu is the case where RetroDECK's
+  own fallback fails too, so it is answered before the not-bakeable one, and the surviving count branch then speaks only
+  for a menu that really does hold one bakeable option. The frontend half of #1016 lands in the same place: a switch the
+  backend refuses is reported there, and the header keeps naming the core that is actually active.
 - **BIOS files** — the summary (required, or files, and the two unknown states), then a table: File, On disk, Contents,
   and a **Download** button on every row that is missing and in the RomM library (#164) — never on a folder declaration,
   whatever its state, because the emulator opens that name as a directory — and a **Delete** button on every row the
@@ -378,10 +388,10 @@ state agree by construction. Under it, for the focused platform:
   the name then prose (47%), or the name with its directory then prose (17%). The rule is to drop a leading token that
   names this file — as itself or at the end of a path — and keep the rest verbatim, with a first half that strips the
   name where the description opens with it verbatim, which is the only way a name containing spaces can be seen
-  (`"7800 BIOS (U).rom (7800 BIOS)"`). A third form ignores surrounding quotes and compares the whole declared path,
-  which is what the corpus's one folder declaration is described by (`"'pcsx2/bios' folder"`, on a row whose name line
-  already shows that path). Together they fire on 690 of the 695; of the five printed whole, three name a folder the
-  file sits in and two are upstream misspellings of the file.
+  (`"7800 BIOS (U).rom (7800 BIOS)"`). Surrounding quotes are stripped before that comparison, which is what reaches the
+  corpus's one folder declaration (`"'pcsx2/bios' folder"`, on a row whose name line already shows that path). Together
+  they fire on 690 of the 695; of the five printed whole, three name a folder the file sits in and two are upstream
+  misspellings of the file.
 
   **The description is on its own line under the row**, muted and clipped to one line, not beside the name: at the
   Deck's scale the `File` column is ~150 px and a fifty-character parenthesis was clipped mid-word on every row that had

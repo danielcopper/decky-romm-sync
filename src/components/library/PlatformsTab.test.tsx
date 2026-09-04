@@ -583,8 +583,27 @@ describe("Library › Platforms", () => {
       expect(coreButton(container)!.querySelector("svg")!.style.color).toBe(AMBER);
     });
 
+    it("says no emulator, in red, when ES-DE lists none at all", async () => {
+      // The one case where RetroDECK's own fallback fails too: it reads
+      // `command[1]` for the system, finds nothing, and exits 1. Reachable for a
+      // platform in neither the plugin's map nor `es_systems.xml` — `ps5`,
+      // `vic-20` and four others on this machine.
+      vi.mocked(backend.getSystemCoreInfo).mockResolvedValue(coreInfo({ emulators: [], active_core_label: null }));
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      const clause = [...container.querySelectorAll<HTMLElement>("span")].find(
+        (el) => el.textContent === " · no emulator",
+      );
+      expect(clause).toBeTruthy();
+      expect(clause!.style.color).toBe(RED);
+      expect(container.textContent).toContain("RetroDECK lists no emulator for this platform");
+      expect(container.textContent).not.toContain("RetroDECK decides");
+      expect(container.textContent).not.toContain("Default");
+      expect(coreButton(container)).toBeNull();
+    });
+
     it.each([
-      ["no options at all", []],
       ["one option, not bakeable", [{ ...MGBA, is_default: false, bakeable: false, reason: "not_installed" }]],
       [
         "two options, neither bakeable",
@@ -595,11 +614,11 @@ describe("Library › Platforms", () => {
       ],
     ])("says RetroDECK decides, not Default, when no option can be pinned (%s)", async (_shape, emulators) => {
       // `active_core_label: null` means no option is BAKEABLE — never that there
-      // are none. All three shapes reach it, and `select_default_option` says
-      // what follows: the plain RetroDECK launch is baked and RetroDECK resolves
-      // the emulator, so the games do start and the clause must not say
-      // otherwise. The two- option shape is the one that used to draw a GOLD
-      // chip beside a clause claiming there was no core.
+      // are none, which is the test above. With options on the menu
+      // `select_default_option` says what follows: the plain RetroDECK launch is
+      // baked and RetroDECK resolves the emulator, so the games do start and the
+      // clause must not say otherwise. The two-option shape is the one that used
+      // to draw a GOLD chip beside a clause claiming there was no core.
       vi.mocked(backend.getSystemCoreInfo).mockResolvedValue(coreInfo({ emulators, active_core_label: null }));
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -1525,9 +1544,9 @@ describe("Library › Platforms", () => {
                 satisfied: true,
                 on_server: false,
                 supplied_by: "RetroDECK",
-                deletable: false,
+                deletable_count: 0,
               }),
-              firmwareFile({ file_name: "gc-pal-12.bin", downloaded: true, satisfied: true, deletable: true }),
+              firmwareFile({ file_name: "gc-pal-12.bin", downloaded: true, satisfied: true, deletable_count: 1 }),
             ],
             deletable_count: 1,
           }),
@@ -1549,7 +1568,9 @@ describe("Library › Platforms", () => {
         success: true,
         platforms: [
           firmwarePlatform({
-            files: [firmwareFile({ file_name: "gc-pal-12.bin", downloaded: true, satisfied: true, deletable: true })],
+            files: [
+              firmwareFile({ file_name: "gc-pal-12.bin", downloaded: true, satisfied: true, deletable_count: 1 }),
+            ],
             deletable_count: 1,
           }),
         ],
@@ -1572,6 +1593,108 @@ describe("Library › Platforms", () => {
       expect(within(container).getByTestId("status-bios").textContent).toBe(
         "Could not delete gc-pal-12.bin: permission denied",
       );
+    });
+
+    it("offers a folder row the delete of what we downloaded into it", async () => {
+      // Two rules, not one. A folder is never offered as a DOWNLOAD — there is
+      // no file to fetch into a name the emulator lists — and that says nothing
+      // about the files already inside it, which are ours wherever a record
+      // names them. PS2's pcsx2/bios is the whole of that case.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({
+                file_name: "bios",
+                declared_path: "pcsx2/bios",
+                declared_kind: "directory",
+                local_path: "/home/deck/retrodeck/bios/pcsx2/bios",
+                on_server: false,
+                satisfied: true,
+                deletable_count: 2,
+              }),
+            ],
+            deletable_count: 2,
+          }),
+        ],
+      });
+      vi.mocked(backend.deleteBiosFolder).mockResolvedValue({ success: true, deleted_count: 2, message: "" });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      // The count is on the button, and the row still offers no download.
+      expect(buttonByText(container, "Delete (2)")).toBeTruthy();
+      expect(buttonByText(container, "Download")).toBeUndefined();
+
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Delete (2)")!);
+        await Promise.resolve();
+      });
+      await confirmLastModal();
+
+      // Addressed by the folder, because no record carries a folder's name.
+      expect(vi.mocked(backend.deleteBiosFolder)).toHaveBeenCalledWith("gba", "/home/deck/retrodeck/bios/pcsx2/bios");
+    });
+
+    it("offers a folder row no delete when we downloaded nothing into it", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({
+                file_name: "bios",
+                declared_path: "pcsx2/bios",
+                declared_kind: "directory",
+                on_server: false,
+                satisfied: true,
+                deletable_count: 0,
+              }),
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect([...container.querySelectorAll("button")].some((b) => b.textContent.startsWith("Delete ("))).toBe(false);
+    });
+
+    it("says Failed on the button that failed, then puts everything back", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(backend.downloadRequiredFirmware).mockResolvedValue({
+          success: false,
+          message: "RomM is unreachable",
+          downloaded: 0,
+        });
+        const { container } = render(<LibraryPage onBack={vi.fn()} />);
+        await act(async () => {
+          for (let i = 0; i < 10; i++) await Promise.resolve();
+        });
+
+        await act(async () => {
+          fireEvent.click(buttonByText(container, "Download required (1)")!);
+          for (let i = 0; i < 8; i++) await Promise.resolve();
+        });
+
+        // The pressed button says it, the others stay disabled, and the line
+        // under the section carries the reason — "Failed" says that it did, not
+        // why.
+        expect(buttonByText(container, "Failed")).toBeTruthy();
+        expect(buttonByText(container, "Download all")).toBeDisabled();
+        expect(within(container).getByTestId("status-bios").textContent).toBe("RomM is unreachable");
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2000);
+        });
+
+        expect(buttonByText(container, "Failed")).toBeUndefined();
+        expect(buttonByText(container, "Download all")).not.toBeDisabled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("spins the pressed download button and disables the others", async () => {

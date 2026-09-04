@@ -23,6 +23,7 @@ import {
   countPlatformSaves,
   debugLog,
   deleteBiosFile as deleteBiosFileCall,
+  deleteBiosFolder as deleteBiosFolderCall,
   deletePlatformBios,
   deletePlatformSaves,
   downloadAllFirmware,
@@ -53,6 +54,12 @@ import {
 } from "../../utils/pruneLease";
 import { removeShortcutsPaced } from "../../utils/shortcutRemoval";
 import { withTimeout } from "../../utils/withTimeout";
+
+/** How long the pressed button says `Failed` before everything returns. Two of
+ *  the two-to-three seconds the device pass asked for: long enough to read one
+ *  word on a pane the reader is already looking at, short enough that the other
+ *  buttons are not held. */
+const FAILED_NOTICE_MS = 2000;
 
 const LEASE_OWNER = "library-platforms";
 const REMOVAL_REPORT_TIMEOUT_MS = 15000;
@@ -169,11 +176,22 @@ export interface PlatformsPageState {
    * sentence.
    */
   downloadPending: string | null;
+  /**
+   * The download button that just failed, for the two seconds it says so.
+   *
+   * The pressed button reports its own outcome: spinner while it runs, then a
+   * red `Failed` before it returns to its label. The pane stays busy for that
+   * window, so the other download buttons re-enable when the word goes rather
+   * than a moment earlier. The backend's own message stays in the status line
+   * under the section, because "Failed" says that it did, not why.
+   */
+  downloadFailed: string | null;
   downloadRequired: (slug: string) => void;
   downloadAll: (slug: string) => void;
   downloadOne: (slug: string, fileName: string) => void;
   deleteBios: (slug: string) => void;
   deleteBiosFile: (slug: string, fileName: string) => void;
+  deleteBiosFolder: (slug: string, folderPath: string) => void;
   removeShortcuts: (row: PlatformRow) => void;
   deleteSaves: (row: PlatformRow) => void;
 }
@@ -213,6 +231,18 @@ export function usePlatformsPage(): PlatformsPageState {
   const [serverOffline, setServerOffline] = useState(false);
   const [firmwareFailed, setFirmwareFailed] = useState(false);
   const [downloadPending, setDownloadPending] = useState<string | null>(null);
+  const [downloadFailed, setDownloadFailed] = useState<string | null>(null);
+  // Cleared on unmount, so a page left during the window cannot set state on a
+  // gone component. A plain timer is the right tool here: the injected-clock
+  // rule is scoped to `py_modules/services/**`, and this file's siblings
+  // (`CustomPlayButton`) already hold their timers in a ref this way.
+  const failedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (failedTimer.current !== null) clearTimeout(failedTimer.current);
+    },
+    [],
+  );
   // Whether a read has ever LANDED, which is not the same as its answer being
   // non-empty: a successful read that speaks for no platform is still an answer
   // set, and counting the map's keys would call it "never read" and take back
@@ -467,6 +497,19 @@ export function usePlatformsPage(): PlatformsPageState {
     [cores, refreshFirmware, reloadCore],
   );
 
+  /** Hold the pressed button on a red `Failed` for a moment before everything
+   *  returns: a spinner that simply stops is not a message, and the two seconds
+   *  are what makes the outcome legible on a pane the reader is looking at. */
+  const reportFailure = useCallback((pending: string) => {
+    setDownloadPending(null);
+    setDownloadFailed(pending);
+    failedTimer.current = setTimeout(() => {
+      failedTimer.current = null;
+      setDownloadFailed(null);
+      setBusySlug(null);
+    }, FAILED_NOTICE_MS);
+  }, []);
+
   const runDownload = useCallback(
     (
       slug: string,
@@ -488,19 +531,20 @@ export function usePlatformsPage(): PlatformsPageState {
             if (result.success) {
               await refreshFirmware();
               if ((result.downloaded ?? 0) > 0) announceBiosChange(slug);
-            } else {
-              setStatus({ slug, scope: "bios", text: result.message ?? "Download failed" });
+              setDownloadPending(null);
+              setBusySlug(null);
+              return;
             }
+            setStatus({ slug, scope: "bios", text: result.message ?? "Download failed" });
+            reportFailure(pending);
           } catch (e) {
             setStatus({ slug, scope: "bios", text: `Download failed: ${e}` });
-          } finally {
-            setDownloadPending(null);
-            setBusySlug(null);
+            reportFailure(pending);
           }
         })(),
       );
     },
-    [refreshFirmware],
+    [refreshFirmware, reportFailure],
   );
 
   const downloadRequired = useCallback(
@@ -539,14 +583,17 @@ export function usePlatformsPage(): PlatformsPageState {
     [refreshFirmware],
   );
 
-  const deleteBiosFile = useCallback(
-    (slug: string, fileName: string) => {
+  /** One row's Delete, whichever end it addresses: the same success and failure
+   *  handling for a file and for a folder's recorded contents. A success is
+   *  said by the rows coming back re-read; only a failure gets a line. */
+  const runRowDelete = useCallback(
+    (slug: string, work: () => Promise<{ success: boolean; message: string }>, what: string) => {
       setBusySlug(slug);
       setStatus(null);
       detach(
         (async () => {
           try {
-            const result = await deleteBiosFileCall(slug, fileName);
+            const result = await work();
             if (result.success) {
               await refreshFirmware();
               announceBiosChange(slug);
@@ -554,7 +601,7 @@ export function usePlatformsPage(): PlatformsPageState {
               setStatus({ slug, scope: "bios", text: result.message });
             }
           } catch (e) {
-            setStatus({ slug, scope: "bios", text: `Failed to delete ${fileName}: ${e}` });
+            setStatus({ slug, scope: "bios", text: `Failed to delete ${what}: ${e}` });
           } finally {
             setBusySlug(null);
           }
@@ -562,6 +609,20 @@ export function usePlatformsPage(): PlatformsPageState {
       );
     },
     [refreshFirmware],
+  );
+
+  const deleteBiosFile = useCallback(
+    (slug: string, fileName: string) => {
+      runRowDelete(slug, () => deleteBiosFileCall(slug, fileName), fileName);
+    },
+    [runRowDelete],
+  );
+
+  const deleteBiosFolder = useCallback(
+    (slug: string, folderPath: string) => {
+      runRowDelete(slug, () => deleteBiosFolderCall(slug, folderPath), "these files");
+    },
+    [runRowDelete],
   );
 
   const removeShortcuts = useCallback(
@@ -671,11 +732,13 @@ export function usePlatformsPage(): PlatformsPageState {
     setAllSync,
     changeCore,
     downloadPending,
+    downloadFailed,
     downloadRequired,
     downloadAll,
     downloadOne,
     deleteBios,
     deleteBiosFile,
+    deleteBiosFolder,
     removeShortcuts,
     deleteSaves,
   };

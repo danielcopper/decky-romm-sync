@@ -395,19 +395,19 @@ const BiosRowLines: FC<{ lines: string[] }> = ({ lines }) =>
  *
  * Measured over the 292 `.info` files a stock RetroDECK ships — 695 declared
  * firmware entries — the description's relation to the row's own `file_name`
- * (which is `os.path.basename` of the declared path) falls into five shapes:
+ * (which is `os.path.basename` of the declared path) falls into six shapes:
  *
  * | 245 | 35% | it IS the name — `"macventure.dat"`                          |
  * | 328 | 47% | the name, a space, then prose — `"scph5500.bin (PS1 JP BIOS)"` |
  * | 115 | 17% | the same, but the name carries its directory — `"dc/dc_boot.bin (Dreamcast BIOS)"` |
  * |   5 |  1% | the first token names something else — a folder the file sits in (`"'Databases' folder"`), or a misspelling of it (two upstream typos) |
  * |   1 |  0% | it names the file, but the name has a space in it — `"7800 BIOS (U).rom (7800 BIOS)"` |
- * |   1 |  0% | it names the whole DECLARATION, in quotes — `"'pcsx2/bios' folder"`, the corpus's only folder |
+ * |   1 |  0% | it names the file in quotes — `"'pcsx2/bios' folder"`, the corpus's only folder declaration |
  *
  * So the rule has two halves: strip the name where the description opens with
  * it verbatim (which is the only way a name containing spaces can be seen), and
- * otherwise strip a first token that names this file — as itself, at the end of
- * a path, or as the whole declared path, with surrounding quotes ignored.
+ * otherwise strip a first token that names this file — as itself or at the end
+ * of a path, with surrounding quotes ignored.
  * Together they fire on 690 of the 695 and on the no-placement case; the
  * remaining five say something real and are printed whole. The name half is
  * anchored at the start rather than searched for anywhere, because a rule that
@@ -431,13 +431,14 @@ function fileDescription(file: FirmwareRow): string | null {
     return description.slice(file.file_name.length).trim() || null;
   }
   const [head, ...tail] = description.split(" ");
-  // Quotes are stripped before the comparison, and the whole declared path is
-  // compared as well as the basename, because the one folder declaration in the
-  // corpus is described as `'pcsx2/bios' folder` — a token that names the
-  // declaration exactly, and that the row's own name line is already showing.
+  // Quotes are stripped before the comparison, because the corpus's one folder
+  // declaration is described as `'pcsx2/bios' folder` — a token that names the
+  // declaration exactly, which the row's own name line is already showing, and
+  // which nothing else would have removed. Comparing the whole declared path as
+  // well would change no outcome: `file_name` is its basename, so a token
+  // equalling the path always equals the basename after the split too.
   const token = (head ?? "").replace(/^['"]|['"]$/g, "");
-  const names = token.split("/").pop() ?? "";
-  if (names !== file.file_name && token !== file.declared_path) return description;
+  if ((token.split("/").pop() ?? "") !== file.file_name) return description;
   const rest = tail.join(" ").trim();
   return rest || null;
 }
@@ -597,23 +598,33 @@ function coreOffer(row: PlatformRow, core: CoreAnswer): CoreOffer {
   if (!core.emulator_data_available) {
     return { kind: "say", text: "RetroDECK was not found, so there is no emulator list to choose from." };
   }
-  // Ahead of the counts, because it is not one: `active_core_label` is null when
-  // nothing ES-DE lists for the platform is BAKEABLE, which says nothing about
-  // how many entries there are. A platform whose only entry is a standalone
-  // emulator this RetroDECK has not installed lands here with one option, and
-  // one with two uninstalled ones lands here with two — where a count-shaped
-  // branch would have said "offers one emulator" or nothing at all.
+  // An EMPTY menu first, because it is the one case where the fallback fails
+  // too. `_resolve_system` hands back the raw RomM slug for a platform its map
+  // does not name, and `get_emulator_options` answers `available: true` with no
+  // options for a system `es_systems.xml` does not list — `vic-20`,
+  // `acorn-electron`, `nintendo-dsi`, `ps5`, `browser` and `win` are in neither
+  // on this machine. RetroDECK's own launch then reads `command[1]` for the
+  // system, finds nothing, logs "No valid emulator found for system" and exits
+  // 1 (`libexec/run_game.sh`), so the games really do not start.
+  if (core.emulators.length === 0) {
+    return { kind: "say", text: "RetroDECK lists no emulator for this platform, so its games will not launch." };
+  }
+  // Then the not-bakeable menu, ahead of the counts because it is not one:
+  // `active_core_label` is null when nothing ES-DE lists is BAKEABLE, which says
+  // nothing about how many entries there are. A platform whose only entry is a
+  // standalone emulator this RetroDECK has not installed lands here with one
+  // option, and one with two uninstalled ones lands here with two — where a
+  // count-shaped branch would have said "offers one emulator" or nothing at all.
+  // Here the fallback DOES work: RetroDECK resolves the emulator itself.
   if (core.active_core_label === null) {
     return {
       kind: "say",
       text: "None of this platform's emulators can be pinned from here, so RetroDECK picks one when a game launches.",
     };
   }
-  // Only one count branch is left, and it is now exactly true: an empty menu
-  // cannot reach here (no options means nothing bakeable, which the branch above
-  // answered), so a single option here is a single BAKEABLE one — there really
-  // is nothing to switch to. The branch that used to say a platform with no
-  // emulator could not launch its games was both unreachable and wrong.
+  // One count branch, and it is exactly true: an empty menu was answered two
+  // branches up and a not-bakeable one the branch after it, so a single option
+  // here is a single BAKEABLE one — there really is nothing to switch to.
   if (core.emulators.length === 1) {
     return { kind: "say", text: "This platform offers one emulator, so there is nothing to switch." };
   }
@@ -645,20 +656,51 @@ const CoreNotice: FC<{ row: PlatformRow; state: PlatformsPageState; offer: CoreO
  * download record's file is still on disk — so one narrow column carries both
  * and no row ever needs two buttons.
  *
- * **The delete's condition is `deletable` and nothing else.** That field says
- * the plugin placed the file and it is still there, which is the whole
- * authority; `downloaded` is `os.path.exists` and is equally true of
- * `dolphin-emu/Sys/codehandler.bin`, which RetroDECK ships, no library can hand
- * back, and which sits one row above a real download on the GameCube pane. The
- * unlink itself re-reads the record and takes the path the record holds, so
+ * **The delete's condition is `deletable_count` and nothing else.** That field
+ * says how many of the plugin's own downloads a delete here would take, which
+ * is the whole authority; `downloaded` is `os.path.exists` and is equally true
+ * of `dolphin-emu/Sys/codehandler.bin`, which RetroDECK ships, no library can
+ * hand back, and which sits one row above a real download on the GameCube pane.
+ * The unlink itself re-reads the records and takes the path each one holds, so
  * this button cannot widen what it removes.
+ *
+ * A declared FOLDER offers it too, and that is a different rule from the one
+ * that keeps a folder out of the downloads: there is no file to FETCH into a
+ * name the emulator lists, but the files already inside it are ours wherever a
+ * record names them. Its button carries the count and its delete is addressed
+ * by the folder rather than by a file name, because no record carries the
+ * folder's name.
  */
-function isSpinning(row: PlatformRow, state: PlatformsPageState, pending: string): boolean {
-  // `downloadPending` names the button, not the platform, and every pane reads
-  // the same state — so the run's own slug is what keeps a spinner off the pane
-  // the reader walked to while a download runs somewhere else. That pane shows
-  // its buttons disabled and the line saying which platform is busy.
-  return state.busySlug === row.slug && state.downloadPending === pending;
+/**
+ * What a download button shows instead of its label: a spinner while its own run
+ * is going, a red `Failed` for the moment after one fails, or nothing.
+ *
+ * Both are keyed on the run's slug as well as the button's identity, because
+ * `downloadPending` and `downloadFailed` name the button and every pane reads
+ * the same state — without the slug a spinner would appear on the pane the
+ * reader walked to. That pane shows disabled buttons and the line naming the
+ * platform that is busy, which is what it always did.
+ */
+function downloadState(row: PlatformRow, state: PlatformsPageState, id: string): "spinner" | "failed" | null {
+  if (state.busySlug !== row.slug) return null;
+  if (state.downloadPending === id) return "spinner";
+  return state.downloadFailed === id ? "failed" : null;
+}
+
+const FAILED_LABEL = <span style={{ color: RED }}>Failed</span>;
+
+/** The label a download button carries right now — its own word unless its run
+ *  is speaking. */
+function downloadLabel(
+  row: PlatformRow,
+  state: PlatformsPageState,
+  id: string,
+  label: string,
+  size: number,
+): ReactNode {
+  const showing = downloadState(row, state, id);
+  if (showing === "spinner") return <Spinner width={size} height={size} />;
+  return showing === "failed" ? FAILED_LABEL : label;
 }
 
 const RowAction: FC<{
@@ -677,26 +719,29 @@ const RowAction: FC<{
           state.downloadOne(row.slug, file.file_name);
         }}
       >
-        {isSpinning(row, state, file.file_name) ? <Spinner width={11} height={11} /> : "Download"}
+        {downloadLabel(row, state, file.file_name, "Download", 11)}
       </DialogButton>
     );
   }
-  if (!file.deletable) return null;
+  const count = file.deletable_count ?? 0;
+  if (count === 0) return null;
+  const folder = file.declared_kind === "directory";
   const confirm = () =>
     showModal(
       <ConfirmModal
-        strTitle={`Delete ${file.file_name}?`}
-        strDescription="This deletes the copy this plugin downloaded, at the place it wrote it. Files your emulator came with, or that you put there yourself, are never touched. Games that need it won't launch until you download it again."
+        strTitle={folder ? `Delete ${count} file(s) in ${file.file_name}?` : `Delete ${file.file_name}?`}
+        strDescription="This deletes only what this plugin downloaded, at the places it wrote them. Files your emulator came with, or that you put there yourself, are never touched — and a folder the emulator lists is never removed. Games that need them won't launch until you download them again."
         strOKButtonText="Delete"
         strCancelButtonText="Cancel"
         onOK={() => {
-          state.deleteBiosFile(row.slug, file.file_name);
+          if (folder) state.deleteBiosFolder(row.slug, file.local_path);
+          else state.deleteBiosFile(row.slug, file.file_name);
         }}
       />,
     );
   return (
     <DialogButton style={ROW_BUTTON} disabled={busy} onClick={confirm}>
-      <span style={{ color: RED }}>Delete</span>
+      <span style={{ color: RED }}>{folder ? `Delete (${count})` : "Delete"}</span>
     </DialogButton>
   );
 };
@@ -825,18 +870,14 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
           disabled={!showRequired || state.busySlug !== null}
           onClick={() => state.downloadRequired(row.slug)}
         >
-          {isSpinning(row, state, "required") ? (
-            <Spinner width={12} height={12} />
-          ) : (
-            `Download required (${requiredMissing})`
-          )}
+          {downloadLabel(row, state, "required", `Download required (${requiredMissing})`, 12)}
         </DialogButton>
         <DialogButton
           style={FLAT_BUTTON}
           disabled={!showAll || state.busySlug !== null}
           onClick={() => state.downloadAll(row.slug)}
         >
-          {isSpinning(row, state, "all") ? <Spinner width={12} height={12} /> : "Download all"}
+          {downloadLabel(row, state, "all", "Download all", 12)}
         </DialogButton>
         <DialogButton
           style={FLAT_BUTTON}
@@ -963,12 +1004,14 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
   // cases — the per-platform override where it still resolves, else the
   // es_systems default. Printing "Default" said the opposite of what was true.
   //
-  // `null` is not a failure either. It means no option is BAKEABLE, and what
-  // follows from that is written at `select_default_option`: the launch is baked
-  // as the plain RetroDECK one and RetroDECK resolves the emulator itself. The
-  // games still start; the plugin is simply not the one choosing, which is what
-  // the clause says.
+  // `null` splits in two, and only one half is a failure. With options on the
+  // menu it means none is BAKEABLE, and `select_default_option` says what
+  // follows: the plain RetroDECK launch is baked and RetroDECK resolves the
+  // emulator itself, so the games still start and the clause says who is
+  // choosing. With NO options there is nothing for RetroDECK to resolve either
+  // — its own launch exits 1 — and the clause says so, in red.
   const activeLabel = core ? core.active_core_label : null;
+  const noEmulator = core != null && core.emulators.length === 0;
   // The platform-level twin of the game page's `activeCoreIsDefault`, read off
   // the payload's own `is_default`, which marks the single option
   // `select_default_option` picks. One expression feeds the clause AND the
@@ -976,8 +1019,9 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
   // gold, because `find` on a null label returns nothing and "not the default"
   // is not the same statement as "an override".
   const activeIsDefault = core?.emulators.find((option) => option.label === activeLabel)?.is_default ?? false;
-  const coreColor = activeLabel === null || activeIsDefault ? MUTED : AMBER;
-  const coreClause = core == null ? null : { text: activeLabel ?? "RetroDECK decides", color: coreColor };
+  const coreColor = noEmulator ? RED : activeLabel === null || activeIsDefault ? MUTED : AMBER;
+  const coreClause =
+    core == null ? null : { text: activeLabel ?? (noEmulator ? "no emulator" : "RetroDECK decides"), color: coreColor };
 
   return (
     <>
