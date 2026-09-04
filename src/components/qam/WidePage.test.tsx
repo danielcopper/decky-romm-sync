@@ -26,6 +26,22 @@ interface StubTabsProps {
   cancelSkipTabHeader?: boolean;
 }
 
+/** Steam's own value for the B button, which is not `@decky/ui`'s: the two
+ *  enums disagree, so the number the chip passes is worth pinning. */
+const GLYPH_BUTTON_B = 1;
+
+interface StubGlyphProps {
+  button: number;
+  bKnockout?: boolean;
+}
+
+/** Stand-in for Steam's controller glyph, which is an `<img>` whose source is
+ *  chosen from the controller in the user's hands. What matters here is which
+ *  button the chip asked for. */
+const StubGlyph: FC<StubGlyphProps> = ({ button, bKnockout }) => (
+  <span data-testid="controller-glyph" data-button={String(button)} data-knockout={String(Boolean(bKnockout))} />
+);
+
 /**
  * Stand-in for Steam's tabbed page: a bar of titles plus the active content.
  * `autoFocusContents` is surfaced as an attribute — the real page consumes it to
@@ -50,6 +66,7 @@ const StubScrollPanel: FC<{ children?: ReactNode }> = ({ children }) => (
 async function loadWidePage(
   tabs: FC<StubTabsProps> | undefined,
   scrollPanel?: FC<{ children?: ReactNode }>,
+  glyph?: FC<StubGlyphProps>,
 ): Promise<FC<WidePageProps>> {
   vi.resetModules();
   // Every export the graph under test imports has to be named here — Vitest
@@ -59,6 +76,8 @@ async function loadWidePage(
     quickAccessMenuClasses: undefined,
     Tabs: tabs,
     ScrollPanel: scrollPanel,
+    ControllerGlyph: glyph,
+    GLYPH_BUTTON_B: GLYPH_BUTTON_B,
   }));
   return (await import("./WidePage")).WidePage;
 }
@@ -94,6 +113,42 @@ describe("WidePage", () => {
     expect(onBack).toHaveBeenCalledTimes(1);
     // One line: the title is the chip's own sibling, not a row under it.
     expect(chip.parentElement).toBe(screen.getByText("Settings").parentElement);
+  });
+
+  it("puts the B glyph on the chip, in Steam's own numbering", async () => {
+    // Back is on B, so the chip names that button the way Steam names it —
+    // drawn for the controller in the user's hands rather than typed as a
+    // letter, which would be wrong on a PlayStation pad.
+    const WidePage = await loadWidePage(StubTabs, undefined, StubGlyph);
+
+    render(
+      <WidePage title="Settings" onBack={vi.fn()}>
+        <div>page body</div>
+      </WidePage>,
+    );
+
+    const glyph = screen.getByTestId("controller-glyph");
+    // 1 is B in Steam's action-button enum and A in @decky/ui's — passing the
+    // wrong one draws the wrong glyph and nothing fails.
+    expect(glyph.dataset.button).toBe(String(GLYPH_BUTTON_B));
+    expect(glyph.dataset.knockout).toBe("true");
+    expect(screen.getByRole("button", { name: /Back/ })).toContainElement(glyph);
+    expect(screen.queryByText("‹ Back")).not.toBeInTheDocument();
+  });
+
+  it("keeps a readable chip when the glyph probe misses", async () => {
+    // The probe is a module lookup in someone else's bundle: the day it misses,
+    // the chip has to still say what it does.
+    const WidePage = await loadWidePage(StubTabs);
+
+    render(
+      <WidePage title="Settings" onBack={vi.fn()}>
+        <div>page body</div>
+      </WidePage>,
+    );
+
+    expect(screen.getByRole("button", { name: "‹ Back" })).toBeInTheDocument();
+    expect(screen.queryByTestId("controller-glyph")).not.toBeInTheDocument();
   });
 
   it("lets B out of the tabbed page instead of spending it on the tab row", async () => {

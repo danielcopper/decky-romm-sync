@@ -16,20 +16,20 @@ without restating it. The width mechanism's decision record is
 
 ## Where the code lives
 
-| Module                                                        | Responsibility                                                                                                      |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `src/index.tsx` (`QAMPanel`)                                  | The router: one `Page` value, one mounted page, a module-level `currentPage` that survives a QAM remount            |
-| `src/types/navigation.ts`                                     | The `Page` union — every page the router can land on                                                                |
-| `src/components/MainPage.tsx`                                 | Main                                                                                                                |
-| `src/components/LibraryPage.tsx`                              | Library — the frame, the two tabs and their state                                                                   |
-| `src/components/SettingsPage.tsx`, `src/components/settings/` | Settings and its sections                                                                                           |
-| `src/components/DangerZone.tsx`, `RemovedGamesCleanup.tsx`    | Data Management                                                                                                     |
-| `src/components/DownloadQueue.tsx`                            | Downloads                                                                                                           |
-| `src/components/library/`                                     | The Library page's tabs: `usePlatformsPage` (its reads and actions), `PlatformsTab`, `PlatformDetail`               |
-| `src/utils/deckyUiInternals.ts`                               | Honest typing for `@decky/ui` values that come from a webpack probe: the frame's class names, `Tabs`, `ScrollPanel` |
-| `src/utils/qamExpansion.ts`                                   | The panel's width: the expand and hide messages, the injected `max-width` rule, and the four paths that clear both  |
-| `src/components/qam/`                                         | The wide-page frame: `WidePage` (the Back/title line, tabs, measured height), `ListDetail` and `ScrollRegion`       |
-| `src/utils/` module stores                                    | State that must outlive a page: sync progress, pending preview, downloads, prune, notices                           |
+| Module                                                        | Responsibility                                                                                                                            |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/index.tsx` (`QAMPanel`)                                  | The router: one `Page` value, one mounted page, a module-level `currentPage` that survives a QAM remount                                  |
+| `src/types/navigation.ts`                                     | The `Page` union — every page the router can land on                                                                                      |
+| `src/components/MainPage.tsx`                                 | Main                                                                                                                                      |
+| `src/components/LibraryPage.tsx`                              | Library — the frame, the two tabs and their state                                                                                         |
+| `src/components/SettingsPage.tsx`, `src/components/settings/` | Settings and its sections                                                                                                                 |
+| `src/components/DangerZone.tsx`, `RemovedGamesCleanup.tsx`    | Data Management                                                                                                                           |
+| `src/components/DownloadQueue.tsx`                            | Downloads                                                                                                                                 |
+| `src/components/library/`                                     | The Library page's tabs: `usePlatformsPage` (its reads and actions), `PlatformsTab`, `PlatformDetail`                                     |
+| `src/utils/deckyUiInternals.ts`                               | Honest typing for `@decky/ui` values that come from a webpack probe: the frame's class names, `Tabs`, `ScrollPanel`, the controller glyph |
+| `src/utils/qamExpansion.ts`                                   | The panel's width: the expand and hide messages, the injected `max-width` rule, and the four paths that clear both                        |
+| `src/components/qam/`                                         | The wide-page frame: `WidePage` (the Back/title line, tabs, measured height), `ListDetail` and `ScrollRegion`                             |
+| `src/utils/` module stores                                    | State that must outlive a page: sync progress, pending preview, downloads, prune, notices                                                 |
 
 ## Two widths
 
@@ -126,7 +126,12 @@ rather than on a page: one `Focusable` with `onCancelButton` wraps the mounted c
 own B still leaves the plugin. That condition is what makes taking B safe: the escape route is never removed, it is
 exactly as far away as the user walked in, and the last press is never swallowed. Steam already prints "B ZURÜCK" in its
 footer legend, which this makes true rather than misleading, so no legend entry of ours is needed. The chip stays as the
-discoverable half and as the mouse path.
+discoverable half and as the mouse path, and it carries **Steam's own B glyph** — drawn for the controller in the user's
+hands, so it is ○ on a PlayStation pad and the swapped face button under a Nintendo layout. `@decky/ui` does not
+re-export that component, so `src/utils/deckyUiInternals.ts` reaches it by a module probe and types it as possibly
+absent; the chip falls back to its chevron the day the probe misses. The button number it passes is Steam's own
+action-button enum (`A=0, B=1, X=2, Y=3`), **not** `@decky/ui`'s `GamepadButton`, where 1 is A — the two disagree on
+every value, and the wrong one draws the wrong glyph without failing.
 
 **A tabbed wide page has to get out of the way for that to work.** Steam's tabbed page renders its content pane as
 `onCancelButton: !cancelSkipTabHeader && <focus the tab row>` (`chunk~2dcc5aaf7.js`), so without the flag the first B

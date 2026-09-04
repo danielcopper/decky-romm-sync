@@ -172,6 +172,7 @@ vi.mock("@decky/ui", async () => {
     quickAccessMenuClasses: undefined,
     Tabs: undefined,
     ScrollPanel: undefined,
+    findModule: vi.fn(() => undefined),
     findSP: vi.fn(() => undefined),
     ConfirmModal: (p: AnyProps) => ce("div", { "data-testid": "confirm-modal" }, p.children as never),
     DialogButton: ({

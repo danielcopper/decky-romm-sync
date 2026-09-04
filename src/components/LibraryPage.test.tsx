@@ -47,6 +47,10 @@ vi.mock("../utils/deckyUiInternals", async () => {
     quickAccessMenuClasses: undefined,
     ScrollPanel: undefined,
     findSP: () => undefined,
+    // The Back chip's glyph probe misses under happy-dom, so the chip renders
+    // its text fallback — which is what the back-button test clicks.
+    ControllerGlyph: undefined,
+    GLYPH_BUTTON_B: 1,
     Tabs: ({ tabs, activeTab, onShowTab }: { tabs: TabShape[]; activeTab: string; onShowTab: (id: string) => void }) =>
       ce(
         "div",

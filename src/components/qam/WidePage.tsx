@@ -21,7 +21,7 @@
 
 import { useLayoutEffect, useRef, useState, type FC, type ReactNode } from "react";
 import { DialogButton, Focusable } from "@decky/ui";
-import { Tabs } from "../../utils/deckyUiInternals";
+import { ControllerGlyph, GLYPH_BUTTON_B, Tabs } from "../../utils/deckyUiInternals";
 import { WIDE_ROOT_CLASS, useWideQamPanel } from "../../utils/qamExpansion";
 import { ScrollRegion } from "./ScrollRegion";
 
@@ -61,6 +61,25 @@ const MIN_BODY_HEIGHT = 240;
 // Breathing room under the body, kept off the measurement so the page never
 // ends flush against the panel's bottom edge.
 const BODY_BOTTOM_GAP = 12;
+
+/**
+ * What the Back chip reads: the button's own glyph and the word.
+ *
+ * The glyph is Steam's, drawn for whatever controller is connected, so the chip
+ * names the same button the footer legend does rather than a letter this plugin
+ * picked. Where the probe misses, the chevron the chip carried before it takes
+ * over — a chip that says Back and no glyph is still true, and a hand-drawn B
+ * would be wrong for a PlayStation pad.
+ */
+const BackChipLabel: FC = () =>
+  ControllerGlyph ? (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
+      <ControllerGlyph button={GLYPH_BUTTON_B} bKnockout style={{ width: "13px", height: "13px" }} />
+      Back
+    </span>
+  ) : (
+    <>‹ Back</>
+  );
 
 /**
  * The remaining viewport below `body`, which is the height a wide page gets to
@@ -130,7 +149,7 @@ export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, on
           style={{ flex: "0 0 auto", minWidth: 0, width: "auto", padding: "4px 10px", fontSize: "13px" }}
           onClick={onBack}
         >
-          ‹ Back
+          <BackChipLabel />
         </DialogButton>
         <span style={{ fontSize: "16px", fontWeight: 600, color: "#dcdedf" }}>{title}</span>
       </Focusable>

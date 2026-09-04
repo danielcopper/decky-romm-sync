@@ -17,6 +17,7 @@
 
 import type { CSSProperties, FC, ReactNode } from "react";
 import {
+  findModule,
   appActionButtonClasses as _appActionButtonClasses,
   basicAppDetailsSectionStylerClasses as _basicAppDetailsSectionStylerClasses,
   appDetailsClasses as _appDetailsClasses,
@@ -90,3 +91,57 @@ export interface ScrollPanelProps {
 export const ScrollPanel: FC<ScrollPanelProps> | undefined = _ScrollPanel;
 
 export const findSP = (): Window | undefined => _findSP();
+
+/**
+ * What Steam's controller-glyph image takes. `button` is Steam's OWN button
+ * enum and not `@decky/ui`'s `GamepadButton` — the two disagree on every value
+ * ({@link GLYPH_BUTTON_B}).
+ */
+export interface ControllerGlyphProps {
+  button: number;
+  /** The monochrome silhouette, which is what Steam uses inside running text. */
+  bKnockout?: boolean;
+  className?: string;
+  style?: CSSProperties;
+}
+
+/**
+ * The value Steam's glyph component wants for **B**.
+ *
+ * It indexes Steam's own action-button enum — `A=0, B=1, X=2, Y=3, Left=4 … `
+ * (`chunk~2dcc5aaf7.js`, module 43014) — which is a different enum from
+ * `@decky/ui`'s `GamepadButton` (`INVALID=0, OK=1, CANCEL=2 …`), where 1 is the
+ * A button. Passing the wrong one draws the wrong glyph rather than failing.
+ */
+export const GLYPH_BUTTON_B = 1;
+
+const isMemoComponent = (value: unknown): boolean =>
+  typeof value === "object" && value !== null && (value as { $$typeof?: symbol }).$$typeof === Symbol.for("react.memo");
+
+/**
+ * Steam's controller-glyph image: one button drawn the way the controller in
+ * the user's hands draws it — B on a Deck or an Xbox pad, ○ on a PlayStation
+ * one, and the swapped face button under a Nintendo layout. It reads the active
+ * controller itself, which is why neither a lookalike SVG nor a typed letter is
+ * an alternative: both would be wrong for someone.
+ *
+ * `@decky/ui` does not re-export it, so it is reached by a module probe. Its
+ * module exports exactly two values — this glyph and the footer's glyph-plus-
+ * label pair — and that shape is unique: across every `.js` file in this
+ * install's `steamui`, exactly one module declares two exports under those two
+ * names and nothing else. Both are mobx observers, which is a `React.memo`
+ * object at runtime and the second half of the filter.
+ *
+ * `undefined` the day Steam renames or re-splits that module, so every caller
+ * keeps a text fallback rather than a hole where the glyph was.
+ */
+export const ControllerGlyph: FC<ControllerGlyphProps> | undefined = findModule((m: unknown) => {
+  try {
+    if (typeof m !== "object" || m === null) return false;
+    const exports = m as Record<string, unknown>;
+    const names = Object.keys(exports);
+    return names.length === 2 && isMemoComponent(exports.W) && isMemoComponent(exports.X);
+  } catch {
+    return false;
+  }
+})?.W;

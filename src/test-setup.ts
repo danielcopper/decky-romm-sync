@@ -301,6 +301,10 @@ vi.mock("@decky/ui", () => {
     quickAccessMenuClasses: undefined,
     Tabs: undefined,
     ScrollPanel: undefined,
+    // No webpack registry to walk, so every probe misses and the caller's
+    // fallback is what the suite exercises — which is the point: the fallback
+    // is what a Steam build that renamed the module would render.
+    findModule: vi.fn(() => undefined),
     // The QAM is open for any test that renders a wide page; the hook's
     // clear-on-close path is exercised in src/utils/qamExpansion.test.tsx.
     useQuickAccessVisible: () => true,
