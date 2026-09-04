@@ -373,6 +373,19 @@ class FirmwareStatusReader:
                 core_so,
             )
             plat["files"] = [{**raw, **_wanted_fields(entry)} for raw, entry in zip(plat["files"], files, strict=True)]
+            # Alphabetical, and only here: the two halves arrive in their own
+            # orders — the library's listing, then the rows it does not hold,
+            # appended — so a file the plugin downloaded sat below one the
+            # library still offers for no reason a reader could see. Sorted
+            # AFTER the merge, because the zip above is positional and because
+            # `declared_path` only exists once `_wanted_fields` has run.
+            #
+            # The key is what the row DISPLAYS: `declared_path` is the folder
+            # prefix and the name together (`dolphin-emu/Sys/codehandler.bin`),
+            # and the bare name where nothing declared a subdirectory. Folded to
+            # lower case, because a corpus that mixes `BS-X.bin` with
+            # `sgb_boot.bin` reads as unsorted under a case-sensitive one.
+            plat["files"].sort(key=lambda f: (f.get("declared_path") or f.get("file_name", "")).lower())
             plat["has_games"] = slug in synced_slugs
             plat["all_downloaded"] = all(f["downloaded"] for f in plat["files"])
             self._stamp_deletable(plat, slug, records)

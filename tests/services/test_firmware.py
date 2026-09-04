@@ -588,6 +588,61 @@ class TestDestinationReadingsReachBothSurfaces:
         assert row["downloaded"] is True
 
 
+class TestTheOverviewRowsAreAlphabetical:
+    """The pane's file list is ordered as it reads, not as the two halves arrive."""
+
+    _CORE = "dolphin_libretro"
+
+    @pytest.mark.asyncio
+    async def test_local_only_rows_are_not_simply_appended(self, plugin, tmp_path):
+        """A file the plugin holds sorts among the library's, not below them.
+
+        The rows come from two sources — the library's listing, then what the
+        emulators want beyond it — and the second was appended, so
+        ``codehandler.bin`` sat under ``gc-pal-12.bin`` on a GameCube pane for
+        no reason a reader could see.
+        """
+        store = FakeFirmwareFileStore()
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            core_info=_test_core_info(),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        # Declared by an emulator and NOT in the library, so it is appended.
+        _declare(fw, ("cx4.data.rom", "CX4 data", True))
+        _stub_listing(
+            fw,
+            [
+                {
+                    "id": 1,
+                    "file_name": "sgb_boot.bin",
+                    "file_path": "bios/gc/sgb_boot.bin",
+                    "file_size_bytes": 8,
+                    "md5_hash": "",
+                },
+                {
+                    "id": 2,
+                    "file_name": "SGB1.sfc",
+                    "file_path": "bios/gc/SGB1.sfc",
+                    "file_size_bytes": 8,
+                    "md5_hash": "",
+                },
+            ],
+        )
+
+        result = await fw.get_firmware_status()
+        names = [f["file_name"] for f in next(p for p in result["platforms"] if p["platform_slug"] == "gc")["files"]]
+
+        # Case-folded, so a capitalised name does not sort above every lowercase
+        # one: the SNES pane really does mix `SGB1.sfc` with `sgb_boot.bin`, and
+        # a case-sensitive sort puts every capital first, which reads as no sort
+        # at all. `cx4.data.rom` is the appended one and lands between them.
+        assert names == ["cx4.data.rom", "SGB1.sfc", "sgb_boot.bin"]
+
+
 class TestAFolderRowCountsWhatWePutInside:
     """The folder branch of the row field, which nothing else exercises.
 
