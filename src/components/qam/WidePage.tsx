@@ -96,27 +96,54 @@ function scrollingAncestor(body: HTMLElement, view: Window): HTMLElement | null 
 }
 
 /**
+ * How far `body` sits below the start of `scroller`'s content, in layout terms.
+ *
+ * The two rects are viewport-relative and the scroller's own `scrollTop` moves
+ * only one of them: scrolling it slides `body` up by exactly that much and
+ * leaves the scroller's own box where it is, so adding `scrollTop` back cancels
+ * it exactly. Scrolling anything ABOVE the scroller moves both boxes together
+ * and cancels in the subtraction. `clientTop` is the scroller's top border,
+ * which its rect includes and `clientHeight` does not.
+ *
+ * `body.offsetTop` would be shorter and is not taken: `offsetTop` is measured
+ * against `offsetParent`, which is the scroller only while Steam's panel stays
+ * positioned — it computes `position: relative` today, and that is Steam's CSS
+ * to change, not ours. Nothing above reads off any element's position.
+ */
+function offsetWithinScroller(body: HTMLElement, scroller: HTMLElement): number {
+  const bodyTop = body.getBoundingClientRect().top;
+  const scrollerTop = scroller.getBoundingClientRect().top;
+  return bodyTop - scrollerTop - scroller.clientTop + scroller.scrollTop;
+}
+
+/**
  * The space left below `body` inside whatever scrolls it — the height a wide
  * page gets to work with, because Steam's tabbed page fills its parent rather
  * than growing and nothing in the QAM chain hands the plugin's panel a height.
  *
- * **Both ends are viewport-relative, so their difference does not move when
- * anything scrolls.** `innerHeight - top` is not the same quantity: it equals
- * the space below only at scroll offset zero, and it grows as the page scrolls
- * — which made the measurement feed itself. A body measured a few hundred
- * pixels down the panel came out that much too tall, the panel then scrolled
- * because the body no longer fit, and the next measurement read a negative
- * `top` and grew it again. Measured on the device at 1245px of body inside a
- * 750px panel, with the tab row pushed off the top; the same DOM at scroll
- * offset zero answers 648px both ways.
+ * **The quantity has to be free of the scroller's own offset, and only a
+ * layout-relative one is.** Every viewport-relative form grows as the panel
+ * scrolls, which makes the measurement feed itself: a body measured part-way
+ * down comes out that much too tall, the panel then has that much more to
+ * scroll, and nothing re-measures. It can be measured part-way down because
+ * `QAMPanel` resets the panel's scroll inside a `requestAnimationFrame`, a
+ * frame after this page's layout effect has already run.
+ *
+ * Measured live in the QAM over the mounted page, at panel offsets 0 / 200 /
+ * 500 / 634 px: `innerHeight - top` answers 648 / 848 / 1148 / 1283, and so
+ * does the scroller's own `bottom - top` — the panel's rect bottom is 764.3
+ * against an `innerHeight` of 764, so bounding to the panel rather than the
+ * window changes no number at any offset. This form answers 648 at all four.
  *
  * With nothing scrolling above it there is no offset to be wrong about, so the
  * viewport is the honest bound in that case.
  */
 function remainingBodyHeight(body: HTMLElement, view: Window): number {
   const scroller = scrollingAncestor(body, view);
-  const bottom = scroller ? scroller.getBoundingClientRect().bottom : view.innerHeight;
-  return Math.max(MIN_BODY_HEIGHT, bottom - body.getBoundingClientRect().top - BODY_BOTTOM_GAP);
+  const remaining = scroller
+    ? scroller.clientHeight - offsetWithinScroller(body, scroller)
+    : view.innerHeight - body.getBoundingClientRect().top;
+  return Math.max(MIN_BODY_HEIGHT, remaining - BODY_BOTTOM_GAP);
 }
 
 export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, onShowTab, children }) => {

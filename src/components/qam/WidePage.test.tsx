@@ -185,22 +185,30 @@ describe("WidePage", () => {
     expect(body().style.minHeight).toBe("");
   });
 
-  it("measures the same height however far the panel is scrolled", async () => {
+  it("measures the same height however far the scrolling panel is scrolled", async () => {
     // The defect this pins is self-amplifying, which is why it reached a device
     // as a page that scrolled as one piece: a body measured part-way down the
-    // panel came out that much too tall, the panel then scrolled because the
-    // body no longer fit, and the next measurement read a negative top and grew
-    // it again. Measured on the device at 1245px of body inside a 750px panel.
+    // panel came out that much too tall, the panel then had that much more to
+    // scroll, and nothing re-measured. It can be measured part-way down because
+    // the panel's scroll reset runs a frame after this page's layout effect.
     //
-    // The two mounts below are the same DOM at two scroll offsets: a panel
-    // 600px tall with the body 100px down it, and everything shifted up by 500.
-    const measure = async (bodyTop: number, panelBottom: number) => {
+    // The two mounts are one DOM at two offsets of the PANEL'S OWN scroll,
+    // which is the device shape and the only one that can go wrong: it slides
+    // the body up and leaves the panel's own box exactly where it is. An
+    // ancestor scrolling above the panel moves both boxes together and cancels
+    // in any formula, so it would prove nothing.
+    const measure = async (scrollTop: number) => {
       const WidePage = await loadWidePage(StubTabs);
+      const isBody = (el: HTMLElement) => el.dataset.testid === "wide-page-body";
       vi.spyOn(window, "getComputedStyle").mockReturnValue({ overflowY: "auto" } as CSSStyleDeclaration);
+      // A panel 600px tall whose top is the viewport top, with the body 100px
+      // down its content — so the body's own top is 100 - scrollTop.
       vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-        const top = this.dataset.testid === "wide-page-body" ? bodyTop : 0;
-        return { top, bottom: this.dataset.testid === "wide-page-body" ? 0 : panelBottom } as DOMRect;
+        return (isBody(this) ? { top: 100 - scrollTop, bottom: 0 } : { top: 0, bottom: 600 }) as DOMRect;
       });
+      vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+      vi.spyOn(HTMLElement.prototype, "clientTop", "get").mockReturnValue(0);
+      vi.spyOn(Element.prototype, "scrollTop", "get").mockReturnValue(scrollTop);
       try {
         render(
           <WidePage title="Settings" onBack={vi.fn()}>
@@ -214,10 +222,10 @@ describe("WidePage", () => {
       }
     };
 
-    // 600 − 100 − 12 both times: a difference of two viewport-relative edges
-    // does not move when the thing they sit in is scrolled.
-    expect(await measure(100, 600)).toBe(488);
-    expect(await measure(-400, 100)).toBe(488);
+    // 600 − 100 − 12 both times. The viewport-relative forms answer 488 and
+    // then 988, because the body's top has moved and the panel's has not.
+    expect(await measure(0)).toBe(488);
+    expect(await measure(500)).toBe(488);
   });
 
   it("never measures the body below its floor", async () => {

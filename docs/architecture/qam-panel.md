@@ -65,7 +65,11 @@ How a page gets wide, measured on the device rather than read from documentation
   `quickAccessMenuClasses`, which can be `undefined`; `[id^="quickaccess_content_"]` is the fallback selector. Decky
   registers one QAM tab (`QuickAccessTab.Decky = 999`), so the plugin's panel is `#quickaccess_content_999` — and
   `TabGroupPanel` sits on that same element, measured, which is why walking the DOM by id and writing the CSS against
-  the class reach the same panel.
+  the class reach the same panel. That same sheet carries one rule that is not about width — Steam's own
+  `outline: outset #fff 2px` for a **disabled** button under `.gpfocus`, which Steam's stylesheet omits. A wide page
+  keeps its buttons rendered-and-disabled rather than hidden, so the stick lands on them and the focus ring would
+  otherwise disappear for that row; it rides in this sheet because the sheet is already scoped to the wide root and a
+  second injector for one selector would be a second thing to clear.
 - Result: the visible panel goes from 348 px to 854 px and the tab panel from 300 px to 806 px (854 minus the 48 px tab
   rail). The QAM browser view itself is 854 px wide in both states, so only the sliding container's geometry, read
   through `findSP()`, proves an expansion.
@@ -87,14 +91,20 @@ therefore measures the space left below its header and takes that as its height;
 `min-height` is not enough — it clips. Under Decky's title bar, the frame's Back row, its title and a tab bar, that
 leaves a body of roughly 260 px inside the 454 px view.
 
-**That measurement is the distance between two viewport-relative edges — the bottom of the nearest scrolling ancestor
-and the top of the body — and it has to be, because a difference of two such edges does not move when the thing they sit
-in is scrolled.** `window.innerHeight - top` is a different quantity: it equals the space below only at scroll offset
-zero, and it grows as the panel scrolls. That made the measurement feed itself, and the loop has no fixed point — a body
-measured part-way down the panel comes out that much too tall, the panel then scrolls because the body no longer fits,
-and the next measurement reads a negative `top` and grows it again. It reached a device as a page that scrolled as one
-piece, tab row and all: 1245 px of body inside a 750 px panel, where the same DOM at offset zero answers 648 px. The
-state is sticky rather than transient, because the inflated height is what keeps the panel scrollable.
+**That measurement has to be free of the scrolling panel's own offset, and only a layout-relative one is**: the body's
+position inside the scroller's content — its viewport top minus the scroller's, plus the scroller's `scrollTop` —
+subtracted from the scroller's `clientHeight`. Every **viewport-relative** form fails, because the panel's own
+`scrollTop` moves the body's rect and leaves the panel's own rect where it is. That made the measurement feed itself,
+and the loop has no fixed point: a body measured part-way down comes out that much too tall, the panel then has that
+much more to scroll, and nothing re-measures. It reached a device as a page that scrolled as one piece, tab row and all
+— 1245 px of body inside a 750 px panel.
+
+Measured live in the QAM over the mounted page, at panel offsets 0 / 200 / 500 / 634 px, `window.innerHeight - top`
+answers 648 / 848 / 1148 / 1283 — and so does `scroller.getBoundingClientRect().bottom - top`, because the panel's rect
+bottom is 764.3 against an `innerHeight` of 764. **Bounding to the panel instead of the window is therefore not the
+fix**; it changes no number at any offset. The layout-relative form answers 648 at all four. What makes a non-zero
+offset reachable at all is that `QAMPanel` resets the panel's scroll inside a `requestAnimationFrame`, a frame after the
+page's own layout effect has already measured.
 
 A region scrolls the way the rest of the QAM scrolls: by moving focus. Every scrolling region goes through
 `ScrollRegion`, which renders Steam's plain `ScrollPanel` — the container the QAM's own tab panel is built from, and the
@@ -325,18 +335,29 @@ it, for the focused platform:
   the real label in both ordinary cases. `null` means no option is **bakeable**, which is not the same as there being
   none, and the two are different sentences:
 
-  - **Options exist, none bakeable** — a platform whose only ES-DE entry is a standalone emulator this RetroDECK has not
-    installed. Not a failure: `select_default_option` says what follows, which is that the plain RetroDECK launch is
-    baked and RetroDECK resolves the emulator itself, so the games start. The clause reads `RetroDECK decides` in the
-    muted colour and the line under it says the plugin cannot pin one.
+  - **Options exist, none bakeable, and the fallback can run** — the plain RetroDECK launch is baked and RetroDECK
+    resolves the emulator itself, so the games start. The clause reads `RetroDECK decides` in the muted colour and the
+    line under it says the plugin cannot pin one.
+  - **Options exist, none bakeable, and the fallback is not installed** — the same unpinnable state, with the opposite
+    outcome. `run_game.sh` takes `command[1]` for the system when no alternate emulator is set and `options_to_payload`
+    keeps ES-DE's document order, so `emulators[0]` **is** that command; when its own `reason` is `not_installed`, the
+    fallback names a binary that is not there. Apple I on the reference machine is exactly this — five commands, the
+    first `LinApple (Standalone)`, none installed and the two MAME forms unbakeable for their quoting. The clause reads
+    `no emulator installed` in **red** and the line names the emulator RetroDECK would have used. Only
+    `downgrade_if_not_installed` ever sets that reason, and only on an otherwise-bakeable option, so the branch fires
+    exactly where the first command's standalone emulator is missing. A first command unbakeable for another reason
+    (`quoting`) whose emulator is also missing keeps the muted sentence — `macintosh` is that shape — because
+    installedness is not established for an option that was never bakeable.
   - **No options at all** — `_resolve_system` falls through to the raw RomM slug for a platform its map does not name,
     and `get_emulator_options` answers `available: true` with an empty list for a system `es_systems.xml` does not list;
     `vic-20`, `acorn-electron`, `nintendo-dsi`, `ps5`, `browser` and `win` are in neither. RetroDECK's own launch then
     reads `command[1]` for the system, finds nothing, and exits 1 (`libexec/run_game.sh`). The clause reads
     `no emulator` in **red** and the line says the games will not launch, because they will not.
 
-  The chip is withheld for both. Printing "Default" for either said the plugin had chosen; printing `no emulator` for
-  both said the games would not start where they do. Both were wrong, in opposite directions.
+  The chip is withheld for all three. Printing "Default" for any of them said the plugin had chosen; printing
+  `no emulator` for all three said the games would not start where they do. Both were wrong, in opposite directions, and
+  the middle state is why the split is three rather than two: it is unpinnable like the first and does not start like
+  the last.
 
   The button appears only when there is something to pick: the platform has games in Steam, the core read landed,
   RetroDECK was found, at least one option is bakeable, and there are at least two. Each of the other cases is a
