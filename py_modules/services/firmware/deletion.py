@@ -97,10 +97,11 @@ class PlatformBiosDeleter:
         refusing that row would strand our own download with nothing in the UI
         able to clean it up.
 
-        *selects* narrows and can never widen: it is a predicate over records
-        this platform already owns, so the worst a wrong one can do is remove
-        fewer files. ``None`` selects all of them, which is the platform-wide
-        button.
+        *selects* is a predicate over records this platform already owns, so
+        the worst a wrong one can do is act on that whole set — never on a file
+        the plugin did not place. ``None`` selects all of them, which is the
+        platform-wide button; the folder button guards its own degenerate path
+        so that "a folder's files" cannot quietly become "the platform's".
 
         A record whose file is already gone is not a deletion and not an error —
         the row is dropped and nothing is counted. That is also what makes two
@@ -171,7 +172,16 @@ class PlatformBiosDeleter:
         name the emulator lists. That says nothing about the files already
         inside it.
         """
-        prefix = f"{folder_path.rstrip('/')}/"
+        # A degenerate path would make the predicate "/" and select every
+        # absolute recorded path — still only this platform's own downloads, but
+        # the platform-wide set rather than a folder's, which is not what the
+        # button offered. Unreachable from the UI (a folder row with no
+        # `local_path` is stamped `deletable_count: 0`), refused here so the
+        # narrowing claim holds for whoever calls it next.
+        root = folder_path.rstrip("/")
+        if not root:
+            return {"success": True, "deleted_count": 0, "message": "Nothing to delete in this folder"}
+        prefix = f"{root}/"
         deleted, errors = await self._loop.run_in_executor(
             None, self._delete_recorded_io, platform_slug, lambda record: record.file_path.startswith(prefix)
         )

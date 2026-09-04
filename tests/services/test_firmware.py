@@ -588,6 +588,64 @@ class TestDestinationReadingsReachBothSurfaces:
         assert row["downloaded"] is True
 
 
+class TestAFolderRowCountsWhatWePutInside:
+    """The folder branch of the row field, which nothing else exercises.
+
+    A declared folder has no name a record could carry, so its ``deletable_count``
+    counts the records written UNDERNEATH it — the rule that a folder is never a
+    download says nothing about the files already in one.
+    """
+
+    _CORE = "pcsx2_libretro"
+
+    def _service(self, plugin, tmp_path, resolver, store):
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "LRPS2"), options=[libretro_option(self._CORE, "LRPS2")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        _stub_listing(fw, [])
+        return fw
+
+    @pytest.mark.asyncio
+    async def test_the_folder_row_counts_the_records_beneath_it(self, plugin, tmp_path):
+        _seed_rom(plugin._uow, rom_id=61, platform_slug="dc", app_id=1)
+        inside = os.path.join(str(tmp_path / "bios"), "pcsx2", "bios", "scph39001.bin")
+        hand_placed = os.path.join(str(tmp_path / "bios"), "pcsx2", "bios", "scph70012.bin")
+        elsewhere = os.path.join(str(tmp_path / "bios"), "scph5501.bin")
+        store = FakeFirmwareFileStore({inside: b"\x00" * 8, hand_placed: b"\x00" * 8, elsewhere: b"\x00" * 8})
+        for name, path in (("scph39001.bin", inside), ("scph5501.bin", elsewhere)):
+            plugin._uow.bios_files.save(
+                BiosFile.mark_downloaded(
+                    platform_slug="dc",
+                    file_name=name,
+                    file_path=path,
+                    downloaded_at="2026-01-01T00:00:00+00:00",
+                    firmware_id=None,
+                )
+            )
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "bios", required_by=[self._CORE], relative_path="pcsx2/bios", present=True, declares_directory=True
+        )
+        fw = self._service(plugin, tmp_path, resolver, store)
+
+        result = await fw.get_firmware_status()
+        row = next(p for p in result["platforms"] if p["platform_slug"] == "dc")["files"][0]
+
+        assert row["declared_kind"] == "directory"
+        # One of the two records is inside the folder; the hand-placed file in
+        # there is not ours, and our own download outside it belongs to the
+        # platform button rather than to this row.
+        assert row["deletable_count"] == 1
+
+
 class TestAFolderRequirementIsAnsweredByItsContents:
     """LRPS2's ``pcsx2/bios`` is answered by what is inside it, never by its being there.
 
@@ -1514,14 +1572,17 @@ class TestGetFirmwareStatusDeletableCount:
         """Both directions in one platform, so the two counts cannot coincide.
 
         ``IPL.bin`` and ``card.bin`` are in the library and on disk but were put
-        there by hand; ``retired.bin`` we downloaded and RomM no longer offers.
-        The library ratio sees the first two, the delete sees only the third.
+        there by hand; ``retired.bin`` we downloaded and RomM no longer offers;
+        ``ours.bin`` we downloaded and it is still listed. The library ratio sees
+        the three it holds, the delete sees the two we placed — and per row, only
+        ``ours.bin`` offers a button, because ``retired.bin`` has no row at all.
         """
         bios_dir = tmp_path / "bios"
         ipl = os.path.join(str(bios_dir), "IPL.bin")
         card = os.path.join(str(bios_dir), "card.bin")
         retired = os.path.join(str(bios_dir), "retired.bin")
-        store = FakeFirmwareFileStore({ipl: b"\x00" * 8, card: b"\x00" * 8, retired: b"\x00" * 8})
+        ours = os.path.join(str(bios_dir), "ours.bin")
+        store = FakeFirmwareFileStore({ipl: b"\x00" * 8, card: b"\x00" * 8, retired: b"\x00" * 8, ours: b"\x00" * 8})
         fw = _make_firmware_service(
             romm_api=plugin._romm_api,
             uow_factory=FakeUnitOfWorkFactory(plugin._uow),
@@ -1540,6 +1601,16 @@ class TestGetFirmwareStatusDeletableCount:
                 firmware_id=None,
             )
         )
+        # Ours, and still offered by the library, so it has a row of its own.
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="gc",
+                file_name="ours.bin",
+                file_path=ours,
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=9,
+            )
+        )
         _stub_listing(
             fw,
             [
@@ -1551,14 +1622,21 @@ class TestGetFirmwareStatusDeletableCount:
                     "file_size_bytes": 8,
                     "md5_hash": "",
                 },
+                {
+                    "id": 9,
+                    "file_name": "ours.bin",
+                    "file_path": "bios/gc/ours.bin",
+                    "file_size_bytes": 8,
+                    "md5_hash": "",
+                },
             ],
         )
 
         result = await fw.get_firmware_status()
         plat = next(p for p in result["platforms"] if p["platform_slug"] == "gc")
 
-        assert plat["local_count"] == 2
-        assert plat["deletable_count"] == 1
+        assert plat["local_count"] == 3
+        assert plat["deletable_count"] == 2
         # And per row, which is what a row's own Delete button reads. `IPL.bin`
         # is the shape that matters: in the library, on disk, `downloaded: True`
         # — and not ours, so it must offer nothing. Deriving the field from
@@ -1568,6 +1646,11 @@ class TestGetFirmwareStatusDeletableCount:
         assert rows["IPL.bin"]["downloaded"] is True
         assert rows["IPL.bin"]["deletable_count"] == 0
         assert rows["card.bin"]["deletable_count"] == 0
+        # And the positive direction, which is the one that fails silently: a row
+        # the plugin DID place must offer its button. Without it, forcing every
+        # file row to 0 leaves the suite green and the button simply never
+        # appears.
+        assert rows["ours.bin"]["deletable_count"] == 1
         # `retired.bin` has no row at all: nothing declares it and the library no
         # longer offers it. So the platform count and the rows legitimately
         # differ — the count is over records, the rows are what the pane has to
@@ -1575,7 +1658,7 @@ class TestGetFirmwareStatusDeletableCount:
         assert "retired.bin" not in rows
         # And the count means the delete: it removes ours, leaves theirs.
         deleted = await fw.delete_platform_bios("gc")
-        assert deleted["deleted_count"] == 1
+        assert deleted["deleted_count"] == 2
         assert retired not in store.files
         assert ipl in store.files
         assert card in store.files
@@ -2198,7 +2281,12 @@ class TestDownloadPlatformFirmwareFile:
 
 
 class TestDeleteOneBiosFile:
-    """The per-row Delete button's backend half — one file, the same authority."""
+    """The per-row Delete button's backend half: one file, or one folder's contents.
+
+    Both run the platform-wide worker under a predicate, so what is pinned here
+    is which records each one selects — the authority itself is the same loop
+    ``TestDeletePlatformBios`` covers.
+    """
 
     @pytest.mark.asyncio
     async def test_deletes_our_own_download_at_the_recorded_path(self, plugin, fw, tmp_path):
@@ -2252,6 +2340,33 @@ class TestDeleteOneBiosFile:
         assert not (bios_dir / "gc-pal-12.bin").exists()
         assert (bios_dir / "gc-ntsc-12.bin").exists()
         assert plugin._uow.bios_files.get("gc", "gc-ntsc-12.bin") is not None
+
+    @pytest.mark.asyncio
+    async def test_an_empty_folder_path_selects_nothing(self, plugin, fw, tmp_path):
+        """The narrowing claim has to hold for a degenerate path too.
+
+        `"".rstrip("/") + "/"` is `"/"`, which every absolute recorded path
+        starts with — the folder button would then take the platform-wide set.
+        Unreachable from the pane, refused here so the sentence stays true.
+        """
+        bios = tmp_path / "retrodeck" / "bios"
+        bios.mkdir(parents=True)
+        ours = bios / "scph5501.bin"
+        ours.write_bytes(b"\x00" * 16)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="ps2",
+                file_name="scph5501.bin",
+                file_path=str(ours),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=5,
+            )
+        )
+
+        result = await fw.delete_bios_folder("ps2", "")
+
+        assert result["deleted_count"] == 0
+        assert ours.exists()
 
     @pytest.mark.asyncio
     async def test_deletes_our_downloads_inside_a_declared_folder(self, plugin, fw, tmp_path):
