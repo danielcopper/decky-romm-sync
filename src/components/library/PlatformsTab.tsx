@@ -4,12 +4,16 @@
  *
  * The row is where a platform is switched on and off. That is the page's only
  * sync control: focus is already on the row and A works the toggle, so the
- * detail does not offer a second one. Beside the toggle the row states the BIOS
- * requirement as a NUMBER — the colour only reinforces it. Both the dot and the
- * ratio take the shared mapping's answer, and the dot is drawn on every row
- * even where there is no level, because one that came and went shifted every
- * name beside it. An em dash where the number would be is an answer of its own:
- * the platform wants no BIOS, or nothing has been read for it yet.
+ * detail does not offer a second one.
+ *
+ * The BIOS state is a DOT and nothing else. The row carried the ratio too until
+ * the device pass found it earned nothing in a line you scan past — the detail
+ * pane one keypress away states it properly, with the files it is made of. So
+ * the dot now carries the signal alone rather than reinforcing a number: it
+ * takes the shared mapping's answer, it is drawn on every row even where there
+ * is no level (one that came and went shifted every name beside it), and the
+ * words behind it are the row's `title`, which is where the number went rather
+ * than away.
  *
  * Structure and vocabulary: `docs/architecture/qam-panel.md`, section Library.
  */
@@ -22,13 +26,22 @@ import { biosColorForLevel } from "../../utils/biosColor";
 import { PlatformDetail } from "./PlatformDetail";
 import type { PlatformRow, PlatformsPageState } from "./usePlatformsPage";
 
-/** The required-files ratio the row carries, or `null` where the platform makes
- *  no claim to state — no firmware entry, or nothing required. The row prints an
- *  em dash for that: "wants none" and "not asked yet" both read as no number. */
-function biosRatio(row: PlatformRow): string | null {
-  const required = row.firmware?.required_count ?? 0;
-  if (!row.firmware || required === 0) return null;
-  return `${row.firmware.required_downloaded ?? 0} / ${required}`;
+/**
+ * What the row's dot means, in words — its `title`, and the only place the list
+ * still states the number.
+ *
+ * The wording is the detail pane's own, so a reader who hovers here and then
+ * opens the pane meets the same vocabulary rather than two names for one state.
+ */
+function biosTooltip(row: PlatformRow): string {
+  const firmware = row.firmware;
+  if (!firmware) return "Nothing is known about this platform's BIOS files";
+  if (firmware.bios_level === "unknown") {
+    return (firmware.required_withheld ?? 0) > 0 ? "BIOS readiness unknown" : "BIOS requirement unknown";
+  }
+  const required = firmware.required_count ?? 0;
+  if (required === 0) return "Nothing required";
+  return `${firmware.required_downloaded ?? 0} / ${required} required BIOS files ready`;
 }
 
 const GroupHeading: FC<{ title: string; count: number }> = ({ title, count }) => (
@@ -52,10 +65,9 @@ const GroupHeading: FC<{ title: string; count: number }> = ({ title, count }) =>
 );
 
 const RowLabel: FC<{ row: PlatformRow; selected: boolean }> = ({ row, selected }) => {
-  const ratio = biosRatio(row);
   const level = row.firmware?.bios_level ?? null;
   return (
-    <span style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
+    <span style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }} title={biosTooltip(row)}>
       {/* Always drawn, grey where there is no level to state: a dot that comes
           and goes shifts every name beside it, and the list is meant to be
           scanned down its left edge. */}
@@ -81,20 +93,6 @@ const RowLabel: FC<{ row: PlatformRow; selected: boolean }> = ({ row, selected }
         }}
       >
         {row.name}
-      </span>
-      {/* The same ratio the detail's header carries, so the list can be scanned
-          without walking it — and in the same colour as the dot, which is what
-          makes a red 0 / 2 findable at a glance. An em dash is not a failure: a
-          platform wanting no BIOS has no ratio to state. */}
-      <span
-        style={{
-          flexShrink: 0,
-          fontSize: "12px",
-          fontVariantNumeric: "tabular-nums",
-          color: ratio === null ? "#8f98a0" : biosColorForLevel(level),
-        }}
-      >
-        {ratio ?? "—"}
       </span>
     </span>
   );

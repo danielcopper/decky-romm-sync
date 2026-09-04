@@ -145,8 +145,9 @@ holds every platform your RomM server reports with at least one ROM, in two grou
 and the row you focus is the one the right-hand pane describes.
 
 1. From the main QAM page, tap **Library**, then move to the **Platforms** tab with L1/R1
-2. Each row carries its BIOS requirement as a number — "3 / 5" — with a coloured dot beside it. An em dash means nothing
-   is required, or that the plugin has nothing to say about that platform yet
+2. Each row is a coloured dot, the platform's name and the sync toggle. The dot is the BIOS state at a glance — green
+   ready, amber partly there, red missing, grey where there is nothing to say — and the numbers behind it are on the
+   right-hand pane, which also states them in full. With a mouse, hovering the row says the same thing in words
 3. Move down the list to pick a platform; the pane on the right changes with the focus
 4. The pane's first line names the platform, how many ROMs it has on RomM, how many are in Steam, and the core it
    launches with

@@ -256,15 +256,20 @@ Wide, two tabs.
 
 **Platforms** is list and detail. The list holds every platform RomM reports with at least one ROM — what
 `get_platforms` returns; a platform with nothing to sync is not listed — in two groups, **Synced** (the toggle is on)
-above **Available**, each alphabetical, with the sync toggle in the row, the BIOS requirement as a **number** (`3 / 5`,
-an em dash where nothing is required) and a dot beside it. The number is what the row states; the dot only reinforces
-it, through the shared mapping every platform-level BIOS dot renders through (`src/utils/biosColor.ts`: green complete,
-amber partial, red missing, grey for a missing level; the per-file rows on the platform detail and the game page
-hard-code the same four colours). The dot is drawn on every row, taking exactly the helper's grey where there is no
+above **Available**, each alphabetical: **a dot, the name, the toggle, and nothing else**. The dot is the row's whole
+BIOS signal, through the shared mapping every platform-level BIOS dot renders through (`src/utils/biosColor.ts`: green
+complete, amber partial, red missing, grey for a missing level; the per-file rows on the platform detail and the game
+page hard-code the same four colours). It is drawn on every row, taking exactly the helper's grey where there is no
 level to state: one that came and went shifted every name beside it, and the list is meant to be scanned down its left
-edge. The ratio takes the same colour, which is what makes a red 0 / 2 findable without walking the list. Enable all and
-Disable all sit above the groups, in the list column and outside every row, so reaching them reports no selection. The
-order freezes while the page is open.
+edge — which matters more now that the dot carries the state alone rather than reinforcing a number beside it. The
+number itself is the row's `title`, in the detail pane's own wording, and the pane's header badge states it in full.
+
+**The row carried the ratio (`3 / 5`, an em dash where nothing is required) until the second device round, and that is
+superseded rather than forgotten.** The first device round asked for it and it was added; using it decided the opposite
+— a number in a line you scan past earns nothing when the pane one keypress away states it properly, with the files it
+is made of. The layout study still draws it; on this point the study is superseded, and so is the earlier round's
+finding. Do not restore it as a regression. Enable all and Disable all sit above the groups, in the list column and
+outside every row, so reaching them reports no selection. The order freezes while the page is open.
 
 The row is the page's only sync control — focus is already there and A works the toggle — so the detail opens with one
 header line instead of a Sync section: the platform's name, `N on RomM · M in Steam · <core label>`, and its BIOS number
@@ -473,7 +478,9 @@ store screenshots (#830) are taken after.
 - [#1809](https://github.com/danielcopper/romm-tender/issues/1809) — the design issue this page answers.
 - The layout study the Platforms tab was chosen from: [library-layouts.html](../assets/library-layouts.html) — the three
   layouts weighed for this page (list and detail, detail with a header, one wide table) at the Deck's real size, each
-  with what it costs. The second is what shipped.
+  with what it costs. The second is what shipped. **Superseded on two points by the device rounds**: the list row's BIOS
+  ratio (dropped — the row is dot, name, toggle) and the core picker's full-width button (now an icon in the header
+  line). The study is a record of a choice, not a description of the page.
 - The static prototype the decisions were made on: [qam-prototype.html](../assets/qam-prototype.html), a single
   self-contained page kept in `docs/assets/`. Every page at device size with numbered notes; its example data is
   invented, and it reflects the decisions as of this page's first version. Redrawn to the Deck's real 854 × 534 CSS px —

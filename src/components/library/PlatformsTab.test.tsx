@@ -252,7 +252,7 @@ describe("Library › Platforms", () => {
       expect(toggles[0]!.checked).toBe(false);
     });
 
-    it("states the BIOS requirement as a number and an em dash where none is wanted", async () => {
+    it("keeps the BIOS number out of the row and puts it in the row's own words", async () => {
       vi.mocked(backend.getPlatforms).mockResolvedValue({
         success: true,
         platforms: [
@@ -270,17 +270,38 @@ describe("Library › Platforms", () => {
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
-      expect(container.textContent).toContain("3 / 5");
-      // Nothing required → no ratio, and the dot is still there because the
-      // firmware read did speak for the platform.
+      // The list carries the dot and the name; the number lives in the detail
+      // pane a keypress away, and in the row's title for a mouse.
+      const rows = [...container.querySelectorAll<HTMLElement>("[title]")];
+      const gba = rows.find((el) => el.textContent.includes("Game Boy Advance"));
+      const n64 = rows.find((el) => el.textContent.includes("Nintendo 64"));
+      expect(gba?.title).toBe("3 / 5 required BIOS files ready");
+      expect(n64?.title).toBe("Nothing required");
+      expect(gba?.textContent).not.toContain("3 / 5");
       expect(container.querySelector('[data-testid="bios-dot-n64"]')).toBeTruthy();
-      expect(container.textContent).toContain("—");
     });
 
-    it("draws the row's ratio in the dot's colour, and states the header's number", async () => {
-      // The point of the ratio in the row is scanning the list without walking
-      // it, which needs the colour as well as the number — a red 0 / 2 has to be
-      // findable at a glance. It is the same number the detail's header carries.
+    it("says in words what the dot could not say, for a platform the read cannot speak for", async () => {
+      // The dot is now the only BIOS signal in the row, so its title has to
+      // carry every state the number used to distinguish — including the two
+      // the detail pane words apart.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [firmwarePlatform({ bios_level: "unknown", required_count: 0, required_withheld: 0 })],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      const row = [...container.querySelectorAll<HTMLElement>("[title]")].find((el) =>
+        el.textContent.includes("Game Boy Advance"),
+      );
+      expect(row?.title).toBe("BIOS requirement unknown");
+    });
+
+    it("leaves the ratio to the dot's colour in the list, and to the header in the pane", async () => {
+      // The row used to print the number beside the name. On the device it
+      // earned nothing in a line you scan past, so the colour carries the state
+      // and the pane's header carries the number — which it always did.
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [firmwarePlatform({ required_count: 2, required_downloaded: 0, bios_level: "missing" })],
@@ -288,9 +309,15 @@ describe("Library › Platforms", () => {
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
-      const ratio = [...container.querySelectorAll<HTMLElement>("span")].find((el) => el.textContent === "0 / 2");
-      expect(ratio).toBeTruthy();
-      expect(ratio!.style.color).toBe(biosColorForLevel("missing"));
+      const row = [...container.querySelectorAll<HTMLElement>("[title]")].find((el) =>
+        el.textContent.includes("Game Boy Advance"),
+      );
+      expect(row?.textContent).not.toContain("0 / 2");
+      expect(row?.title).toBe("0 / 2 required BIOS files ready");
+      expect(container.querySelector<HTMLElement>('[data-testid="bios-dot-gba"]')!.style.backgroundColor).toBe(
+        biosColorForLevel("missing"),
+      );
+      // The pane's header still states it.
       expect(container.textContent).toContain("BIOS 0 / 2");
     });
 
