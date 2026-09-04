@@ -222,8 +222,10 @@ describe("WidePage", () => {
       }
     };
 
-    // 600 − 100 − 12 both times. The viewport-relative forms answer 488 and
-    // then 988, because the body's top has moved and the panel's has not.
+    // 600 − 100 − 12 both times. The panel-rect form answers 488 and then 988,
+    // because the body's top has moved and the panel's has not; the original
+    // `innerHeight − top` fails at the FIRST assertion instead, since
+    // happy-dom's viewport is 768 rather than the panel's 600.
     expect(await measure(0)).toBe(488);
     expect(await measure(500)).toBe(488);
   });

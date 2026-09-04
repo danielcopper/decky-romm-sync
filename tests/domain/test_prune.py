@@ -11,8 +11,6 @@ from domain.prune import (
     sanitize_package_name,
     selected_prune_ids,
 )
-from domain.rom import Rom
-from domain.version_metadata import VersionMetadata
 
 if TYPE_CHECKING:
     from domain.prune import BundleReadmeContext
@@ -32,18 +30,6 @@ _PRODUCED_KINDS = {
     "cover_validator",
     "sgdb_cache",
 }
-
-
-def _rom(rom_id: int, group: str | None) -> Rom:
-    return Rom.synced(
-        rom_id=rom_id,
-        platform_slug="dc",
-        name=str(rom_id),
-        fs_name=f"{rom_id}.gdi",
-        shortcut_app_id=None,
-        synced_at="now",
-        version=VersionMetadata(sibling_group_key=group),
-    )
 
 
 def _readme_context() -> BundleReadmeContext:

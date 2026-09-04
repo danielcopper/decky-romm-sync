@@ -115,8 +115,15 @@ function scrollingAncestor(body: HTMLElement, view: Window): HTMLElement | null 
  * against an `innerHeight` of 764, so bounding to the panel rather than the
  * window changes no number at any offset. This form answers 648 at all four.
  *
- * With nothing scrolling above it there is no offset to be wrong about, so the
- * viewport is the honest bound in that case.
+ * Both branches assume the scroller is an element other than the viewport's own.
+ * The document element would break the first — it IS the viewport's scroller, so
+ * its rect moves under its own scroll and the difference is already offset-free,
+ * making `+ scrollTop` a double count. And the `null` branch is reached when no
+ * ancestor computes `overflow-y: auto|scroll`, which is not the same as nothing
+ * scrolling: a document scrolling at the viewport level is exactly that case,
+ * and there the fallback is the self-amplifying form again. Neither is reachable
+ * from the QAM, where the panel is an ordinary element and Steam's own document
+ * does not scroll.
  */
 function remainingBodyHeight(body: HTMLElement, view: Window): number {
   const scroller = scrollingAncestor(body, view);

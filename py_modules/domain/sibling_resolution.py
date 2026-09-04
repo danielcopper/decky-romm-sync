@@ -1,11 +1,12 @@
 """Deterministic sibling-group representative resolution + canonical naming (ADR-0021 §3).
 
 A sibling group is one game with several released dumps (region / language /
-revision variants). :func:`group_rows` is the partition itself — which rows form
-a group, and the rule that a NULL key is a singleton — and every consumer of a
-group reads it from here so they cannot disagree about the boundaries. The rest
-answers two questions about a group, both a pure, shuffle-stable compute over
-its fetched members:
+revision variants). :func:`group_rows` is the partition of a **row list** — which
+rows in it form a group, and the rule that a NULL key is a singleton. It is not
+the only route to a group: a caller that wants one group by its key queries the
+repository for it (``uow.roms.iter_by_group_key``) and guards the NULL case
+itself, which several do. The rest answers two questions about a group, both a
+pure, shuffle-stable compute over its fetched members:
 
 * **Which version does the group bind to** — :func:`resolve_group_representative`.
   The resolution chain::
