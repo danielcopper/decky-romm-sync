@@ -313,9 +313,15 @@ keyed by ROM and layers that ROM's own pin on top, and the firmware overview car
 has nothing to say about. It costs one ES-DE options read and a `settings.json` lookup, and opens no database
 transaction. `count_platform_saves` answers how many save files the platform holds, for the Delete _N_ save files
 button: nothing else knows the number, because the delete finds its files through the platform's installed ROMs and
-counts only what it removed, afterwards. It walks that same path without deleting — one short read transaction for the
-installed ids, then a file probe per ROM, offloaded off the event loop — and it is asked again after a delete, so the
-button stops offering saves that are gone.
+counts only what it removed, afterwards. It walks that same path without deleting, and **that path is N+1 short
+`BEGIN IMMEDIATE` transactions**, not one: the id read opens its own, and `find_save_files` →
+`RomInfo.get_rom_save_info` opens one per ROM. With `sort_by_core` recorded it is 2N+1 plus an ES-DE probe per ROM,
+because `resolve_retroarch_corename` → `ActiveCoreResolver.active_core_for_rom` opens a second and resolves through
+`get_default_emulator`. That cost is deliberate and is not the read's to fix: it must walk exactly what the delete
+walks, or the number offered stops being the number taken. What keeps it out of the way is that it is offloaded off the
+event loop and asked once per selection, and that a failure — `SQLITE_BUSY` among them — degrades to a line saying the
+count could not be read rather than to a wrong number. It is asked again after a delete, so the button stops offering
+saves that are gone.
 
 **Collections** has no per-entry detail, so it is one wide list: the favorites toggle and the Mine / All owner scope on
 top, the kind filter (Standard, Smart, Virtual — with the Franchise / IGDB Collection split inside Virtual), the fuzzy
