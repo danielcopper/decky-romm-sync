@@ -793,17 +793,15 @@ describe("Library › Platforms", () => {
       }
     });
 
-    it("marks a row nothing could judge apart from one shown to be missing", async () => {
-      // Amber, not red: calling it missing would claim an absence nothing
-      // established, and the row's own verdict is what the register forbids
-      // guessing at.
+    it("marks a verdict nothing could establish with ?, and nothing else", async () => {
+      // `?` is the VERDICT axis alone. Amber, not red: calling it missing would
+      // claim an absence nothing established, which the register forbids.
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
           firmwarePlatform({
             files: [
               firmwareFile({ file_name: "folder", declared_kind: "directory", downloaded: true, satisfied: null }),
-              firmwareFile({ file_name: "e.bin", wanted: "unknown", required_by_active: false, downloaded: false }),
             ],
             bios_level: "unknown",
             required_withheld: 1,
@@ -813,12 +811,61 @@ describe("Library › Platforms", () => {
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
-      expect(diskMarks(container)).toEqual([
-        { glyph: "?", color: AMBER },
-        { glyph: "?", color: AMBER },
-      ]);
+      expect(diskMarks(container)).toEqual([{ glyph: "?", color: AMBER }]);
       expect(container.textContent).toContain("could not be checked");
       expect(container.textContent).not.toContain("required, missing");
+    });
+
+    it("still says whether a row nothing could be asked about is on disk", async () => {
+      // A row with no placement is `wanted: "unknown"` — nothing could be asked
+      // — but its verdict is `downloaded` and IS established. Spending the glyph
+      // on the need axis would throw that away, and a platform nothing could
+      // answer for is made entirely of such rows: it is the pane that tells the
+      // reader to place BIOS files by hand, so it must keep saying which are
+      // already there.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({ file_name: "here.bin", wanted: "unknown", required_by_active: false, downloaded: true }),
+              firmwareFile({ file_name: "gone.bin", wanted: "unknown", required_by_active: false, downloaded: false }),
+            ],
+            bios_level: "unknown",
+            required_count: 0,
+            required_withheld: 0,
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(diskMarks(container)).toEqual([
+        { glyph: "✓", color: AMBER },
+        { glyph: "✗", color: AMBER },
+      ]);
+      // The legend must not call these unchecked — they were checked.
+      expect(container.textContent).toContain("here; nothing asked for it");
+      expect(container.textContent).toContain("missing; nothing asked for it");
+      expect(container.textContent).not.toContain("could not be checked");
+    });
+
+    it("never reads a folder's presence as its verdict, even with no verdict at all", async () => {
+      // The register's rule: a folder's verdict is what it HOLDS. A payload
+      // carrying none leaves the row unestablished rather than falling back to
+      // `downloaded`, which for the linked pcsx2/bios is always true.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [firmwareFile({ file_name: "bios", declared_kind: "directory", downloaded: true })],
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(diskMarks(container)).toEqual([{ glyph: "?", color: AMBER }]);
     });
 
     it("says a file name once", async () => {

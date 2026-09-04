@@ -123,39 +123,52 @@ function getUnknownSummary(requiredWithheld: number, total: number) {
  * Two facts, two channels, so neither has to be read off the other:
  *
  * - **the glyph is the VERDICT** — `✓` met, `✗` not met, `?` nothing could
- *   establish it. It is `BiosFileEntry.satisfied`, never presence: for a
+ *   establish it. It is `BiosFileEntry.satisfied`, **never presence**: for a
  *   declared folder the two come apart completely, since RetroDECK links
  *   LRPS2's `pcsx2/bios` onto the BIOS root, so the folder is always there and
- *   what satisfies the core is a file inside it. A payload carrying no verdict
- *   at all falls back to `downloaded`, which is what the verdict is for a plain
- *   file.
+ *   what satisfies the core is a file inside it.
  * - **the colour is the NEED** — strong where the core the platform launches
- *   with requires the file, muted where it does not. `required_by_active`, not
- *   `wanted`, because the summary above the table counts the same way and the
- *   two must not disagree about what "required" means.
+ *   with requires the file, muted where it does not, **amber where nothing
+ *   could say**. Keyed on `required_by_active`, not `wanted`, because the
+ *   summary above the table counts the same way and the two must not disagree
+ *   about what "required" means.
  *
- * So the four states the device pass asked for come out as: required + met
- * green ✓, required + unmet red ✗, spare + met pale green ✓, spare + unmet grey
- * ✗. Two states have no counterpart in that list and are **not** folded into
- * one of the four: a verdict nothing could establish, and a row no installed
- * emulator could be asked about (`wanted: "unknown"`). Both are amber, because
- * calling either of them missing would claim an absence nothing established —
- * and amber is the colour this panel already gives a row it cannot call settled.
+ * The two axes are read in that order, and the order is load-bearing. A row with
+ * no placement is `wanted: "unknown"` — no installed emulator could be asked —
+ * and its verdict is `downloaded` all the same (`domain/bios_status.py`,
+ * `_row_verdict(None, …)`), so it IS established. Testing the need axis first
+ * would spend the glyph on a need-axis fact and throw that verdict away, and a
+ * platform nothing could be asked about is made entirely of such rows: that is
+ * the pane telling the reader they can place BIOS files by hand, so which ones
+ * are already there is the one thing it must not stop saying.
+ *
+ * So the four states the device pass asked for come out as required + met green
+ * `✓`, required + unmet red `✗`, spare + met pale green `✓`, spare + unmet grey
+ * `✗`; a need nothing could establish keeps its glyph and goes amber; and only a
+ * verdict nothing could establish becomes `?`.
  *
  * `not_needed` and `optional` share the muted branch on purpose: for the core
- * about to launch, a file it does not require is not a gap either way, and
- * splitting them would need a fifth colour to say something the row's own
- * description already says.
+ * about to launch, a file it does not require is not a gap either way.
  *
  * The `Contents` cell reads the same `satisfied`, so the two columns are two
  * renderings of one field and cannot contradict each other.
  */
 function diskMark(file: FirmwareRow): { glyph: string; color: string; title: string } {
-  const verdict = file.satisfied === undefined ? file.downloaded : file.satisfied;
-  if (file.wanted === "unknown") return { glyph: "?", color: AMBER, title: "nothing could say whether this is wanted" };
+  // A folder's verdict is what it HOLDS, never that the folder is there — the
+  // register's rule — so a payload carrying no verdict for one leaves the row
+  // unestablished rather than falling back to presence. For a declared file
+  // `downloaded` IS the verdict, which is the only thing the fallback is for.
+  const declaredFolder = file.declared_kind === "directory";
+  const verdict = file.satisfied !== undefined ? file.satisfied : declaredFolder ? null : file.downloaded;
   if (verdict === null) return { glyph: "?", color: AMBER, title: "nothing could check this" };
+
+  const needUnknown = file.wanted === "unknown";
   const required = file.required_by_active;
-  if (verdict) return { glyph: "✓", color: required ? GREEN : PALE_GREEN, title: required ? "required, here" : "here" };
+  if (verdict) {
+    if (needUnknown) return { glyph: "✓", color: AMBER, title: "here; nothing could say whether it is wanted" };
+    return { glyph: "✓", color: required ? GREEN : PALE_GREEN, title: required ? "required, here" : "here" };
+  }
+  if (needUnknown) return { glyph: "✗", color: AMBER, title: "missing; nothing could say whether it is wanted" };
   return { glyph: "✗", color: required ? RED : MUTED, title: required ? "required, missing" : "missing" };
 }
 
@@ -289,6 +302,8 @@ const BiosLegend: FC<{ files: FirmwareRow[] }> = ({ files }) => {
   const shown = [
     { glyph: "✗", color: RED, text: "required, missing" },
     { glyph: "✓", color: GREEN, text: "required, here" },
+    { glyph: "✗", color: AMBER, text: "missing; nothing asked for it" },
+    { glyph: "✓", color: AMBER, text: "here; nothing asked for it" },
     { glyph: "?", color: AMBER, text: "could not be checked" },
     { glyph: "✓", color: PALE_GREEN, text: "here, not required" },
     { glyph: "✗", color: MUTED, text: "missing, not required" },
