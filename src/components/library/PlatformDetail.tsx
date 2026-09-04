@@ -15,7 +15,8 @@
 
 import type { FC, ReactNode } from "react";
 import { ConfirmModal, DialogButton, Focusable, showContextMenu, showModal, Spinner } from "@decky/ui";
-import type { FirmwarePlatformExt } from "../../types";
+import { FaMicrochip } from "react-icons/fa";
+import type { FirmwarePlatformExt, SystemCoreInfo } from "../../types";
 import { biosColorForLevel } from "../../utils/biosColor";
 import { biosFileNote } from "../../utils/biosFileNote";
 import { buildEmulatorMenu } from "../../utils/emulatorMenu";
@@ -69,6 +70,30 @@ const LIBRARY_MARK = { glyph: "⊘", color: VIOLET, title: "not in your RomM lib
  * there is a call site.
  */
 const FLAT_BUTTON = { flex: "1 1 auto", minWidth: 0, padding: "6px 10px", fontSize: "13px" } as const;
+
+/**
+ * The core picker's button in the header line — the game page's icon button, at
+ * this line's scale.
+ *
+ * The chrome is written out rather than reusing `.romm-gear-btn`: that class is
+ * injected into the SharedJSContext document by the game page's own style
+ * injector, and the QAM panel is a different document (`#quickaccess_content_999`
+ * lives in Steam's QuickAccess view), so the class would simply not apply here.
+ * What IS shared is what the user asked to be shared — the icon and its two
+ * colours.
+ */
+const CORE_BUTTON = {
+  alignSelf: "center",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "28px",
+  minWidth: "28px",
+  height: "28px",
+  padding: 0,
+  borderRadius: "4px",
+  flexShrink: 0,
+} as const;
 
 /** One row of the firmware overview's per-platform file list. Named off the
  *  payload rather than restated, so a field added to it reaches here. */
@@ -457,64 +482,59 @@ const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, dow
 };
 
 /**
- * The core row: one button under the header, or one sentence saying why there is
- * nothing to press.
+ * What the pane can offer for this platform's core: a pick, or a sentence
+ * saying why there is nothing to pick.
  *
- * **No section heading.** The header line above already names the active core,
- * so a title over a single button would restate it — and on the Deck's body a
- * heading is a row the pane cannot pay for.
+ * One decision, because the answer is rendered in two places — the header's
+ * icon button and the line under it — and splitting it would let the two
+ * disagree, which is a sentence saying there is nothing to switch under a
+ * button that switches.
  */
-const CoreSection: FC<{ row: PlatformRow; state: PlatformsPageState; core: CoreAnswer }> = ({ row, state, core }) => {
+type CoreOffer = { kind: "pick"; core: SystemCoreInfo } | { kind: "say"; text: string };
+
+function coreOffer(row: PlatformRow, core: CoreAnswer): CoreOffer {
   // Strictly zero, so an unread shortcut count does not withdraw the picker:
   // "sync this first" would be a claim about a platform nothing was learned
   // about, and the core read is independent of the count anyway.
   if (row.shortcutCount === 0) {
-    return <Muted>Sync this platform first — the core applies to the games it puts in Steam.</Muted>;
+    return { kind: "say", text: "Sync this platform first — the core applies to the games it puts in Steam." };
   }
-  if (core === undefined) return <Muted>Reading the emulators for this platform…</Muted>;
+  if (core === undefined) return { kind: "say", text: "Reading the emulators for this platform…" };
   if (core === null) {
-    return (
-      <>
-        <Muted>Could not read the emulators for this platform. Reopen the page to try again.</Muted>
-        <GroupStatus state={state} slug={row.slug} scope="core" />
-      </>
-    );
+    return { kind: "say", text: "Could not read the emulators for this platform. Reopen the page to try again." };
   }
   if (!core.emulator_data_available) {
-    return <Muted>RetroDECK was not found, so there is no emulator list to choose from.</Muted>;
+    return { kind: "say", text: "RetroDECK was not found, so there is no emulator list to choose from." };
   }
-  if (core.emulators.length < 2) {
-    return <Muted>This platform offers one emulator, so there is nothing to switch.</Muted>;
+  // Zero and one are different sentences. A platform ES-DE offers nothing for
+  // has no launch at all, which the header's own clause also states; saying it
+  // "offers one emulator" there would be a count of something that is not
+  // there.
+  if (core.emulators.length === 0) {
+    return { kind: "say", text: "RetroDECK offers no emulator for this platform, so its games cannot launch." };
   }
-  return (
-    <>
-      <Focusable flow-children="horizontal" style={{ display: "flex", padding: "0 16px 4px" }}>
-        <DialogButton
-          style={FLAT_BUTTON}
-          disabled={state.busySlug !== null}
-          onClick={(e: MouseEvent) =>
-            showContextMenu(
-              buildEmulatorMenu({
-                emulators: core.emulators,
-                emulatorDataAvailable: core.emulator_data_available,
-                activeLabel: core.active_core_label,
-                // Null on purpose: this pane IS the platform level, so marking
-                // an entry "(system)" would restate where the reader already is.
-                platformCoreLabel: null,
-                onPick: (label) => state.changeCore(row.slug, label),
-              }),
-              getEventTarget(e),
-            )
-          }
-        >
-          Change core ›
-        </DialogButton>
-      </Focusable>
-      <Muted>Switching cores may affect save compatibility.</Muted>
-      <GroupStatus state={state} slug={row.slug} scope="core" />
-    </>
-  );
-};
+  if (core.emulators.length === 1) {
+    return { kind: "say", text: "This platform offers one emulator, so there is nothing to switch." };
+  }
+  return { kind: "pick", core };
+}
+
+/**
+ * The line under the header when there is no core to pick, and the place a
+ * refused switch is reported.
+ *
+ * There is no heading and no button: the button moved into the header line the
+ * platform is already named on, which is where the game page keeps its own. The
+ * save-compatibility warning moved with it — into the picker, where
+ * `buildEmulatorMenu` has always rendered it, so a copy here was the same
+ * sentence on the page that opens the menu carrying it.
+ */
+const CoreNotice: FC<{ row: PlatformRow; state: PlatformsPageState; offer: CoreOffer }> = ({ row, state, offer }) => (
+  <>
+    {offer.kind === "say" && <Muted>{offer.text}</Muted>}
+    <GroupStatus state={state} slug={row.slug} scope="core" />
+  </>
+);
 
 const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: FirmwarePlatformExt }> = ({
   row,
@@ -766,13 +786,31 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
 export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ row, state }) => {
   const core = state.coreFor(row.slug);
   const firmware = row.firmware;
+  const offer = coreOffer(row, core);
   // The core clause is absent while this platform's core read is in flight, and
   // stays absent if it failed — the read is issued per selection, so walking the
   // list shows each newly focused platform's header without a core until its own
   // answer lands. That, and a failed shortcut-count read dropping "· N in
   // Steam", are the two ways this line loses a piece; both failures now say so
   // on the pane, and the in-flight one is a beat rather than a state.
-  const coreLabel = core ? (core.active_core_label ?? "Default") : null;
+  //
+  // The clause NAMES the core, and "Default" is not one of the names it can
+  // take: `resolve_platform_label` already answers with the real label in both
+  // ordinary cases — the per-platform override where it still resolves, else the
+  // es_systems default — and answers `null` for exactly one thing, which is a
+  // platform with no bakeable emulator at all. Printing "Default" there said the
+  // opposite of what was true.
+  const activeLabel = core ? core.active_core_label : null;
+  // The platform-level twin of the game page's `activeCoreIsDefault`, read off
+  // the payload's own `is_default`, which marks the single option
+  // `select_default_option` picks. Both ends of the label come from these
+  // options, so a label matching none of them cannot arise; it would read as an
+  // override, which is the direction that draws attention rather than hiding it.
+  const activeIsDefault = core?.emulators.find((option) => option.label === activeLabel)?.is_default ?? false;
+  const coreClause =
+    core == null
+      ? null
+      : { text: activeLabel ?? "no emulator", color: activeLabel === null ? RED : activeIsDefault ? MUTED : AMBER };
   const requiredCount = firmware?.required_count ?? 0;
   const biosBadge =
     firmware && requiredCount > 0 ? `BIOS ${firmware.required_downloaded ?? 0} / ${requiredCount}` : null;
@@ -780,18 +818,47 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
   return (
     <>
       {/* One header line rather than a Sync section: the toggle is in the list
-          row, so what is left here is what the platform IS. */}
-      <div style={{ display: "flex", alignItems: "baseline", gap: "10px", padding: "8px 16px 0" }}>
+          row, so what is left here is what the platform IS — and, since the
+          device round, the core picker too: a full-width button under this line
+          cost the pane a `Field`-height row and a warning line to say what the
+          picker itself says. */}
+      <Focusable
+        flow-children="horizontal"
+        style={{ display: "flex", alignItems: "baseline", gap: "10px", padding: "8px 16px 0" }}
+      >
         <span style={{ fontSize: "16px", fontWeight: 600, color: "#dcdedf", minWidth: 0 }}>{row.name}</span>
         <span style={{ flex: "1 1 auto", fontSize: "11px", color: MUTED }}>
           {`${row.romCount} on RomM`}
           {row.shortcutCount === null ? "" : ` · ${row.shortcutCount} in Steam`}
-          {coreLabel ? ` · ${coreLabel}` : ""}
+          {coreClause && <span style={{ color: coreClause.color }}>{` · ${coreClause.text}`}</span>}
         </span>
         {biosBadge && (
           <span style={{ fontSize: "12px", color: biosColorForLevel(firmware?.bios_level ?? null) }}>{biosBadge}</span>
         )}
-      </div>
+        {offer.kind === "pick" && (
+          <DialogButton
+            style={CORE_BUTTON}
+            title="Emulator Core"
+            disabled={state.busySlug !== null}
+            onClick={(e: MouseEvent) =>
+              showContextMenu(
+                buildEmulatorMenu({
+                  emulators: offer.core.emulators,
+                  emulatorDataAvailable: offer.core.emulator_data_available,
+                  activeLabel: offer.core.active_core_label,
+                  // Null on purpose: this pane IS the platform level, so marking
+                  // an entry "(system)" would restate where the reader already is.
+                  platformCoreLabel: null,
+                  onPick: (label) => state.changeCore(row.slug, label),
+                }),
+                getEventTarget(e),
+              )
+            }
+          >
+            <FaMicrochip size={16} color={activeIsDefault ? MUTED : AMBER} />
+          </DialogButton>
+        )}
+      </Focusable>
       {/* The count is what failed, not the removal: taking the platform's games
           out of Steam needs only the slug. So the line says the number is
           missing and stops there — the buttons below stay live. */}
@@ -805,7 +872,7 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
         <Muted>{`Removing ${state.removalProgress.removed} of ${state.removalProgress.total}…`}</Muted>
       )}
       <BusyElsewhere row={row} state={state} />
-      <CoreSection row={row} state={state} core={core} />
+      <CoreNotice row={row} state={state} offer={offer} />
       {/* A failed read is said on EVERY pane, not only the ones with no entry.
           A failed refresh does not clear the map, so a platform that has an
           entry keeps showing pre-change rows — which is exactly where a reader

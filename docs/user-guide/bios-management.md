@@ -149,10 +149,13 @@ and the row you focus is the one the right-hand pane describes.
    ready, amber partly there, red missing, grey where there is nothing to say — and the numbers behind it are on the
    right-hand pane, which also states them in full. With a mouse, hovering the row says the same thing in words
 3. Move down the list to pick a platform; the pane on the right changes with the focus
-4. The pane's first line names the platform, how many ROMs it has on RomM, how many are in Steam, and the core it
-   launches with
-5. **Change core** opens a menu of the platform's emulators. It appears once the platform has games in Steam — with
-   none, a sentence asks you to sync it first
+4. The pane's first line names the platform, how many ROMs it has on RomM, how many are in Steam, and the emulator it
+   launches with — by name, in grey when it is the platform's default and in gold when you have picked something else.
+   If the line reads **no emulator** in red, RetroDECK offers nothing that can launch this platform and the sentence
+   below says so
+5. The **chip button** at the right of that line opens a menu of the platform's emulators — the same button, in the same
+   two colours, as the one on a game's page. It appears once the platform has games in Steam and there is more than one
+   emulator to choose between; otherwise a sentence under the line says why there is nothing to pick
 6. **BIOS files** states how many required files are ready (e.g. "1 / 2 required") when the system needs any, and
    otherwise reads "Nothing required" with the inventory of your library's files beside it (e.g. "3 / 5 files held"). A
    system with a required row the plugin could not judge — a declared folder it could not read, say — reads "BIOS
@@ -417,20 +420,22 @@ directly into each game's Steam shortcut, so your choice applies reliably for an
 
 ### Per-Platform (Library Platforms tab)
 
-In **Library › Platforms**, a platform with more than one emulator shows a **Change core** button under its header line.
-The button opens a menu listing every emulator ES-DE offers for that platform — both RetroArch cores and **standalone
-emulators** (e.g. PCSX2, RPCS3, Dolphin, PPSSPP). Some entries appear **disabled** with a short reason (for example
-"script/shortcut form" or "needs setup files (launch via ES-DE once)") when the plugin can't launch them directly from
-Steam; those can't be picked. Picking an enabled emulator sets it as the default for all games on that platform. A
-"Switching cores may affect save compatibility" note appears at the top of the menu and under the button.
+In **Library › Platforms**, a platform with more than one emulator shows a **chip button** at the right of its header
+line — the same button a game's page carries, grey when the platform is on its default emulator and gold when you have
+picked another. It opens a menu listing every emulator ES-DE offers for that platform — both RetroArch cores and
+**standalone emulators** (e.g. PCSX2, RPCS3, Dolphin, PPSSPP). Some entries appear **disabled** with a short reason (for
+example "script/shortcut form" or "needs setup files (launch via ES-DE once)") when the plugin can't launch them
+directly from Steam; those can't be picked. Picking an enabled emulator sets it as the default for all games on that
+platform. A "Switching cores may affect save compatibility" note is the first line of the menu.
 
 1. Open **Library** from the main QAM page and move to the **Platforms** tab
 2. Move to the platform you want to change
-3. Press **Change core** and pick an emulator from the menu
+3. Press the chip button and pick an emulator from the menu
 4. The BIOS table below updates to show what the new choice needs
 
-A platform that offers one emulator says so instead of showing a button. If RetroDECK can't be found (no
-`es_systems.xml`), the pane says the emulator list is unavailable rather than showing an empty picker.
+A platform that offers one emulator says so instead of showing a button, and one ES-DE offers nothing for says that its
+games cannot launch. If RetroDECK can't be found (no `es_systems.xml`), the pane says the emulator list is unavailable
+rather than showing an empty picker.
 
 The plugin stores the choice in its own settings and **immediately re-applies it** to every installed game on that
 platform — the change takes effect right away, with no sync needed (games that already have a per-game core keep their

@@ -218,7 +218,9 @@ def resolve_platform_label(options: list[EmulatorOption], override: str | None) 
     degrades to the default — never fatal — mirroring the launch-bake resolver so
     the label a surface shows and the actual launch agree. ``None`` when the
     platform has no bakeable emulator at all (empty menu, or ``es_systems.xml``
-    unreadable), which the frontend renders as "Default".
+    unreadable) — a real answer with one meaning: nothing here can launch the
+    platform's games. A surface states that; it is never a name, and least of
+    all "Default", which says the opposite.
     """
     if override is not None and label_to_invocation(options, override) is not None:
         return override

@@ -272,15 +272,30 @@ finding. Do not restore it as a regression. Enable all and Disable all sit above
 outside every row, so reaching them reports no selection. The order freezes while the page is open.
 
 The row is the page's only sync control — focus is already there and A works the toggle — so the detail opens with one
-header line instead of a Sync section: the platform's name, `N on RomM · M in Steam · <core label>`, and its BIOS number
-on the right. Under it, for the focused platform:
+header line instead of a Sync section: the platform's name, `N on RomM · M in Steam · <core name>`, its BIOS number, and
+the core picker's icon button, right-aligned. Under it, for the focused platform:
 
-- **Emulator core** — a Change core button opening the same context menu the game page uses (`buildEmulatorMenu`), with
-  the save-compatibility caveat under it, and **no section heading of its own**: the header line above already names the
-  active core, so a title over one button restates it and costs the pane a row. Only when the platform has games in
-  Steam; otherwise one sentence says to sync it first. Where the platform offers one emulator, or RetroDECK was not
-  found, a sentence says that instead of a picker that could not answer. The frontend half of #1016 lands here: a switch
-  the backend refuses is reported under the button, and the header keeps naming the core that is actually active.
+- **Emulator core** — a **microchip icon button in the header line**, opening the same context menu the game page uses
+  (`buildEmulatorMenu`). It is the game page's own button and its own colour coding: grey `#8f98a0` when the active core
+  is the default option, gold `#d4a72c` when it is an override, read off the payload's `is_default` for the option
+  carrying `active_core_label`. The **core clause beside it takes the same two colours from the same condition**, so the
+  name and the icon cannot disagree. A full-width button under the header, with the save-compatibility caveat under
+  that, is what this replaced: two rows for one action, on the pane where rows are the scarce thing. The caveat is not
+  lost — `buildEmulatorMenu` renders it as the menu's first item, so the copy on the page that opens the menu was the
+  same sentence twice.
+
+  **The clause names the core; "Default" is not one of the names it can take.** `resolve_platform_label` answers with
+  the real label in both ordinary cases and answers `null` for exactly one thing — a platform with no bakeable emulator
+  at all — so the clause reads `no emulator` in red there, and the line under it says nothing can launch the platform's
+  games. Printing "Default" for that state, which is what the pane did until the second device round, said the opposite
+  of what was true.
+
+  The button appears only when there is something to pick: the platform has games in Steam, the core read landed,
+  RetroDECK was found, and at least two emulators exist. Each of the other cases is a sentence under the header instead
+  — sync this first, the read is in flight, the read failed, RetroDECK was not found, the platform offers one emulator,
+  or ES-DE offers none at all (a different sentence from "one", because a count of something that is not there is not an
+  answer). The frontend half of #1016 lands in the same place: a switch the backend refuses is reported there, and the
+  header keeps naming the core that is actually active.
 - **BIOS files** — the summary (required, or files, and the two unknown states), then a table: File, On disk, Contents,
   and a **Download** button on every row that is missing and in the RomM library (#164) — never on a folder declaration,
   whatever its state, because the emulator opens that name as a directory. Below it one row of buttons: Download

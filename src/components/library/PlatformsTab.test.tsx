@@ -120,6 +120,13 @@ async function focusRow(container: HTMLElement, name: string): Promise<void> {
   });
 }
 
+/** The core picker's button — an icon in the header line, so it has no text to
+ *  find it by. `title` is what Steam's own icon buttons are identified by, and
+ *  it is what a mouse user sees on hover. */
+function coreButton(container: HTMLElement): HTMLButtonElement | null {
+  return container.querySelector<HTMLButtonElement>('button[title="Emulator Core"]');
+}
+
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement | undefined {
   return [...container.querySelectorAll("button")].find((b) => b.textContent === text);
 }
@@ -539,13 +546,71 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("12 on RomM · 9 in Steam · mGBA");
     });
 
+    it("names the active core in the header and greys it when it is the default", async () => {
+      // "Default" is not one of the names this clause can take: the backend
+      // answers with the real label in both ordinary cases and answers null for
+      // exactly one thing, which is a platform nothing can launch.
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      const clause = [...container.querySelectorAll<HTMLElement>("span")].find((el) => el.textContent === " · mGBA");
+      expect(clause).toBeTruthy();
+      expect(clause!.style.color).toBe(GREY);
+      expect(container.textContent).not.toContain("Default");
+      expect(coreButton(container)!.querySelector("svg")!.style.color).toBe(GREY);
+    });
+
+    it("colours an overridden core gold, in the header clause and the icon alike", async () => {
+      // The same two colours the game page's core button uses, from the same
+      // condition, so the label and the icon beside it can never disagree.
+      vi.mocked(backend.getSystemCoreInfo).mockResolvedValue(coreInfo({ active_core_label: "VBA Next" }));
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      const clause = [...container.querySelectorAll<HTMLElement>("span")].find(
+        (el) => el.textContent === " · VBA Next",
+      );
+      expect(clause!.style.color).toBe(AMBER);
+      expect(coreButton(container)!.querySelector("svg")!.style.color).toBe(AMBER);
+    });
+
+    it("says no emulator, not Default, when nothing can launch the platform", async () => {
+      // `active_core_label: null` means the platform has no bakeable emulator at
+      // all. The pane used to print "Default" for it, which said the opposite of
+      // what was true.
+      vi.mocked(backend.getSystemCoreInfo).mockResolvedValue(coreInfo({ emulators: [], active_core_label: null }));
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      const clause = [...container.querySelectorAll<HTMLElement>("span")].find(
+        (el) => el.textContent === " · no emulator",
+      );
+      expect(clause).toBeTruthy();
+      expect(clause!.style.color).toBe(RED);
+      expect(container.textContent).not.toContain("Default");
+      // And the line under it says what that means, rather than counting one
+      // emulator that is not there.
+      expect(container.textContent).toContain("RetroDECK offers no emulator for this platform");
+      expect(container.textContent).not.toContain("offers one emulator");
+      expect(coreButton(container)).toBeNull();
+    });
+
+    it("leaves the save-compatibility warning to the picker that carries it", async () => {
+      // `buildEmulatorMenu` renders it as the menu's first item, so a copy on
+      // the pane was the same sentence on the page that opens the menu.
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).not.toContain("Switching cores may affect save compatibility");
+    });
+
     it("asks for a sync before offering a core when nothing of the platform is in Steam", async () => {
       vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({ platforms: [] });
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
       expect(container.textContent).toContain("Sync this platform first");
-      expect(buttonByText(container, "Change core ›")).toBeUndefined();
+      expect(coreButton(container)).toBeNull();
     });
 
     it("offers nothing to switch when the platform has one emulator", async () => {
@@ -554,7 +619,7 @@ describe("Library › Platforms", () => {
       await flushAsync();
 
       expect(container.textContent).toContain("offers one emulator");
-      expect(buttonByText(container, "Change core ›")).toBeUndefined();
+      expect(coreButton(container)).toBeNull();
     });
 
     it("says RetroDECK was not found rather than showing an empty picker", async () => {
@@ -577,7 +642,7 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("Could not read how many of these games are in Steam");
       expect(container.textContent).not.toContain("in Steam ·");
       expect(container.textContent).not.toContain("Sync this platform first");
-      expect(buttonByText(container, "Change core ›")).toBeTruthy();
+      expect(coreButton(container)).not.toBeNull();
       expect(buttonByText(container, "Remove shortcuts")).not.toBeDisabled();
     });
 
@@ -751,7 +816,7 @@ describe("Library › Platforms", () => {
 
     async function openCoreMenu(container: HTMLElement): Promise<void> {
       await act(async () => {
-        fireEvent.click(buttonByText(container, "Change core ›")!);
+        fireEvent.click(coreButton(container)!);
         await Promise.resolve();
       });
     }
