@@ -24,6 +24,12 @@ import { getEventTarget } from "../../utils/events";
 import { SYNC_RUNNING_HINT, useSyncRunning } from "../../utils/syncRunning";
 import type { CoreAnswer, PlatformRow, PlatformsPageState, StatusScope } from "./usePlatformsPage";
 
+/** The size every secondary line on this pane is set in: the under-row
+ *  description and note lines, and the Contents cell beside them. One constant,
+ *  because the device pass asked for the cell to match those lines and a second
+ *  literal is how they drift apart again. */
+const SECONDARY_FONT = "11px";
+
 const MUTED = "#8f98a0";
 const RED = "#d94126";
 const GREEN = "#5ba32b";
@@ -75,6 +81,12 @@ const LIBRARY_MARK = { glyph: "⊘", color: VIOLET, title: "not in your RomM lib
  * renders in its `Classic` mode.
  */
 const FLAT_BUTTON = { flex: "1 1 auto", minWidth: 0, padding: "6px 10px", fontSize: "13px" } as const;
+
+/** The button in a BIOS row's action column. Narrow because the column is
+ *  sized for it and the file name beside it is the thing worth width: 4px of
+ *  horizontal padding on a 92px column still leaves a target wider than it is
+ *  tall, which is what keeps it pressable at the Deck's scale. */
+const ROW_BUTTON = { width: "100%", minWidth: 0, padding: "4px", fontSize: "11px" } as const;
 
 /**
  * The core picker's button in the header line — the game page's icon button, at
@@ -249,12 +261,12 @@ function libraryMark(file: FirmwareRow): typeof LIBRARY_MARK | null {
   return file.on_server === false && file.declared_kind !== "directory" ? LIBRARY_MARK : null;
 }
 
-const SectionTitle: FC<{ title: string; note?: string }> = ({ title, note }) => (
+const SectionTitle: FC<{ title: string; note?: string; noteColor?: string }> = ({ title, note, noteColor }) => (
   <div style={{ display: "flex", alignItems: "baseline", gap: "8px", padding: "12px 16px 4px" }}>
     <span style={{ fontSize: "12px", fontWeight: 600, letterSpacing: "0.5px", color: "#dcdedf" }}>
       {title.toUpperCase()}
     </span>
-    {note && <span style={{ fontSize: "11px", color: MUTED }}>{note}</span>}
+    {note && <span style={{ fontSize: SECONDARY_FONT, color: noteColor ?? MUTED }}>{note}</span>}
   </div>
 );
 
@@ -365,7 +377,7 @@ const BiosRowLines: FC<{ lines: string[] }> = ({ lines }) =>
   lines.length === 0 ? null : (
     <div style={{ display: "flex", flexDirection: "column", gap: "2px", marginLeft: "18px", marginTop: "2px" }}>
       {lines.map((line) => (
-        <div key={line} style={{ fontSize: "11px", color: MUTED, whiteSpace: "pre-wrap" }}>
+        <div key={line} style={{ fontSize: SECONDARY_FONT, color: MUTED, whiteSpace: "pre-wrap" }}>
           {line}
         </div>
       ))}
@@ -493,7 +505,7 @@ const BiosLegend: FC<{ files: FirmwareRow[] }> = ({ files }) => {
   );
 };
 
-const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, download }) => {
+const BiosFileRow: FC<{ file: FirmwareRow; action: ReactNode }> = ({ file, action }) => {
   const { note, lines, fromLibrary } = biosFileNote(file);
   const mark = diskMark(file);
   const library = libraryMark(file);
@@ -529,14 +541,14 @@ const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, dow
             </span>
           )}
         </span>
-        <span style={{ color: MUTED }}>{contentsCell(file)}</span>
-        <span>{download}</span>
+        <span style={{ color: MUTED, fontSize: SECONDARY_FONT }}>{contentsCell(file)}</span>
+        <span>{action}</span>
       </div>
       {description && (
         <div
           style={{
             marginLeft: "18px",
-            fontSize: "11px",
+            fontSize: SECONDARY_FONT,
             color: MUTED,
             overflow: "hidden",
             textOverflow: "ellipsis",
@@ -549,7 +561,7 @@ const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, dow
       <BiosRowLines lines={rowLines} />
     </>
   );
-  if (download) return <div style={{ padding: "4px 16px" }}>{cells}</div>;
+  if (action) return <div style={{ padding: "4px 16px" }}>{cells}</div>;
   // A row with nothing to press still has to be reachable, or the reader cannot
   // scroll past it to the rows below: the activate handler is what makes a
   // Focusable a focus stop.
@@ -624,6 +636,70 @@ const CoreNotice: FC<{ row: PlatformRow; state: PlatformsPageState; offer: CoreO
     <GroupStatus state={state} slug={row.slug} scope="core" />
   </>
 );
+
+/**
+ * A BIOS row's one action: fetch it, or remove the copy we fetched.
+ *
+ * The two are alternatives by construction rather than by choice — a row is
+ * offered a download only when the file is missing, and a delete only when a
+ * download record's file is still on disk — so one narrow column carries both
+ * and no row ever needs two buttons.
+ *
+ * **The delete's condition is `deletable` and nothing else.** That field says
+ * the plugin placed the file and it is still there, which is the whole
+ * authority; `downloaded` is `os.path.exists` and is equally true of
+ * `dolphin-emu/Sys/codehandler.bin`, which RetroDECK ships, no library can hand
+ * back, and which sits one row above a real download on the GameCube pane. The
+ * unlink itself re-reads the record and takes the path the record holds, so
+ * this button cannot widen what it removes.
+ */
+function isSpinning(row: PlatformRow, state: PlatformsPageState, pending: string): boolean {
+  // `downloadPending` names the button, not the platform, and every pane reads
+  // the same state — so the run's own slug is what keeps a spinner off the pane
+  // the reader walked to while a download runs somewhere else. That pane shows
+  // its buttons disabled and the line saying which platform is busy.
+  return state.busySlug === row.slug && state.downloadPending === pending;
+}
+
+const RowAction: FC<{
+  row: PlatformRow;
+  state: PlatformsPageState;
+  file: FirmwareRow;
+  fetchable: Set<string>;
+}> = ({ row, state, file, fetchable }) => {
+  const busy = state.busySlug !== null;
+  if (fetchable.has(file.file_name) && !state.serverOffline) {
+    return (
+      <DialogButton
+        style={ROW_BUTTON}
+        disabled={busy}
+        onClick={() => {
+          state.downloadOne(row.slug, file.file_name);
+        }}
+      >
+        {isSpinning(row, state, file.file_name) ? <Spinner width={11} height={11} /> : "Download"}
+      </DialogButton>
+    );
+  }
+  if (!file.deletable) return null;
+  const confirm = () =>
+    showModal(
+      <ConfirmModal
+        strTitle={`Delete ${file.file_name}?`}
+        strDescription="This deletes the copy this plugin downloaded, at the place it wrote it. Files your emulator came with, or that you put there yourself, are never touched. Games that need it won't launch until you download it again."
+        strOKButtonText="Delete"
+        strCancelButtonText="Cancel"
+        onOK={() => {
+          state.deleteBiosFile(row.slug, file.file_name);
+        }}
+      />,
+    );
+  return (
+    <DialogButton style={ROW_BUTTON} disabled={busy} onClick={confirm}>
+      <span style={{ color: RED }}>Delete</span>
+    </DialogButton>
+  );
+};
 
 const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: FirmwarePlatformExt }> = ({
   row,
@@ -701,7 +777,11 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
 
   return (
     <>
-      <SectionTitle title="BIOS files" note={summaryLabel} />
+      {/* The ratio is stated once, here, and takes the same mapping the list's
+          dot takes — the header carried a second copy of it until the device
+          pass, and its width was what wrapped that line three times. Two places
+          state a platform's BIOS state and they now agree by construction. */}
+      <SectionTitle title="BIOS files" note={summaryLabel} noteColor={biosColorForLevel(firmware.bios_level ?? null)} />
       <Muted>{summaryDescription}</Muted>
       {nothingEstablished && (
         <Muted>
@@ -714,17 +794,7 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
         <BiosFileRow
           key={file.file_name}
           file={file}
-          download={
-            fetchable.has(file.file_name) && !state.serverOffline ? (
-              <DialogButton
-                style={{ padding: "4px 0", minWidth: 0, fontSize: "12px" }}
-                disabled={state.busySlug !== null}
-                onClick={() => state.downloadOne(row.slug, file.file_name)}
-              >
-                Download
-              </DialogButton>
-            ) : null
-          }
+          action={<RowAction row={row} state={state} file={file} fetchable={fetchable} />}
         />
       ))}
       {files.length > 0 && <BiosLegend files={files} />}
@@ -738,39 +808,44 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
           `ButtonItem` is a `Field` row around a button and costs the pane a row
           of its own; the three here fit on one.
 
-          Delete is local-only (no server needed) and shown only when there is at
-          least one file it would actually remove. That number is the backend's
+          All three are always rendered and disable when there is nothing to do,
+          the ruling the user gave for the Remove group and for the same reason:
+          a button that vanishes is a state the reader has to work out, and on
+          PS2 all three vanished at once. A disabled `DialogButton` is still a
+          focus stop, so the row stays walkable.
+
+          Delete is local-only (no server needed). Its number is the backend's
           `deletable_count` — the plugin's own download records that are still on
           disk, which is exactly what the delete unlinks. The library ratio
           counts a different set and was wrong here in both directions,
           including hiding the button over downloads RomM had stopped listing. */}
-      {(showRequired || showAll || deletable > 0) && (
-        <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px", padding: "2px 16px 6px" }}>
-          {showRequired && (
-            <DialogButton
-              style={FLAT_BUTTON}
-              disabled={state.busySlug !== null}
-              onClick={() => state.downloadRequired(row.slug)}
-            >
-              {`Download required (${requiredMissing})`}
-            </DialogButton>
+      <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px", padding: "2px 16px 6px" }}>
+        <DialogButton
+          style={FLAT_BUTTON}
+          disabled={!showRequired || state.busySlug !== null}
+          onClick={() => state.downloadRequired(row.slug)}
+        >
+          {isSpinning(row, state, "required") ? (
+            <Spinner width={12} height={12} />
+          ) : (
+            `Download required (${requiredMissing})`
           )}
-          {showAll && (
-            <DialogButton
-              style={FLAT_BUTTON}
-              disabled={state.busySlug !== null}
-              onClick={() => state.downloadAll(row.slug)}
-            >
-              Download all
-            </DialogButton>
-          )}
-          {deletable > 0 && (
-            <DialogButton style={FLAT_BUTTON} disabled={state.busySlug !== null} onClick={confirmDeleteBios}>
-              <span style={{ color: RED }}>{`Delete BIOS (${deletable})`}</span>
-            </DialogButton>
-          )}
-        </Focusable>
-      )}
+        </DialogButton>
+        <DialogButton
+          style={FLAT_BUTTON}
+          disabled={!showAll || state.busySlug !== null}
+          onClick={() => state.downloadAll(row.slug)}
+        >
+          {isSpinning(row, state, "all") ? <Spinner width={12} height={12} /> : "Download all"}
+        </DialogButton>
+        <DialogButton
+          style={FLAT_BUTTON}
+          disabled={deletable === 0 || state.busySlug !== null}
+          onClick={confirmDeleteBios}
+        >
+          <span style={{ color: RED }}>{`Delete BIOS (${deletable})`}</span>
+        </DialogButton>
+      </Focusable>
       <GroupStatus state={state} slug={row.slug} scope="bios" />
     </>
   );
@@ -903,9 +978,6 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
   const activeIsDefault = core?.emulators.find((option) => option.label === activeLabel)?.is_default ?? false;
   const coreColor = activeLabel === null || activeIsDefault ? MUTED : AMBER;
   const coreClause = core == null ? null : { text: activeLabel ?? "RetroDECK decides", color: coreColor };
-  const requiredCount = firmware?.required_count ?? 0;
-  const biosBadge =
-    firmware && requiredCount > 0 ? `BIOS ${firmware.required_downloaded ?? 0} / ${requiredCount}` : null;
 
   return (
     <>
@@ -924,9 +996,6 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
           {row.shortcutCount === null ? "" : ` · ${row.shortcutCount} in Steam`}
           {coreClause && <span style={{ color: coreClause.color }}>{` · ${coreClause.text}`}</span>}
         </span>
-        {biosBadge && (
-          <span style={{ fontSize: "12px", color: biosColorForLevel(firmware?.bios_level ?? null) }}>{biosBadge}</span>
-        )}
         {offer.kind === "pick" && (
           <DialogButton
             style={CORE_BUTTON}

@@ -272,8 +272,11 @@ finding. Do not restore it as a regression. Enable all and Disable all sit above
 outside every row, so reaching them reports no selection. The order freezes while the page is open.
 
 The row is the page's only sync control — focus is already there and A works the toggle — so the detail opens with one
-header line instead of a Sync section: the platform's name, `N on RomM · M in Steam · <core name>`, its BIOS number, and
-the core picker's icon button, right-aligned. Under it, for the focused platform:
+header line instead of a Sync section: the platform's name, `N on RomM · M in Steam · <core name>`, and the core
+picker's icon button, right-aligned. **The BIOS ratio is not on that line** — it was, and its width is what wrapped the
+line three times on a platform with a long name and a long core label. It is stated once instead, beside `BIOS FILES`
+eight pixels below, in the colour `biosColor.ts` gives the list's dot, so the two places that state a platform's BIOS
+state agree by construction. Under it, for the focused platform:
 
 - **Emulator core** — a **microchip icon button in the header line**, opening the same context menu the game page uses
   (`buildEmulatorMenu`). It is the game page's own button and its own colour coding: grey `#8f98a0` when the active core
@@ -301,8 +304,26 @@ the core picker's icon button, right-aligned. Under it, for the focused platform
   header keeps naming the core that is actually active.
 - **BIOS files** — the summary (required, or files, and the two unknown states), then a table: File, On disk, Contents,
   and a **Download** button on every row that is missing and in the RomM library (#164) — never on a folder declaration,
-  whatever its state, because the emulator opens that name as a directory. Below it one row of buttons: Download
-  required (_N_), Download all, Delete BIOS behind a `ConfirmModal`.
+  whatever its state, because the emulator opens that name as a directory — and a **Delete** button on every row the
+  plugin's own download record still holds, which is the same authority `Delete BIOS` uses and is described below. Below
+  the table one row of buttons: Download required (_N_), Download all, Delete BIOS behind a `ConfirmModal`. **All three
+  are always rendered and disable when there is nothing to do**, the ruling the Remove group already had: on PS2 all
+  three vanished at once, and a button that disappears is a state the reader has to work out. A disabled `DialogButton`
+  is still a focus stop, so the row stays walkable.
+
+  **A running download is said by the button that started it.** The pressed button — bulk or per-row — becomes a
+  spinner, every other download button on the pane disables, and when it finishes the rows re-read. There is no
+  "Downloaded _X_" notice any more: a success says itself. A **failure** still gets words, in the same status line under
+  the section, carrying the backend's own message; that line is now failure-only. The spinner is keyed on the run's slug
+  as well as the button's identity, so walking to another platform mid-download shows disabled buttons and the "Working
+  on _X_" line rather than a spinner that belongs elsewhere.
+
+  **The per-row Delete is authorised by the download record and nothing else** — the row carries `deletable`, which the
+  backend derives from the same records `deletable_count` counts (`_deletable_names`), and the unlink re-reads the
+  record and takes the path it holds. `downloaded` is `os.path.exists` and is equally true of firmware RetroDECK ships:
+  `dolphin-emu/Sys/codehandler.bin` sits one row above a real download on a GameCube pane, no RomM library can hand it
+  back, and authorising on presence destroyed exactly that file on a real device. The callable (`delete_bios_file`)
+  reuses `delete_platform_bios`'s worker shape rather than growing a second delete path.
 
   **`On disk` holds marks and never text**, and it is the only place presence is stated. A cell carries **one or two**
   of them.

@@ -179,10 +179,14 @@ and the row you focus is the one the right-hand pane describes.
    its contents could not be established. A plain file reads an em dash, which means the question was never asked:
    checking a file's contents is still to come, and until it lands the em dash must not be read as "checked, and nothing
    there"
-9. A **Download** button sits on every row that is missing and in your RomM library. **Download required** and
-   **Download all** fetch several at once. A system nothing installed could answer for has no download buttons at all —
-   see [When the requirement is unknown](#when-the-requirement-is-unknown)
-10. **Delete BIOS** removes that platform's downloaded BIOS files (see below)
+9. A **Download** button sits on every row that is missing and in your RomM library, and a **Delete** button on every
+   row this plugin downloaded and still has on disk — that is the only thing it will remove, so a file your emulator
+   came with never offers one. While a download runs, the button you pressed becomes a spinner and the other download
+   buttons grey out; when it finishes the list re-reads itself. Only a failure prints a line
+10. **Download required** and **Download all** fetch several at once, and **Delete BIOS** removes everything this plugin
+    downloaded for the platform (see below). All three are always there and grey out when there is nothing to do — a
+    system nothing installed could answer for has all of them greyed, see
+    [When the requirement is unknown](#when-the-requirement-is-unknown)
 
 <!-- Screenshot: Library › Platforms with a platform selected, its core button above the BIOS table -->
 

@@ -305,10 +305,12 @@ describe("Library › Platforms", () => {
       expect(row?.title).toBe("BIOS requirement unknown");
     });
 
-    it("leaves the ratio to the dot's colour in the list, and to the header in the pane", async () => {
-      // The row used to print the number beside the name. On the device it
-      // earned nothing in a line you scan past, so the colour carries the state
-      // and the pane's header carries the number — which it always did.
+    it("states the ratio once, beside BIOS FILES, in the dot's own colour", async () => {
+      // The row used to print the number beside the name and the pane's header
+      // line carried a second copy. On the device the row's earned nothing in a
+      // line you scan past, and the header's width was what wrapped that line
+      // three times — so one statement is left, and it takes the same mapping
+      // the dot takes.
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [firmwarePlatform({ required_count: 2, required_downloaded: 0, bios_level: "missing" })],
@@ -324,8 +326,13 @@ describe("Library › Platforms", () => {
       expect(container.querySelector<HTMLElement>('[data-testid="bios-dot-gba"]')!.style.backgroundColor).toBe(
         biosColorForLevel("missing"),
       );
-      // The pane's header still states it.
-      expect(container.textContent).toContain("BIOS 0 / 2");
+      // Once on the pane, and never as the header's own badge.
+      expect(container.textContent).not.toContain("BIOS 0 / 2");
+      const note = [...container.querySelectorAll<HTMLElement>("span")].find(
+        (el) => el.textContent === "0 / 2 required",
+      );
+      expect(note).toBeTruthy();
+      expect(note!.style.color).toBe(biosColorForLevel("missing"));
     });
 
     it("keeps the dot grey rather than dropping it where there is no level", async () => {
@@ -450,8 +457,10 @@ describe("Library › Platforms", () => {
     });
 
     it("leaves an action's result on the platform it was about", async () => {
-      // Walking the list while a download's line is up must not carry that line
-      // onto another platform's pane, nor lose it on the way back.
+      // Walking the list while a failure's line is up must not carry that line
+      // onto another platform's pane, nor lose it on the way back. A FAILED
+      // download is what puts a line there now: a success says itself by the
+      // spinner ending and the rows re-reading.
       vi.mocked(backend.getPlatforms).mockResolvedValue({
         success: true,
         platforms: [
@@ -460,9 +469,9 @@ describe("Library › Platforms", () => {
         ],
       });
       vi.mocked(backend.downloadRequiredFirmware).mockResolvedValue({
-        success: true,
-        message: "Downloaded 1 required firmware files",
-        downloaded: 1,
+        success: false,
+        message: "RomM is unreachable",
+        downloaded: 0,
       });
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -470,13 +479,13 @@ describe("Library › Platforms", () => {
         fireEvent.click(buttonByText(container, "Download required (1)")!);
         for (let i = 0; i < 8; i++) await Promise.resolve();
       });
-      expect(within(container).getByTestId("status-bios").textContent).toBe("Downloaded 1 required firmware files");
+      expect(within(container).getByTestId("status-bios").textContent).toBe("RomM is unreachable");
 
       await focusRow(container, "Nintendo 64");
       expect(within(container).queryByTestId("status-bios")).toBeNull();
 
       await focusRow(container, "Game Boy Advance");
-      expect(within(container).getByTestId("status-bios").textContent).toBe("Downloaded 1 required firmware files");
+      expect(within(container).getByTestId("status-bios").textContent).toBe("RomM is unreachable");
     });
 
     it("says which platform is working while another pane's buttons are disabled", async () => {
@@ -1473,7 +1482,9 @@ describe("Library › Platforms", () => {
       });
 
       expect(vi.mocked(backend.downloadPlatformFirmwareFile)).toHaveBeenCalledWith("gba", "gba_bios.bin");
-      expect(within(container).getByTestId("status-bios").textContent).toBe("Downloaded gba_bios.bin");
+      // No notice on success: the spinner ending and the re-read rows are the
+      // message, which is what the device pass asked for.
+      expect(within(container).queryByTestId("status-bios")).toBeNull();
     });
 
     it("offers no Download for a file already here, nor for one the library does not hold", async () => {
@@ -1496,6 +1507,107 @@ describe("Library › Platforms", () => {
       expect(buttonByText(container, "Download")).toBeUndefined();
     });
 
+    it("offers a per-row Delete only where a download record still holds the file", async () => {
+      // The GameCube pane from the device pass, which is the whole point of the
+      // field: `codehandler.bin` is RetroDECK's own, present on disk, and no
+      // RomM library can hand it back — authorising on `downloaded` deleted
+      // exactly that file on a real device. `gc-pal-12.bin` is ours, and only it
+      // may offer the button.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({
+                file_name: "codehandler.bin",
+                declared_path: "dolphin-emu/Sys/codehandler.bin",
+                downloaded: true,
+                satisfied: true,
+                on_server: false,
+                supplied_by: "RetroDECK",
+                deletable: false,
+              }),
+              firmwareFile({ file_name: "gc-pal-12.bin", downloaded: true, satisfied: true, deletable: true }),
+            ],
+            deletable_count: 1,
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      const deletes = [...container.querySelectorAll("button")].filter((b) => b.textContent === "Delete");
+      expect(deletes).toHaveLength(1);
+      // …and it belongs to the row that names our own download.
+      const row = deletes[0]!.closest("div")!.parentElement!;
+      expect(row.textContent).toContain("gc-pal-12.bin");
+      expect(row.textContent).not.toContain("codehandler.bin");
+    });
+
+    it("deletes one BIOS file by name, and says so only when it fails", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [firmwareFile({ file_name: "gc-pal-12.bin", downloaded: true, satisfied: true, deletable: true })],
+            deletable_count: 1,
+          }),
+        ],
+      });
+      vi.mocked(backend.deleteBiosFile).mockResolvedValue({
+        success: false,
+        deleted_count: 0,
+        message: "Could not delete gc-pal-12.bin: permission denied",
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        fireEvent.click([...container.querySelectorAll("button")].find((b) => b.textContent === "Delete")!);
+        await Promise.resolve();
+      });
+      await confirmLastModal();
+
+      expect(vi.mocked(backend.deleteBiosFile)).toHaveBeenCalledWith("gba", "gc-pal-12.bin");
+      expect(within(container).getByTestId("status-bios").textContent).toBe(
+        "Could not delete gc-pal-12.bin: permission denied",
+      );
+    });
+
+    it("spins the pressed download button and disables the others", async () => {
+      // The notice under the row is gone; the button that was pressed IS the
+      // progress, and nothing else on the pane can be pressed while it runs.
+      let finish: (v: { success: boolean; message: string; downloaded: number }) => void = () => {};
+      vi.mocked(backend.downloadPlatformFirmwareFile).mockReturnValue(
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      );
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Download")!);
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+
+      const rowButton = [...container.querySelectorAll("button")].find((b) =>
+        b.querySelector('[data-testid="spinner"]'),
+      );
+      expect(rowButton).toBeTruthy();
+      expect(buttonByText(container, "Download all")).toBeDisabled();
+      expect(buttonByText(container, "Delete BIOS (0)")).toBeDisabled();
+      expect(within(container).queryByTestId("status-bios")).toBeNull();
+
+      await act(async () => {
+        finish({ success: true, message: "Downloaded gba_bios.bin", downloaded: 1 });
+        for (let i = 0; i < 8; i++) await Promise.resolve();
+      });
+      // Everything comes back, and the success is said by the rows, not a line.
+      expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
+      expect(within(container).queryByTestId("status-bios")).toBeNull();
+    });
+
     it("offers no Download for a folder declaration, absent or not", async () => {
       // The emulator LISTS that name, so there is no file to fetch into it —
       // what would satisfy the row is a BIOS image inside the folder, which is a
@@ -1514,8 +1626,10 @@ describe("Library › Platforms", () => {
       await flushAsync();
 
       expect(container.textContent).toContain("bios");
+      // The row's own button is genuinely absent — there is nothing to fetch
+      // into a folder. The bulk buttons are always rendered and disabled.
       expect(buttonByText(container, "Download")).toBeUndefined();
-      expect(buttonByText(container, "Download all")).toBeUndefined();
+      expect(buttonByText(container, "Download all")).toBeDisabled();
     });
 
     it("withdraws every download while RomM is unreachable", async () => {
@@ -1528,8 +1642,8 @@ describe("Library › Platforms", () => {
       await flushAsync();
 
       expect(buttonByText(container, "Download")).toBeUndefined();
-      expect(buttonByText(container, "Download required (1)")).toBeUndefined();
-      expect(buttonByText(container, "Download all")).toBeUndefined();
+      expect(buttonByText(container, "Download required (1)")).toBeDisabled();
+      expect(buttonByText(container, "Download all")).toBeDisabled();
     });
 
     it("fetches the required files and announces the change", async () => {
@@ -1595,7 +1709,7 @@ describe("Library › Platforms", () => {
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
-      expect(buttonByText(container, "Delete BIOS (0)")).toBeUndefined();
+      expect(buttonByText(container, "Delete BIOS (0)")).toBeDisabled();
     });
 
     it("confirms before deleting, then deletes and announces the change", async () => {
@@ -1690,7 +1804,7 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("BIOS requirement unknown");
       expect(container.textContent).toContain("BIOS management is not supported for this system yet");
       expect(buttonByText(container, "Download")).toBeUndefined();
-      expect(buttonByText(container, "Download all")).toBeUndefined();
+      expect(buttonByText(container, "Download all")).toBeDisabled();
     });
 
     it("keeps the downloads when only the readiness verdict is withheld", async () => {

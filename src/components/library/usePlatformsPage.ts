@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   countPlatformSaves,
   debugLog,
+  deleteBiosFile as deleteBiosFileCall,
   deletePlatformBios,
   deletePlatformSaves,
   downloadAllFirmware,
@@ -158,10 +159,21 @@ export interface PlatformsPageState {
   toggleSync: (row: PlatformRow, enabled: boolean) => void;
   setAllSync: (enabled: boolean) => void;
   changeCore: (slug: string, pickedLabel: string) => void;
+  /**
+   * Which download button was pressed, while it runs — `"required"`, `"all"`,
+   * or a file name — and `null` otherwise.
+   *
+   * The pane says a download is happening by spinning THAT button and disabling
+   * the others, so it needs the identity and not just `busySlug`. A success is
+   * said by the spinner ending and the rows re-reading; only a failure gets a
+   * sentence.
+   */
+  downloadPending: string | null;
   downloadRequired: (slug: string) => void;
   downloadAll: (slug: string) => void;
   downloadOne: (slug: string, fileName: string) => void;
   deleteBios: (slug: string) => void;
+  deleteBiosFile: (slug: string, fileName: string) => void;
   removeShortcuts: (row: PlatformRow) => void;
   deleteSaves: (row: PlatformRow) => void;
 }
@@ -200,6 +212,7 @@ export function usePlatformsPage(): PlatformsPageState {
   const [firmware, setFirmware] = useState<Record<string, FirmwarePlatformExt>>({});
   const [serverOffline, setServerOffline] = useState(false);
   const [firmwareFailed, setFirmwareFailed] = useState(false);
+  const [downloadPending, setDownloadPending] = useState<string | null>(null);
   // Whether a read has ever LANDED, which is not the same as its answer being
   // non-empty: a successful read that speaks for no platform is still an answer
   // set, and counting the map's keys would call it "never read" and take back
@@ -455,21 +468,33 @@ export function usePlatformsPage(): PlatformsPageState {
   );
 
   const runDownload = useCallback(
-    (slug: string, work: () => Promise<{ success: boolean; message?: string; downloaded?: number }>) => {
+    (
+      slug: string,
+      pending: string,
+      work: () => Promise<{ success: boolean; message?: string; downloaded?: number }>,
+    ) => {
       setBusySlug(slug);
-      setStatus({ slug, scope: "bios", text: "Downloading…" });
+      setDownloadPending(pending);
+      // Cleared up front, so a previous failure does not stand under a run that
+      // has not answered yet.
+      setStatus(null);
       detach(
         (async () => {
           try {
             const result = await work();
-            setStatus({ slug, scope: "bios", text: result.message ?? (result.success ? "Done" : "Download failed") });
+            // Success says itself: the spinner ends and the rows come back
+            // re-read. Only a failure gets words, because a stopped spinner is
+            // not a message and the notice that used to carry one is gone.
             if (result.success) {
               await refreshFirmware();
               if ((result.downloaded ?? 0) > 0) announceBiosChange(slug);
+            } else {
+              setStatus({ slug, scope: "bios", text: result.message ?? "Download failed" });
             }
           } catch (e) {
             setStatus({ slug, scope: "bios", text: `Download failed: ${e}` });
           } finally {
+            setDownloadPending(null);
             setBusySlug(null);
           }
         })(),
@@ -479,12 +504,15 @@ export function usePlatformsPage(): PlatformsPageState {
   );
 
   const downloadRequired = useCallback(
-    (slug: string) => runDownload(slug, () => downloadRequiredFirmware(slug)),
+    (slug: string) => runDownload(slug, "required", () => downloadRequiredFirmware(slug)),
     [runDownload],
   );
-  const downloadAll = useCallback((slug: string) => runDownload(slug, () => downloadAllFirmware(slug)), [runDownload]);
+  const downloadAll = useCallback(
+    (slug: string) => runDownload(slug, "all", () => downloadAllFirmware(slug)),
+    [runDownload],
+  );
   const downloadOne = useCallback(
-    (slug: string, fileName: string) => runDownload(slug, () => downloadPlatformFirmwareFile(slug, fileName)),
+    (slug: string, fileName: string) => runDownload(slug, fileName, () => downloadPlatformFirmwareFile(slug, fileName)),
     [runDownload],
   );
 
@@ -502,6 +530,31 @@ export function usePlatformsPage(): PlatformsPageState {
             }
           } catch (e) {
             setStatus({ slug, scope: "bios", text: `Failed to delete BIOS files: ${e}` });
+          } finally {
+            setBusySlug(null);
+          }
+        })(),
+      );
+    },
+    [refreshFirmware],
+  );
+
+  const deleteBiosFile = useCallback(
+    (slug: string, fileName: string) => {
+      setBusySlug(slug);
+      setStatus(null);
+      detach(
+        (async () => {
+          try {
+            const result = await deleteBiosFileCall(slug, fileName);
+            if (result.success) {
+              await refreshFirmware();
+              announceBiosChange(slug);
+            } else {
+              setStatus({ slug, scope: "bios", text: result.message });
+            }
+          } catch (e) {
+            setStatus({ slug, scope: "bios", text: `Failed to delete ${fileName}: ${e}` });
           } finally {
             setBusySlug(null);
           }
@@ -617,10 +670,12 @@ export function usePlatformsPage(): PlatformsPageState {
     toggleSync,
     setAllSync,
     changeCore,
+    downloadPending,
     downloadRequired,
     downloadAll,
     downloadOne,
     deleteBios,
+    deleteBiosFile,
     removeShortcuts,
     deleteSaves,
   };
