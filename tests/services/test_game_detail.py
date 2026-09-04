@@ -686,11 +686,20 @@ class TestGetCachedGameDetailCarriesNoBiosAnswer:
 
     @pytest.mark.asyncio
     async def test_a_populated_firmware_cache_changes_nothing(self, plugin, game_detail_service, tmp_path):
-        """Even with the server listing warm, no answer rides this payload."""
+        """Even with the server listing warm, no answer rides this payload.
+
+        The seed is the whole difference between this case and the cold one above
+        — every assertion below is equally true of an empty cache. So the cache is
+        read before it is written: that raises the moment it moves off this
+        attribute, where a bare assignment would create a dead name and leave the
+        test asserting what its cold-cache sibling already covers.
+        """
         from unittest.mock import patch
 
         _seed_rom(plugin, 42, app_id=50000, name="Pokemon", platform_slug="gba")
-        plugin._firmware_service._firmware_cache = [
+        listing = plugin._firmware_service._listing
+        assert listing._firmware_cache is None
+        listing._firmware_cache = [
             {
                 "file_path": "bios/gba/gba_bios.bin",
                 "file_name": "gba_bios.bin",
@@ -699,9 +708,9 @@ class TestGetCachedGameDetailCarriesNoBiosAnswer:
                 "id": 1,
             },
         ]
-        plugin._firmware_service._firmware_cache_epoch = 99.0
+        listing._firmware_cache_epoch = 99.0
 
-        with patch.object(plugin._firmware_service, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path))):
+        with patch.object(plugin._firmware_service._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path))):
             result = game_detail_service.get_cached_game_detail(50000)
 
         assert result["bios_status"] is None

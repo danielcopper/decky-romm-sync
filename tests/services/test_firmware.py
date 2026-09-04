@@ -137,6 +137,19 @@ def _make_firmware_service(
     )
 
 
+def _set_loop(fw: FirmwareService, loop) -> None:
+    """Point every sub-service that offloads work at *loop*.
+
+    The loop is config-carried, so each sub-service holds its own reference and
+    the façade holds none. A test that swaps the loop has to reach all three, or
+    the swap lands on nothing and the offloaded hop runs on the loop the fixture
+    happened to construct the service under.
+    """
+    fw._status._loop = loop
+    fw._downloads._loop = loop
+    fw._deletion._loop = loop
+
+
 def _inline_executor(fw: FirmwareService) -> None:
     """Run every ``run_in_executor`` hop inline, on the calling task.
 
@@ -152,12 +165,12 @@ def _inline_executor(fw: FirmwareService) -> None:
 
     loop = MagicMock()
     loop.run_in_executor = run
-    fw._loop = loop
+    _set_loop(fw, loop)
 
 
 def _resolver(fw: FirmwareService) -> FakeFirmwareResolver:
     """The fake resolver behind *fw*, for tests that seed it after construction."""
-    resolver = fw._firmware_resolver
+    resolver = fw._demand._firmware_resolver
     assert isinstance(resolver, FakeFirmwareResolver)
     return resolver
 
@@ -173,7 +186,7 @@ def _resolver_reads(fw: FirmwareService, bios_dir) -> None:
 
 def _stub_listing(fw: FirmwareService, firmware_list: list[dict[str, Any]]) -> None:
     """Answer ``list_firmware`` with *firmware_list* on the service's API stub."""
-    api = fw._romm_api
+    api = fw._config.romm_api
     assert isinstance(api, MagicMock)
     api.list_firmware.return_value = firmware_list
 
@@ -243,16 +256,49 @@ def plugin():
 
 @pytest.fixture(autouse=True)
 async def _set_event_loop(plugin, fw):
-    """Ensure plugin.loop and fw._loop match the running event loop for async tests."""
+    """Ensure plugin.loop and the firmware sub-services match the running event loop."""
     loop = asyncio.get_event_loop()
     plugin.loop = loop
-    fw._loop = loop
+    _set_loop(fw, loop)
 
 
 # Shorthand to access the firmware service from plugin
 @pytest.fixture
 def fw(plugin):
     return plugin._firmware_service
+
+
+# What the façade holds. Everything else the service needs lives on a sub-service.
+_FACADE_ATTRIBUTES = frozenset({"_config", "_listing", "_demand", "_status", "_downloads", "_deletion"})
+
+
+@pytest.fixture(autouse=True)
+def _no_dead_rebind_on_the_facade(fw):
+    """Fail an assignment to a name the façade does not have.
+
+    Python answers such an assignment by creating the name, so ``fw._loop = loop``
+    — a line meaning to swap the loop the offloaded hops run on — lands on the
+    façade, does nothing, and leaves the test green against whichever loop the
+    fixture built the service under. Nothing else notices: the call it was meant
+    to redirect still works, just against the old object. This makes the
+    assignment itself the failure.
+
+    Two assignments stay allowed, and only one of them is safe. Shadowing a name
+    the façade already answers to is deliberate — ``fw.check_platform_bios = mock``
+    replaces a real method rather than inventing one. Rebinding one of the six
+    construction slots is NOT: ``fw._listing = FakeListing()`` reaches
+    ``invalidate_firmware_cache`` and nothing else, because every sub-service bound
+    its own reference to the listing when it was built, and the same holds for
+    ``_demand``. A swap has to reach every holder, so build the service around the
+    fake rather than rebinding it afterwards.
+    """
+    yield
+    stray = sorted(name for name in vars(fw) if name not in _FACADE_ATTRIBUTES and not hasattr(type(fw), name))
+    assert not stray, (
+        f"assigned {stray} to the façade, which holds no such name — the assignment did nothing. "
+        f"Firmware state lives on a sub-service: assign inside fw._listing / fw._demand / fw._status / "
+        f"fw._downloads / fw._deletion, or _set_loop(fw, loop) for the event loop."
+    )
 
 
 def _declare(fw: FirmwareService, *specs: tuple[str, str, bool]) -> None:
@@ -273,15 +319,44 @@ def _declare(fw: FirmwareService, *specs: tuple[str, str, bool]) -> None:
         )
 
 
+class TestTheFacadeOnlyDelegates:
+    """The façade wires the sub-services and delegates. It implements nothing itself.
+
+    Stated as the whole surface rather than as a list of banned names, so it fails
+    in both directions: a helper the split relocated cannot come back here, and a
+    new method cannot arrive without someone deciding it belongs on the façade
+    rather than in the module that owns its job. A second implementation here is
+    what the split cost — presence, the destination it is read at, and the RomM
+    listing each have one owner now, and a convenience wrapper on the façade would
+    answer from whatever it happened to hold.
+    """
+
+    def test_the_facade_defines_exactly_its_delegations(self):
+        own = {name for name, value in vars(FirmwareService).items() if callable(value) and not name.startswith("__")}
+        assert own == {
+            "invalidate_firmware_cache",
+            "get_firmware_status",
+            "check_platform_bios",
+            "download_firmware",
+            "download_all_firmware",
+            "download_required_firmware",
+            "delete_platform_bios",
+        }
+
+    def test_the_facade_holds_only_its_sub_services(self, fw):
+        """Construction leaves the config and the five sub-services, and nothing else."""
+        assert set(vars(fw)) == _FACADE_ATTRIBUTES
+
+
 class TestFirmwareDestPath:
     """Where a firmware file lands: the resolver's placement, or flat as a fallback."""
 
     def test_flat_default_when_nothing_declares_the_file(self, fw, tmp_path):
         """A server file no emulator asks for has no stated layout — flat in the root."""
         bios = os.path.join(str(tmp_path), "retrodeck", "bios")
-        fw._retrodeck_paths = FakeRetroDeckPaths(bios=bios)
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=bios)
         firmware = {"file_name": "bios.bin", "file_path": "bios/n64/bios.bin"}
-        dest = fw._firmware_dest_path(firmware, None)
+        dest = fw._demand.dest_path(firmware, None)
         assert dest == os.path.join(str(tmp_path), "retrodeck", "bios", "bios.bin")
 
     def test_subdirectory_placement_is_honoured(self, fw, tmp_path):
@@ -290,17 +365,17 @@ class TestFirmwareDestPath:
             "dc_boot.bin", required_by=["flycast_libretro"], relative_path="dc/dc_boot.bin"
         )
         bios = os.path.join(str(tmp_path), "retrodeck", "bios")
-        fw._retrodeck_paths = FakeRetroDeckPaths(bios=bios)
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=bios)
         firmware = {"file_name": "dc_boot.bin", "file_path": "bios/dc/dc_boot.bin"}
-        dest = fw._firmware_dest_path(firmware, placement)
+        dest = fw._demand.dest_path(firmware, placement)
         assert dest == os.path.join(str(tmp_path), "retrodeck", "bios", "dc", "dc_boot.bin")
 
     def test_placement_without_a_subdirectory_goes_flat(self, fw, tmp_path):
         placement = _resolver(fw).declare("scph5501.bin", required_by=["mednafen_psx_libretro"])
         bios = os.path.join(str(tmp_path), "retrodeck", "bios")
-        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=bios)):
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=bios)):
             firmware = {"file_name": "scph5501.bin", "file_path": "bios/ps/scph5501.bin"}
-            dest = fw._firmware_dest_path(firmware, placement)
+            dest = fw._demand.dest_path(firmware, placement)
             assert dest == os.path.join(str(tmp_path), "retrodeck", "bios", "scph5501.bin")
 
     def test_a_placement_outside_the_root_falls_back_to_the_file_name(self, fw, tmp_path):
@@ -313,17 +388,17 @@ class TestFirmwareDestPath:
         """
         placement = _resolver(fw).declare("bios7.bin", required_by=["melonds_libretro"], relative_path=None)
         bios = os.path.join(str(tmp_path), "retrodeck", "bios")
-        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=bios)):
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=bios)):
             firmware = {"file_name": "bios7.bin", "file_path": "bios/nds/bios7.bin"}
-            dest = fw._firmware_dest_path(firmware, placement)
+            dest = fw._demand.dest_path(firmware, placement)
             assert dest == os.path.join(bios, "bios7.bin")
 
     def test_uses_dynamic_bios_path(self, fw, tmp_path):
         """Uses ``retrodeck_paths.bios_path()`` for the base directory."""
         sd_bios = "/run/media/deck/Emulation/retrodeck/bios"
-        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=sd_bios)):
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=sd_bios)):
             firmware = {"file_name": "fw.bin", "file_path": "bios/saturn/fw.bin"}
-            dest = fw._firmware_dest_path(firmware, None)
+            dest = fw._demand.dest_path(firmware, None)
             assert dest == os.path.join(sd_bios, "fw.bin")
 
     def test_a_traversing_placement_is_refused(self, fw, tmp_path):
@@ -333,10 +408,10 @@ class TestFirmwareDestPath:
         placement = _resolver(fw).declare("evil.bin", required_by=["x_libretro"], relative_path="../evil.bin")
         bios = os.path.join(str(tmp_path), "retrodeck", "bios")
         with (
-            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=bios)),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=bios)),
             pytest.raises(PathTraversalError),
         ):
-            fw._firmware_dest_path({"file_name": "evil.bin"}, placement)
+            fw._demand.dest_path({"file_name": "evil.bin"}, placement)
 
     def test_a_declaration_the_distribution_links_onto_the_root_is_still_a_destination(self, fw, tmp_path):
         """RetroDECK points ``<bios>/pcsx2/bios`` at ``<bios>``, so LRPS2's folder IS the root.
@@ -348,9 +423,9 @@ class TestFirmwareDestPath:
         (bios_dir / "pcsx2").mkdir(parents=True)
         (bios_dir / "pcsx2" / "bios").symlink_to(bios_dir)
         placement = _resolver(fw).declare("bios", required_by=["pcsx2_libretro"], relative_path="pcsx2/bios")
-        fw._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
 
-        assert fw._firmware_dest_path({"file_name": "bios"}, placement) == os.path.realpath(str(bios_dir))
+        assert fw._demand.dest_path({"file_name": "bios"}, placement) == os.path.realpath(str(bios_dir))
 
     def test_a_server_file_name_may_not_land_on_the_root(self, fw, tmp_path):
         """The opt-in is the declaration's, not the listing's — an empty name is no file."""
@@ -358,10 +433,10 @@ class TestFirmwareDestPath:
 
         bios_dir = tmp_path / "retrodeck" / "bios"
         bios_dir.mkdir(parents=True)
-        fw._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
 
         with pytest.raises(PathTraversalError):
-            fw._firmware_dest_path({"file_name": ""}, None)
+            fw._demand.dest_path({"file_name": ""}, None)
 
 
 class TestPresenceComesFromTheReading:
@@ -915,7 +990,7 @@ class TestGetFirmwareStatus:
             {"id": 3, "file_name": "gba_bios.bin", "file_path": "bios/gba/gba_bios.bin", "file_size_bytes": 300},
         ]
         # A real loop so the executor-run reads hit the shared fake UoW.
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
         # "dc": a bound ROM. "ps2": only an unbound ROM. "gba": no ROM rows.
         _seed_rom(plugin._uow, rom_id=42, platform_slug="dc", app_id=1)
         _seed_rom(plugin._uow, rom_id=43, platform_slug="ps2", app_id=None)
@@ -950,7 +1025,7 @@ class TestGetFirmwareStatus:
         _stub_listing(fw, firmware_list)
         _inline_executor(fw)
 
-        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
             result = await fw.get_firmware_status()
         assert result["success"] is True
         assert result["platforms"][0]["files"][0]["downloaded"] is True
@@ -959,7 +1034,7 @@ class TestGetFirmwareStatus:
     async def test_handles_api_error_with_offline_fallback(self, plugin, fw):
         # Real loop: only the HTTP list_firmware fails; the installed-slugs read
         # against the fake UoW still succeeds.
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
 
         with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("Connection refused")):
             result = await fw.get_firmware_status()
@@ -1307,7 +1382,7 @@ class TestGetFirmwareStatusBiosAggregates:
             core_info=_dc_core_info(),
             retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
         )
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
 
         with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
             result = await fw.get_firmware_status()
@@ -1337,7 +1412,7 @@ class TestGetFirmwareStatusBiosAggregates:
             firmware_folder_verdicts=FakeFolderVerdicts(),
             core_info=_test_core_info(),
         )
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
 
         with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
             result = await fw.get_firmware_status()
@@ -1362,7 +1437,7 @@ class TestGetFirmwareStatusBiosAggregates:
             firmware_folder_verdicts=FakeFolderVerdicts(),
             core_info=FakeCoreInfoProvider(options=[]),
         )
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
 
         with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
             result = await fw.get_firmware_status()
@@ -1396,20 +1471,20 @@ class TestGetFirmwareStatusBiosAggregates:
                 "md5_hash": "",
             },
         ]
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
 
-        real_exists = fw._firmware_file_store.exists
+        real_exists = fw._config.firmware_file_store.exists
         checked: list[str] = []
 
         def _tracking_exists(path):
             checked.append(path)
             return real_exists(path)
 
-        fw._firmware_file_store.exists = _tracking_exists
+        fw._config.firmware_file_store.exists = _tracking_exists
 
         with (
             patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
-            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
         ):
             result = await fw.get_firmware_status()
 
@@ -1764,8 +1839,8 @@ class TestDownloadFirmware:
             with open(dest, "wb") as f:
                 f.write(content)
 
-        fw._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
-        fw._loop = asyncio.get_event_loop()
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+        _set_loop(fw, asyncio.get_event_loop())
 
         with (
             patch.object(plugin._romm_api, "get_firmware", return_value=fw_detail),
@@ -1795,7 +1870,7 @@ class TestDownloadFirmware:
             "md5_hash": "",
         }
 
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
 
         with (
             patch.object(plugin._romm_api, "get_firmware", return_value=fw_detail),
@@ -1822,8 +1897,8 @@ class TestDownloadFirmware:
             "md5_hash": "",
         }
 
-        fw._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
-        fw._loop = asyncio.get_event_loop()
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+        _set_loop(fw, asyncio.get_event_loop())
 
         download_called = []
 
@@ -1876,7 +1951,7 @@ class TestDownloadAllFirmware:
             },
         ]
 
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
 
         download_called_ids = []
 
@@ -1886,8 +1961,8 @@ class TestDownloadAllFirmware:
 
         with (
             patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
-            patch.object(fw, "_download_one", side_effect=fake_download_firmware),
-            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_firmware),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
         ):
             result = await fw.download_all_firmware("dc")
 
@@ -1918,7 +1993,7 @@ class TestDownloadAllFirmware:
             declares_directory=True,
             folder=FolderVerdict(satisfied=False),
         )
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
         download_called_ids = []
 
         async def fake_download_firmware(fw_id, _placements):
@@ -1927,8 +2002,8 @@ class TestDownloadAllFirmware:
 
         with (
             patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
-            patch.object(fw, "_download_one", side_effect=fake_download_firmware),
-            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_firmware),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
         ):
             result = await fw.download_all_firmware("ps2")
 
@@ -2017,7 +2092,7 @@ class TestDeletePlatformBios:
             firmware_file_store=store,
             retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
         )
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
         _declare(fw, ("scph5501.bin", "PS1 US BIOS", True), ("scph5502.bin", "PS1 EU BIOS", True))
 
         # The downloaded file has a BiosFile record to prune (firmware slug "ps").
@@ -2089,7 +2164,7 @@ class TestDeletePlatformBios:
             retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
             core_info=_test_core_info(),
         )
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
         _resolver(fw).declare("IPL.bin", required_by=[_TEST_CORE], description="GameCube IPL")
         _resolver(fw).declare(
             "codehandler.bin",
@@ -2274,7 +2349,7 @@ class TestDeletePlatformBios:
             retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
             core_info=_test_core_info(),
         )
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
         for slug in ("psx", "ps"):
             plugin._uow.bios_files.save(
                 BiosFile.mark_downloaded(
@@ -2445,7 +2520,7 @@ class TestCheckPlatformBiosRequired:
         _stub_listing(fw, firmware_list)
         _inline_executor(fw)
 
-        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
             result = await fw.check_platform_bios("dc")
         assert result["needs_bios"] is True
         assert result["required_count"] == 2
@@ -2488,7 +2563,7 @@ class TestCheckPlatformBiosRequired:
         _stub_listing(fw, firmware_list)
         _inline_executor(fw)
 
-        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
             result = await fw.check_platform_bios("dc")
         assert result["needs_bios"] is True
         assert result["required_count"] == 2
@@ -2731,7 +2806,7 @@ class TestCheckPlatformBiosNoCoreFields:
         )
         fw = _make_firmware_service(romm_api=plugin._romm_api, core_info=core_info)
         # no emulator declares anything here
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
 
         with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
             result = await fw.check_platform_bios("sms")
@@ -2768,7 +2843,7 @@ class TestCheckPlatformBiosNoCoreFields:
         _stub_listing(fw, firmware_list)
         _inline_executor(fw)
 
-        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
             result = await fw.check_platform_bios("gba")
 
         assert result["needs_bios"] is True
@@ -2800,10 +2875,10 @@ class TestDownloadRequiredFirmware:
             },
         ]
 
-        fw._core_info.active_core = (_TEST_CORE, "Test Core")
+        fw._config.core_info.active_core = (_TEST_CORE, "Test Core")
         _declare(fw, ("required.bin", "Required BIOS", True), ("optional.bin", "Optional firmware", False))
 
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
 
         download_called_ids = []
 
@@ -2813,7 +2888,7 @@ class TestDownloadRequiredFirmware:
 
         with (
             patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
-            patch.object(fw, "_download_one", side_effect=fake_download_firmware),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_firmware),
         ):
             result = await fw.download_required_firmware("dc")
 
@@ -2856,7 +2931,7 @@ class TestDownloadRequiredFirmware:
             download_called_ids.append(fw_id)
             return {"success": True}
 
-        with patch.object(fw, "_download_one", side_effect=fake_download_firmware):
+        with patch.object(fw._downloads, "_download_one", side_effect=fake_download_firmware):
             result = await fw.download_required_firmware("dc")
 
         # RAW slug matched the firmware file_path filter, so the file is considered.
@@ -2896,7 +2971,7 @@ class TestDownloadRequiredFirmware:
 
         _declare(fw, ("existing.bin", "Already downloaded", True), ("missing.bin", "Not yet downloaded", True))
 
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
 
         download_called_ids = []
 
@@ -2906,8 +2981,8 @@ class TestDownloadRequiredFirmware:
 
         with (
             patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
-            patch.object(fw, "_download_one", side_effect=fake_download_firmware),
-            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_firmware),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
         ):
             result = await fw.download_required_firmware("dc")
 
@@ -2939,7 +3014,7 @@ class TestCheckPlatformBiosOffline:
             core_info=_dc_core_info(),
             retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
         )
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
 
         with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
             result = await fw.check_platform_bios("dc")
@@ -2962,7 +3037,7 @@ class TestCheckPlatformBiosOffline:
         """
         with (
             patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")),
-            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))),
         ):
             result = await fw.check_platform_bios("n64")
 
@@ -2982,7 +3057,7 @@ class TestCheckPlatformBiosOffline:
             firmware_resolver=FakeFirmwareResolver(unread_cores=frozenset({"n64_libretro"})),
             core_info=FakeCoreInfoProvider(options=[libretro_option("n64_libretro", "Mupen64")]),
         )
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
 
         with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
             result = await fw.check_platform_bios("n64")
@@ -2992,7 +3067,7 @@ class TestCheckPlatformBiosOffline:
     @pytest.mark.asyncio
     async def test_a_cached_listing_still_contributes_its_own_files(self, plugin, fw, tmp_path):
         """The listing cache is what keeps the server-only rows available offline."""
-        fw._firmware_cache = [
+        fw._listing._firmware_cache = [
             {
                 "id": 1,
                 "file_name": "scph5501.bin",
@@ -3001,7 +3076,7 @@ class TestCheckPlatformBiosOffline:
                 "md5_hash": "",
             },
         ]
-        fw._firmware_cache_epoch = fw._clock.time()
+        fw._listing._firmware_cache_epoch = fw._config.clock.time()
         _declare(fw, ("scph5501.bin", "PS1 US BIOS", True))
 
         with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
@@ -3020,7 +3095,7 @@ class TestCheckPlatformBiosOffline:
         """
         with (
             patch.object(plugin._romm_api, "list_firmware", return_value=[]),
-            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))),
         ):
             result = await fw.check_platform_bios("n64")
 
@@ -3084,7 +3159,7 @@ class TestPerCoreFiltering:
     async def test_the_launching_core_decides_what_counts_as_required(self, tmp_path):
         """gpSP requires the GBA BIOS, and only the files gpSP opens are counted."""
         fw = self._service(("gpsp_libretro", "gpSP"))
-        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
             result = await fw.check_platform_bios("gba")
 
         assert result["needs_bios"] is True
@@ -3200,15 +3275,15 @@ class TestCheckPlatformBiosPreResolvedCore:
         ]
         self._gba_two_core_service(fw, firmware_list)
         # System default = mGBA (optional). The per-game override should win.
-        fw._core_info.active_core = ("mgba_libretro", "mGBA")
+        fw._config.core_info.active_core = ("mgba_libretro", "mGBA")
 
-        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
             result = await fw.check_platform_bios("gba", active_core_so="gpsp_libretro")
 
         assert result["needs_bios"] is True
         assert result["required_count"] == 1  # gpSP requires gba_bios.bin
         # The pre-resolved core short-circuits the system-default read entirely.
-        assert fw._core_info.active_core_calls == []
+        assert fw._config.core_info.active_core_calls == []
 
     @pytest.mark.asyncio
     async def test_none_falls_back_to_system_default(self, fw, tmp_path):
@@ -3222,15 +3297,15 @@ class TestCheckPlatformBiosPreResolvedCore:
             {"id": 1, "file_name": "gba_bios.bin", "file_path": "bios/gba/gba_bios.bin", "md5_hash": ""},
         ]
         self._gba_two_core_service(fw, firmware_list)
-        fw._core_info.active_core = ("mgba_libretro", "mGBA")
+        fw._config.core_info.active_core = ("mgba_libretro", "mGBA")
 
-        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
+        with patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
             result = await fw.check_platform_bios("gba")
 
         assert result["needs_bios"] is True
         assert result["required_count"] == 0  # mGBA treats gba_bios.bin as optional
         # None → the system default was read once for the system "gba".
-        assert fw._core_info.active_core_calls == ["gba"]
+        assert fw._config.core_info.active_core_calls == ["gba"]
 
 
 class TestDownloadFirmwareErrors:
@@ -3239,8 +3314,8 @@ class TestDownloadFirmwareErrors:
     @pytest.mark.asyncio
     async def test_fetch_metadata_error(self, fw):
         """Fetch firmware metadata failure returns error."""
-        assert isinstance(fw._romm_api, MagicMock)
-        fw._romm_api.get_firmware.side_effect = Exception("not found")
+        assert isinstance(fw._config.romm_api, MagicMock)
+        fw._config.romm_api.get_firmware.side_effect = Exception("not found")
         _inline_executor(fw)
 
         result = await fw.download_firmware(999)
@@ -3272,8 +3347,8 @@ class TestDownloadFirmwareErrors:
             with open(dest, "wb") as f:
                 f.write(content)
 
-        fw._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
-        fw._loop = asyncio.get_event_loop()
+        fw._demand._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+        _set_loop(fw, asyncio.get_event_loop())
 
         with (
             patch.object(plugin._romm_api, "get_firmware", return_value=fw_detail),
@@ -3307,8 +3382,8 @@ class TestFirmwareListCache:
         api.list_firmware.return_value = [{"id": 1, "file_name": "bios.bin"}]
         fw = self._make_service(api)
 
-        result1 = fw._get_firmware_list()
-        result2 = fw._get_firmware_list()
+        result1 = fw._listing.get_firmware_list()
+        result2 = fw._listing.get_firmware_list()
 
         assert result1 == [{"id": 1, "file_name": "bios.bin"}]
         assert result2 == result1
@@ -3323,14 +3398,14 @@ class TestFirmwareListCache:
         ]
         fw = self._make_service(api)
 
-        result1 = fw._get_firmware_list()
+        result1 = fw._listing.get_firmware_list()
         assert len(result1) == 1
         assert api.list_firmware.call_count == 1
 
         # Simulate TTL expiry by backdating the wall-clock cache epoch
-        fw._firmware_cache_epoch = fw._clock.time() - 3601
+        fw._listing._firmware_cache_epoch = fw._config.clock.time() - 3601
 
-        result2 = fw._get_firmware_list()
+        result2 = fw._listing.get_firmware_list()
         assert len(result2) == 2
         assert api.list_firmware.call_count == 2
 
@@ -3360,7 +3435,7 @@ class TestFirmwareListCache:
 
         # The restored in-memory cache is reconstructed from the thin aggregate:
         # synthetic file_path round-trips through parse_firmware_slug, md5 dropped.
-        assert fw._firmware_cache == [
+        assert fw._listing._firmware_cache == [
             {
                 "id": 1,
                 "file_name": "bios.bin",
@@ -3369,9 +3444,9 @@ class TestFirmwareListCache:
                 "md5_hash": "",
             }
         ]
-        assert fw._firmware_cache_epoch == stale_epoch
+        assert fw._listing._firmware_cache_epoch == stale_epoch
 
-        result = fw._get_firmware_list()
+        result = fw._listing.get_firmware_list()
 
         assert result == [{"id": 2, "file_name": "fresh.bin"}]
         assert api.list_firmware.call_count == 1
@@ -3385,11 +3460,11 @@ class TestFirmwareListCache:
         ]
         fw = self._make_service(api)
 
-        fw._get_firmware_list()
+        fw._listing.get_firmware_list()
         assert api.list_firmware.call_count == 1
 
         fw.invalidate_firmware_cache()
-        result = fw._get_firmware_list()
+        result = fw._listing.get_firmware_list()
         assert len(result) == 2
         assert api.list_firmware.call_count == 2
 
@@ -3402,14 +3477,14 @@ class TestFirmwareListCache:
         ]
         fw = self._make_service(api)
 
-        result1 = fw._get_firmware_list()
+        result1 = fw._listing.get_firmware_list()
         assert len(result1) == 1
 
         # Expire the cache so it tries to re-fetch (must be far enough in the past
         # to exceed TTL even when system uptime is short)
-        fw._firmware_cache_epoch = fw._clock.time() - 7200
+        fw._listing._firmware_cache_epoch = fw._config.clock.time() - 7200
 
-        result2 = fw._get_firmware_list()
+        result2 = fw._listing.get_firmware_list()
         assert result2 == result1  # Falls back to stale cache
         assert api.list_firmware.call_count == 2
 
@@ -3420,7 +3495,7 @@ class TestFirmwareListCache:
         fw = self._make_service(api)
 
         with pytest.raises(Exception, match="connection refused"):
-            fw._get_firmware_list()
+            fw._listing.get_firmware_list()
 
 
 class TestFirmwareCachePersistence:
@@ -3441,7 +3516,7 @@ class TestFirmwareCachePersistence:
         fw = _make_firmware_service(uow_factory=FakeUnitOfWorkFactory(uow))
 
         # Reconstructed thin dict: synthetic file_path, md5 dropped.
-        assert fw._firmware_cache == [
+        assert fw._listing._firmware_cache == [
             {
                 "id": 1,
                 "file_name": "bios.bin",
@@ -3450,27 +3525,27 @@ class TestFirmwareCachePersistence:
                 "md5_hash": "",
             }
         ]
-        assert fw._firmware_cache_epoch == 1000.0
+        assert fw._listing._firmware_cache_epoch == 1000.0
 
     def test_empty_db_cache_leaves_memory_none(self):
         """Empty DB cache doesn't populate the in-memory cache."""
         fw = _make_firmware_service(uow_factory=FakeUnitOfWorkFactory(FakeUnitOfWork()))
-        assert fw._firmware_cache is None
+        assert fw._listing._firmware_cache is None
 
     def test_db_read_failure_handled_gracefully(self):
         """A repo error during restore doesn't crash init."""
         uow = FakeUnitOfWork()
         with patch.object(uow.firmware_cache, "iter_all", side_effect=OSError("db locked")):
             fw = _make_firmware_service(uow_factory=FakeUnitOfWorkFactory(uow))
-        assert fw._firmware_cache is None
+        assert fw._listing._firmware_cache is None
 
     def test_cache_persisted_after_http_fetch(self, plugin, fw):
         """Firmware cache written to the DB after a successful HTTP fetch."""
         firmware_list = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin", "file_size_bytes": 512}]
         _stub_listing(fw, firmware_list)
-        fw._firmware_cache = None  # Force refetch
+        fw._listing._firmware_cache = None  # Force refetch
 
-        result = fw._get_firmware_list()
+        result = fw._listing.get_firmware_list()
 
         assert result == firmware_list
         assert plugin._uow.firmware_cache.replace_count == 1
@@ -3479,7 +3554,7 @@ class TestFirmwareCachePersistence:
         assert stored is not None
         assert stored.id == 1
         assert stored.file_size_bytes == 512
-        assert stored.cached_at == fw._firmware_cache_epoch
+        assert stored.cached_at == fw._listing._firmware_cache_epoch
 
     def test_invalidate_clears_persisted_cache(self, plugin, fw):
         """invalidate_firmware_cache drops every DB cache row."""
@@ -3487,25 +3562,25 @@ class TestFirmwareCachePersistence:
             plugin._uow,
             [FirmwareCacheEntry.cached(id=1, name="x.bin", platform_slug="dc", file_size_bytes=10, cached_at=1.0)],
         )
-        fw._firmware_cache = [{"id": 1}]
-        fw._firmware_cache_epoch = 1.0
+        fw._listing._firmware_cache = [{"id": 1}]
+        fw._listing._firmware_cache_epoch = 1.0
 
         fw.invalidate_firmware_cache()
 
-        assert fw._firmware_cache is None
+        assert fw._listing._firmware_cache is None
         assert list(plugin._uow.firmware_cache.iter_all()) == []
 
     def test_persist_failure_does_not_crash_fetch(self, plugin, fw):
         """A DB write failure during fetch doesn't break the return value."""
         firmware_list = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin", "file_size_bytes": 512}]
         _stub_listing(fw, firmware_list)
-        fw._firmware_cache = None
+        fw._listing._firmware_cache = None
 
         with patch.object(plugin._uow.firmware_cache, "replace_all", side_effect=OSError("disk full")):
-            result = fw._get_firmware_list()
+            result = fw._listing.get_firmware_list()
 
         assert result == firmware_list
-        assert fw._firmware_cache == firmware_list
+        assert fw._listing._firmware_cache == firmware_list
 
 
 class TestDeletePlatformBiosIOLogsWarnings:
@@ -3518,7 +3593,7 @@ class TestDeletePlatformBiosIOLogsWarnings:
 
         fake_files = FakeFirmwareFileStore({"/fake/bios/scph5501.bin": b"\x00", "/fake/bios/scph5502.bin": b"\x00"})
         fake_files.remove_failures.add("/fake/bios/scph5501.bin")
-        fw._firmware_file_store = fake_files
+        fw._deletion._firmware_file_store = fake_files
 
         for name in ("scph5501.bin", "scph5502.bin"):
             plugin._uow.bios_files.save(
@@ -3568,8 +3643,8 @@ class TestBadPathFirmwareCallables:
 
         uow = FakeUnitOfWork()
         fw = self._build_service(fake_romm_api, uow=uow)
-        fw._firmware_cache = [{"id": 1, "file_name": "bios.bin"}]
-        fw._firmware_cache_epoch = 1.0
+        fw._listing._firmware_cache = [{"id": 1, "file_name": "bios.bin"}]
+        fw._listing._firmware_cache_epoch = 1.0
 
         with (
             patch.object(uow.firmware_cache, "clear", side_effect=OSError("disk full")),
@@ -3578,8 +3653,8 @@ class TestBadPathFirmwareCallables:
             fw.invalidate_firmware_cache()  # must not raise
 
         # In-memory cache cleared regardless of DB failure.
-        assert fw._firmware_cache is None
-        assert fw._firmware_cache_epoch == 0
+        assert fw._listing._firmware_cache is None
+        assert fw._listing._firmware_cache_epoch == 0
         # The failure surfaced as a warning.
         assert any("disk full" in record.getMessage() for record in caplog.records)
 
@@ -3589,7 +3664,7 @@ class TestBadPathFirmwareCallables:
         import logging
 
         fw = self._build_service(fake_romm_api)
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
         fake_romm_api.fail_on_next(OSError("connection reset"))
 
         with caplog.at_level(logging.ERROR):
@@ -3599,7 +3674,7 @@ class TestBadPathFirmwareCallables:
         assert result["downloaded"] == 0
         assert "message" in result
         # The cache was not populated by the failed fetch.
-        assert fw._firmware_cache is None
+        assert fw._listing._firmware_cache is None
 
     @pytest.mark.asyncio
     async def test_download_required_firmware_returns_error_with_zero_when_list_fetch_fails(
@@ -3609,7 +3684,7 @@ class TestBadPathFirmwareCallables:
         import logging
 
         fw = self._build_service(fake_romm_api)
-        fw._loop = asyncio.get_event_loop()
+        _set_loop(fw, asyncio.get_event_loop())
         fake_romm_api.fail_on_next(OSError("connection reset"))
 
         with caplog.at_level(logging.ERROR):
@@ -3619,4 +3694,4 @@ class TestBadPathFirmwareCallables:
         assert result["downloaded"] == 0
         assert "message" in result
         # The cache was not populated by the failed fetch.
-        assert fw._firmware_cache is None
+        assert fw._listing._firmware_cache is None

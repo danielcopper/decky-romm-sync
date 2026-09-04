@@ -220,7 +220,7 @@ class FirmwareCatalogue:
         prevent. A caller reaching this with no core to name has not established
         a reading, whether it says so with ``None`` or with an empty list, so
         both answer the same. That makes the refusal belt-and-braces rather than
-        the only guard: ``FirmwareService._core_scope`` already returns ``None``
+        the only guard: ``services/firmware/status.py``'s ``_core_scope`` already returns ``None``
         for a platform ES-DE offers no libretro core for.
         """
         if not self.resolved or not core_sos:
