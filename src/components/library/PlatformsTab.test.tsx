@@ -1526,6 +1526,42 @@ describe("Library › Platforms", () => {
       expect(buttonByText(container, "Download")).toBeUndefined();
     });
 
+    it("keeps a row with no button reachable, which is what lets the table scroll", async () => {
+      // The register's rule: a region scrolls only by moving focus, so a row
+      // nobody can focus is a row nobody can scroll past. A row with neither
+      // button needs the Focusable wrapper, and the wrapper was lost once
+      // because the prop it keys on became an always-truthy element. happy-dom
+      // has no nav tree, but the `Focusable` mock does render a testid, so this
+      // one the suite can see.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              // Present, ours to keep, in the library: no Download, no Delete.
+              firmwareFile({
+                file_name: "settled.bin",
+                downloaded: true,
+                satisfied: true,
+                supplied_by: "RetroDECK",
+                deletable_count: 0,
+              }),
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      const nameCell = [...container.querySelectorAll<HTMLElement>("span")].find(
+        (el) => el.textContent === "settled.bin",
+      );
+      expect(nameCell).toBeTruthy();
+      // grid cell → grid → the row's wrapper, which must be the Focusable.
+      const wrapper = nameCell!.closest("div")!.parentElement!;
+      expect(wrapper.dataset.testid).toBe("focusable");
+    });
+
     it("offers a per-row Delete only where a download record still holds the file", async () => {
       // The GameCube pane from the device pass, which is the whole point of the
       // field: `codehandler.bin` is RetroDECK's own, present on disk, and no
@@ -1637,6 +1673,38 @@ describe("Library › Platforms", () => {
       expect(vi.mocked(backend.deleteBiosFolder)).toHaveBeenCalledWith("gba", "/home/deck/retrodeck/bios/pcsx2/bios");
     });
 
+    it("shows a folder row no description, because its verdict is its meaning", async () => {
+      // LRPS2 never reads a file name: what the row means is that the folder
+      // holds something the core will boot, which the verdict mark and the image
+      // lines already say. The corpus's one folder is described as
+      // `'pcsx2/bios' folder`, and once the name comes out that leaves the bare
+      // word "folder" — a second spelling of `declared_kind`.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({
+                file_name: "bios",
+                declared_path: "pcsx2/bios",
+                declared_kind: "directory",
+                description: "'pcsx2/bios' folder",
+                on_server: false,
+                satisfied: true,
+                images: ["USA v02.00(…) Console"],
+              }),
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("pcsx2/bios");
+      expect(container.textContent).toContain("USA v02.00(…) Console");
+      expect(container.textContent).not.toContain("folder");
+    });
+
     it("offers a folder row no delete when we downloaded nothing into it", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
@@ -1659,6 +1727,54 @@ describe("Library › Platforms", () => {
       await flushAsync();
 
       expect([...container.querySelectorAll("button")].some((b) => b.textContent.startsWith("Delete ("))).toBe(false);
+    });
+
+    it("keeps the spinner on the pane whose run it is", async () => {
+      // `downloadPending` names the button and every pane reads the same state,
+      // so without the run's slug the pane a reader walks to mid-download shows
+      // a spinner belonging to a run it is not part of. That pane shows disabled
+      // buttons and the line naming the busy platform instead.
+      vi.mocked(backend.getPlatforms).mockResolvedValue({
+        success: true,
+        platforms: [
+          platform({ id: 1, slug: "gba", name: "Game Boy Advance" }),
+          platform({ id: 2, slug: "n64", name: "Nintendo 64" }),
+        ],
+      });
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [firmwarePlatform(), firmwarePlatform({ platform_slug: "n64" })],
+      });
+      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
+        platforms: [
+          { slug: "gba", name: "GBA", count: 9 },
+          { slug: "n64", name: "N64", count: 4 },
+        ],
+      });
+      let finish: (v: { success: boolean; message: string; downloaded: number }) => void = () => {};
+      vi.mocked(backend.downloadRequiredFirmware).mockReturnValue(
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      );
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Download required (1)")!);
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+      expect(container.querySelector('[data-testid="spinner"]')).toBeTruthy();
+
+      await focusRow(container, "Nintendo 64");
+
+      expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
+      expect(container.textContent).toContain("Working on Game Boy Advance");
+      expect(buttonByText(container, "Download required (1)")).toBeDisabled();
+
+      await act(async () => {
+        finish({ success: true, message: "", downloaded: 1 });
+        for (let i = 0; i < 8; i++) await Promise.resolve();
+      });
     });
 
     it("says Failed on the button that failed, then puts everything back", async () => {

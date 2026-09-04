@@ -24,10 +24,11 @@ import { getEventTarget } from "../../utils/events";
 import { SYNC_RUNNING_HINT, useSyncRunning } from "../../utils/syncRunning";
 import type { CoreAnswer, PlatformRow, PlatformsPageState, StatusScope } from "./usePlatformsPage";
 
-/** The size every secondary line on this pane is set in: the under-row
- *  description and note lines, and the Contents cell beside them. One constant,
- *  because the device pass asked for the cell to match those lines and a second
- *  literal is how they drift apart again. */
+/** The size every secondary LINE on this pane is set in: the under-row
+ *  description and note lines, the Contents cell beside them, the muted
+ *  sentences, the table header and the legend. One constant, because the device
+ *  pass asked for the cell to match those lines and a second literal is how they
+ *  drift apart again. Button labels are not lines and keep their own sizes. */
 const SECONDARY_FONT = "11px";
 
 const MUTED = "#8f98a0";
@@ -271,7 +272,7 @@ const SectionTitle: FC<{ title: string; note?: string; noteColor?: string }> = (
 );
 
 const Muted: FC<{ children: ReactNode }> = ({ children }) => (
-  <div style={{ fontSize: "11px", color: MUTED, padding: "0 16px 6px" }}>{children}</div>
+  <div style={{ fontSize: SECONDARY_FONT, color: MUTED, padding: "0 16px 6px" }}>{children}</div>
 );
 
 /** The status line for one group of one platform, or nothing. Both halves
@@ -320,7 +321,7 @@ const BiosTableHeader: FC = () => (
       gridTemplateColumns: TABLE_COLUMNS,
       gap: "8px",
       padding: "0 16px 4px",
-      fontSize: "11px",
+      fontSize: SECONDARY_FONT,
       color: MUTED,
     }}
   >
@@ -421,6 +422,14 @@ const BiosRowLines: FC<{ lines: string[] }> = ({ lines }) =>
  * which is reproducible by re-running that classification over the same tree.
  */
 function fileDescription(file: FirmwareRow): string | null {
+  // A declared FOLDER shows none. Its meaning is its verdict and the images
+  // listed under it — LRPS2 never reads a file name, so what the row says is
+  // "this folder holds something the core will boot", which `✓` and the image
+  // lines already say. The corpus's one folder is described as
+  // `'pcsx2/bios' folder`, which after the name comes out leaves the bare word
+  // "folder": a restatement of `declared_kind`. This is a rule about what a
+  // folder ROW shows, not a prediction about what descriptions exist.
+  if (file.declared_kind === "directory") return null;
   const description = file.description.trim();
   if (!description) return null;
   // A name with a space in it is not one token, so the token rule cannot see it.
@@ -493,7 +502,7 @@ const BiosLegend: FC<{ files: FirmwareRow[] }> = ({ files }) => {
         display: "flex",
         flexDirection: "column",
         padding: "2px 16px 6px",
-        fontSize: "11px",
+        fontSize: SECONDARY_FONT,
         lineHeight: 1.3,
       }}
     >
@@ -565,7 +574,9 @@ const BiosFileRow: FC<{ file: FirmwareRow; action: ReactNode }> = ({ file, actio
   if (action) return <div style={{ padding: "4px 16px" }}>{cells}</div>;
   // A row with nothing to press still has to be reachable, or the reader cannot
   // scroll past it to the rows below: the activate handler is what makes a
-  // Focusable a focus stop.
+  // Focusable a focus stop. `action` is therefore a NODE that may be null and
+  // never a component element — an element is always truthy, which is how this
+  // branch went dead once while this comment went on explaining it.
   return (
     <Focusable onActivate={() => {}} style={{ padding: "4px 16px" }}>
       {cells}
@@ -649,29 +660,6 @@ const CoreNotice: FC<{ row: PlatformRow; state: PlatformsPageState; offer: CoreO
 );
 
 /**
- * A BIOS row's one action: fetch it, or remove the copy we fetched.
- *
- * The two are alternatives by construction rather than by choice — a row is
- * offered a download only when the file is missing, and a delete only when a
- * download record's file is still on disk — so one narrow column carries both
- * and no row ever needs two buttons.
- *
- * **The delete's condition is `deletable_count` and nothing else.** That field
- * says how many of the plugin's own downloads a delete here would take, which
- * is the whole authority; `downloaded` is `os.path.exists` and is equally true
- * of `dolphin-emu/Sys/codehandler.bin`, which RetroDECK ships, no library can
- * hand back, and which sits one row above a real download on the GameCube pane.
- * The unlink itself re-reads the records and takes the path each one holds, so
- * this button cannot widen what it removes.
- *
- * A declared FOLDER offers it too, and that is a different rule from the one
- * that keeps a folder out of the downloads: there is no file to FETCH into a
- * name the emulator lists, but the files already inside it are ours wherever a
- * record names them. Its button carries the count and its delete is addressed
- * by the folder rather than by a file name, because no record carries the
- * folder's name.
- */
-/**
  * What a download button shows instead of its label: a spinner while its own run
  * is going, a red `Failed` for the moment after one fails, or nothing.
  *
@@ -703,12 +691,39 @@ function downloadLabel(
   return showing === "failed" ? FAILED_LABEL : label;
 }
 
-const RowAction: FC<{
-  row: PlatformRow;
-  state: PlatformsPageState;
-  file: FirmwareRow;
-  fetchable: Set<string>;
-}> = ({ row, state, file, fetchable }) => {
+/**
+ * A BIOS row's one action: fetch it, or remove the copy we fetched — or
+ * nothing, which is a `null` the row needs in order to wrap itself in a
+ * `Focusable`.
+ *
+ * The two buttons are alternatives in every state the pane can show, so one
+ * narrow column carries both. They are not mutually exclusive by construction,
+ * though: a file downloaded before an emu-atlas bump moved its placement is
+ * absent at the new destination (so fetchable) and present at the recorded one
+ * (so deletable). Download wins there, which is the useful half — the file the
+ * core will look for is the one that is missing.
+ *
+ * **The delete's condition is `deletable_count` and nothing else.** That field
+ * says how many of the plugin's own downloads a delete here would take, which
+ * is the whole authority; `downloaded` is `os.path.exists` and is equally true
+ * of `dolphin-emu/Sys/codehandler.bin`, which RetroDECK ships, no library can
+ * hand back, and which sits one row above a real download on the GameCube pane.
+ * The unlink itself re-reads the records and takes the path each one holds, so
+ * this button cannot widen what it removes.
+ *
+ * A declared FOLDER offers it too, and that is a different rule from the one
+ * that keeps a folder out of the downloads: there is no file to FETCH into a
+ * name the emulator lists, but the files already inside it are ours wherever a
+ * record names them. Its button carries the count and its delete is addressed
+ * by the folder rather than by a file name, because no record carries the
+ * folder's name.
+ */
+function rowAction(
+  row: PlatformRow,
+  state: PlatformsPageState,
+  file: FirmwareRow,
+  fetchable: Set<string>,
+): ReactNode | null {
   const busy = state.busySlug !== null;
   if (fetchable.has(file.file_name) && !state.serverOffline) {
     return (
@@ -744,7 +759,7 @@ const RowAction: FC<{
       <span style={{ color: RED }}>{folder ? `Delete (${count})` : "Delete"}</span>
     </DialogButton>
   );
-};
+}
 
 const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: FirmwarePlatformExt }> = ({
   row,
@@ -836,11 +851,7 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
       )}
       {files.length > 0 && <BiosTableHeader />}
       {files.map((file) => (
-        <BiosFileRow
-          key={file.file_name}
-          file={file}
-          action={<RowAction row={row} state={state} file={file} fetchable={fetchable} />}
-        />
+        <BiosFileRow key={file.file_name} file={file} action={rowAction(row, state, file, fetchable)} />
       ))}
       {files.length > 0 && <BiosLegend files={files} />}
       {unanswered > 0 && (
@@ -1035,7 +1046,7 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
         style={{ display: "flex", alignItems: "baseline", gap: "10px", padding: "8px 16px 0" }}
       >
         <span style={{ fontSize: "16px", fontWeight: 600, color: "#dcdedf", minWidth: 0 }}>{row.name}</span>
-        <span style={{ flex: "1 1 auto", fontSize: "11px", color: MUTED }}>
+        <span style={{ flex: "1 1 auto", fontSize: SECONDARY_FONT, color: MUTED }}>
           {`${row.romCount} on RomM`}
           {row.shortcutCount === null ? "" : ` · ${row.shortcutCount} in Steam`}
           {coreClause && <span style={{ color: coreClause.color }}>{` · ${coreClause.text}`}</span>}
