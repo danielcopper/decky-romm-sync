@@ -633,10 +633,13 @@ function coreOffer(row: PlatformRow, core: CoreAnswer): CoreOffer {
   // alternate emulator is set, and `options` keeps ES-DE's document order, so
   // `emulators[0]` IS that command. If its emulator is the one RetroDECK has
   // not installed, the fallback names a binary that is not there and the games
-  // do not start — Apple I on this machine is exactly that: five commands, the
-  // first `LinApple (Standalone)`, none installed and the two MAME forms
-  // unbakeable for their quoting. Any other reason (`inject`, and the rest)
-  // leaves an emulator RetroDECK can actually run.
+  // do not start. Any other reason (`inject`, and the rest) leaves an emulator
+  // RetroDECK can actually run — including, measured on the reference machine,
+  // Apple I: ES-DE lists it two live commands, both MAME, and the first is a
+  // LIBRETRO one whose core is installed, so its reason is `quoting` rather
+  // than `not_installed` and RetroDECK's fallback really does start. Three
+  // standalone entries sit in that block commented out and are not commands at
+  // all.
   if (core.active_core_label === null) {
     const fallback = core.emulators[0];
     if (fallback?.reason === "not_installed") {

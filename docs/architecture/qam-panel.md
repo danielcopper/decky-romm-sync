@@ -363,13 +363,14 @@ it, for the focused platform:
   - **Options exist, none bakeable, and the fallback is not installed** — the same unpinnable state, with the opposite
     outcome. `run_game.sh` takes `command[1]` for the system when no alternate emulator is set and `options_to_payload`
     keeps ES-DE's document order, so `emulators[0]` **is** that command; when its own `reason` is `not_installed`, the
-    fallback names a binary that is not there. Apple I on the reference machine is exactly this — five commands, the
-    first `LinApple (Standalone)`, none installed and the two MAME forms unbakeable for their quoting. The clause reads
-    `no emulator installed` in **red** and the line names the emulator RetroDECK would have used. Only
-    `downgrade_if_not_installed` ever sets that reason, and only on an otherwise-bakeable option, so the branch fires
-    exactly where the first command's standalone emulator is missing. A first command unbakeable for another reason
-    (`quoting`) whose emulator is also missing keeps the muted sentence — `macintosh` is that shape — because
-    installedness is not established for an option that was never bakeable.
+    fallback names a binary that is not there. The clause reads `no emulator installed` in **red** and the line names
+    the emulator RetroDECK would have used. Only `downgrade_if_not_installed` ever sets that reason, and only on an
+    otherwise-bakeable option, so the branch fires exactly where the first command's standalone emulator is missing. A
+    first command unbakeable for another reason (`quoting`) whose emulator is also missing keeps the muted sentence —
+    `macintosh` is that shape — because installedness is not established for an option that was never bakeable. **Apple
+    I is the muted case, not this one**: ES-DE gives it two live commands, both MAME, and the first is a _libretro_ one
+    whose core is installed, so it reads `RetroDECK decides` and its games start. The three standalone entries in that
+    block are commented out and are not commands at all.
   - **No options at all** — `_resolve_system` falls through to the raw RomM slug for a platform its map does not name,
     and `get_emulator_options` answers `available: true` with an empty list for a system `es_systems.xml` does not list;
     `vic-20`, `acorn-electron`, `nintendo-dsi`, `ps5`, `browser` and `win` are in neither. RetroDECK's own launch then
