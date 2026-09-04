@@ -44,6 +44,15 @@ function biosTooltip(row: PlatformRow): string {
   return `${firmware.required_downloaded ?? 0} / ${required} required BIOS files ready`;
 }
 
+// The selection marker and the gap after it, which together are how far a row's
+// content sits from the list column's edge. Named because the list header's
+// padding has to be the same number: the pair of buttons up there spans the rows
+// below it, and happy-dom lays nothing out, so a drift between the two would be
+// invisible to every test.
+const ROW_MARKER_WIDTH = 3;
+const ROW_MARKER_GAP = 5;
+const ROW_CONTENT_INSET = ROW_MARKER_WIDTH + ROW_MARKER_GAP;
+
 const GroupHeading: FC<{ title: string; count: number }> = ({ title, count }) => (
   // Plain text: it accompanies the rows under it and scrolls with them. Making
   // it a focus stop would put a step between two rows that leads nowhere.
@@ -127,8 +136,8 @@ export const PlatformsTab: FC<{ state: PlatformsPageState }> = ({ state }) => {
                 against the dot it reads as part of it. */}
             <div
               style={{
-                borderLeft: selected ? "3px solid #1a9fff" : "3px solid transparent",
-                paddingLeft: "5px",
+                borderLeft: `${ROW_MARKER_WIDTH}px solid ${selected ? "#1a9fff" : "transparent"}`,
+                paddingLeft: `${ROW_MARKER_GAP}px`,
               }}
             >
               <ToggleField
@@ -148,14 +157,17 @@ export const PlatformsTab: FC<{ state: PlatformsPageState }> = ({ state }) => {
 
   const listHeader: ReactNode = (
     // The pair spans exactly what a row below it spans, which is NOT symmetric:
-    // a row is inset 8px on the left by its own marker bar (3px) and the gap
-    // after it (5px), and runs flush to the column's right edge. Steam's `Field`
-    // contributes nothing horizontally to that — inside the QAM it renders in
-    // its `Classic` mode, whose only padding is 10px top and bottom — so there
-    // is no Field inset to match, and an 8px right padding here is 8px of the
-    // rows' width the buttons do not have. Measured on the device through CEF:
-    // rows 79.6 → 335.9, buttons 79.9 → 335.9.
-    <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px", padding: "4px 0 8px 8px" }}>
+    // a row is inset on the left by its own marker bar and the gap after it, and
+    // runs flush to the column's right edge. Steam's `Field` contributes nothing
+    // horizontally to that — inside the QAM it renders in its `Classic` mode,
+    // whose only padding is 10px top and bottom — so there is no Field inset to
+    // match, and a right padding here would be that much of the rows' width the
+    // buttons do not have. Measured on the device through CEF: rows 79.6 →
+    // 335.9, buttons 79.9 → 335.9.
+    <Focusable
+      flow-children="horizontal"
+      style={{ display: "flex", gap: "8px", padding: `4px 0 8px ${ROW_CONTENT_INSET}px` }}
+    >
       <DialogButton style={{ flex: 1, minWidth: 0, padding: "8px 0" }} onClick={() => state.setAllSync(true)}>
         Enable all
       </DialogButton>

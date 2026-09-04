@@ -121,10 +121,11 @@ export interface PlatformsPageState {
   /** The BIOS overview could not be read. Distinct from a platform the read
    *  simply has nothing to say about, which is a finished answer. */
   firmwareFailed: boolean;
-  /** An answer set from a successful read is held. With `firmwareFailed` it is
-   *  what separates a failed REFRESH from a failed first read: the panes still
-   *  carry their last good answers, including the "nothing known" one, which a
-   *  pane with no entry of its own must go on saying. */
+  /** A read has landed at some point. With `firmwareFailed` it is what separates
+   *  a failed REFRESH from a failed first read: the panes still carry their last
+   *  good answers, including the "nothing known" one, which a pane with no entry
+   *  of its own must go on saying. It is the READ that is recorded, not the
+   *  answer's size — an overview that spoke for no platform is an answer too. */
   firmwareHeld: boolean;
   /** The Steam shortcut counts could not be read — every row's `shortcutCount`
    *  is `null` and the detail says so where the number would have been. */
@@ -199,6 +200,11 @@ export function usePlatformsPage(): PlatformsPageState {
   const [firmware, setFirmware] = useState<Record<string, FirmwarePlatformExt>>({});
   const [serverOffline, setServerOffline] = useState(false);
   const [firmwareFailed, setFirmwareFailed] = useState(false);
+  // Whether a read has ever LANDED, which is not the same as its answer being
+  // non-empty: a successful read that speaks for no platform is still an answer
+  // set, and counting the map's keys would call it "never read" and take back
+  // the "nothing is known" wording on every pane after a failed refresh.
+  const [firmwareRead, setFirmwareRead] = useState(false);
   const [shortcutCounts, setShortcutCounts] = useState<Record<string, number>>({});
   const [shortcutCountsFailed, setShortcutCountsFailed] = useState(false);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
@@ -227,6 +233,7 @@ export function usePlatformsPage(): PlatformsPageState {
       }
       setServerOffline(result.server_offline ?? false);
       setFirmware(Object.fromEntries(result.platforms.map((p) => [p.platform_slug, p])));
+      setFirmwareRead(true);
       setFirmwareFailed(false);
     } catch (e) {
       logWarn(`Failed to read firmware status: ${e}`);
@@ -259,6 +266,18 @@ export function usePlatformsPage(): PlatformsPageState {
   const loadSaveCount = useCallback((slug: string) => {
     if (saveCountRequested.current.has(slug)) return;
     saveCountRequested.current.add(slug);
+    // Back to unread while the read is in flight, which matters only on a
+    // retry: the previous answer is a `null` failure, and leaving it in place
+    // would show "could not be read" for the whole of the second attempt — the
+    // three-state distinction the button is built on, collapsed to two at
+    // exactly the moment the third state is true. `reloadCore` clears its slot
+    // for the same reason.
+    setSaveCounts((prev) => {
+      if (!(slug in prev)) return prev;
+      const next = { ...prev };
+      delete next[slug];
+      return next;
+    });
     countPlatformSaves(slug)
       .then((result) => setSaveCounts((prev) => ({ ...prev, [slug]: result.count })))
       .catch((e) => {
@@ -586,7 +605,7 @@ export function usePlatformsPage(): PlatformsPageState {
     failed,
     serverOffline,
     firmwareFailed,
-    firmwareHeld: Object.keys(firmware).length > 0,
+    firmwareHeld: firmwareRead,
     shortcutCountsFailed,
     selectedSlug,
     select,
