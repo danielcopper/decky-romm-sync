@@ -1843,16 +1843,25 @@ of `check_platform_bios` for it to read. That is why `BiosChecker` has one metho
 `bios_label` are derived once, in `_bios_aggregates`, where the reading state that decides them is known; every consumer
 threads them through rather than re-deriving over the payload.
 
-**The BIOS delete's whole input is the download records.** `_delete_platform_bios_io` iterates `downloaded_bios` rows
-for the platform's firmware slugs, unlinks each row's own `file_path`, and prunes the row. Both halves matter. Authority
-comes from having placed the file, and the row is the only evidence of that, so a status listing cannot gate it — that
-gate hid the button entirely for a platform whose downloads had all left the RomM library. And the row's `file_path` is
-where the download actually wrote (kept current by the home migration's `relocate`), where a status row's `local_path`
-is recomputed from today's placement: for a file fetched before an emu-atlas bump moved it, the recomputed path names
-whatever now occupies the new destination. A row whose file is already gone is pruned without counting as a deletion or
-an error, which is also what makes two rows naming one path harmless. `get_firmware_status` ships `deletable_count` —
-records still on disk, distinct paths — so the button's number is the same set the delete acts on; `local_count` is the
-library's progress ratio and is wrong for it in both directions.
+**The BIOS delete's whole input is the download records.** `PlatformBiosDeleter._delete_recorded_io` iterates
+`downloaded_bios` rows for the platform's firmware slugs, unlinks each row's own `file_path`, and prunes the row. Both
+halves matter. Authority comes from having placed the file, and the row is the only evidence of that, so a status
+listing cannot gate it — that gate hid the button entirely for a platform whose downloads had all left the RomM library.
+And the row's `file_path` is where the download actually wrote (kept current by the home migration's `relocate`), where
+a status row's `local_path` is recomputed from today's placement: for a file fetched before an emu-atlas bump moved it,
+the recomputed path names whatever now occupies the new destination. A row whose file is already gone is pruned without
+counting as a deletion or an error, which is also what makes two rows naming one path harmless. `get_firmware_status`
+ships `deletable_count` — records still on disk, distinct paths — so the button's number is the same set the delete acts
+on; `local_count` is the library's progress ratio and is wrong for it in both directions.
+
+**Three buttons reach that one loop**, and they differ only in which records they select: the platform's Delete BIOS
+(every record), a file row's Delete (`delete_bios_file`, the records naming it), and a declared folder's Delete
+(`delete_bios_folder`, the records written underneath it — a folder has no name a record could carry, and a folder being
+undownloadable says nothing about the files already in one). A predicate can only narrow that platform's own record set,
+so no caller can reach a file the plugin did not place; a second copy of the loop is what the register's BIOS-delete
+rule warns against, because the copies would drift in silence. `get_firmware_status` stamps the same answer per ROW as
+`deletable_count`, which is what each row's button is offered on — never `downloaded`, which is `os.path.exists` and
+equally true of firmware RetroDECK ships.
 
 ### Domain (`py_modules/domain/`)
 

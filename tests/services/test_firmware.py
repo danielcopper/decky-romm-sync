@@ -2541,8 +2541,9 @@ class TestDeletePlatformBios:
         Drives ``delete_platform_bios`` end-to-end through the *real*
         ``check_platform_bios`` (server-offline registry fallback), so the
         ``files`` list is the genuine ``[asdict(f) for f in files]`` payload
-        the callable hands to ``_delete_platform_bios_io``. Before the fix that
-        worker read ``f.downloaded`` / ``f.local_path`` / ``f.file_name`` as
+        the callable hands to the removal worker (``_delete_recorded_io``).
+        Before the fix that worker read ``f.downloaded`` / ``f.local_path`` /
+        ``f.file_name`` as
         attributes on those dicts, raising ``AttributeError`` in the executor
         and deleting nothing — the "Failed to delete BIOS files" the modal showed.
         """
@@ -4051,7 +4052,11 @@ class TestFirmwareCachePersistence:
 
 
 class TestDeletePlatformBiosIOLogsWarnings:
-    """Coverage for the OSError-warning path in _delete_platform_bios_io."""
+    """Coverage for the OSError-warning path in ``_delete_recorded_io``.
+
+    Reached here through the platform-wide button, and shared with the row and
+    folder ones — all three run that loop under different record predicates.
+    """
 
     @pytest.mark.asyncio
     async def test_logs_warning_and_collects_error_when_remove_fails(self, plugin, fw, caplog):
