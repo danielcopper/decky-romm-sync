@@ -314,12 +314,14 @@ state agree by construction. Under it, for the focused platform:
   backend refuses is reported there, and the header keeps naming the core that is actually active.
 - **BIOS files** — the summary (required, or files, and the two unknown states), then a table: File, On disk, Contents,
   and a **Download** button on every row that is missing and in the RomM library (#164) — never on a folder declaration,
-  whatever its state, because the emulator opens that name as a directory — and a **Delete** button on every row the
-  plugin's own download record still holds, which is the same authority `Delete BIOS` uses and is described below. Below
-  the table one row of buttons: Download required (_N_), Download all, Delete BIOS behind a `ConfirmModal`. **All three
-  are always rendered and disable when there is nothing to do**, the ruling the Remove group already had: on PS2 all
-  three vanished at once, and a button that disappears is a state the reader has to work out. A disabled `DialogButton`
-  is still a focus stop, so the row stays walkable.
+  whatever its state, because the emulator opens that name as a directory — and a **Delete** button on every row a
+  download record of ours still holds. That covers a declared **folder** too, where no record carries the row's name and
+  the button counts the records written underneath it (`Delete (N)`): a folder is never a download, which says nothing
+  about the files already inside one. Same authority as `Delete BIOS`, described below. Below the table one row of
+  buttons: Download required (_N_), Download all, Delete BIOS behind a `ConfirmModal`. **All three are always rendered
+  and disable when there is nothing to do**, the ruling the Remove group already had: on PS2 all three vanished at once,
+  and a button that disappears is a state the reader has to work out. A disabled `DialogButton` is still a focus stop,
+  so the row stays walkable.
 
   **A running download is said by the button that started it.** The pressed button — bulk or per-row — becomes a
   spinner, every other download button on the pane disables, and when it finishes the rows re-read. There is no
@@ -331,13 +333,13 @@ state agree by construction. Under it, for the focused platform:
   walking to another platform mid-download shows disabled buttons and the "Working on _X_" line rather than a spinner
   that belongs elsewhere.
 
-  **The per-row Delete is authorised by the download record and nothing else** — the row carries `deletable`, which the
-  backend derives from the same records the platform count comes from (`_stamp_deletable`), and the unlink re-reads the
-  record and takes the path it holds. `downloaded` is `os.path.exists` and is equally true of firmware RetroDECK ships:
-  `dolphin-emu/Sys/codehandler.bin` sits one row above a real download on a GameCube pane, no RomM library can hand it
-  back, and authorising on presence destroyed exactly that file on a real device. All three buttons — the platform's, a
-  file row's and a folder row's — run **one** removal loop (`_delete_recorded_io`) under different record predicates,
-  because a second copy of that loop is exactly what the register's BIOS-delete rule warns about.
+  **The per-row Delete is authorised by the download record and nothing else** — the row carries `deletable_count`,
+  which the backend derives from the same records the platform count comes from (`_stamp_deletable`), and the unlink
+  re-reads the record and takes the path it holds. `downloaded` is `os.path.exists` and is equally true of firmware
+  RetroDECK ships: `dolphin-emu/Sys/codehandler.bin` sits one row above a real download on a GameCube pane, no RomM
+  library can hand it back, and authorising on presence destroyed exactly that file on a real device. All three buttons
+  — the platform's, a file row's and a folder row's — run **one** removal loop (`_delete_recorded_io`) under different
+  record predicates, because a second copy of that loop is exactly what the register's BIOS-delete rule warns about.
 
   **`On disk` holds marks and never text**, and it is the only place presence is stated. A cell carries **one or two**
   of them.

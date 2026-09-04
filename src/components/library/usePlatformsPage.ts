@@ -57,8 +57,9 @@ import { withTimeout } from "../../utils/withTimeout";
 
 /** How long the pressed button says `Failed` before everything returns. Two of
  *  the two-to-three seconds the device pass asked for: long enough to read one
- *  word on a pane the reader is already looking at, short enough that the other
- *  buttons are not held. */
+ *  word on a pane the reader is already looking at, and the pane stays busy for
+ *  exactly that long, so the other download buttons come back when the word
+ *  goes rather than a moment earlier. */
 const FAILED_NOTICE_MS = 2000;
 
 const LEASE_OWNER = "library-platforms";
@@ -570,7 +571,10 @@ export function usePlatformsPage(): PlatformsPageState {
             setStatus({ slug, scope: "bios", text: result.message });
             if (result.success) {
               await refreshFirmware();
-              announceBiosChange(slug);
+              // Only when something went, the same rule the row deletes and the
+              // downloads keep: the event costs every mounted game panel a live
+              // BIOS read, so a run that moved no files stays silent.
+              if (result.deleted_count > 0) announceBiosChange(slug);
             }
           } catch (e) {
             setStatus({ slug, scope: "bios", text: `Failed to delete BIOS files: ${e}` });

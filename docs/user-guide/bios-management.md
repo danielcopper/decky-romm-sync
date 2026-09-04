@@ -182,8 +182,10 @@ and the row you focus is the one the right-hand pane describes.
    there"
 9. A **Download** button sits on every row that is missing and in your RomM library, and a **Delete** button on every
    row this plugin downloaded and still has on disk — that is the only thing it will remove, so a file your emulator
-   came with never offers one. While a download runs, the button you pressed becomes a spinner and the other download
-   buttons grey out; when it finishes the list re-reads itself. Only a failure prints a line
+   came with never offers one. A **folder** row (PS2's `pcsx2/bios`) offers `Delete (N)` for the files we downloaded
+   into it. While a download runs, the button you pressed becomes a spinner and the other download buttons grey out;
+   when it finishes the list re-reads itself. **If it fails**, that button turns red and says **Failed** for about two
+   seconds — the other buttons stay greyed until it clears — and a line under the section says what went wrong
 10. **Download required** and **Download all** fetch several at once, and **Delete BIOS** removes everything this plugin
     downloaded for the platform (see below). All three are always there and grey out when there is nothing to do — a
     system nothing installed could answer for has all of them greyed, see
