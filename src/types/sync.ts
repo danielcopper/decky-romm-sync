@@ -219,7 +219,9 @@ export interface RegistryPlatform {
    * How many of the platform's ROMs are reachable from Steam: every member of a
    * sibling group that holds a binding, because one shortcut serves the whole
    * group and the game's page switches versions across it. Equal to `count` only
-   * where every group is a single version.
+   * where every group that HOLDS a binding is a single version — a group with no
+   * binding contributes to neither number, which is exactly a partly-synced
+   * platform.
    *
    * Absent on older backends; a reader falls back to `count`, which is the
    * pre-#1815 wording and understates rather than inventing a number.

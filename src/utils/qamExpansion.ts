@@ -11,6 +11,14 @@
  * clears it: a wide page that leaks it leaves Steam's QAM expanded until the
  * Friends tab toggles it back. `useWideQamPanel` covers the three paths a
  * mounted page can observe; `collapseQamOnDismount` is the fourth.
+ *
+ * The injected sheet carries one rule that is not about width: a focus outline
+ * for a DISABLED button, which Steam's own stylesheet omits. It rides here
+ * because the sheet is already scoped to the wide root and a second injector
+ * for one selector would be a second thing to clear. A wide page keeps its
+ * buttons rendered-and-disabled rather than hidden, so a reader walking the
+ * page with the stick lands on them, and without the rule the focus ring
+ * simply vanishes for that row.
  */
 
 import { useEffect, type RefObject } from "react";

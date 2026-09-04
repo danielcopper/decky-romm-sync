@@ -127,7 +127,8 @@ solo groups). Key derivation: `domain/sibling_group.py`, persisted as `roms.sibl
   group's one shortcut opens the game's page and **Switch version** reaches the rest from there. Distinct from
   **bound**, which is the active version alone. A count of reachable ROMs is what a surface states about how much of a
   platform arrived in Steam; a count of bindings is what it states about shortcuts, and the two are only equal where
-  every group is a single version (`reachable_count` vs. `count`, `services/library/reporter.py`).
+  every group **that holds a binding** is a single version — a group with no binding raises neither count
+  (`reachable_count` vs. `count`, `services/library/reporter.py`).
 
 **Region** and **Languages** are **attributes of a single version**, parsed from its filename tags: `(Spain)` → where
 that release shipped; `(En,Fr,De,Es)` → the languages contained in that one dump. A multi-language version is still one
