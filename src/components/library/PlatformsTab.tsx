@@ -31,28 +31,42 @@ function biosRatio(row: PlatformRow): string | null {
 const GroupHeading: FC<{ title: string; count: number }> = ({ title, count }) => (
   // Plain text: it accompanies the rows under it and scrolls with them. Making
   // it a focus stop would put a step between two rows that leads nowhere.
-  <div style={{ padding: "8px 16px 2px", fontSize: "11px", fontWeight: 600, color: "#8f98a0" }}>
-    {title} ({count})
+  //
+  // Flush left, with the rows indented past it — a heading further right than
+  // what it heads reads as a child of the row above. Uppercase to match the
+  // detail's own section titles, which are the only other labels of this kind.
+  <div
+    style={{
+      padding: "8px 8px 2px",
+      fontSize: "11px",
+      fontWeight: 600,
+      letterSpacing: "0.5px",
+      color: "#8f98a0",
+    }}
+  >
+    {title.toUpperCase()} ({count})
   </div>
 );
 
 const RowLabel: FC<{ row: PlatformRow; selected: boolean }> = ({ row, selected }) => {
   const ratio = biosRatio(row);
+  const level = row.firmware?.bios_level ?? null;
   return (
     <span style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
-      {row.firmware && (
-        <span
-          data-testid={`bios-dot-${row.slug}`}
-          style={{
-            display: "inline-block",
-            width: "8px",
-            height: "8px",
-            borderRadius: "50%",
-            backgroundColor: biosColorForLevel(row.firmware.bios_level ?? null),
-            flexShrink: 0,
-          }}
-        />
-      )}
+      {/* Always drawn, grey where there is no level to state: a dot that comes
+          and goes shifts every name beside it, and the list is meant to be
+          scanned down its left edge. */}
+      <span
+        data-testid={`bios-dot-${row.slug}`}
+        style={{
+          display: "inline-block",
+          width: "8px",
+          height: "8px",
+          borderRadius: "50%",
+          backgroundColor: biosColorForLevel(level),
+          flexShrink: 0,
+        }}
+      />
       <span
         style={{
           flex: "1 1 auto",
@@ -65,7 +79,20 @@ const RowLabel: FC<{ row: PlatformRow; selected: boolean }> = ({ row, selected }
       >
         {row.name}
       </span>
-      <span style={{ flexShrink: 0, fontSize: "12px", color: "#8f98a0" }}>{ratio ?? "—"}</span>
+      {/* The same ratio the detail's header carries, so the list can be scanned
+          without walking it — and in the same colour as the dot, which is what
+          makes a red 0 / 2 findable at a glance. An em dash is not a failure: a
+          platform wanting no BIOS has no ratio to state. */}
+      <span
+        style={{
+          flexShrink: 0,
+          fontSize: "12px",
+          fontVariantNumeric: "tabular-nums",
+          color: ratio === null ? "#8f98a0" : biosColorForLevel(level),
+        }}
+      >
+        {ratio ?? "—"}
+      </span>
     </span>
   );
 };
@@ -95,7 +122,14 @@ export const PlatformsTab: FC<{ state: PlatformsPageState }> = ({ state }) => {
         render: (selected: boolean) => (
           <>
             {index === 0 && <GroupHeading title={title} count={slugs.length} />}
-            <div style={{ borderLeft: selected ? "3px solid #1a9fff" : "3px solid transparent" }}>
+            {/* The marker bar, with room between it and the status dot — flush
+                against the dot it reads as part of it. */}
+            <div
+              style={{
+                borderLeft: selected ? "3px solid #1a9fff" : "3px solid transparent",
+                paddingLeft: "5px",
+              }}
+            >
               <ToggleField
                 label={<RowLabel row={row} selected={selected} />}
                 checked={row.syncEnabled}
@@ -112,7 +146,9 @@ export const PlatformsTab: FC<{ state: PlatformsPageState }> = ({ state }) => {
   pushGroup(groups.available, "Available");
 
   const listHeader: ReactNode = (
-    <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px", padding: "4px 16px 8px" }}>
+    // Padded to the list column's own edges, so the pair spans exactly the
+    // width of the rows beneath it rather than sitting inset from them.
+    <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px", padding: "4px 8px 8px" }}>
       <DialogButton style={{ flex: 1, minWidth: 0, padding: "8px 0" }} onClick={() => state.setAllSync(true)}>
         Enable all
       </DialogButton>

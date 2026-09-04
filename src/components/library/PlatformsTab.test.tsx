@@ -24,6 +24,7 @@ import * as backend from "../../api/backend";
 import { removeShortcut, setLaunchOptionsConfirmed } from "../../utils/steamShortcuts";
 import { clearPlatformCollection } from "../../utils/collections";
 import { setSyncProgress } from "../../utils/syncProgress";
+import { biosColorForLevel } from "../../utils/biosColor";
 import type { FirmwarePlatformExt, PlatformSyncSetting, SystemCoreInfo } from "../../types";
 
 vi.mock("../../utils/scrollHelpers", () => ({ scrollToTop: vi.fn(), scrollElementToTop: vi.fn() }));
@@ -198,10 +199,10 @@ describe("Library › Platforms", () => {
       await flushAsync();
 
       const text = container.textContent;
-      expect(text.indexOf("Synced (2)")).toBeLessThan(text.indexOf("Dreamcast"));
+      expect(text.indexOf("SYNCED (2)")).toBeLessThan(text.indexOf("Dreamcast"));
       expect(text.indexOf("Dreamcast")).toBeLessThan(text.indexOf("Game Boy Advance"));
-      expect(text.indexOf("Game Boy Advance")).toBeLessThan(text.indexOf("Available (1)"));
-      expect(text.indexOf("Available (1)")).toBeLessThan(text.indexOf("Nintendo 64"));
+      expect(text.indexOf("Game Boy Advance")).toBeLessThan(text.indexOf("AVAILABLE (1)"));
+      expect(text.indexOf("AVAILABLE (1)")).toBeLessThan(text.indexOf("Nintendo 64"));
     });
 
     it("keeps the order frozen when a row is toggled off", async () => {
@@ -217,7 +218,7 @@ describe("Library › Platforms", () => {
 
       // Dreamcast is now off and still stands first, under Synced.
       const text = container.textContent;
-      expect(text.indexOf("Dreamcast")).toBeLessThan(text.indexOf("Available (1)"));
+      expect(text.indexOf("Dreamcast")).toBeLessThan(text.indexOf("AVAILABLE (1)"));
       expect(toggles[0]!.checked).toBe(false);
     });
 
@@ -246,12 +247,34 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("—");
     });
 
-    it("shows no dot for a platform the firmware read has nothing to say about", async () => {
+    it("draws the row's ratio in the dot's colour, and states the header's number", async () => {
+      // The point of the ratio in the row is scanning the list without walking
+      // it, which needs the colour as well as the number — a red 0 / 2 has to be
+      // findable at a glance. It is the same number the detail's header carries.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [firmwarePlatform({ required_count: 2, required_downloaded: 0, bios_level: "missing" })],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      const ratio = [...container.querySelectorAll<HTMLElement>("span")].find((el) => el.textContent === "0 / 2");
+      expect(ratio).toBeTruthy();
+      expect(ratio!.style.color).toBe(biosColorForLevel("missing"));
+      expect(container.textContent).toContain("BIOS 0 / 2");
+    });
+
+    it("keeps the dot grey rather than dropping it where there is no level", async () => {
+      // Drawn on every row: a dot that comes and goes shifts each name beside
+      // it, and the list is meant to be scanned down its left edge. Grey is the
+      // colour for "no level", which is what the shared mapping answers.
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({ success: true, platforms: [] });
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
-      expect(container.querySelector('[data-testid="bios-dot-gba"]')).toBeNull();
+      const dot = container.querySelector<HTMLElement>('[data-testid="bios-dot-gba"]');
+      expect(dot).not.toBeNull();
+      expect(dot!.style.backgroundColor).toBe(biosColorForLevel(null));
     });
 
     it("toggles a platform optimistically through its own id", async () => {
