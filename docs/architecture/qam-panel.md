@@ -309,16 +309,22 @@ the core picker's icon button, right-aligned. Under it, for the focused platform
   two come apart entirely. The **colour is the need**: strong where the launching core requires the file (green `✓`, red
   `✗`), muted where it does not (pale green `✓`, grey `✗`), keyed on `required_by_active` so the table and the summary
   above it cannot mean different things by "required". Two states have no place in that four-way scheme and are **not**
-  folded into it: a verdict nothing could establish and a row no installed emulator could be asked about are both amber
-  `?`, because calling either missing would claim an absence nothing established. `optional` and `not_needed` do share
-  the muted branch: for the core about to launch, neither is a gap.
+  folded into it, and they are **not the same state either**. A verdict nothing could establish is an amber `?` — the
+  glyph channel has nothing to say. A row no installed emulator could be asked about keeps its verdict, which IS
+  established, and goes amber on the colour channel alone: an amber `✓` or `✗`. Reading the need axis first would spend
+  the glyph on a need-axis fact and throw the verdict away, on exactly the platform made entirely of such rows.
+  `optional` and `not_needed` do share the muted branch: for the core about to launch, neither is a gap.
 
-  **Mark 2, `⊘` in violet, appears beside mark 1 wherever `on_server` is `false`** — the RomM library does not hold this
-  file. It is **additive and never a replacement**: a present file you could not fetch again keeps its green `✓` and
-  gains the `⊘`, and a required missing one keeps its red `✗`. Folding the two axes into one colour channel is what
-  would collapse required and optional among exactly the rows that cannot be downloaded. It reads the field only for
-  display; the readiness count, the progress ratio and the download affordance each read it their own way, and the
-  invariant register in `CLAUDE.md` owns that rule.
+  **Mark 2, `⊘` in violet, appears beside mark 1 wherever `on_server` is `false` and the declaration is a file** — the
+  RomM library does not hold this one. A declared **folder** is excluded, and not as a special case: no library holds a
+  folder, so the backend stamps every folder row `on_server: False` unconditionally and the mark would say "your library
+  does not hold this" about something nothing could. That is the sentence `biosFileNote` already refuses to produce, and
+  the reason the download filter and the download batch refuse those rows too. It is **additive and never a
+  replacement**: a present file you could not fetch again keeps its green `✓` and gains the `⊘`, and a required missing
+  one keeps its red `✗`. Folding the two axes into one colour channel is what would collapse required and optional among
+  exactly the rows that cannot be downloaded. It reads the field only for display; the readiness count, the progress
+  ratio and the download affordance each read it their own way, and the invariant register in `CLAUDE.md` owns that
+  rule.
 
   A legend under the table names the marks it actually contains, **one entry per line** — an entry for a state no row is
   in explains nothing and costs a row, and mark 2 is inside that filter with one line of its own rather than one per
@@ -333,7 +339,7 @@ the core picker's icon button, right-aligned. Under it, for the focused platform
   `2 files`), never written as `file(s)`.
 
   Everything a row says in words goes **under the row, full width** — `biosFileNote`'s note first, then a folder's
-  images — because a 68px cell wraps one sentence across three lines. The one note that does not appear there is the
+  images — because a 48px cell wraps one sentence across three lines. The one note that does not appear there is the
   library one ("not in your RomM library" and its missing variant), which mark 2 now carries: the helper flags it as
   `fromLibrary` so this surface can drop it without re-deriving the helper's precedence, and the game page's BIOS tab,
   which has room, still prints it. Notes are rare on this pane by construction — over the `.info` corpus the only rows
@@ -344,15 +350,24 @@ the core picker's icon button, right-aligned. Under it, for the focused platform
   or the file name itself for a row no placement covers. Both spell the name into the words, and across the 292 `.info`
   files a stock RetroDECK ships (695 declared entries) they do it in three shapes: the description IS the name (35%),
   the name then prose (47%), or the name with its directory then prose (17%). The rule is to drop a leading token that
-  names this file — as itself or at the end of a path — and keep the rest verbatim; it fires on 688 of the 695. Of the
-  seven it does not, five name the file nowhere, and two do name it but carry a space inside the name, so the first
-  token is not it — all seven are printed whole. Contents is answered for a folder declaration only: the count of images
-  it holds (the resolver's verbatim strings are listed full-width under the row, `pre-wrap`, because the padding in them
-  is what makes a line matchable against the emulator's own picker), or that it holds none, or that nothing could
-  establish its contents. A file row reads an em dash, and that em dash means the question was never asked — the
-  machine-wide reading is deliberately unverified, #1803 is what will ask it, and until then the dash must not come to
-  mean "asked, and nothing found". The section appears whenever the firmware read speaks for the platform, synced or not
-  — there is nothing to say about one it does not cover.
+  names this file — as itself or at the end of a path — and keep the rest verbatim, with a first half that strips the
+  name where the description opens with it verbatim, which is the only way a name containing spaces can be seen
+  (`"7800 BIOS (U).rom (7800 BIOS)"`). Together they fire on 689 of the 695; the remaining six name the file nowhere and
+  are printed whole.
+
+  **The description is on its own line under the row**, muted and clipped to one line, not beside the name: at the
+  Deck's scale the `File` column is ~150 px and a fifty-character parenthesis was clipped mid-word on every row that had
+  one. The **declared folder** goes the other way, onto the name line as a muted prefix (`dc/` **`dc_boot.bin`**), where
+  it belongs to the file's identity — `declared_path` carries it, because `file_name` is a basename and `local_path` is
+  joined under a root the frontend does not know. 207 of the 695 declarations name a subdirectory and their descriptions
+  spell it in only 115, so the description was never a substitute. A row can therefore carry two lines under it — the
+  description first, then `biosFileNote`'s note — and neither is in a cell any more. Contents is answered for a folder
+  declaration only: the count of images it holds (the resolver's verbatim strings are listed full-width under the row,
+  `pre-wrap`, because the padding in them is what makes a line matchable against the emulator's own picker), or that it
+  holds none, or that nothing could establish its contents. A file row reads an em dash, and that em dash means the
+  question was never asked — the machine-wide reading is deliberately unverified, #1803 is what will ask it, and until
+  then the dash must not come to mean "asked, and nothing found". The section appears whenever the firmware read speaks
+  for the platform, synced or not — there is nothing to say about one it does not cover.
 - **Remove** — Remove _N_ shortcuts and Delete _N_ save files on one row, the actions the Data Management platform modal
   used to offer, without Delete BIOS (it is one group up). Red, last, each behind a confirmation, and with **no heading
   over them**: both buttons name what they remove and are drawn in red, so a title says nothing they do not. **Both

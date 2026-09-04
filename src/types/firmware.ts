@@ -53,6 +53,13 @@ interface FirmwareFile extends FirmwareVerdict {
   size: number;
   md5: string;
   local_path: string;
+  /** Where the emulator said the file goes, relative to the firmware root —
+   *  `dc/dc_boot.bin` where a subdirectory was declared, the bare name
+   *  otherwise. `file_name` is its basename and `local_path` is it joined under
+   *  a root this side does not know, so this is the only field that can answer
+   *  which folder a file placed by hand belongs in. Optional because a payload
+   *  from before the field existed carries none. */
+  declared_path?: string;
   downloaded: boolean;
   description: string;
   wanted: FirmwareWanted;
@@ -184,6 +191,13 @@ export interface BiosFileStatus extends FirmwareVerdict {
   file_name: string;
   downloaded: boolean;
   local_path: string;
+  /** Where the emulator said the file goes, relative to the firmware root —
+   *  `dc/dc_boot.bin` where a subdirectory was declared, the bare name
+   *  otherwise. `file_name` is its basename and `local_path` is it joined under
+   *  a root this side does not know, so this is the only field that can answer
+   *  which folder a file placed by hand belongs in. Optional because a payload
+   *  from before the field existed carries none. */
+  declared_path?: string;
   description: string;
   wanted: FirmwareWanted;
   /** Whether the core THIS game launches with requires the file. `wanted` is the

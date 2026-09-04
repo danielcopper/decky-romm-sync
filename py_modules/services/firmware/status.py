@@ -559,6 +559,7 @@ def _wanted_fields(entry) -> dict[str, Any]:
     only what the machine answered, so the two vocabularies stay separable.
     """
     return {
+        "declared_path": entry.declared_path,
         "description": entry.description,
         "wanted": entry.wanted,
         "required_by_active": entry.required_by_active,

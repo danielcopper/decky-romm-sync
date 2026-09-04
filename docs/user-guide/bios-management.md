@@ -160,16 +160,19 @@ and the row you focus is the one the right-hand pane describes.
    otherwise reads "Nothing required" with the inventory of your library's files beside it (e.g. "3 / 5 files held"). A
    system with a required row the plugin could not judge — a declared folder it could not read, say — reads "BIOS
    readiness unknown" instead — see [When readiness cannot be stated](#when-readiness-cannot-be-stated)
-7. Below it, a table lists the files themselves: the **file**, whether it is **on disk**, and its **contents**. On disk
-   holds marks and no words. The first mark carries two things — a green ✓ for a file that is there and required, a red
-   ✗ for one that is required and is not, and the paler green ✓ / grey ✗ for a file the core you launch with does not
-   need either way. Amber means nothing could be established: a ✓ or ✗ in amber is a file whose presence is known but
-   which no installed emulator could be asked about, and a `?` is a row that could not be checked at all. A violet ⊘
-   appears **beside** that mark — never in place of it — when your RomM library does not hold the file: a file you
-   already have keeps its green ✓, one you still need keeps its red ✗, and the ⊘ adds that the plugin cannot fetch it
-   for you. A legend under the table, one line per mark, names the marks that are actually on it. Anything else a row
-   has to say is printed **under** the row rather than in the column — that a file was provided by RetroDECK, that a
-   folder holds no image, that a location could not be read
+7. Below it, a table lists the files themselves: the **file**, whether it is **on disk**, and its **contents**. Where
+   the emulator asks for the file in a subfolder, the folder is shown in front of the name (`dc/` **`dc_boot.bin`**) —
+   that is where it has to go, and it is the one thing you need when placing a file by hand. The description in
+   parentheses is printed under the row rather than beside the name, so it is not cut off. On disk holds marks and no
+   words. The first mark carries two things — a green ✓ for a file that is there and required, a red ✗ for one that is
+   required and is not, and the paler green ✓ / grey ✗ for a file the core you launch with does not need either way.
+   Amber means nothing could be established: a ✓ or ✗ in amber is a file whose presence is known but which no installed
+   emulator could be asked about, and a `?` is a row that could not be checked at all. A violet ⊘ appears **beside**
+   that mark — never in place of it — when your RomM library does not hold the file: a file you already have keeps its
+   green ✓, one you still need keeps its red ✗, and the ⊘ adds that the plugin cannot fetch it for you. A legend under
+   the table, one line per mark, names the marks that are actually on it. Anything else a row has to say is printed
+   **under** the row rather than in the column — that a file was provided by RetroDECK, that a folder holds no image,
+   that a location could not be read
 8. **Contents** answers for a required **folder**: how many BIOS images it holds — and the images themselves are listed
    under the row, in the emulator's own words so you can match one against its picker — or that it holds none, or that
    its contents could not be established. A plain file reads an em dash, which means the question was never asked:

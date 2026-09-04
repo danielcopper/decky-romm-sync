@@ -62,12 +62,17 @@ const LIBRARY_MARK = { glyph: "⊘", color: VIOLET, title: "not in your RomM lib
  * (`DialogButtonProps extends DialogCommonProps`, `Dialog.d.ts`), and is Steam's
  * own button component rather than a lookalike of one.
  *
- * What their relationship is inside Steam is deliberately NOT claimed here.
- * `@decky/ui` finds `ButtonItem` with a webpack prop-list regex over
- * `CommonUIModule` (`components/ButtonItem.js`), so the package can say nothing
- * about what it renders, and the module's own render function is not in this
- * install's `steamui` chunks to read — the one `childrenContainerWidth` hit
- * there is a call site.
+ * They are the same button, and the difference is the row around it. In
+ * `chunk~2dcc5aaf7.js` module 12316, the `forwardRef` decky's prop-list regex
+ * matches (`highlightOnFocus` then `childrenContainerWidth`) renders a `Field`
+ * whose first child is a second `forwardRef`, and that one renders `o.$n`;
+ * module 64608 re-exports `$n` from module 44351, where it is the `forwardRef`
+ * whose className is `"DialogButton","_DialogLayout","Secondary"` — the exact
+ * string `@decky/ui` searches for to bind its own `DialogButton`
+ * (`components/Dialog.js`, `DialogButton = DialogButtonSecondary`). So
+ * `ButtonItem` IS a `Field` wrapped around this component, and what a `Field`
+ * costs is the row's own padding: 10px top and bottom inside the QAM, where it
+ * renders in its `Classic` mode.
  */
 const FLAT_BUTTON = { flex: "1 1 auto", minWidth: 0, padding: "6px 10px", fontSize: "13px" } as const;
 
@@ -233,9 +238,16 @@ function diskMark(file: FirmwareRow): { glyph: string; color: string; title: str
  *
  * `on_server` absent is not `false` — it is a payload that never spoke about
  * the library — so an unstated row carries no mark rather than a claim.
+ *
+ * A declared FOLDER is out, and not as a special case: no RomM library holds a
+ * folder, so `_overview_row` stamps every folder row `on_server: False`
+ * unconditionally and the mark would say "your library does not hold this"
+ * about something no library can. That is the sentence `biosFileNote` already
+ * refuses to produce for the same reason, and the same reason keeps folder rows
+ * out of the download filter and out of the download batch.
  */
 function libraryMark(file: FirmwareRow): typeof LIBRARY_MARK | null {
-  return file.on_server === false ? LIBRARY_MARK : null;
+  return file.on_server === false && file.declared_kind !== "directory" ? LIBRARY_MARK : null;
 }
 
 const SectionTitle: FC<{ title: string; note?: string }> = ({ title, note }) => (
@@ -278,10 +290,15 @@ const BusyElsewhere: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
   return <Muted>{`Working on ${other} — actions here are paused until it finishes.`}</Muted>;
 };
 
-// File, On disk, Contents, and the row's own button. `On disk` holds marks and
-// nothing else, so it is sized for its own heading rather than for a sentence,
-// and what it gives up goes to the file name.
-const TABLE_COLUMNS = "1fr 68px 92px 116px";
+// File, On disk, Contents, and the row's own button. Every column but the first
+// is sized for the widest thing it can hold, measured on the device at the
+// Deck's scale: the `On disk` heading is 38.7px and two marks are ~34px; the
+// widest Contents value ("12 images") is 76.8px against a 46.1px heading; the
+// Download button's label is ~55px. What that leaves goes to the file name,
+// which is the column with something to say. None of them is conditional — a
+// column that appears and disappears per platform is worse than a narrow one,
+// and `Contents` is about to be filled for file rows (#1803).
+const TABLE_COLUMNS = "1fr 48px 84px 92px";
 
 const BiosTableHeader: FC = () => (
   // Column names accompany the rows below them and scroll with them; making the
@@ -331,7 +348,7 @@ function contentsCell(file: FirmwareRow): string {
 /**
  * What a row says under itself: its note, and the images a folder holds.
  *
- * Full width, because the alternative is a 68px cell wrapping one sentence
+ * Full width, because the alternative is a 48px cell wrapping one sentence
  * across three lines — the cost the marks were introduced to stop paying. A
  * note here is also rare: measured over the `.info` corpus, the only rows that
  * carry one are the handful RetroDECK supplies itself and PS2's folder row.
@@ -369,26 +386,55 @@ const BiosRowLines: FC<{ lines: string[] }> = ({ lines }) =>
  * | 245 | 35% | it IS the name — `"macventure.dat"`                          |
  * | 328 | 47% | the name, a space, then prose — `"scph5500.bin (PS1 JP BIOS)"` |
  * | 115 | 17% | the same, but the name carries its directory — `"dc/dc_boot.bin (Dreamcast BIOS)"` |
- * |   7 |  1% | the first token is not the name — five that never mention it (`"Dolphin 'Sys' folder"`, two upstream typos), and two whose name contains a space |
+ * |   6 |  1% | the description does not open with the name — `"Dolphin 'Sys' folder"`, and two upstream typos |
+ * |   1 |  0% | it does, but the name has a space in it — `"7800 BIOS (U).rom (7800 BIOS)"` |
  *
- * So the rule is: if the description's first token names this file — as itself
- * or at the end of a path — drop that token and keep the rest. That fires on
- * 688 of the 695 and on the no-placement case. Of the seven left, five say
- * something real and are printed whole; the other two do repeat the name and
- * are printed whole anyway, because a name with a space in it (`"7800 BIOS
- * (U).rom"`) is not one token and a rule that scanned for it anywhere in the
- * words would cut into prose that merely quotes it. The prose is kept verbatim,
- * parentheses and all, because it is the packager's own words and
- * re-punctuating it is a second way to be wrong.
+ * So the rule has two halves: strip the name where the description opens with
+ * it verbatim (which is the only way a name containing spaces can be seen), and
+ * otherwise strip a first token that names this file as itself or at the end of
+ * a path. Together they fire on 689 of the 695 and on the no-placement case;
+ * the remaining six say something real and are printed whole. The name half is
+ * anchored at the start rather than searched for anywhere, because a rule that
+ * scanned the whole string would cut into prose that merely quotes the name.
+ * The prose is kept verbatim, parentheses and all, because it is the packager's
+ * own words and re-punctuating it is a second way to be wrong.
+ *
+ * The counts were taken over the deployed flatpak with
+ * `grep -o … | wc -l`-style matching per entry rather than per line: the shapes
+ * are counted by classifying every `firmwareN_path` / `firmwareN_desc` pair,
+ * which is reproducible by re-running that classification over the same tree.
  */
 function fileDescription(file: FirmwareRow): string | null {
   const description = file.description.trim();
   if (!description) return null;
+  // A name with a space in it is not one token, so the token rule cannot see it.
+  // Two of the 695 are spelled that way ("7800 BIOS (U).rom"), and both printed
+  // the name twice until this line. Anchored at the start rather than searched
+  // for anywhere, so prose that merely quotes the name is left alone.
+  if (description.startsWith(`${file.file_name} `)) {
+    return description.slice(file.file_name.length).trim() || null;
+  }
   const [head, ...tail] = description.split(" ");
   const names = head === undefined ? "" : (head.split("/").pop() ?? "");
   if (names !== file.file_name) return description;
   const rest = tail.join(" ").trim();
   return rest || null;
+}
+
+/**
+ * The folder the emulator declared this file in, with its trailing slash, or
+ * `null` for a file that belongs at the root of the BIOS directory.
+ *
+ * The row's own name is a basename, so without this the pane cannot answer the
+ * one question a user placing a file by hand has: which folder. 207 of the 695
+ * declarations a stock RetroDECK ships name a subdirectory — `dc/dc_boot.bin`,
+ * `ep128emu/roms/exos21.rom` — and their descriptions spell it in only 115 of
+ * those, so the description is not a substitute for the declaration.
+ */
+function declaredFolder(file: FirmwareRow): string | null {
+  const declared = file.declared_path;
+  if (declared === undefined || !declared.includes("/")) return null;
+  return `${declared.slice(0, declared.lastIndexOf("/"))}/`;
 }
 
 /**
@@ -443,6 +489,7 @@ const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, dow
   const mark = diskMark(file);
   const library = libraryMark(file);
   const description = fileDescription(file);
+  const folder = declaredFolder(file);
   // The library note is the one sentence the cell's second mark now carries, and
   // on a platform whose library holds little it was the same words under nearly
   // every row. Everything else moves under the row rather than into the cell.
@@ -451,8 +498,8 @@ const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, dow
     <>
       <div style={{ display: "grid", gridTemplateColumns: TABLE_COLUMNS, gap: "8px", alignItems: "center" }}>
         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {folder && <span style={{ color: MUTED }}>{folder}</span>}
           {file.file_name}
-          {description && <span style={{ fontSize: "11px", color: MUTED }}>{` ${description}`}</span>}
         </span>
         <span style={{ display: "flex", gap: "4px", fontSize: "14px", whiteSpace: "nowrap" }}>
           <span data-testid="disk-mark" style={{ color: mark.color }} title={mark.title}>
@@ -467,6 +514,20 @@ const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, dow
         <span style={{ color: MUTED }}>{contentsCell(file)}</span>
         <span>{download}</span>
       </div>
+      {description && (
+        <div
+          style={{
+            marginLeft: "18px",
+            fontSize: "11px",
+            color: MUTED,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {description}
+        </div>
+      )}
       <BiosRowLines lines={rowLines} />
     </>
   );

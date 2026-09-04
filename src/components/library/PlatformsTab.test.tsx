@@ -1100,6 +1100,40 @@ describe("Library › Platforms", () => {
       expect(container.querySelectorAll('[data-testid="bios-legend"] > span')).toHaveLength(3);
     });
 
+    it("keeps the second mark off a folder declaration, which no library holds", async () => {
+      // The backend stamps every folder row `on_server: false` unconditionally —
+      // no RomM library holds a folder — so a mark keyed on that field alone
+      // says "your library does not hold this" about something nothing could.
+      // No other fixture here has that combination, which is why the suite could
+      // not have caught it: a directory row with `on_server: true` is a payload
+      // the backend never produces.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({
+                file_name: "bios",
+                declared_kind: "directory",
+                on_server: false,
+                downloaded: true,
+                satisfied: true,
+              }),
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(diskMarks(container)).toEqual([{ glyph: "✓", color: GREEN }]);
+      expect(libraryMarks(container)).toEqual([]);
+      // …and the legend does not gain a line for a state no row is in.
+      expect(container.querySelector('[data-testid="bios-legend"]')?.textContent).not.toContain(
+        "not in your RomM library",
+      );
+    });
+
     it("leaves the second mark off a platform whose library holds everything", async () => {
       // The legend's filter is what keeps it from costing a row per state, and
       // the new mark is inside it like every other entry.
@@ -1164,9 +1198,17 @@ describe("Library › Platforms", () => {
               // 47%: the name, then prose.
               firmwareFile({ file_name: "scph5500.bin", description: "scph5500.bin (PS1 JP BIOS)" }),
               // 17%: the same, with the name carrying its directory.
-              firmwareFile({ file_name: "dc_boot.bin", description: "dc/dc_boot.bin (Dreamcast BIOS)" }),
+              firmwareFile({
+                file_name: "dc_boot.bin",
+                declared_path: "dc/dc_boot.bin",
+                description: "dc/dc_boot.bin (Dreamcast BIOS)",
+              }),
               // 1%: no mention of the name — printed whole, it says something real.
               firmwareFile({ file_name: "codehandler.bin", description: "Dolphin 'Sys' folder" }),
+              // The two the token rule cannot see: the name itself has a space
+              // in it, so its first token is "7800". Both printed the name twice
+              // until the anchored prefix rule was added.
+              firmwareFile({ file_name: "7800 BIOS (U).rom", description: "7800 BIOS (U).rom (7800 BIOS)" }),
             ],
           }),
         ],
@@ -1175,14 +1217,77 @@ describe("Library › Platforms", () => {
       await flushAsync();
 
       const text = container.textContent;
-      for (const name of ["macventure.dat", "scph5500.bin", "dc_boot.bin", "codehandler.bin"]) {
+      for (const name of ["macventure.dat", "scph5500.bin", "dc_boot.bin", "codehandler.bin", "7800 BIOS (U).rom"]) {
         expect(text.split(name).length - 1).toBe(1);
       }
       // The prose survives verbatim, parentheses and all; only the name is taken out.
       expect(text).toContain("(PS1 JP BIOS)");
       expect(text).toContain("(Dreamcast BIOS)");
-      expect(text).not.toContain("dc/dc_boot.bin");
+      expect(text).toContain("(7800 BIOS)");
       expect(text).toContain("Dolphin 'Sys' folder");
+    });
+
+    it("says which folder a declared file belongs in, beside its name", async () => {
+      // The row's name is a basename, and for 207 of the corpus's 695
+      // declarations the emulator asks for a subdirectory. It is the one thing a
+      // user placing a file by hand has to know, and no other cell carries it.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({ file_name: "dc_boot.bin", declared_path: "dc/dc_boot.bin", description: "" }),
+              firmwareFile({ file_name: "gba_bios.bin", declared_path: "gba_bios.bin", description: "" }),
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      const names = [...container.querySelectorAll<HTMLElement>("span")].map((el) => el.textContent);
+      expect(names).toContain("dc/dc_boot.bin");
+      // A file at the root of the BIOS directory says no folder at all — a
+      // prefix on every row would be noise on the 488 that have none.
+      expect(names).toContain("gba_bios.bin");
+      expect(container.textContent).not.toContain("/gba_bios.bin");
+    });
+
+    it("puts the description on its own line under the row, not beside the name", async () => {
+      // A 50-character parenthesis in a 150px cell was clipped mid-word on every
+      // row that had one. Full width under the row is one line where the cell
+      // needed three, and it is the same block a row's note already uses.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({
+                file_name: "BS-X.bin",
+                description: "BS-X.bin (BS-X - Sore wa Namae o Nusumareta Machi no Monogatari (Japan) (Rev 1))",
+                on_server: false,
+                supplied_by: "RetroDECK",
+              }),
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      const nameCell = [...container.querySelectorAll<HTMLElement>("span")].find((el) => el.textContent === "BS-X.bin");
+      expect(nameCell).toBeTruthy();
+      // The description is not in the name's cell any more…
+      expect(nameCell!.parentElement!.textContent).not.toContain("Sore wa Namae");
+      // …it is under the row, and so is the row's own note, in that order.
+      // The grid of cells, and then the wrapper that holds it and everything
+      // rendered under the row.
+      const row = nameCell!.closest("div")!.parentElement!;
+      const under = [...row.children].map((d) => d.textContent).filter(Boolean);
+      const description = under.findIndex((t) => t.includes("Sore wa Namae"));
+      const note = under.findIndex((t) => t === "provided by RetroDECK");
+      expect(description).toBeGreaterThanOrEqual(0);
+      expect(note).toBeGreaterThan(description);
     });
 
     it("counts a satisfied folder's images in Contents and lists them under the row", async () => {
