@@ -78,7 +78,7 @@ import tomllib
 import re
 from dataclasses import dataclass
 from glob import escape as _glob_escape
-from typing import Any, Literal, Mapping, Protocol, cast
+from typing import Any, Iterable, Literal, Mapping, Protocol, cast
 
 from ._data import packaged_text
 from .core_info import (
@@ -3442,6 +3442,73 @@ def _requirements_of(cores: tuple[CoreFirmware, ...]) -> tuple[FirmwareRequireme
     return tuple(sorted(flat, key=lambda r: (r.path, r.core_so)))
 
 
+# What tells two caveats apart when an answer is assembled: the code and the
+# data, flattened. A data value is a string or a read-only mapping (the tally
+# the alternative-emulator code carries under ``emulators``), and a mapping
+# cannot be hashed, so it is spelled out as its sorted items.
+_CaveatKey = tuple[str, tuple[tuple[str, str | tuple[tuple[str, str], ...]], ...]]
+
+
+def _caveat_key(caveat: Caveat) -> _CaveatKey:
+    flat: list[tuple[str, str | tuple[tuple[str, str], ...]]] = []
+    for key in sorted(caveat.data):
+        value = caveat.data[key]
+        flat.append((key, tuple(sorted(value.items())) if isinstance(value, Mapping) else value))
+    return caveat.code, tuple(flat)
+
+
+def stated_once(caveats: Iterable[Caveat]) -> tuple[Caveat, ...]:
+    """*caveats* with every later restatement of an earlier one dropped — the answer-level rule.
+
+    A system answer resolves a catalogue's entries one by one, and each
+    entry resolves that core's ``.info`` declarations against the machine
+    itself, observing its destinations again. A catalogue that names one core
+    under two entries for one system — RetroDECK 0.10.9b's ES-DE catalogue
+    lists ps2 with two of its commands on ``pcsx2_libretro.so``, labelled
+    ``LRPS2`` and ``PCSX2``
+    (components/es-de/share/es-de/resources/systems/linux/es_systems.xml in
+    the Flatpak) — therefore observes each destination once per entry, and
+    every answer-level caveat that observation carries is stated twice with
+    identical data: a declared file whose bytes fail
+    (:data:`CAVEAT_FIRMWARE_UNREADABLE`), a destination that cannot be looked
+    at (:data:`CAVEAT_FIRMWARE_PATH_INACCESSIBLE`), a file where the core
+    lists a folder (:data:`CAVEAT_FIRMWARE_PATH_NOT_A_DIRECTORY`), a directory
+    where it reads a file (:data:`CAVEAT_FIRMWARE_PATH_OBSTRUCTED`), an
+    archive identity whose bytes differ
+    (:data:`CAVEAT_FIRMWARE_IDENTITY_NOT_COMPARABLE`) and a distribution's own
+    copy that cannot be read
+    (:data:`CAVEAT_FIRMWARE_SUPPLIED_SOURCE_UNREADABLE`). Three of those
+    codes need a file declaration — the identity check's unreadable file,
+    the obstruction and the archive's not-comparable — which is why three of
+    the five modeled vectors could not have been written over the ps2 row;
+    the vectors model a doubling on psx, dreamcast and gc. The folder read
+    memoises itself (:data:`_FolderReads`), so the folder-contents codes were
+    single already. This rule covers every code, and is applied at every
+    place this module assembles a :class:`FirmwareAnswer`. A core's own
+    caveat list is that entry's and is not touched.
+
+    Two caveats are one statement when ``code`` and ``data`` agree, and the
+    first stays. ``message`` is outside the key on purpose: prose is not part
+    of the contract, two readers word one fact differently —
+    :func:`_unread_candidate` and :func:`_unclaimed_identity` each spell
+    :data:`CAVEAT_FIRMWARE_UNREADABLE` in their own sentence — and keeping the
+    first keeps the sentence of the reader that observed it first. A data
+    value can be a read-only mapping — the type permits one, and
+    :data:`~atlas.placement.CAVEAT_PER_GAME_ALTERNATIVE_EMULATOR` carries a
+    tally under ``emulators``, though no firmware caveat carries one today —
+    which no set can hold, so the key spells a mapping out as its sorted
+    items rather than hashing ``data.items()``.
+    """
+    seen: set[_CaveatKey] = set()
+    kept: list[Caveat] = []
+    for caveat in caveats:
+        key = _caveat_key(caveat)
+        if key not in seen:
+            seen.add(key)
+            kept.append(caveat)
+    return tuple(kept)
+
+
 def _empty_answer(context: FirmwareContext, extra: tuple[Caveat, ...] = ()) -> FirmwareAnswer:
     return FirmwareAnswer(
         root=None,
@@ -3449,7 +3516,7 @@ def _empty_answer(context: FirmwareContext, extra: tuple[Caveat, ...] = ()) -> F
         unclaimed=(),
         hash_checked=False,
         sources=context.sources,
-        caveats=(*context.caveats, *extra),
+        caveats=stated_once((*context.caveats, *extra)),
     )
 
 
@@ -3785,7 +3852,7 @@ def firmware_for_core(
             unclaimed=(),
             hash_checked=verify,
             sources=context.sources,
-            caveats=(*context.caveats, reason),
+            caveats=stated_once((*context.caveats, reason)),
         )
     cores, caveats = _resolve_cores(machine, context, (match,), verify=verify)
     return FirmwareAnswer(
@@ -3794,7 +3861,7 @@ def firmware_for_core(
         unclaimed=(),
         hash_checked=verify,
         sources=context.sources,
-        caveats=(*context.caveats, *caveats),
+        caveats=stated_once((*context.caveats, *caveats)),
     )
 
 
@@ -5562,7 +5629,7 @@ def firmware_for_system(
         unclaimed=(),
         hash_checked=verify,
         sources=context.sources,
-        caveats=(*context.caveats, *caveats),
+        caveats=stated_once((*context.caveats, *caveats)),
     )
 
 
@@ -5771,7 +5838,7 @@ def firmware_inventory(machine: Machine, context: FirmwareContext, *, verify: bo
         unclaimed=unclaimed,
         hash_checked=verify,
         sources=context.sources,
-        caveats=(*context.caveats, *caveats),
+        caveats=stated_once((*context.caveats, *caveats)),
     )
 
 
