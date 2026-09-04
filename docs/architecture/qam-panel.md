@@ -134,6 +134,17 @@ is no offset showing both, Steam would scroll the element straight back, so noth
 The set of shapes it counts as a focus stop is measured in the running QAM, not assumed: Steam's own components render
 `div[tabindex="0"]` and a `DialogButton` is a native `button` carrying no tabindex attribute at all.
 
+**A region also keeps the wheel to itself.** Its `overscroll-behavior` is `contain`, because all three nested scrollers
+here — the region, Steam's `ScrollingTab` above it, the QAM panel above that — compute `auto` by default, so a mouse
+that reached the end of one went on to scroll the panel and took the frame's Back row off the top with it. A controller
+never showed it: Steam scrolls a region by moving focus, not by wheel events. The property names no axis of `overflow`,
+so it cannot undo the sideways clipping the bounds deliberately leave to Steam.
+
+**A list-and-detail page's detail region is keyed on the selection**, so choosing another entry mounts a fresh region
+and its detail opens at its own top rather than at the offset the previous one was left at. A key rather than a ref,
+because the panel is reached through a webpack probe and nothing establishes that it forwards one; and it is safe
+because focus is in the list when the selection changes — that is what changed it — so nothing focused is unmounted.
+
 `ScrollPanelGroup` — the sibling that binds gamepad direction to scrolling, and would carry unfocusable content — was
 tried on the device and rejected. It is focusable and its OK button focuses its first visible child, so each region
 became a focus stop of its own: the whole list outlined as one block, A to step into it, and only then rows taking
