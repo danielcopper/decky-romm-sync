@@ -31,6 +31,24 @@ const AMBER = "#d4a72c";
  *  Green's quieter twin, so "there and needed" and "there and spare" are one
  *  glance apart rather than one reading apart. */
 const PALE_GREEN = "#8fc46b";
+/** The second mark's own colour, deliberately outside the verdict palette's
+ *  traffic light: what it reports is not a degree of wrongness. */
+const VIOLET = "#a48fd4";
+
+/**
+ * The second mark: your RomM library does not hold this file.
+ *
+ * It sits BESIDE the verdict mark and never in place of it — the two are
+ * different questions, and a row that is present but unfetchable ("you have it,
+ * but you could not fetch it again") is exactly the combination a single
+ * channel would lose. Which is why it also carries no need axis of its own: the
+ * mark it stands next to already says whether the file is wanted.
+ *
+ * `⊘` is not one of the verdict shapes and reads as "not available" rather than
+ * as a degree of wrong; DejaVu Sans carries U+2298, the same fontconfig
+ * fallback the `✓`/`✗` glyphs already rely on for this table.
+ */
+const LIBRARY_MARK = { glyph: "⊘", color: VIOLET, title: "not in your RomM library" } as const;
 
 /**
  * The padding a `DialogButton` is given wherever this pane puts buttons in a
@@ -128,7 +146,7 @@ function getUnknownSummary(requiredWithheld: number, total: number) {
 }
 
 /**
- * What one row's `On disk` cell says, as a glyph and a colour.
+ * The first mark in one row's `On disk` cell, as a glyph and a colour.
  *
  * Two facts, two channels, so neither has to be read off the other:
  *
@@ -182,6 +200,20 @@ function diskMark(file: FirmwareRow): { glyph: string; color: string; title: str
   return { glyph: "✗", color: required ? RED : MUTED, title: required ? "required, missing" : "missing" };
 }
 
+/**
+ * The row's second mark, or `null` where the library holds the file.
+ *
+ * One field, one rule, no conditionality on the verdict: a file downloaded
+ * before it left the library is still one that cannot be fetched again, so the
+ * mark appears beside a `✓` exactly as it does beside a `✗`.
+ *
+ * `on_server` absent is not `false` — it is a payload that never spoke about
+ * the library — so an unstated row carries no mark rather than a claim.
+ */
+function libraryMark(file: FirmwareRow): typeof LIBRARY_MARK | null {
+  return file.on_server === false ? LIBRARY_MARK : null;
+}
+
 const SectionTitle: FC<{ title: string; note?: string }> = ({ title, note }) => (
   <div style={{ display: "flex", alignItems: "baseline", gap: "8px", padding: "12px 16px 4px" }}>
     <span style={{ fontSize: "12px", fontWeight: 600, letterSpacing: "0.5px", color: "#dcdedf" }}>
@@ -222,7 +254,10 @@ const BusyElsewhere: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
   return <Muted>{`Working on ${other} — actions here are paused until it finishes.`}</Muted>;
 };
 
-const TABLE_COLUMNS = "1fr 104px 92px 116px";
+// File, On disk, Contents, and the row's own button. `On disk` holds marks and
+// nothing else, so it is sized for its own heading rather than for a sentence,
+// and what it gives up goes to the file name.
+const TABLE_COLUMNS = "1fr 68px 92px 116px";
 
 const BiosTableHeader: FC = () => (
   // Column names accompany the rows below them and scroll with them; making the
@@ -270,15 +305,20 @@ function contentsCell(file: FirmwareRow): string {
 }
 
 /**
- * The images a folder holds, one per line under the row they belong to.
+ * What a row says under itself: its note, and the images a folder holds.
  *
- * Each string is the resolver's verbatim, and `pre-wrap` keeps the column
+ * Full width, because the alternative is a 68px cell wrapping one sentence
+ * across three lines — the cost the marks were introduced to stop paying. A
+ * note here is also rare: measured over the `.info` corpus, the only rows that
+ * carry one are the handful RetroDECK supplies itself and PS2's folder row.
+ *
+ * Each image string is the resolver's verbatim, and `pre-wrap` keeps the column
  * padding PCSX2 puts in its own option labels — that alignment is what makes a
  * line matchable against the emulator's own picker. They sit under the row
  * rather than in the Contents cell because the cell is 92px and one of these
  * labels is not; the cell counts them instead.
  */
-const BiosFileLines: FC<{ lines: string[] }> = ({ lines }) =>
+const BiosRowLines: FC<{ lines: string[] }> = ({ lines }) =>
   lines.length === 0 ? null : (
     <div style={{ display: "flex", flexDirection: "column", gap: "2px", marginLeft: "18px", marginTop: "2px" }}>
       {lines.map((line) => (
@@ -298,21 +338,24 @@ const BiosFileLines: FC<{ lines: string[] }> = ({ lines }) =>
  * for a row no placement covers, the file name itself (`build_file_entry`'s
  * `else file_name`). Both spell the name into the words.
  *
- * Measured over the 291 `.info` files a stock RetroDECK ships — 695 declared
+ * Measured over the 292 `.info` files a stock RetroDECK ships — 695 declared
  * firmware entries — the description's relation to the row's own `file_name`
  * (which is `os.path.basename` of the declared path) falls into four shapes:
  *
  * | 245 | 35% | it IS the name — `"macventure.dat"`                          |
- * | 329 | 47% | the name, a space, then prose — `"scph5500.bin (PS1 JP BIOS)"` |
- * | 116 | 17% | the same, but the name carries its directory — `"dc/dc_boot.bin (Dreamcast BIOS)"` |
- * |   5 |  1% | no mention of the name at all — `"Dolphin 'Sys' folder"`, and two upstream typos |
+ * | 328 | 47% | the name, a space, then prose — `"scph5500.bin (PS1 JP BIOS)"` |
+ * | 115 | 17% | the same, but the name carries its directory — `"dc/dc_boot.bin (Dreamcast BIOS)"` |
+ * |   7 |  1% | the first token is not the name — five that never mention it (`"Dolphin 'Sys' folder"`, two upstream typos), and two whose name contains a space |
  *
  * So the rule is: if the description's first token names this file — as itself
- * or at the end of a path — drop that token and keep the rest. That covers 690
- * of the 695 and the no-placement case; the remaining five say something real
- * and are printed whole. The prose is kept verbatim, parentheses and all,
- * because it is the packager's own words and re-punctuating it is a second way
- * to be wrong.
+ * or at the end of a path — drop that token and keep the rest. That fires on
+ * 688 of the 695 and on the no-placement case. Of the seven left, five say
+ * something real and are printed whole; the other two do repeat the name and
+ * are printed whole anyway, because a name with a space in it (`"7800 BIOS
+ * (U).rom"`) is not one token and a rule that scanned for it anywhere in the
+ * words would cut into prose that merely quotes it. The prose is kept verbatim,
+ * parentheses and all, because it is the packager's own words and
+ * re-punctuating it is a second way to be wrong.
  */
 function fileDescription(file: FirmwareRow): string | null {
   const description = file.description.trim();
@@ -327,9 +370,14 @@ function fileDescription(file: FirmwareRow): string | null {
 /**
  * What the marks in `On disk` mean, under the table that uses them.
  *
- * Only the entries the table actually contains: a legend line for a state no row
- * is in explains nothing and costs a row, which on this pane is the scarce
- * thing. The order is the order a reader cares about — what is wrong first.
+ * One entry per line, which is what makes a two-mark cell readable and is what
+ * keeps the filter doing real work: only the entries the table actually
+ * contains, because a line for a state no row is in explains nothing and costs
+ * a row, the scarce thing on this pane. Mark 2 is inside that filter as well —
+ * a platform whose library holds every file shows no line for it — and gets one
+ * line rather than one per pairing, since it means the same beside every
+ * verdict. The order is the order a reader cares about: what is wrong first,
+ * then the second channel.
  */
 const BiosLegend: FC<{ files: FirmwareRow[] }> = ({ files }) => {
   const marks = files.map(diskMark);
@@ -342,9 +390,21 @@ const BiosLegend: FC<{ files: FirmwareRow[] }> = ({ files }) => {
     { glyph: "✓", color: PALE_GREEN, text: "here, not required" },
     { glyph: "✗", color: MUTED, text: "missing, not required" },
   ].filter((entry) => marks.some((mark) => mark.glyph === entry.glyph && mark.color === entry.color));
+  if (files.some((file) => libraryMark(file) !== null)) {
+    shown.push({ glyph: LIBRARY_MARK.glyph, color: LIBRARY_MARK.color, text: LIBRARY_MARK.title });
+  }
   if (shown.length === 0) return null;
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", padding: "2px 16px 6px", fontSize: "11px" }}>
+    <div
+      data-testid="bios-legend"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        padding: "2px 16px 6px",
+        fontSize: "11px",
+        lineHeight: 1.3,
+      }}
+    >
       {shown.map((entry) => (
         <span key={`${entry.glyph}${entry.color}`} style={{ color: MUTED }}>
           <span style={{ color: entry.color }}>{entry.glyph}</span> {entry.text}
@@ -355,9 +415,14 @@ const BiosLegend: FC<{ files: FirmwareRow[] }> = ({ files }) => {
 };
 
 const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, download }) => {
-  const { note, lines } = biosFileNote(file);
+  const { note, lines, fromLibrary } = biosFileNote(file);
   const mark = diskMark(file);
+  const library = libraryMark(file);
   const description = fileDescription(file);
+  // The library note is the one sentence the cell's second mark now carries, and
+  // on a platform whose library holds little it was the same words under nearly
+  // every row. Everything else moves under the row rather than into the cell.
+  const rowLines = fromLibrary ? [] : [...(note ? [note] : []), ...lines];
   const cells = (
     <>
       <div style={{ display: "grid", gridTemplateColumns: TABLE_COLUMNS, gap: "8px", alignItems: "center" }}>
@@ -365,14 +430,20 @@ const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, dow
           {file.file_name}
           {description && <span style={{ fontSize: "11px", color: MUTED }}>{` ${description}`}</span>}
         </span>
-        <span style={{ color: mark.color }} title={mark.title}>
-          <span style={{ fontSize: "14px" }}>{mark.glyph}</span>
-          {note && <span style={{ display: "block", fontSize: "11px", color: MUTED }}>{note}</span>}
+        <span style={{ display: "flex", gap: "4px", fontSize: "14px", whiteSpace: "nowrap" }}>
+          <span data-testid="disk-mark" style={{ color: mark.color }} title={mark.title}>
+            {mark.glyph}
+          </span>
+          {library && (
+            <span data-testid="library-mark" style={{ color: library.color }} title={library.title}>
+              {library.glyph}
+            </span>
+          )}
         </span>
         <span style={{ color: MUTED }}>{contentsCell(file)}</span>
         <span>{download}</span>
       </div>
-      <BiosFileLines lines={lines} />
+      <BiosRowLines lines={rowLines} />
     </>
   );
   if (download) return <div style={{ padding: "4px 16px" }}>{cells}</div>;

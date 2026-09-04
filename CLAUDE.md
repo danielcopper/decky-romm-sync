@@ -269,11 +269,13 @@ Format: **invariant** — tier — enforced by.
   required row; `services/firmware/status.py::_bios_aggregates` scopes `server_count` / `local_count` to `on_server`
   rows; the download buttons' condition is a filter inside `src/components/library/PlatformDetail.tsx` and exists
   nowhere else — and since #1815 the per-row Download button reads the same filtered set, so a fourth reader of the axis
-  now exists in that one file. Each fold has its own quiet failure: drop the row from readiness and a platform reads
-  ready while a required file is absent; add it to the ratio and a SNES page reports `0 / 26 files, 26 missing` for
-  twenty-six optional files no core wants; add it to the buttons and the page offers a download that cannot succeed.
-  `on_server` is the one field all three read; the row's `id: None` is an honest absence with no consumer at all, so
-  nothing breaks if it is filled in and nothing is guarded by leaving it empty
+  now exists in that one file. A fifth reads it in the same file for the On-disk cell's second mark (`⊘`), and that one
+  is display alone: it neither counts nor gates, which is what keeps it out of all three folds below. Each fold has its
+  own quiet failure: drop the row from readiness and a platform reads ready while a required file is absent; add it to
+  the ratio and a SNES page reports `0 / 26 files, 26 missing` for twenty-six optional files no core wants; add it to
+  the buttons and the page offers a download that cannot succeed. `on_server` is the one field all three read; the row's
+  `id: None` is an honest absence with no consumer at all, so nothing breaks if it is filled in and nothing is guarded
+  by leaving it empty
 - **No BIOS answer outlives the page that asked for it** — test + prompt-only —
   `tests/services/test_game_detail.py::TestGetCachedGameDetailCarriesNoBiosAnswer` and the two contract cases in
   `tests/contract/test_game_detail_read.py`. `get_cached_game_detail` carries none and says so (`bios_status_unknown`,

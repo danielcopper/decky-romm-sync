@@ -131,14 +131,27 @@ const RED = "#d94126";
 const PALE_GREEN = "#8fc46b";
 const GREY = "#8f98a0";
 const AMBER = "#d4a72c";
+const VIOLET = "#a48fd4";
 
-/** The BIOS table's On-disk marks, in row order: the glyph and the colour it is
+/** The BIOS table's verdict marks, in row order: the glyph and the colour it is
  *  drawn in. The glyph carries the verdict and the colour carries the need, so a
  *  test that read only one of them would pass on half the encoding. */
 function diskMarks(container: HTMLElement): { glyph: string; color: string }[] {
-  return [...container.querySelectorAll<HTMLElement>("span[title]")]
-    .filter((el) => /^[✓✗?]$/.test(el.textContent.trim().charAt(0)))
-    .map((el) => ({ glyph: el.textContent.trim().charAt(0), color: el.style.color }));
+  return [...container.querySelectorAll<HTMLElement>('[data-testid="disk-mark"]')].map((el) => ({
+    glyph: el.textContent.trim(),
+    color: el.style.color,
+  }));
+}
+
+/** The second mark, one per row whose file the RomM library does not hold. Read
+ *  separately from the verdict marks on purpose: the two are additive, so a test
+ *  that folded them into one list could not tell a replaced mark from an added
+ *  one. */
+function libraryMarks(container: HTMLElement): { glyph: string; color: string }[] {
+  return [...container.querySelectorAll<HTMLElement>('[data-testid="library-mark"]')].map((el) => ({
+    glyph: el.textContent.trim(),
+    color: el.style.color,
+  }));
 }
 
 /** The BIOS table's Contents cells, by their exact text.
@@ -868,9 +881,98 @@ describe("Library › Platforms", () => {
       expect(diskMarks(container)).toEqual([{ glyph: "?", color: AMBER }]);
     });
 
+    it("adds a second mark for what the library does not hold, and never trades the first for it", async () => {
+      // Two facts, two marks: a file you have but could not fetch again keeps
+      // its green ✓, and a required missing one keeps its red ✗. Folding the
+      // library gap into the verdict's colour would collapse required and
+      // optional among exactly the rows that cannot be downloaded.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({ file_name: "here.bin", downloaded: true, satisfied: true, on_server: false }),
+              firmwareFile({ file_name: "gone.bin", downloaded: false, satisfied: false, on_server: false }),
+              firmwareFile({ file_name: "have.bin", downloaded: true, satisfied: true }),
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(diskMarks(container)).toEqual([
+        { glyph: "✓", color: GREEN },
+        { glyph: "✗", color: RED },
+        { glyph: "✓", color: GREEN },
+      ]);
+      // Two of the three rows, in row order — the third is in the library.
+      expect(libraryMarks(container)).toEqual([
+        { glyph: "⊘", color: VIOLET },
+        { glyph: "⊘", color: VIOLET },
+      ]);
+      // The sentence the mark replaces is said once, in the legend, and on no
+      // row: on the rows it was the same words twice over, wrapped across three
+      // lines of a 68px cell.
+      expect(container.textContent.match(/not in your RomM library/g)).toHaveLength(1);
+      const legend = container.querySelector('[data-testid="bios-legend"]');
+      expect(legend?.textContent).toContain("not in your RomM library");
+      // One legend line for the mark, not one per verdict it can stand beside.
+      expect(container.querySelectorAll('[data-testid="bios-legend"] > span')).toHaveLength(3);
+    });
+
+    it("leaves the second mark off a platform whose library holds everything", async () => {
+      // The legend's filter is what keeps it from costing a row per state, and
+      // the new mark is inside it like every other entry.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({ files: [firmwareFile({ file_name: "a.bin", downloaded: true, satisfied: true })] }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(libraryMarks(container)).toEqual([]);
+      const legend = container.querySelector('[data-testid="bios-legend"]');
+      expect(legend?.textContent).not.toContain("not in your RomM library");
+      // One entry per line. happy-dom lays nothing out, so the column is the
+      // observable — without it the entries flow into one wrapping row.
+      expect((legend as HTMLElement | null)?.style.flexDirection).toBe("column");
+    });
+
+    it("puts a row's own note under the row, out of the marks column", async () => {
+      // Everything `biosFileNote` says that is NOT the library sentence still
+      // has to reach the reader — it just gets the full width instead of a
+      // 68px cell. `provided by` is the note that outranks all the others.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({
+                file_name: "codehandler.bin",
+                downloaded: true,
+                satisfied: true,
+                on_server: false,
+                supplied_by: "RetroDECK",
+              }),
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("provided by RetroDECK");
+      // The note is not in the marks cell: that cell holds the two marks only.
+      const cell = container.querySelector('[data-testid="disk-mark"]')?.parentElement;
+      expect(cell?.textContent).toBe("✓⊘");
+    });
+
     it("says a file name once, in each shape the .info corpus actually has", async () => {
       // The description is the core's own firmwareN_desc, not RomM's, and every
-      // one of these is a verbatim pair from the 291 .info files a stock
+      // one of these is a verbatim pair from the 292 .info files a stock
       // RetroDECK ships. Only the first was caught before, which is why a
       // PlayStation row read "scph5500.bin scph5500.bin (PS1 JP BIOS)".
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({

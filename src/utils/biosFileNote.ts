@@ -42,9 +42,9 @@ export type BiosNoteRow = Pick<
  * Both come back together because they are alternatives as often as they are
  * companions — a folder that lists what it holds needs no sentence saying it
  * holds something — and a surface taking one without the other would render a
- * satisfied folder as a bare name. What each surface still chooses is where the
- * lines go: the BIOS tab has an indented block under the row, the platform
- * detail puts them in its Contents column.
+ * satisfied folder as a bare name. Both surfaces put them under the row they
+ * belong to — the BIOS tab in an indented block, the platform detail alongside
+ * the note, whose own cells are too narrow to hold either.
  */
 export interface BiosFileWords {
   /** The em-dash note after the row's name, or `""` where there is none. */
@@ -52,6 +52,18 @@ export interface BiosFileWords {
   /** One line each, rendered under the row. Empty for every row but a folder
    *  whose read identified images, where the list IS the content. */
   lines: string[];
+  /**
+   * The note is the library one — "not in your RomM library" and its missing
+   * variant — rather than anything the reading established.
+   *
+   * It is the one note that says the same thing on every row it applies to, and
+   * on a platform whose library holds little it applies to nearly all of them.
+   * A surface that carries that fact some other way — the platform detail marks
+   * it in the row's own cell — drops the sentence and keeps the rest; the game
+   * page's BIOS tab has room for it and prints it. The flag exists so neither
+   * has to re-derive this function's precedence to know which note it got.
+   */
+  fromLibrary: boolean;
 }
 
 /** A directory is at a destination the emulator opens as a file, so nothing
@@ -112,7 +124,7 @@ function verdictNote(row: BiosNoteRow): BiosFileWords {
 }
 
 /** One line and nothing under it — every group but a satisfied folder's. */
-const said = (note: string): BiosFileWords => ({ note, lines: [] });
+const said = (note: string): BiosFileWords => ({ note, lines: [], fromLibrary: false });
 
 /** A declared FILE: what the reading found at the place the emulator opens. */
 function fileAtItsDestination(has: (code: string) => boolean): BiosFileWords {
@@ -128,7 +140,7 @@ function fileAtItsDestination(has: (code: string) => boolean): BiosFileWords {
  * is what pushed the status dot onto a line of its own.
  */
 function folderHolding(images: string[]): BiosFileWords {
-  return images.length > 0 ? { note: "", lines: [...images] } : said("holds a BIOS image");
+  return images.length > 0 ? { note: "", lines: [...images], fromLibrary: false } : said("holds a BIOS image");
 }
 
 /** A folder shown to hold nothing the core would boot, or none at all. */
@@ -148,18 +160,22 @@ function folderWithheld(satisfied: boolean | null | undefined, has: (code: strin
  * What *row* says about itself — an empty note where its own state is the whole story.
  *
  * The note is `""` for a plain library file, present or missing alike: what the
- * surfaces disagree about is how to say "missing", so that word is left to
- * them (the platform detail spells it out; the tab's dot already carries it).
+ * surfaces disagree about is how to say "missing", so that word is left to them
+ * (the platform detail marks it in its On-disk cell; the tab's dot carries it).
  */
 export function biosFileNote(row: BiosNoteRow): BiosFileWords {
-  if (row.supplied_by) return { note: `provided by ${row.supplied_by}`, lines: [] };
+  if (row.supplied_by) return { note: `provided by ${row.supplied_by}`, lines: [], fromLibrary: false };
   const verdict = verdictNote(row);
   if (verdict.note || verdict.lines.length > 0) return verdict;
   // No RomM library holds a folder — the emulator lists that name — so the
   // library note would describe a download nobody can make.
-  if (row.declared_kind === "directory") return { note: "", lines: [] };
+  if (row.declared_kind === "directory") return { note: "", lines: [], fromLibrary: false };
   if (row.on_server === false) {
-    return { note: row.downloaded ? "not in your RomM library" : "missing, not in your RomM library", lines: [] };
+    return {
+      note: row.downloaded ? "not in your RomM library" : "missing, not in your RomM library",
+      lines: [],
+      fromLibrary: true,
+    };
   }
-  return { note: "", lines: [] };
+  return { note: "", lines: [], fromLibrary: false };
 }

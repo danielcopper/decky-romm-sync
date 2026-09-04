@@ -54,7 +54,7 @@ describe("biosFileNote", () => {
   });
 
   it("still says a satisfied folder holds an image when none was named", () => {
-    expect(biosFileNote(folder(true))).toEqual({ note: "holds a BIOS image", lines: [] });
+    expect(biosFileNote(folder(true))).toEqual({ note: "holds a BIOS image", lines: [], fromLibrary: false });
   });
 
   it("says an unmet folder holds no image", () => {
@@ -117,5 +117,19 @@ describe("biosFileNote", () => {
   it("keeps the library note for a row nothing else was established for", () => {
     expect(noteOf({ downloaded: true, on_server: false, satisfied: true })).toBe("not in your RomM library");
     expect(noteOf({ downloaded: false, on_server: false, satisfied: false })).toBe("missing, not in your RomM library");
+  });
+
+  it("flags the library note as the library one, and no other note", () => {
+    // A surface that carries the fact some other way drops the sentence and
+    // keeps the rest. Without the flag it would have to re-derive this
+    // function's precedence — and a `provided by` row is also `on_server:
+    // false`, so keying on that field alone would drop the wrong note.
+    expect(biosFileNote({ downloaded: true, on_server: false, satisfied: true }).fromLibrary).toBe(true);
+    expect(biosFileNote({ downloaded: false, on_server: false, satisfied: false }).fromLibrary).toBe(true);
+    expect(
+      biosFileNote({ downloaded: true, on_server: false, supplied_by: "RetroDECK", satisfied: true }).fromLibrary,
+    ).toBe(false);
+    expect(biosFileNote({ downloaded: true, on_server: true, satisfied: true }).fromLibrary).toBe(false);
+    expect(biosFileNote(folder(false, ["firmware-directory-holds-no-image"])).fromLibrary).toBe(false);
   });
 });
