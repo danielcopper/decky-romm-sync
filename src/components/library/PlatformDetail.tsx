@@ -491,8 +491,21 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
   );
 };
 
+/**
+ * Taking a platform back out of Steam, and taking its save files off the disk.
+ *
+ * Both buttons are always rendered and disable when there is nothing to delete;
+ * neither is ever hidden. Hiding the group on the shortcut count alone strands a
+ * platform whose shortcuts were removed but whose saves remain — those saves are
+ * then unreachable from this page, and this is the only page that offers them.
+ *
+ * The saves count is its own read (`count_platform_saves`), because nothing else
+ * knows it: the delete finds its files through the platform's installed ROMs and
+ * counts only what it removed, afterwards.
+ */
 const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ row, state }) => {
   const syncRunning = useSyncRunning();
+  const saveCount = state.saveCountFor(row.slug);
   const confirmDeleteSaves = () =>
     showModal(
       <ConfirmModal
@@ -519,7 +532,7 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
       <ButtonItem
         layout="below"
         bottomSeparator="none"
-        disabled={state.busySlug !== null || syncRunning}
+        disabled={state.busySlug !== null || syncRunning || row.shortcutCount === 0}
         description={syncRunning ? SYNC_RUNNING_HINT : undefined}
         onClick={confirmRemoveShortcuts}
       >
@@ -527,8 +540,17 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
           {`Remove ${row.shortcutCount} shortcut${row.shortcutCount === 1 ? "" : "s"}`}
         </span>
       </ButtonItem>
-      <ButtonItem layout="below" bottomSeparator="none" disabled={state.busySlug !== null} onClick={confirmDeleteSaves}>
-        <span style={{ color: "#d94126" }}>Delete save files</span>
+      <ButtonItem
+        layout="below"
+        bottomSeparator="none"
+        disabled={state.busySlug !== null || saveCount === 0}
+        onClick={confirmDeleteSaves}
+      >
+        <span style={{ color: "#d94126" }}>
+          {typeof saveCount === "number"
+            ? `Delete ${saveCount} save file${saveCount === 1 ? "" : "s"}`
+            : "Delete save files"}
+        </span>
       </ButtonItem>
       <GroupStatus state={state} slug={row.slug} scope="remove" />
     </>
@@ -570,7 +592,7 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
           <Muted>Nothing is known about this platform&apos;s BIOS files.</Muted>
         </>
       )}
-      {row.shortcutCount > 0 && <RemoveSection row={row} state={state} />}
+      <RemoveSection row={row} state={state} />
     </>
   );
 };

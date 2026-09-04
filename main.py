@@ -808,6 +808,9 @@ class Plugin:
     async def delete_local_saves(self, rom_id):
         return self._save_sync_service.delete_local_saves(rom_id)
 
+    async def count_platform_saves(self, platform_slug):
+        return await self._save_sync_service.count_platform_saves(platform_slug)
+
     @migration_blocked
     @prune_active_blocked
     async def delete_platform_saves(self, platform_slug):

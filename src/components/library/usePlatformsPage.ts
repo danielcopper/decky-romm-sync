@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  countPlatformSaves,
   debugLog,
   deletePlatformBios,
   deletePlatformSaves,
@@ -97,6 +98,14 @@ export interface FrozenGroups {
  */
 export type CoreAnswer = SystemCoreInfo | null | undefined;
 
+/**
+ * How many save files a platform holds. `undefined` is "not read yet" and
+ * `null` is "the read failed" — the same three-way answer the core read gives,
+ * and for the same reason: the Delete save files button disables on a real
+ * zero, so an unknown must not look like one.
+ */
+export type SaveCountAnswer = number | null | undefined;
+
 export interface PlatformsPageState {
   rows: Map<string, PlatformRow>;
   groups: FrozenGroups | null;
@@ -108,6 +117,7 @@ export interface PlatformsPageState {
   selectedSlug: string | null;
   select: (slug: string) => void;
   coreFor: (slug: string) => CoreAnswer;
+  saveCountFor: (slug: string) => SaveCountAnswer;
   status: DetailStatus | null;
   /**
    * The platform whose action is in flight, or `null`. Every action on every
@@ -167,6 +177,7 @@ export function usePlatformsPage(): PlatformsPageState {
   const [shortcutCounts, setShortcutCounts] = useState<Record<string, number>>({});
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [cores, setCores] = useState<Record<string, SystemCoreInfo | null>>({});
+  const [saveCounts, setSaveCounts] = useState<Record<string, number | null>>({});
   const [status, setStatus] = useState<DetailStatus | null>(null);
   const [busySlug, setBusySlug] = useState<string | null>(null);
   const [removalProgress, setRemovalProgress] = useState<{ slug: string; removed: number; total: number } | null>(null);
@@ -175,6 +186,7 @@ export function usePlatformsPage(): PlatformsPageState {
   // walking the list issues one read per row and the guard must hold within a
   // single render pass, before any answer has come back.
   const coreRequested = useRef<Set<string>>(new Set());
+  const saveCountRequested = useRef<Set<string>>(new Set());
 
   const refreshFirmware = useCallback(async () => {
     try {
@@ -207,6 +219,26 @@ export function usePlatformsPage(): PlatformsPageState {
       });
   }, []);
 
+  const loadSaveCount = useCallback((slug: string) => {
+    if (saveCountRequested.current.has(slug)) return;
+    saveCountRequested.current.add(slug);
+    countPlatformSaves(slug)
+      .then((result) => setSaveCounts((prev) => ({ ...prev, [slug]: result.count })))
+      .catch((e) => {
+        logWarn(`Failed to count the save files for ${slug}: ${e}`);
+        setSaveCounts((prev) => ({ ...prev, [slug]: null }));
+      });
+  }, []);
+
+  /** Ask again after a delete: the count the button showed is now spent. */
+  const reloadSaveCount = useCallback(
+    (slug: string) => {
+      saveCountRequested.current.delete(slug);
+      loadSaveCount(slug);
+    },
+    [loadSaveCount],
+  );
+
   const reloadCore = useCallback(
     (slug: string) => {
       coreRequested.current.delete(slug);
@@ -233,7 +265,10 @@ export function usePlatformsPage(): PlatformsPageState {
         setGroups(frozen);
         const first = frozen.synced[0] ?? frozen.available[0] ?? null;
         setSelectedSlug(first);
-        if (first) loadCore(first);
+        if (first) {
+          loadCore(first);
+          loadSaveCount(first);
+        }
       })
       .catch(() => setFailed(true))
       .finally(() => setLoading(false));
@@ -247,7 +282,7 @@ export function usePlatformsPage(): PlatformsPageState {
     return () => {
       detach(releasePruneLeasesByOwner(LEASE_OWNER));
     };
-  }, [loadCore, refreshFirmware, refreshShortcutCounts]);
+  }, [loadCore, loadSaveCount, refreshFirmware, refreshShortcutCounts]);
 
   const rows = new Map<string, PlatformRow>(
     platforms.map((p) => [
@@ -268,11 +303,13 @@ export function usePlatformsPage(): PlatformsPageState {
     (slug: string) => {
       setSelectedSlug(slug);
       loadCore(slug);
+      loadSaveCount(slug);
     },
-    [loadCore],
+    [loadCore, loadSaveCount],
   );
 
   const coreFor = useCallback((slug: string): CoreAnswer => cores[slug], [cores]);
+  const saveCountFor = useCallback((slug: string): SaveCountAnswer => saveCounts[slug], [saveCounts]);
 
   // Disable all has to be able to put the list back exactly as it was, which no
   // functional update can reconstruct. The snapshot is written in an effect
@@ -475,23 +512,27 @@ export function usePlatformsPage(): PlatformsPageState {
     [refreshShortcutCounts],
   );
 
-  const deleteSaves = useCallback((row: PlatformRow) => {
-    setBusySlug(row.slug);
-    setStatus({ slug: row.slug, scope: "remove", text: `Deleting ${row.name} saves…` });
-    detach(
-      (async () => {
-        try {
-          const result = await deletePlatformSaves(row.slug);
-          setStatus({ slug: row.slug, scope: "remove", text: result.message });
-          globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync" } }));
-        } catch {
-          setStatus({ slug: row.slug, scope: "remove", text: "Failed to delete saves" });
-        } finally {
-          setBusySlug(null);
-        }
-      })(),
-    );
-  }, []);
+  const deleteSaves = useCallback(
+    (row: PlatformRow) => {
+      setBusySlug(row.slug);
+      setStatus({ slug: row.slug, scope: "remove", text: `Deleting ${row.name} saves…` });
+      detach(
+        (async () => {
+          try {
+            const result = await deletePlatformSaves(row.slug);
+            setStatus({ slug: row.slug, scope: "remove", text: result.message });
+            globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync" } }));
+          } catch {
+            setStatus({ slug: row.slug, scope: "remove", text: "Failed to delete saves" });
+          } finally {
+            setBusySlug(null);
+            reloadSaveCount(row.slug);
+          }
+        })(),
+      );
+    },
+    [reloadSaveCount],
+  );
 
   return {
     rows,
@@ -502,6 +543,7 @@ export function usePlatformsPage(): PlatformsPageState {
     selectedSlug,
     select,
     coreFor,
+    saveCountFor,
     status,
     busySlug,
     removalProgress,

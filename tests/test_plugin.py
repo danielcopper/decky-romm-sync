@@ -850,6 +850,7 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_cached_game_detail",
     "get_platform_core_info",
     "get_system_core_info",
+    "count_platform_saves",
     # Read-only disc-picker state query (the pin-write select_disc IS decorated).
     "get_disc_selection",
     # Read-only version-picker state query (the binding-move switch_version IS decorated).

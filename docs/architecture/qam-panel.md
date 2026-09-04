@@ -257,19 +257,28 @@ on the right. Under it, for the focused platform:
   machine-wide reading is deliberately unverified, #1803 is what will ask it, and until then the dash must not come to
   mean "asked, and nothing found". The section appears whenever the firmware read speaks for the platform, synced or not
   — there is nothing to say about one it does not cover.
-- **Remove** — Remove _N_ shortcuts and Delete save files, the actions the Data Management platform modal used to offer,
-  without Delete BIOS (it is one group up). Only when the platform has shortcuts in Steam; that count is the only "has
-  anything" signal the panel can read, so a platform holding save files and no shortcut shows no group. Red, last, each
-  behind a confirmation.
+- **Remove** — Remove _N_ shortcuts and Delete _N_ save files, the actions the Data Management platform modal used to
+  offer, without Delete BIOS (it is one group up). Red, last, each behind a confirmation. **Both buttons are always
+  rendered and disable when there is nothing to delete; neither is ever hidden.** Hiding the group on the shortcut count
+  alone strands a platform whose shortcuts were removed and whose saves remain — those saves are then unreachable, and
+  this is the only page that offers them. A count still being read is not a zero: the saves button says only what it
+  does and stays pressable until the answer lands.
 
-Four reads feed the tab. Three are list-shaped and run once per page mount: `get_platforms` (RomM's platforms with ROMs,
+Five reads feed the tab. Three are list-shaped and run once per page mount: `get_platforms` (RomM's platforms with ROMs,
 the list itself), `get_firmware_status` (BIOS state for the platforms it can speak for) and `get_registry_platforms`
 (ROMs bound to a Steam shortcut per platform — the shortcut counts, and what "has synced games" means here). Only the
-first gates the list; the other two fill in beside it. The fourth is `get_system_core_info`, a **per-platform-slug read
-issued once per selection** and cached for the life of the page. It exists because neither of the others can answer for
-the focused platform: `get_platform_core_info` is keyed by ROM and layers that ROM's own pin on top, and the firmware
-overview carries no entry at all for a platform it has nothing to say about. It costs one ES-DE options read and a
-`settings.json` lookup, and opens no database transaction.
+first gates the list; the other two fill in beside it, and each says so on the pane when it fails rather than letting
+its absence read as an answer.
+
+The other two are **per-platform-slug reads issued once per selection** and cached for the life of the page.
+`get_system_core_info` exists because neither list read can answer for the focused platform: `get_platform_core_info` is
+keyed by ROM and layers that ROM's own pin on top, and the firmware overview carries no entry at all for a platform it
+has nothing to say about. It costs one ES-DE options read and a `settings.json` lookup, and opens no database
+transaction. `count_platform_saves` answers how many save files the platform holds, for the Delete _N_ save files
+button: nothing else knows the number, because the delete finds its files through the platform's installed ROMs and
+counts only what it removed, afterwards. It walks that same path without deleting — one short read transaction for the
+installed ids, then a file probe per ROM, offloaded off the event loop — and it is asked again after a delete, so the
+button stops offering saves that are gone.
 
 **Collections** has no per-entry detail, so it is one wide list: the favorites toggle and the Mine / All owner scope on
 top, the kind filter (Standard, Smart, Virtual — with the Franchise / IGDB Collection split inside Virtual), the fuzzy

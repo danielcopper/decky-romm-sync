@@ -65,6 +65,10 @@ class SaveService:
         self._save_file_store = config.save_file_store
         self._uow_factory: UnitOfWorkFactory = config.uow_factory
         self._settings_persister = config.settings_persister
+        # Held for the one read this façade offloads itself: the per-platform
+        # save count walks the filesystem once per installed ROM, and the page
+        # asks it on every selection.
+        self._loop = config.loop
         # Resolve plugin version once at construction; the DeviceRegistry and
         # any other consumer receive the resolved string, not the Protocol.
         plugin_version = config.plugin_metadata.read_version(config.plugin_dir)
@@ -587,6 +591,28 @@ class SaveService:
         """Read installed-ROM ids on *platform_slug* from the rom_installs aggregate (WS3)."""
         with self._uow_factory() as uow:
             return [install.rom_id for install in uow.rom_installs.iter_all() if install.platform_slug == platform_slug]
+
+    async def count_platform_saves(self, platform_slug: str) -> dict[str, Any]:
+        """How many local save files the installed ROMs on *platform_slug* hold.
+
+        The read half of :meth:`delete_platform_saves`, over the same two steps
+        in the same order — the platform's installed ROM ids, then each one's
+        save files — so the number a button offers is the number the delete would
+        remove. It only looks: nothing here unlinks a file or writes a row.
+
+        The Library page's platform detail asks it once per selected platform,
+        beside the core read, and puts the count on Delete _N_ save files. That
+        button disables at zero rather than disappearing, so a platform whose
+        shortcuts are gone and whose saves remain still offers the one action
+        that can reach them.
+        """
+        return await self._loop.run_in_executor(None, self._count_platform_saves_io, platform_slug)
+
+    def _count_platform_saves_io(self, platform_slug: str) -> dict[str, Any]:
+        rom_ids = self._installed_rom_ids_on_platform(platform_slug)
+        # The file walk runs after the id read's UoW has closed, for the reason
+        # the delete does the same: a Unit of Work never spans file I/O.
+        return {"count": sum(len(self._rom_info.find_save_files(rom_id)) for rom_id in rom_ids)}
 
     def delete_platform_saves(self, platform_slug: str) -> dict[str, Any]:
         """Delete local save files for all installed ROMs on a platform."""

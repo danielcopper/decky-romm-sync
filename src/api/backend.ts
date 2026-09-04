@@ -1145,6 +1145,10 @@ export const deleteLocalSaves = callable<[number], { success: boolean; deleted_c
 export const deletePlatformSaves = callable<[string], { success: boolean; deleted_count: number; message: string }>(
   "delete_platform_saves",
 );
+/** How many local save files a platform holds — the read half of
+ *  `deletePlatformSaves`, walking the same path without deleting. The Library
+ *  page's platform detail asks it once per selection, beside the core read. */
+export const countPlatformSaves = callable<[string], { count: number }>("count_platform_saves");
 export const deletePlatformBios = callable<[string], { success: boolean; deleted_count: number; message: string }>(
   "delete_platform_bios",
 );

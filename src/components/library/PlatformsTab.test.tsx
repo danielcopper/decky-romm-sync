@@ -168,6 +168,7 @@ describe("Library › Platforms", () => {
     vi.mocked(backend.getFirmwareStatus).mockResolvedValue({ success: true, platforms: [firmwarePlatform()] });
     vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({ platforms: [{ slug: "gba", name: "GBA", count: 9 }] });
     vi.mocked(backend.getSystemCoreInfo).mockResolvedValue(coreInfo());
+    vi.mocked(backend.countPlatformSaves).mockResolvedValue({ count: 3 });
     vi.mocked(backend.savePlatformSync).mockResolvedValue({ success: true, message: "" });
     vi.mocked(backend.setAllPlatformsSync).mockResolvedValue({ success: true, message: "" });
     vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: [] });
@@ -486,12 +487,37 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("RetroDECK was not found");
     });
 
-    it("hides the removal group for a platform with nothing in Steam", async () => {
+    it("keeps the removal group and disables what there is nothing to delete", async () => {
+      // Never hidden: a platform whose shortcuts are gone but whose saves remain
+      // must still offer the button that reaches them, and this is the only page
+      // that offers it.
       vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({ platforms: [] });
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
-      expect(container.textContent).not.toContain("Delete save files");
+      expect(buttonByText(container, "Remove 0 shortcuts")).toBeDisabled();
+      expect(buttonByText(container, "Delete 3 save files")).not.toBeDisabled();
+    });
+
+    it("disables the saves button on a real zero, and never on an unread count", async () => {
+      let answer: (v: { count: number }) => void = () => {};
+      vi.mocked(backend.countPlatformSaves).mockReturnValue(
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+      );
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      // Unread is not zero: the count is still coming, so the button says only
+      // what it does and stays pressable.
+      expect(buttonByText(container, "Delete save files")).not.toBeDisabled();
+
+      await act(async () => {
+        answer({ count: 0 });
+        for (let i = 0; i < 6; i++) await Promise.resolve();
+      });
+      expect(buttonByText(container, "Delete 0 save files")).toBeDisabled();
     });
   });
 
@@ -966,7 +992,7 @@ describe("Library › Platforms", () => {
       expect(buttonByText(container, "Remove 9 shortcuts")).toBeDisabled();
       expect(container.textContent).toContain("Unavailable while a library sync is running.");
       // The save deletion is not sync-gated.
-      expect(buttonByText(container, "Delete save files")).not.toBeDisabled();
+      expect(buttonByText(container, "Delete 3 save files")).not.toBeDisabled();
     });
 
     it("confirms before deleting saves, then deletes them and tells the save surfaces", async () => {
@@ -982,7 +1008,7 @@ describe("Library › Platforms", () => {
         const { container } = render(<LibraryPage onBack={vi.fn()} />);
         await flushAsync();
         await act(async () => {
-          fireEvent.click(buttonByText(container, "Delete save files")!);
+          fireEvent.click(buttonByText(container, "Delete 3 save files")!);
           await Promise.resolve();
         });
         expect(vi.mocked(backend.deletePlatformSaves)).not.toHaveBeenCalled();
@@ -997,12 +1023,32 @@ describe("Library › Platforms", () => {
       }
     });
 
+    it("re-reads the saves count after deleting, so the button stops offering them", async () => {
+      vi.mocked(backend.deletePlatformSaves).mockResolvedValue({
+        success: true,
+        deleted_count: 3,
+        message: "Deleted 3 save files",
+      });
+      vi.mocked(backend.countPlatformSaves).mockResolvedValueOnce({ count: 3 }).mockResolvedValue({ count: 0 });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Delete 3 save files")!);
+        await Promise.resolve();
+      });
+      await confirmLastModal();
+      await flushAsync();
+
+      expect(buttonByText(container, "Delete 0 save files")).toBeDisabled();
+    });
+
     it("surfaces a save deletion that threw", async () => {
       vi.mocked(backend.deletePlatformSaves).mockRejectedValue(new Error("io"));
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(buttonByText(container, "Delete save files")!);
+        fireEvent.click(buttonByText(container, "Delete 3 save files")!);
         await Promise.resolve();
       });
       await confirmLastModal();

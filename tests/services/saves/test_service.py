@@ -698,6 +698,51 @@ class TestEmulatorTag:
         assert active_core.calls == [42, 43]
 
     @pytest.mark.asyncio
+    async def test_count_platform_saves_is_what_the_delete_would_remove(self, tmp_path):
+        """The count and the delete walk the same path, so they cannot disagree."""
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _install_rom(svc, tmp_path, rom_id=2, system="gba", file_name="game2.gba")
+        _create_save(tmp_path, system="gba", rom_name="game1")
+        _create_save(tmp_path, system="gba", rom_name="game2")
+
+        assert (await svc.count_platform_saves("gba"))["count"] == 2
+
+        assert svc.delete_platform_saves("gba")["deleted_count"] == 2
+        # Counting again after the delete answers zero — it looked, it did not
+        # remember.
+        assert (await svc.count_platform_saves("gba"))["count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_count_platform_saves_deletes_nothing(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        save = _create_save(tmp_path, system="gba", rom_name="game1")
+
+        assert (await svc.count_platform_saves("gba"))["count"] == 1
+        assert save.exists()
+
+    @pytest.mark.asyncio
+    async def test_count_platform_saves_is_scoped_to_its_platform(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
+        _create_save(tmp_path, system="gba", rom_name="game1")
+        _create_save(tmp_path, system="snes", rom_name="game2")
+
+        assert (await svc.count_platform_saves("gba"))["count"] == 1
+        assert (await svc.count_platform_saves("snes"))["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_count_platform_saves_answers_zero_for_a_platform_with_nothing(self, tmp_path):
+        """Zero rather than an absent answer — the button disables on it."""
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+
+        assert (await svc.count_platform_saves("gba"))["count"] == 0
+        assert (await svc.count_platform_saves("n64"))["count"] == 0
+
+    @pytest.mark.asyncio
     async def test_delete_platform_saves(self, tmp_path):
         svc, _ = make_service(tmp_path)
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
