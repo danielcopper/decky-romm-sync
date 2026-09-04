@@ -656,8 +656,9 @@ describe("Library › Platforms", () => {
       // set, and the options keep ES-DE's document order — so `emulators[0]` is
       // that command. If its emulator is not installed the fallback names a
       // binary that is not there, and "RetroDECK picks one" would be false.
-      // Apple I is this shape on a real machine: five commands, the first
-      // `LinApple (Standalone)`, none installed.
+      // Apple I is this shape: its first ES-DE command is unbakeable for
+      // `no_rom_target`, not for a missing emulator, so the muted branch is the
+      // correct one there and the red clause belongs to a different platform.
       vi.mocked(backend.getSystemCoreInfo).mockResolvedValue(coreInfo({ emulators, active_core_label: null }));
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
