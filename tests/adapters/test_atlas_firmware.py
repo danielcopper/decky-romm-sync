@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 from _vendor.atlas import (
     CAVEAT_FIRMWARE_DIRECTORY_HOLDS_NO_CANDIDATE,
+    CAVEAT_FIRMWARE_IDENTITY_NOT_COMPARABLE,
     CAVEAT_FIRMWARE_IMAGE_IDENTIFIED,
     CAVEAT_FIRMWARE_IMAGE_UNLISTED,
     CAVEAT_FIRMWARE_PATH_OBSTRUCTED,
@@ -619,6 +620,20 @@ class TestFolderVerdictsTheInventoryAlreadySettles:
         assert placement.caveats == ()
 
 
+def _not_comparable(file_name: str) -> Caveat:
+    """One core's report that the identity at the shared destination settles nothing."""
+    return Caveat(
+        code=CAVEAT_FIRMWARE_IDENTITY_NOT_COMPARABLE,
+        message=f"{file_name}'s bytes differ from the pinned ones",
+        data={
+            "path": f"{_ROOT}/gba_bios.bin",
+            "file_name": file_name,
+            "archive_reason": "romset",
+            "table_version": "6.0.0",
+        },
+    )
+
+
 class TestDestinationCaveats:
     """What else the reading found at a row's own destination, in the resolver's codes."""
 
@@ -651,18 +666,22 @@ class TestDestinationCaveats:
 
         assert placement.caveats == ()
 
-    def test_one_statement_arriving_twice_is_carried_once(self, adapter, monkeypatch):
-        """RetroDECK lists one core under two entries, so its caveats are stated twice."""
-        duplicate = Caveat(
-            code=CAVEAT_FIRMWARE_PATH_OBSTRUCTED,
-            message="a directory is in the way",
-            data={"path": f"{_ROOT}/gba_bios.bin"},
-        )
+    def test_two_caveats_at_one_destination_list_their_code_once(self, adapter, monkeypatch):
+        """The row carries codes, so two findings about one place must not list one twice.
+
+        Two cores whose declarations spell one file differently resolve to the
+        same destination, and each states the identity it could not compare —
+        one ``path``, two ``file_name`` values, so the resolver keeps both.
+        """
         placement = self._placement(
-            adapter, monkeypatch, _requirement(found=KIND_DIRECTORY, checked="unknown"), duplicate, duplicate
+            adapter,
+            monkeypatch,
+            _requirement(found=KIND_FILE, checked="not-comparable"),
+            _not_comparable("gba_bios.bin"),
+            _not_comparable("bios/gba_bios.bin"),
         )
 
-        assert placement.caveats == (CAVEAT_FIRMWARE_PATH_OBSTRUCTED,)
+        assert placement.caveats == (CAVEAT_FIRMWARE_IDENTITY_NOT_COMPARABLE,)
 
 
 _FOLDER = f"{_ROOT}/pcsx2/bios"
@@ -721,6 +740,7 @@ class TestFolderVerdictAdapter:
         assert installation.asked_for == ("pcsx2_libretro.so", True)
 
     def test_an_identified_image_satisfies_the_folder_and_is_named(self, folder_adapter, monkeypatch):
+        """The two halves count differently: a description per image, the code once."""
         answer = _answer(
             _core(core_so="pcsx2_libretro.so", requirements=(_folder_requirement(contents_satisfied=True),)),
             caveats=(
@@ -736,6 +756,7 @@ class TestFolderVerdictAdapter:
             "Europe  v02.00(14/06/2004)  Console 20040614-100914",
             "Japan   v02.00(14/06/2004)  Console 20040614-100905",
         )
+        assert verdicts["bios"].caveats == (CAVEAT_FIRMWARE_IMAGE_IDENTIFIED,)
 
     def test_an_image_the_packaged_table_does_not_list_counts_all_the_same(self, folder_adapter, monkeypatch):
         """The table lists what System.dat lists; the core's own test is the verdict."""
@@ -794,18 +815,6 @@ class TestFolderVerdictAdapter:
         verdicts, _ = self._verdicts(folder_adapter, monkeypatch, answer)
 
         assert verdicts["bios"].caveats == ()
-
-    def test_one_statement_arriving_twice_is_carried_once(self, folder_adapter, monkeypatch):
-        duplicate = _image("ps2-0200e-20040614.bin", "Europe  v02.00")
-        answer = _answer(
-            _core(core_so="pcsx2_libretro.so", requirements=(_folder_requirement(contents_satisfied=True),)),
-            caveats=(duplicate, duplicate),
-        )
-
-        verdicts, _ = self._verdicts(folder_adapter, monkeypatch, answer)
-
-        assert verdicts["bios"].images == ("Europe  v02.00",)
-        assert verdicts["bios"].caveats == (CAVEAT_FIRMWARE_IMAGE_IDENTIFIED,)
 
     def test_a_file_declaration_gets_no_folder_verdict(self, folder_adapter, monkeypatch):
         """A verdict about contents nobody listed would be a state that lies."""

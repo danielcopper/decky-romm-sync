@@ -110,6 +110,7 @@ from .firmware import firmware_inventory as _resolve_inventory
 from .firmware import identify_firmware as _resolve_identification
 from .machine import (
     GLOB_COMPLETE,
+    GLOB_INCOMPLETE,
     KIND_DIRECTORY,
     KIND_FILE,
     KIND_INACCESSIBLE,
@@ -8618,7 +8619,8 @@ def _melonds_savefile_placement(
 # drive, whose host directory vfs.yml states (/dev_hdd0/, defaulting to
 # $(EmulatorDir)dev_hdd0/, vfs_config.h:13). Below it, one directory per title
 # id under home/<user>/savedata; the user is a runtime selection nothing on
-# disk records, so every user home that exists is stated as its own tree.
+# disk records, so the homes RPCS3's own GetUserAccounts would list are
+# stated as trees, the ones it passes over as skipped.
 # ---------------------------------------------------------------------------
 
 _RPCS3_EMULATOR_DIR_KEY = "$(EmulatorDir)"
@@ -8641,13 +8643,22 @@ class _PerUserSaves:
     RPCS3 keeps saves at ``dev_hdd0/home/<user>/savedata`` and Vita3K at
     ``ux0/user/<user>/savedata``. Both pick the user at run time; RPCS3 writes
     the selection down nowhere, Vita3K records it in config.yml — so both
-    state *every* user directory that exists, and the assembly is theirs
-    jointly. What differs is the words and the citations, which each card
-    supplies.
+    state the user directories the emulator's own listing keeps rather than a
+    guess at the one in force, and the assembly is theirs jointly. What
+    differs is the words and the citations, which each card supplies, and the
+    listing rule itself: RPCS3 keeps a directory by its name and a
+    localusername file, Vita3K by a user.xml that loads.
 
     ``user_root`` is the directory holding the user directories,
     ``first_user`` the one the emulator starts with — used only where nothing
     could be listed, never as a claim that it is the one running.
+
+    ``skipped`` and ``unestablished`` are directories the listing reached and
+    the answer does not state as a user: the ones the emulator's own selection
+    passes over, and the ones whose deciding file atlas could not look at.
+    Each rides into the caveat's data when non-empty. ``no_user_reason`` is
+    stated where no user is listed, because "no user directory was found" is
+    false of a tree whose directories were all passed over.
 
     ``user_reason`` is the machine-readable half of ``user_sentence``: *why*
     the running user is or is not settled here. The two emulators do not share
@@ -8683,6 +8694,9 @@ class _PerUserSaves:
     provenance: str
     configured_user: str | None = None
     headline_user: str | None = None
+    skipped: tuple[str, ...] = ()
+    unestablished: tuple[str, ...] = ()
+    no_user_reason: str = "no user directory was found"
 
 
 def _per_user_state(
@@ -8711,7 +8725,7 @@ def _per_user_state(
         )
         reason = "which users exist here was not established"
     elif not users:
-        sentence, reason = shape.no_user_sentence, "no user directory was found"
+        sentence, reason = shape.no_user_sentence, shape.no_user_reason
     else:
         sentence, reason = shape.user_sentence, shape.user_reason
     data = {
@@ -8723,6 +8737,13 @@ def _per_user_state(
     # it holds whatever the listing did or did not establish.
     if shape.configured_user is not None:
         data["configured_user"] = shape.configured_user
+    # The directories the listing reached and the answer does not state as a
+    # user — structured, so a client sees the survey passed them over rather
+    # than never reached them.
+    if shape.skipped:
+        data["skipped"] = ",".join(shape.skipped)
+    if shape.unestablished:
+        data["unestablished"] = ",".join(shape.unestablished)
     return sentence, data
 
 
@@ -8731,12 +8752,32 @@ def _per_user_listing(machine: Machine, user_root: str) -> tuple[GlobResult, tup
 
     Hoisted out of the placement so an emulator whose words depend on what the
     listing found — Vita3K's recorded user — resolves them before building its
-    shape, on the same observation the placement then states. A user is a
-    directory: anything else the glob hands back — a stray file beside the
-    user homes, a dead link — would otherwise become a group naming
+    shape, on the same observation the placement then states.
+
+    Two globs, ``*`` and ``.*``, because both emulators iterate the directory
+    — RPCS3's ``fs::dir`` is a readdir walk (File.cpp:2091-2108 at build
+    7c6b3dcd), Vita3K's is ``fs::directory_iterator`` (get_users_list,
+    user_management.cpp:87 at cb1f592c) — and a wildcard never matches a
+    leading period, on the running machine and in a fixture alike. A name
+    that starts with a period is one the emulators reach and decide by their
+    own rules, so it is listed here and left to them. The listing is complete
+    only when both globs are, and a place either could not read is named once.
+
+    A user is a directory: anything else the globs hand back — a stray file
+    beside the user homes, a dead link — would otherwise become a group naming
     ``<that file>/savedata``, a path nothing writes to.
     """
-    listing = machine.glob(os.path.join(user_root, "*"))
+    matches: set[str] = set()
+    unreadable: set[str] = set()
+    for pattern in ("*", ".*"):
+        result = machine.glob(os.path.join(user_root, pattern))
+        matches.update(result.matches)
+        unreadable.update(result.unreadable)
+    listing = GlobResult(
+        GLOB_INCOMPLETE if unreadable else GLOB_COMPLETE,
+        tuple(sorted(matches)),
+        tuple(sorted(unreadable)),
+    )
     users = tuple(
         sorted(
             os.path.basename(path)
@@ -8850,6 +8891,196 @@ def _per_user_savedata_placement(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _PerUserSurvey:
+    """The user directories an emulator's own listing keeps, and what became of the rest.
+
+    ``listed`` are the groups; ``skipped`` the directories the emulator's
+    selection passes over, ``unestablished`` the ones whose deciding file
+    atlas could not look at; ``aside`` is the clause that says so, appended
+    to whichever sentence the survey earns — empty where every directory
+    found is listed.
+    """
+
+    listed: tuple[str, ...]
+    skipped: tuple[str, ...]
+    unestablished: tuple[str, ...]
+    aside: str
+
+
+def _per_user_aside(
+    *,
+    emulator: str,
+    passed_over: list[str],
+    citation: str | None,
+    unestablished: list[str],
+    unread: tuple[str, str],
+) -> str:
+    """The clause about the directories a survey does not state as users.
+
+    ``passed_over`` holds one entry per directory — its name, then the joiner
+    and the reason the emulator's listing drops it (``"12345678, which holds
+    no localusername file"``), so joining several with ``", and "`` still
+    reads as one directory per clause rather than splicing a full sentence
+    where a noun phrase belongs. ``citation`` is the one line covering every
+    entry alike — Vita3K's listing drops both its fates through the same call
+    — and is ``None`` where the fates need different lines, which the caller
+    then cites inside each entry instead, so the citation this answer's
+    ``user_sentence`` already carries does not repeat here word for word.
+    ``unread`` says what atlas could not look at for the ``unestablished``
+    ones and why that is not the emulator's verdict — a pair, the sentence
+    for one name and the sentence for several, because those entries are
+    bare names: they are listed as a plain series (``A``, ``A and B``,
+    ``A, B, and C``), not joined the way the comma-carrying ``passed_over``
+    entries are.
+    """
+    clauses: list[str] = []
+    if passed_over:
+        which = "that directory is" if len(passed_over) == 1 else "those directories are"
+        noun = "a user" if len(passed_over) == 1 else "users"
+        cite = f" ({citation})" if citation else ""
+        clauses.append(
+            f"{emulator}'s own listing passes over {', and '.join(passed_over)}{cite}, "
+            f"so {which} not stated as {noun}"
+        )
+    if unestablished:
+        one = len(unestablished) == 1
+        which = "it is" if one else "they are"
+        noun = "a user" if one else "users"
+        clauses.append(
+            f"whether {emulator} lists {_series(unestablished)} is not established — "
+            f"{unread[0] if one else unread[1]} — so {which} stated apart rather than as {noun}"
+        )
+    return "".join(f"; {clause}" for clause in clauses)
+
+
+def _series(names: list[str]) -> str:
+    """``A``, ``A and B``, ``A, B, and C`` — a plain series of bare names."""
+    if len(names) <= 2:
+        return " and ".join(names)
+    return ", ".join(names[:-1]) + ", and " + names[-1]
+
+
+def _per_user_no_user_reason(survey: _PerUserSurvey) -> str:
+    """Why no user is listed — three facts the empty survey can stand on."""
+    if survey.unestablished:
+        return "whether the emulator would list a user account here was not established"
+    if survey.skipped:
+        return "no user account the emulator would list was found"
+    return "no user directory was found"
+
+
+# What GetUserAccounts makes of one directory below home/ (user_account.cpp:35-66
+# at build 7c6b3dcd): kept when its name passes check_user and a localusername
+# file is there, passed over otherwise — and one fate that is atlas's alone, a
+# localusername whose stat failed here, where the emulator's own stat is not
+# known to fail the same way.
+_RPCS3_USER_LISTED = "listed"
+_RPCS3_USER_NAME_REJECTED = "name-rejected"
+_RPCS3_USER_NO_LOCALUSERNAME = "no-localusername"
+_RPCS3_USER_UNESTABLISHED = "unestablished"
+_RPCS3_LOCALUSERNAME = "localusername"
+_RPCS3_SELECTION_CITATION = (
+    "GetUserAccounts, user_account.cpp:35-66; check_user, system_utils.cpp:59-69 at build 7c6b3dcd"
+)
+# The two halves of that citation, narrowed to the one call each skip reason
+# actually turns on — used in the aside instead of the pair above, so a
+# sentence that already carries the pair in full does not carry it twice.
+_RPCS3_NAME_CITATION = "check_user, system_utils.cpp:59-69 at build 7c6b3dcd"
+_RPCS3_LOCALUSERNAME_CITATION = "GetUserAccounts, user_account.cpp:57-60 at build 7c6b3dcd"
+
+
+def _rpcs3_check_user(name: str) -> int:
+    """``rpcs3::utils::check_user``, mirrored from its code rather than its comment.
+
+    The code (system_utils.cpp:59-69 at build 7c6b3dcd) is ``id = 0; if
+    (user.size() == 8) std::from_chars(&user.front(), &user.back() + 1, id);
+    return id;`` — ``from_chars`` reads the leading run of decimal digits,
+    stops at the first character that is not one, and its result code is never
+    looked at. So a name passes when it is exactly eight bytes long (``size()``
+    counts the bytes of the directory name, not its characters) and the digits
+    it opens with read as a non-zero number: ``12345678`` and ``1234abcd``
+    pass, ``00000000``, ``.1234567`` and ``abcdefgh`` do not. The caller's
+    comment ("exactly 8 all-numerical characters", user_account.cpp:48) names
+    a stricter rule than the one that runs.
+    """
+    if len(os.fsencode(name)) != 8:
+        return 0
+    digits = 0
+    while digits < len(name) and "0" <= name[digits] <= "9":
+        digits += 1
+    return int(name[:digits]) if digits else 0
+
+
+@dataclass(frozen=True, slots=True)
+class _Rpcs3UserHome:
+    """One directory below home/ as GetUserAccounts would take it."""
+
+    directory: str
+    fate: str
+
+
+def _rpcs3_user_home(machine: Machine, user_root: str, user: str) -> _Rpcs3UserHome:
+    """One directory's fate — the two tests GetUserAccounts applies, in its order.
+
+    The name first (check_user, user_account.cpp:49-54 at build 7c6b3dcd),
+    then ``fs::is_file`` on ``<home>/localusername`` (:57-60): a ``stat`` that
+    succeeds on something other than a directory (File.cpp:1064-1079,
+    ``fs::get_stat`` being ``::stat`` at :1036-1043), which is what
+    ``path_kind`` answers ``file`` for. A missing localusername and one that
+    is a directory are the emulator's own skip; one whose stat failed here is
+    neither — the emulator's stat is not known to fail the same way — so the
+    fate says so and the caller states it apart.
+    """
+    if _rpcs3_check_user(user) == 0:
+        return _Rpcs3UserHome(user, _RPCS3_USER_NAME_REJECTED)
+    kind = machine.path_kind(os.path.join(user_root, user, _RPCS3_LOCALUSERNAME))
+    if kind == KIND_FILE:
+        return _Rpcs3UserHome(user, _RPCS3_USER_LISTED)
+    if kind == KIND_INACCESSIBLE:
+        return _Rpcs3UserHome(user, _RPCS3_USER_UNESTABLISHED)
+    return _Rpcs3UserHome(user, _RPCS3_USER_NO_LOCALUSERNAME)
+
+
+def _rpcs3_users(machine: Machine, user_root: str, users: tuple[str, ...]) -> _PerUserSurvey:
+    """GetUserAccounts read the way it runs, over the directories the listing found."""
+    homes = tuple(_rpcs3_user_home(machine, user_root, user) for user in users)
+    passed_over: list[str] = []
+    for home in homes:
+        if home.fate == _RPCS3_USER_NAME_REJECTED:
+            passed_over.append(
+                f"{home.directory}, which is not named by eight bytes opening with a "
+                f"non-zero number ({_RPCS3_NAME_CITATION})"
+            )
+        elif home.fate == _RPCS3_USER_NO_LOCALUSERNAME:
+            passed_over.append(
+                f"{home.directory}, which holds no localusername file "
+                f"({_RPCS3_LOCALUSERNAME_CITATION})"
+            )
+    unestablished = [h.directory for h in homes if h.fate == _RPCS3_USER_UNESTABLISHED]
+    skipped_fates = (_RPCS3_USER_NAME_REJECTED, _RPCS3_USER_NO_LOCALUSERNAME)
+    return _PerUserSurvey(
+        listed=tuple(h.directory for h in homes if h.fate == _RPCS3_USER_LISTED),
+        skipped=tuple(h.directory for h in homes if h.fate in skipped_fates),
+        unestablished=tuple(unestablished),
+        aside=_per_user_aside(
+            emulator="RPCS3",
+            passed_over=passed_over,
+            # The pair citation already stands in full in user_sentence — each
+            # entry above cites the one call it actually turns on instead of
+            # repeating that pair here.
+            citation=None,
+            unestablished=unestablished,
+            unread=(
+                "its localusername could not be looked at, and the emulator's own look "
+                "(fs::is_file, File.cpp:1064-1079) is not known to fail the same way",
+                "their localusername could not be looked at, and the emulator's own look "
+                "(fs::is_file, File.cpp:1064-1079) is not known to fail the same way",
+            ),
+        ),
+    )
+
+
 def _rpcs3_savefile_placement(
     machine: Machine,
     *,
@@ -8871,8 +9102,10 @@ def _rpcs3_savefile_placement(
 
     The user is where this answer stops short of certainty: it is a runtime
     selection (``m_usr``, System.h:164) and no file records which one is in
-    force, so every user home that exists becomes a group and the caveat says
-    the running emulator uses one of them.
+    force, so every user account the emulator's own listing keeps — the
+    directories ``GetUserAccounts`` takes, read here the way it runs — becomes
+    a group and the caveat says the running emulator uses one of them; the
+    directories that listing passes over are stated as such, not as users.
     """
     settings = _standalone_settings(card)
     config_dir = homes.emulator_root(settings.bases[0], card.token)
@@ -8933,11 +9166,43 @@ def _rpcs3_savefile_placement(
     vmc = os.path.join(hdd0, _RPCS3_VMC_SUBDIR)
     user_root = os.path.join(hdd0, "home")
     listing, users = _per_user_listing(machine, user_root)
+    survey = _rpcs3_users(machine, user_root, users)
+    if survey.unestablished:
+        # At least one directory found here is one atlas could not decide —
+        # the opening clause cannot assert "no account exists" when that is
+        # exactly what is unsettled; it says so is itself unestablished, and
+        # the aside then names which directory and why.
+        no_user_sentence = (
+            f"whether any user account RPCS3 would list exists below {user_root} is not "
+            f"established{survey.aside}, and the tree named is user {_RPCS3_FIRST_USER} "
+            "(Emulator::m_usr, System.h:164), which it would create on the first save — "
+            "stated as that rather than as a user found here"
+        )
+    elif survey.skipped:
+        # Directories were found and read here — the ending has to say the
+        # tree named is a stand-in, not that no home exists, which is what
+        # the empty-tree ending below would otherwise claim of them too.
+        no_user_sentence = (
+            f"no user account RPCS3 would list exists below {user_root}{survey.aside}, and "
+            f"the tree named is user {_RPCS3_FIRST_USER} (Emulator::m_usr, System.h:164), "
+            "which it would create on the first save — stated as that rather than as a user "
+            "found here"
+        )
+    else:
+        # The tree named where nothing is listed: the user the emulator
+        # starts with, stated as that and never as a home found on this
+        # machine.
+        no_user_sentence = (
+            f"no user home exists below {user_root} — nothing has saved here yet. The tree "
+            f"named is the one the emulator starts with, user {_RPCS3_FIRST_USER} "
+            "(Emulator::m_usr, System.h:164), which it would create on the first save; it is "
+            "not a home found on this machine"
+        )
     return _per_user_savedata_placement(
         machine,
         card=card,
         listing=listing,
-        users=users,
+        users=survey.listed,
         shape=_PerUserSaves(
             user_root=user_root,
             first_user=_RPCS3_FIRST_USER,
@@ -8948,16 +9213,16 @@ def _rpcs3_savefile_placement(
             user_sentence=(
                 "which user account the emulator runs as is a runtime selection — it starts "
                 f"at {_RPCS3_FIRST_USER} (Emulator::m_usr, System.h:164) and the user manager "
-                "changes it — and no file records the current one, so every user home found "
-                "here is stated"
+                "changes it — and no file records the current one, so every user account "
+                "RPCS3 itself would list is stated: a directory below home named by eight "
+                "bytes opening with a non-zero number and holding a localusername file "
+                f"({_RPCS3_SELECTION_CITATION}), read here the same way{survey.aside}"
             ),
-            no_user_sentence=(
-                f"no user home exists below {user_root} — nothing has saved "
-                f"here yet. The tree named is the one the emulator starts with, user "
-                f"{_RPCS3_FIRST_USER} (Emulator::m_usr, System.h:164), which it would create "
-                "on the first save; it is not a home found on this machine"
-            ),
+            no_user_sentence=no_user_sentence,
             user_reason="the active user account is not recorded on disk",
+            no_user_reason=_per_user_no_user_reason(survey),
+            skipped=survey.skipped,
+            unestablished=survey.unestablished,
             mode="hdd0",
             readings=(OptionReading(_RPCS3_HDD0_KEY, stated, provenance, None),),
             reading_file=vfs_path if result.status == READ_OK else None,
@@ -9005,7 +9270,7 @@ def _rpcs3_savefile_placement(
 # tree. ``pref-path`` in config.yml, and everything the emulator keeps hangs
 # off it as ``ux0/…``; saves are ``ux0/user/<user id>/savedata/<title id>``
 # (io.cpp:136-143). Same user-account shape as RPCS3, and the same answer to
-# it: every user directory that exists is stated.
+# it: every user directory the emulator itself would list is stated.
 # ---------------------------------------------------------------------------
 
 _VITA3K_PREF_PATH_KEY = "pref-path"
@@ -9093,8 +9358,72 @@ def _vita3k_listed_user(machine: Machine, user_root: str, user: str) -> _Vita3kL
 def _vita3k_listed_users(
     machine: Machine, user_root: str, users: tuple[str, ...]
 ) -> tuple[_Vita3kListedUser, ...]:
-    """The users Vita3K itself would list — get_users_list read the way it runs."""
+    """Every directory found as get_users_list would take it — read the way it runs."""
     return tuple(_vita3k_listed_user(machine, user_root, user) for user in users)
+
+
+def _vita3k_survey(homes: tuple[_Vita3kListedUser, ...]) -> _PerUserSurvey:
+    """get_users_list's verdict over every directory found, in the shape the caveat states.
+
+    A user is a directory whose user.xml loads (user_management.cpp:89 at
+    cb1f592c); one without a user.xml and one whose user.xml does not parse
+    are the emulator's own skip, and one whose user.xml atlas could not read
+    is left undecided, the way :func:`_vita3k_listed_user` classifies them.
+    """
+    passed_over: list[str] = []
+    for home in homes:
+        if home.fate == _VITA3K_USER_NO_XML:
+            passed_over.append(f"{home.directory}, which has no user.xml")
+        elif home.fate == _VITA3K_USER_XML_INVALID:
+            passed_over.append(f"{home.directory}, whose user.xml does not parse")
+    unestablished = [h.directory for h in homes if h.fate == _VITA3K_USER_XML_UNREADABLE]
+    skipped_fates = (_VITA3K_USER_NO_XML, _VITA3K_USER_XML_INVALID)
+    return _PerUserSurvey(
+        listed=tuple(h.directory for h in homes if h.fate == _VITA3K_USER_LISTED),
+        skipped=tuple(h.directory for h in homes if h.fate in skipped_fates),
+        unestablished=tuple(unestablished),
+        aside=_per_user_aside(
+            emulator="Vita3K",
+            passed_over=passed_over,
+            citation="get_users_list, user_management.cpp:89 at cb1f592c",
+            unestablished=unestablished,
+            unread=(
+                "its user.xml could not be read, and the emulator's own load "
+                "(load_file, user_management.cpp:89) is not known to fail the same way",
+                "their user.xml could not be read, and the emulator's own load "
+                "(load_file, user_management.cpp:89) is not known to fail the same way",
+            ),
+        ),
+    )
+
+
+def _vita3k_survey_tail(survey: _PerUserSurvey) -> str:
+    """How a sentence ends where the headline does not follow the record.
+
+    Where a user is listed the headline is the first listed tree; where none
+    is, it is the compiled stand-in — and the ending has to say which, because
+    "the tree named stays the first found" is false of a stand-in.
+    """
+    if survey.listed:
+        return (
+            "the tree named is the first user listed, and every user Vita3K itself would "
+            f"list is stated{survey.aside}"
+        )
+    if survey.unestablished:
+        # At least one directory found here is one atlas could not decide —
+        # the ending cannot assert "no directory is a user Vita3K would list"
+        # when that is exactly what is unsettled.
+        return (
+            "whether any directory here is a user Vita3K would list is not "
+            f"established{survey.aside}, and the tree named is the one the emulator's own "
+            f"redirect comment names, user {_VITA3K_FIRST_USER} (io.cpp:203), stated as that "
+            "rather than as a user found here"
+        )
+    return (
+        f"no directory here is a user Vita3K would list{survey.aside}, and the tree named "
+        f"is the one the emulator's own redirect comment names, user {_VITA3K_FIRST_USER} "
+        "(io.cpp:203), stated as that rather than as a user found here"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -9115,7 +9444,10 @@ class _Vita3kUser:
 
 
 def _vita3k_recorded_user_state(
-    configured: str, listed: tuple[_Vita3kListedUser, ...], user_root: str
+    configured: str,
+    homes: tuple[_Vita3kListedUser, ...],
+    user_root: str,
+    survey: _PerUserSurvey,
 ) -> tuple[str | None, str, str]:
     """The recorded user held against the emulator's own listing — four states.
 
@@ -9124,10 +9456,11 @@ def _vita3k_recorded_user_state(
     the emulator would list the recorded user is not established, and nothing
     is decided; the recorded directory exists but nothing lists it as that
     user — not set up; or nothing here answers to the id at all — no tree.
+    ``homes`` is every directory found, whatever its fate, because the third
+    state is about a directory the emulator does not list.
     """
-    identities = tuple(u.identity for u in listed if u.identity is not None)
-    unreadable = tuple(u.directory for u in listed if u.fate == _VITA3K_USER_XML_UNREADABLE)
-    own = next((u for u in listed if u.directory == configured), None)
+    identities = tuple(u.identity for u in homes if u.identity is not None)
+    own = next((u for u in homes if u.directory == configured), None)
     if configured in identities:
         sentence = (
             f"config.yml records {_VITA3K_USER_ID_KEY} {configured} and that user is "
@@ -9138,17 +9471,17 @@ def _vita3k_recorded_user_state(
             "that user (init_home, gui.cpp:688-696) and the tree named is its, created "
             "on the first save where no directory of that name exists yet; a plain "
             "launch without user-auto-connect opens the user manager instead — every "
-            "user directory found is still stated"
+            f"user Vita3K itself would list is stated{survey.aside}"
         )
         return configured, sentence, "the configured user's tree is the one named"
-    if unreadable:
+    tail = _vita3k_survey_tail(survey)
+    if survey.unestablished:
         sentence = (
             f"config.yml records {_VITA3K_USER_ID_KEY} {configured}, and whether "
             "Vita3K would list that user is not established — the user.xml under "
-            f"{', '.join(unreadable)} could not be read, and the listing is keyed by "
-            "what those files state (get_users_list, user_management.cpp:83-97) — so "
-            "the tree named stays the first found, and every user directory found is "
-            "stated"
+            f"{', '.join(survey.unestablished)} could not be read, and the listing is "
+            "keyed by what those files state (get_users_list, user_management.cpp:83-97) "
+            f"— so the record does not move the headline: {tail}"
         )
         return None, sentence, "whether the configured user is set up here was not established"
     if own is not None:
@@ -9166,16 +9499,14 @@ def _vita3k_recorded_user_state(
             f"exists, but no user.xml here lists it as that user — {detail} — so "
             "Vita3K would skip it and open the user manager for the player to pick "
             "(get_users_list, user_management.cpp:83-97; init_home, gui.cpp:688-696); "
-            "the tree named stays the first found, and every user directory found is "
-            "stated"
+            f"the record does not move the headline: {tail}"
         )
         return None, sentence, "the configured user is not set up here"
     sentence = (
         f"config.yml records {_VITA3K_USER_ID_KEY} {configured}, no directory of "
         f"that name exists below {user_root}, and no user.xml here names that id — "
         "nothing for a launch to reopen, so the user manager opens and the player "
-        "picks (init_home, gui.cpp:688-696) — the tree named is the first found, "
-        "and every user directory found is stated"
+        f"picks (init_home, gui.cpp:688-696) — {tail}"
     )
     return None, sentence, "the configured user has no tree here"
 
@@ -9183,9 +9514,9 @@ def _vita3k_recorded_user_state(
 def _vita3k_user(
     read: YamlScalars,
     *,
-    machine: Machine,
     listing: GlobResult,
-    users: tuple[str, ...],
+    homes: tuple[_Vita3kListedUser, ...],
+    survey: _PerUserSurvey,
     user_root: str,
 ) -> _Vita3kUser:
     """The user preselection config.yml records, resolved against the tree.
@@ -9217,19 +9548,20 @@ def _vita3k_user(
     if unread:
         sentence = (
             f"config.yml states {_VITA3K_USER_ID_KEY} as a construct atlas does not read, so "
-            "which user it preselects is unread here — every user directory found is stated"
+            f"which user it preselects is unread here — {_vita3k_survey_tail(survey)}"
         )
         reason = "the configured user id is stated in a construct atlas does not read"
     elif configured is None:
         sentence = (
             f"config.yml records no {_VITA3K_USER_ID_KEY}, so nothing preselects a user and "
             "the user manager opens for the player to pick (init_home, gui.cpp:688-696) — "
-            "every user directory found here is stated"
+            f"{_vita3k_survey_tail(survey)}"
         )
         reason = "the configuration preselects no user"
-    elif listing.status == GLOB_COMPLETE and users:
-        listed = _vita3k_listed_users(machine, user_root, users)
-        headline, sentence, reason = _vita3k_recorded_user_state(configured, listed, user_root)
+    elif listing.status == GLOB_COMPLETE and homes:
+        headline, sentence, reason = _vita3k_recorded_user_state(
+            configured, homes, user_root, survey
+        )
     else:
         # An empty or unlistable tree: _per_user_state answers those states
         # with its own sentences, so what stands here is the config-side fact
@@ -9238,8 +9570,8 @@ def _vita3k_user(
             f"config.yml records {_VITA3K_USER_ID_KEY} {configured} — Vita3K opens it when "
             "the launch names an app on the command line, and on a plain launch when "
             "user-auto-connect is on (init_home, gui.cpp:688-696); otherwise the user "
-            "manager opens and the player picks — so every user directory found here is "
-            "stated"
+            "manager opens and the player picks — so every user Vita3K itself would list "
+            "here is stated"
         )
         reason = "the configuration preselects a user, and whether a launch opens it depends "
         reason += "on how the launch was made"
@@ -9306,11 +9638,14 @@ def _vita3k_savefile_placement(
     Below it the unit is ``ux0/user/<user>/savedata``, one directory per title
     id (io.cpp:136-143). Which user that is at run time is decided by
     ``init_home`` from the id config.yml records — see :func:`_vita3k_user`.
-    Every user directory found becomes a group of its own with the recorded id
-    stated beside them, and where the recorded user's directory is among them
-    the headline names its tree, because a frontend launch reopens exactly
-    that user; everywhere else the headline stays the first tree found and
-    the caveat says what is not settled.
+    Every user directory ``get_users_list`` keeps — one whose user.xml loads
+    (user_management.cpp:87-89) — becomes a group of its own with the recorded
+    id stated beside them, the directories it passes over are stated as
+    skipped, and one whose user.xml atlas could not read is stated as
+    unestablished; where the recorded user is among the listed ones the
+    headline names its tree, because a frontend launch reopens exactly that
+    user; everywhere else the headline stays the first tree listed, or the
+    compiled stand-in where none is, and the caveat says what is not settled.
     """
     config_path = _standalone_settings_path(card, homes)
     result = machine.read_text(config_path)
@@ -9363,30 +9698,46 @@ def _vita3k_savefile_placement(
             {"emulator": card.token, "config": config_path, "path": stated},
         )
     user_root = os.path.join(host.path, _VITA3K_USER_TREE)
-    listing, users = _per_user_listing(machine, user_root)
-    user = _vita3k_user(read, machine=machine, listing=listing, users=users, user_root=user_root)
-    # An empty tree with a recorded user is still an empty tree — the headline
-    # stays the compiled default — but the emptiness now says one thing more:
-    # the recorded user's tree is among the ones missing.
-    recorded_aside = "" if user.configured is None else f", the recorded user {user.configured} included"
+    listing, directories = _per_user_listing(machine, user_root)
+    user_homes = _vita3k_listed_users(machine, user_root, directories)
+    survey = _vita3k_survey(user_homes)
+    user = _vita3k_user(
+        read, listing=listing, homes=user_homes, survey=survey, user_root=user_root
+    )
+    if user_homes:
+        # Directories were found and none is a user the emulator lists: the
+        # recorded user's state is still the sentence, and its ending names
+        # the stand-in the answer falls back on.
+        no_user_sentence = user.sentence
+    else:
+        # An empty tree with a recorded user is still an empty tree — the
+        # headline stays the compiled default — but the emptiness says one
+        # thing more: the recorded user's tree is among the ones missing.
+        recorded_aside = (
+            "" if user.configured is None else f", the recorded user {user.configured} included"
+        )
+        no_user_sentence = (
+            f"no user directory exists below {user_root} "
+            f"— nothing has saved here yet{recorded_aside}. The tree named is the one "
+            f"the emulator's own redirect spells, user {_VITA3K_FIRST_USER} "
+            "(io.cpp:203), which it would create; it is not a directory found on this "
+            "machine"
+        )
     return _per_user_savedata_placement(
         machine,
         card=card,
         listing=listing,
-        users=users,
+        users=survey.listed,
         shape=_PerUserSaves(
             user_root=user_root,
             first_user=_VITA3K_FIRST_USER,
             names_citation="init_savedata_app_path, io.cpp:136-143 at commit cb1f592c",
             user_sentence=user.sentence,
-            no_user_sentence=(
-                f"no user directory exists below {user_root} "
-                f"— nothing has saved here yet{recorded_aside}. The tree named is the one "
-                f"the emulator's own redirect spells, user {_VITA3K_FIRST_USER} "
-                "(io.cpp:203), which it would create; it is not a directory found on this "
-                "machine"
-            ),
+            no_user_sentence=no_user_sentence,
             user_reason=user.reason,
+            no_user_reason=_per_user_no_user_reason(survey),
+            skipped=survey.skipped,
+            unestablished=survey.unestablished,
             mode="pref-path",
             readings=(
                 OptionReading(
