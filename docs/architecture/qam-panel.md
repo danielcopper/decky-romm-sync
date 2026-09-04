@@ -296,12 +296,14 @@ on the right. Under it, for the focused platform:
   over them**: both buttons name what they remove and are drawn in red, so a title says nothing they do not. **Both
   buttons are always rendered and disable when there is nothing to delete; neither is ever hidden.** Hiding the group on
   the shortcut count alone strands a platform whose shortcuts were removed and whose saves remain — those saves are then
-  unreachable, and this is the only page that offers them. A count still being read is neither a zero nor a failure, and
-  the saves button must not look like either: while it is coming the button is disabled and carries a **spinner**, which
-  claims nothing — a pressable plain label would invite a press over an unknown set, and a `0` would state an emptiness
-  nobody established. A read that **failed** is the third case and says so in a line under the pair, because with a
-  spinner above it a silent failure is a spinner that never stops; the button stays pressable there, since a failed
-  count is not evidence that there is nothing to delete.
+  unreachable, and this is the only page that offers them. Only the shortcut removal is gated on a running sync
+  (`remove_platform_shortcuts` carries `@sync_active_blocked`; `delete_platform_saves` deliberately does not), so the
+  hint under the pair names that button rather than reading as though it covered both. A count still being read is
+  neither a zero nor a failure, and the saves button must not look like either: while it is coming the button is
+  disabled and carries a **spinner**, which claims nothing — a pressable plain label would invite a press over an
+  unknown set, and a `0` would state an emptiness nobody established. A read that **failed** is the third case and says
+  so in a line under the pair, because with a spinner above it a silent failure is a spinner that never stops; the
+  button stays pressable there, since a failed count is not evidence that there is nothing to delete.
 
 Five reads feed the tab. Three are list-shaped and run once per page mount: `get_platforms` (RomM's platforms with ROMs,
 the list itself), `get_firmware_status` (BIOS state for the platforms it can speak for) and `get_registry_platforms`

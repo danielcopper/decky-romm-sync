@@ -34,11 +34,21 @@ const PALE_GREEN = "#8fc46b";
 
 /**
  * The padding a `DialogButton` is given wherever this pane puts buttons in a
- * row. `ButtonItem` — the full-width control most of the panel uses — takes no
- * style or class of its own (`ItemProps` has neither), so its height is Steam's
- * and cannot be argued with; a `DialogButton` takes `style`, and IS the button
- * `ButtonItem` renders inside its own `Field` row. Using it directly is Steam's
- * button without Steam's row, not a lookalike.
+ * row.
+ *
+ * `ButtonItem` — the full-width control most of the panel uses — takes no style
+ * or class of its own: its props are `ItemProps`, which has neither
+ * (`@decky/ui/dist/components/Item.d.ts`), so its height is Steam's and cannot
+ * be argued with from here. `DialogButton` does take `style`
+ * (`DialogButtonProps extends DialogCommonProps`, `Dialog.d.ts`), and is Steam's
+ * own button component rather than a lookalike of one.
+ *
+ * What their relationship is inside Steam is deliberately NOT claimed here.
+ * `@decky/ui` finds `ButtonItem` with a webpack prop-list regex over
+ * `CommonUIModule` (`components/ButtonItem.js`), so the package can say nothing
+ * about what it renders, and the module's own render function is not in this
+ * install's `steamui` chunks to read — the one `childrenContainerWidth` hit
+ * there is a call site.
  */
 const FLAT_BUTTON = { flex: "1 1 auto", minWidth: 0, padding: "6px 10px", fontSize: "13px" } as const;
 
@@ -665,10 +675,16 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
           spinner above it that became worse rather than better — a spinner that
           never stops — so the two land together. */}
       {saveCount === null && <Muted>Could not read how many save files this platform holds.</Muted>}
-      {/* The sync hint was a ButtonItem `description`; with the button in a row
-          it has nowhere to hang, so it stands under the pair — and only while
-          the reason is live. */}
-      {syncRunning && <Muted>{SYNC_RUNNING_HINT}</Muted>}
+      {/* The hint was a ButtonItem `description`, attached to the one button it
+          was about; under a row it has nowhere to hang, so it names that button
+          instead. Only the shortcut removal is sync-gated — `main.py`'s
+          `remove_platform_shortcuts` carries `@sync_active_blocked` and
+          `delete_platform_saves` deliberately does not — so an unscoped sentence
+          claims a restriction the backend does not impose. Scoping the sentence
+          rather than gating the delete: the gate is the authority on what a sync
+          blocks, and widening it to make a line true would be the tail wagging
+          the dog. */}
+      {syncRunning && <Muted>{`Removing shortcuts: ${SYNC_RUNNING_HINT}`}</Muted>}
       <GroupStatus state={state} slug={row.slug} scope="remove" />
     </>
   );
@@ -677,6 +693,12 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
 export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ row, state }) => {
   const core = state.coreFor(row.slug);
   const firmware = row.firmware;
+  // The core clause is absent while this platform's core read is in flight, and
+  // stays absent if it failed — the read is issued per selection, so walking the
+  // list shows each newly focused platform's header without a core until its own
+  // answer lands. That, and a failed shortcut-count read dropping "· N in
+  // Steam", are the two ways this line loses a piece; both failures now say so
+  // on the pane, and the in-flight one is a beat rather than a state.
   const coreLabel = core ? (core.active_core_label ?? "Default") : null;
   const requiredCount = firmware?.required_count ?? 0;
   const biosBadge =
