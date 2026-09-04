@@ -4,12 +4,13 @@
  * and the title, an optional L1/R1 tab bar, and a body of a definite, measured
  * height.
  *
- * Back is on **Y** as well as on the chip, through `FooterLegendProps` on the
- * frame's own `Focusable` — so Steam draws it in the footer legend beside its
- * own A/B entries and it works wherever focus is. B is deliberately untouched:
- * that is Decky's back, and it leaves the plugin altogether. The chip stays
- * because it is the discoverable half — the legend says the shortcut exists, the
- * chip says the page has a way out at all.
+ * Back on the gamepad is **B**, bound once by the panel's router for every
+ * sub-page (`src/index.tsx`) rather than here — so the narrow pages get it too,
+ * and Main, which has nowhere to go back to, keeps Decky's own B. What the frame
+ * has to do is get out of the way: Steam's tabbed page binds the content pane's
+ * `onCancelButton` to "focus the tab row" unless `cancelSkipTabHeader` is
+ * passed, so the first B inside a tab would be swallowed there. The chip stays
+ * as the discoverable half and as the mouse path.
  *
  * The page's own content is `children`, or — when the page has tabs — the
  * `content` of each tab, which Steam's `Tabs` renders itself. A tabbed page
@@ -107,7 +108,10 @@ export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, on
     // the tabbed page, and the Back row above the tabs is outside it
     // (`chunk~2dcc5aaf7.js`, the tab row's `showGlyphs`).
     body = Tabs ? (
-      <Tabs tabs={tabs} activeTab={activeTab} onShowTab={onShowTab} autoFocusContents />
+      // `cancelSkipTabHeader` leaves the content pane's cancel handler unset, so
+      // B reaches the router's binding instead of being spent moving focus to
+      // the tab row.
+      <Tabs tabs={tabs} activeTab={activeTab} onShowTab={onShowTab} autoFocusContents cancelSkipTabHeader />
     ) : (
       tabs.find((tab) => tab.id === activeTab)?.content
     );
@@ -121,11 +125,7 @@ export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, on
     <div className={WIDE_ROOT_CLASS} ref={rootRef} {...(ownsEntryFocus ? { [OWNS_ENTRY_FOCUS_ATTR]: "" } : {})}>
       {/* One line, not three: the full-width Back row and the title on its own
           line cost two of the four rows the Deck's body has to spend. */}
-      <Focusable
-        style={{ display: "flex", alignItems: "center", gap: "10px", padding: "4px 16px 6px" }}
-        onSecondaryButton={onBack}
-        onSecondaryActionDescription="Back"
-      >
+      <Focusable style={{ display: "flex", alignItems: "center", gap: "10px", padding: "4px 16px 6px" }}>
         <DialogButton
           style={{ flex: "0 0 auto", minWidth: 0, width: "auto", padding: "4px 10px", fontSize: "13px" }}
           onClick={onBack}

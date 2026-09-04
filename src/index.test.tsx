@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { toaster } from "@decky/api";
 import { emitDeckyEvent, deckyEventListenerCount } from "./test-utils/decky-api-mock";
@@ -117,14 +117,18 @@ vi.mock("./api/backend", async () => {
 // which is the one thing the router's focus effect branches on.
 let mainPageOwnsEntryFocus = false;
 vi.mock("./components/MainPage", () => ({
-  MainPage: () =>
+  MainPage: ({ onNavigate }: { onNavigate: (page: string) => void }) =>
     // React drops an attribute whose value is undefined, so this renders the
     // marker only in the owns-focus case.
     createElement(
       "div",
       { "data-romm-owns-entry-focus": mainPageOwnsEntryFocus ? "" : undefined },
       createElement("button", null, "first button"),
+      createElement("button", { onClick: () => onNavigate("downloads") }, "go to downloads"),
     ),
+}));
+vi.mock("./components/DownloadQueue", () => ({
+  DownloadQueue: () => createElement("div", null, "downloads page"),
 }));
 
 import { applyAllPlaytime, registerMetadataPatches, applyAllMetadata } from "./patches/metadataPatches";
@@ -2090,6 +2094,38 @@ describe("index.tsx — where entry focus lands on a page swap", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("takes B back one page, and leaves Main's B to Decky", async () => {
+    // The escape route is never removed: on a sub-page B returns to Main, and on
+    // Main nothing is bound, so Decky's own back still leaves the plugin. Steam
+    // already prints "B ZURÜCK" — this makes it true rather than misleading.
+    const plugin = pluginFactory();
+    const { container } = render(plugin.content);
+
+    const pressB = () =>
+      fireEvent(
+        container.querySelector('[data-testid="focusable"]') ?? container,
+        new CustomEvent("decky-button-down", { detail: { button: 2 } }),
+      );
+
+    // On Main the router wraps nothing, so there is no Focusable to answer B.
+    expect(container.querySelector('[data-testid="focusable"]')).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "go to downloads" }));
+      await Promise.resolve();
+    });
+    expect(screen.getByText("downloads page")).toBeInTheDocument();
+
+    await act(async () => {
+      pressB();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "first button" })).toBeInTheDocument();
+    expect(screen.queryByText("downloads page")).toBeNull();
+
+    plugin.onDismount();
   });
 
   it("leaves focus alone for a page that places its own", async () => {

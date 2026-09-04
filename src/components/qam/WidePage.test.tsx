@@ -21,6 +21,9 @@ interface StubTabsProps {
   activeTab: string;
   onShowTab: (tabId: string) => void;
   autoFocusContents?: boolean;
+  /** Steam's own, and the reason B reaches the router: with it unset the tabbed
+   *  page binds the content pane's cancel to focusing the tab row. */
+  cancelSkipTabHeader?: boolean;
 }
 
 /**
@@ -93,24 +96,20 @@ describe("WidePage", () => {
     expect(chip.parentElement).toBe(screen.getByText("Settings").parentElement);
   });
 
-  it("takes Back on Y as well, leaving B to Decky", async () => {
-    const WidePage = await loadWidePage(StubTabs);
-    const onBack = vi.fn();
+  it("lets B out of the tabbed page instead of spending it on the tab row", async () => {
+    // Steam binds the content pane's onCancelButton to "focus the tab row"
+    // unless cancelSkipTabHeader is passed, so without it the first B inside a
+    // tab never reaches the router's binding.
+    const seen: StubTabsProps[] = [];
+    const RecordingTabs: FC<StubTabsProps> = (props) => {
+      seen.push(props);
+      return <div data-testid="stub-tabs" />;
+    };
+    const WidePage = await loadWidePage(RecordingTabs);
 
-    render(
-      <WidePage title="Settings" onBack={onBack}>
-        <div>page body</div>
-      </WidePage>,
-    );
-    const header = screen.getByRole("button", { name: "‹ Back" }).parentElement!;
+    render(<WidePage title="Library" onBack={vi.fn()} tabs={TAB_SET} activeTab="platforms" onShowTab={vi.fn()} />);
 
-    // CANCEL is B — Decky's own back, which leaves the plugin. The frame must
-    // not answer it.
-    fireEvent(header, new CustomEvent("decky-button-down", { detail: { button: 2 } }));
-    expect(onBack).not.toHaveBeenCalled();
-
-    fireEvent(header, new CustomEvent("decky-button-down", { detail: { button: 3 } }));
-    expect(onBack).toHaveBeenCalledTimes(1);
+    expect(seen[0]?.cancelSkipTabHeader).toBe(true);
   });
 
   it("gives the body a definite height taken from the remaining viewport", async () => {

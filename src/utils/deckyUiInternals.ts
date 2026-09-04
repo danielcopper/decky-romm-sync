@@ -36,12 +36,27 @@ export const playSectionClasses: typeof _playSectionClasses | undefined = _playS
 export const quickAccessMenuClasses: typeof _quickAccessMenuClasses | undefined = _quickAccessMenuClasses;
 
 /**
+ * What the tabbed page accepts beyond the four props `@decky/ui` declares.
+ *
+ * `cancelSkipTabHeader` is Steam's own — its tabbed page renders the content
+ * pane as `onCancelButton: !cancelSkipTabHeader && <focus the tab row>`
+ * (`chunk~2dcc5aaf7.js`, the `TabContents` `Focusable`), so passing it true
+ * leaves no cancel handler there and B travels on to whatever ancestor binds
+ * it. Steam passes it itself in the controller-configurator dialogs. Upstream's
+ * `TabsProps` predates the prop; the component is typed `any` there, so nothing
+ * would have caught the name being wrong either.
+ */
+export interface WideTabsProps extends TabsProps {
+  cancelSkipTabHeader?: boolean;
+}
+
+/**
  * Steam's L1/R1 tabbed page, found through a `findModuleByExport` probe on the
  * shape of its render function — so it is `undefined` whenever that probe misses.
  * Upstream types it `any`, which hides both the absence and the props; a
  * component type states what the frame actually passes it.
  */
-export const Tabs: FC<TabsProps> | undefined = _Tabs;
+export const Tabs: FC<WideTabsProps> | undefined = _Tabs;
 
 /**
  * What the scroll panel accepts beyond its children. Upstream types it

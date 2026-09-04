@@ -120,13 +120,21 @@ Main's menu opens Library, Settings and Data Management. The Sync page opens fro
 sync** status row; Downloads opens from **View All** in the download summary, which is shown only while the queue is not
 empty. Every page but Main opens with a **Back** chip, which returns to Main. The chip shares its line with the page
 title — one row, not the three a full-width button plus a title line used to cost, which on the Deck's body is most of
-what a detail pane has to spend. Back is also on **Y**: the frame's header is a `Focusable` carrying `onSecondaryButton`
-with an `onSecondaryActionDescription`, so Steam draws it in the footer legend beside its own entries and it works
-wherever focus is. **B is deliberately left alone** — that is Decky's own back, and it leaves the plugin entirely. The
-chip stays as the discoverable half: the legend says a shortcut exists, the chip says the page has a way out at all.
-After a navigation the router scrolls to the top and places gamepad focus on the page's first button, as it does today.
-The module-level `currentPage` survives a QAM remount, so reopening the QAM lands on the page that was open, and a wide
-page re-expands on mount.
+what a detail pane has to spend. Back is also on **B**, and the binding lives in the panel's router (`src/index.tsx`)
+rather than on a page: one `Focusable` with `onCancelButton` wraps the mounted content **only while `page` is not
+`main`**, so every sub-page — wide and narrow — answers B from wherever focus sits, and Main answers nothing, so Decky's
+own B still leaves the plugin. That condition is what makes taking B safe: the escape route is never removed, it is
+exactly as far away as the user walked in, and the last press is never swallowed. Steam already prints "B ZURÜCK" in its
+footer legend, which this makes true rather than misleading, so no legend entry of ours is needed. The chip stays as the
+discoverable half and as the mouse path.
+
+**A tabbed wide page has to get out of the way for that to work.** Steam's tabbed page renders its content pane as
+`onCancelButton: !cancelSkipTabHeader && <focus the tab row>` (`chunk~2dcc5aaf7.js`), so without the flag the first B
+inside a tab is spent moving focus to the tab row and never reaches the router. `WidePage` passes `cancelSkipTabHeader`
+— Steam's own prop, which it uses in its controller-configurator dialogs, and which upstream's `TabsProps` predates;
+`src/utils/deckyUiInternals.ts` types it. After a navigation the router scrolls to the top and places gamepad focus on
+the page's first button, as it does today. The module-level `currentPage` survives a QAM remount, so reopening the QAM
+lands on the page that was open, and a wide page re-expands on mount.
 
 ## Building blocks
 

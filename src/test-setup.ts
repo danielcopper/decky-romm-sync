@@ -176,9 +176,9 @@ vi.mock("@decky/ui", () => {
     // Focusable forwards onButtonDown as a real DOM "decky-button-down"
     // listener so tests can drive gamepad input via
     // fireEvent(el, new CustomEvent("decky-button-down", { detail: { button } })).
-    // onSecondaryButton rides the same event, filtered to SECONDARY (Y), because
-    // that is how Steam delivers it — one gamepad stream, dispatched to the
-    // handler the button maps to — so a test drives it the same way.
+    // onCancelButton rides the same event, filtered to CANCEL (B), because that
+    // is how Steam delivers it — one gamepad stream, dispatched to the handler
+    // the button maps to — so a test drives it the same way.
     // onFocus is forwarded because a Focusable is how the list-and-detail layout
     // learns that focus moved to a row — dropping it would make focus-selects
     // vacuously untestable. Other FooterLegend-only props (flow-children,
@@ -188,7 +188,7 @@ vi.mock("@decky/ui", () => {
       children,
       style,
       onButtonDown,
-      onSecondaryButton,
+      onCancelButton,
       onFocus,
       role,
       tabIndex,
@@ -196,7 +196,7 @@ vi.mock("@decky/ui", () => {
     }: AnyProps & {
       style?: unknown;
       onButtonDown?: (evt: unknown) => void;
-      onSecondaryButton?: (evt: unknown) => void;
+      onCancelButton?: (evt: unknown) => void;
       onFocus?: (evt: unknown) => void;
     }) =>
       createElement(
@@ -212,11 +212,11 @@ vi.mock("@decky/ui", () => {
             if (!el) return;
             const prev = (el as unknown as { _deckyButtonDown?: EventListener })._deckyButtonDown;
             if (prev) el.removeEventListener("decky-button-down", prev);
-            if (!onButtonDown && !onSecondaryButton) return;
+            if (!onButtonDown && !onCancelButton) return;
             const listener = ((e: Event) => {
               onButtonDown?.(e);
               const button = (e as CustomEvent<{ button?: number } | null>).detail?.button;
-              if (button === 3) onSecondaryButton?.(e);
+              if (button === 2) onCancelButton?.(e);
             }) as EventListener;
             (el as unknown as { _deckyButtonDown?: EventListener })._deckyButtonDown = listener;
             el.addEventListener("decky-button-down", listener);
