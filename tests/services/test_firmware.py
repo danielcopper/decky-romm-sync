@@ -343,6 +343,7 @@ class TestTheFacadeOnlyDelegates:
             "download_required_firmware",
             "delete_platform_bios",
             "delete_bios_file",
+            "delete_bios_folder",
         }
 
     def test_the_facade_holds_only_its_sub_services(self, fw):
@@ -2237,6 +2238,62 @@ class TestDeleteOneBiosFile:
         assert not (bios_dir / "gc-pal-12.bin").exists()
         assert (bios_dir / "gc-ntsc-12.bin").exists()
         assert plugin._uow.bios_files.get("gc", "gc-ntsc-12.bin") is not None
+
+    @pytest.mark.asyncio
+    async def test_deletes_our_downloads_inside_a_declared_folder(self, plugin, fw, tmp_path):
+        """PS2's `pcsx2/bios` is a folder declaration, and what we put in it is ours.
+
+        Two rules, not one: a folder is never offered as a DOWNLOAD, because
+        there is no file to fetch into a name the emulator lists — that says
+        nothing about the files already inside it. A recorded download under the
+        folder must be removable, and a file we never placed must not be.
+        """
+        folder = tmp_path / "retrodeck" / "bios" / "pcsx2" / "bios"
+        folder.mkdir(parents=True)
+        ours = folder / "scph39001.bin"
+        ours.write_bytes(b"\x00" * 128)
+        theirs = folder / "scph70012.bin"
+        theirs.write_bytes(b"\x01" * 128)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="ps2",
+                file_name="scph39001.bin",
+                file_path=str(ours),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=3,
+            )
+        )
+
+        result = await fw.delete_bios_folder("ps2", str(folder))
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert not ours.exists()
+        # The hand-placed file, and the folder itself, are not ours to remove.
+        assert theirs.exists()
+        assert folder.is_dir()
+
+    @pytest.mark.asyncio
+    async def test_a_folder_path_narrows_and_never_widens(self, plugin, fw, tmp_path):
+        """A record outside the folder is out of reach of that folder's button."""
+        bios = tmp_path / "retrodeck" / "bios"
+        (bios / "pcsx2" / "bios").mkdir(parents=True)
+        outside = bios / "scph5501.bin"
+        outside.write_bytes(b"\x02" * 64)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="ps2",
+                file_name="scph5501.bin",
+                file_path=str(outside),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=4,
+            )
+        )
+
+        result = await fw.delete_bios_folder("ps2", str(bios / "pcsx2" / "bios"))
+
+        assert result["deleted_count"] == 0
+        assert outside.exists()
 
     @pytest.mark.asyncio
     async def test_a_file_with_no_record_is_never_touched(self, plugin, fw, tmp_path):

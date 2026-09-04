@@ -1160,6 +1160,14 @@ export const deletePlatformBios = callable<[string], { success: boolean; deleted
 export const deleteBiosFile = callable<[string, string], { success: boolean; deleted_count: number; message: string }>(
   "delete_bios_file",
 );
+/** A declared folder's Delete button. The folder has no name a download record
+ *  could carry, so the files inside it are matched by being written underneath
+ *  it — a filter over the platform's own records, which narrows and can never
+ *  widen. The folder itself is never removed; the emulator lists it. */
+export const deleteBiosFolder = callable<
+  [string, string],
+  { success: boolean; deleted_count: number; message: string }
+>("delete_bios_folder");
 
 // Save version history callables
 export const savesListFileVersions = callable<[number, string, string], ListFileVersionsResult>(

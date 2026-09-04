@@ -174,6 +174,71 @@ class PlatformBiosDeleter:
 
         return deleted, errors
 
+    def _delete_bios_folder_io(self, platform_slug, folder_path) -> tuple[int, list[str]]:
+        """Sync worker for :meth:`delete_bios_folder` — our downloads inside a folder.
+
+        A declared FOLDER has no name a record could carry: the emulator lists
+        the folder and the files inside it are whatever was put there. So the
+        records are matched by being written *underneath* it, and the removal is
+        otherwise identical — record authorises, record's ``file_path`` is
+        unlinked, row pruned.
+
+        **The folder path narrows and can never widen.** It is a filter over the
+        platform's own records, so a destination that has since moved offers
+        fewer files rather than reaching something the plugin did not place, and
+        a caller passing an unrelated path removes nothing at all. The folder
+        itself is never removed: the emulator lists it, and it is not ours.
+
+        This is deliberately not the same rule as the download side's: a folder
+        is never offered as a DOWNLOAD, because there is no file to fetch into a
+        name the emulator lists. That says nothing about the files already
+        inside it, which are ours to remove wherever a record names them.
+        """
+        prefix = f"{folder_path.rstrip('/')}/"
+        deleted = 0
+        errors: list[str] = []
+        pruned: list[tuple[str, str]] = []
+        for record in self._recorded_bios_files(platform_slug):
+            if not record.file_path.startswith(prefix):
+                continue
+            if self._firmware_file_store.exists(record.file_path):
+                try:
+                    self._firmware_file_store.remove_file(record.file_path)
+                except OSError as e:
+                    self._logger.warning(f"Failed to remove BIOS file {record.file_name}: {e}")
+                    errors.append(f"{record.file_name}: {e}")
+                    continue
+                deleted += 1
+            pruned.append((record.platform_slug, record.file_name))
+
+        if pruned:
+            self._prune_bios_records(pruned)
+
+        return deleted, errors
+
+    async def delete_bios_folder(self, platform_slug, folder_path) -> dict[str, Any]:
+        """Delete the BIOS files the plugin downloaded inside *folder_path*.
+
+        The folder row's twin of :meth:`delete_bios_file`, on the same
+        authority: only a file a ``downloaded_bios`` record names is removed,
+        and only at the path that record holds.
+        """
+        deleted, errors = await self._loop.run_in_executor(
+            None, self._delete_bios_folder_io, platform_slug, folder_path
+        )
+        self._listing.invalidate()
+
+        if errors:
+            return {
+                "success": False,
+                "reason": ErrorCode.UNKNOWN.value,
+                "deleted_count": deleted,
+                "message": f"Could not delete every file: {errors[0]}",
+            }
+        if deleted == 0:
+            return {"success": True, "deleted_count": 0, "message": "Nothing to delete in this folder"}
+        return {"success": True, "deleted_count": deleted, "message": f"Deleted {deleted} BIOS file(s)"}
+
     async def delete_bios_file(self, platform_slug, file_name) -> dict[str, Any]:
         """Delete one BIOS file the plugin downloaded, by name.
 

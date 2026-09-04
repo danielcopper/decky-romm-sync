@@ -28,6 +28,7 @@ from domain.bios_status import (
     format_bios_status,
 )
 from domain.emulator_commands import options_to_payload, resolve_platform_label
+from domain.firmware_wants import DECLARED_DIRECTORY
 
 if TYPE_CHECKING:
     import asyncio
@@ -253,23 +254,31 @@ class FirmwareStatusReader:
                 if rom.platform_slug and rom.shortcut_app_id is not None
             }
 
-    def _deletable(self, platform_slug: str, records: list[BiosFile]) -> tuple[set[str], int]:
-        """What a delete would take for *platform_slug*: the names, and the count.
+    def _stamp_deletable(self, plat: dict[str, Any], platform_slug: str, records: list[BiosFile]) -> None:
+        """Stamp what a delete would take — per row, and for the platform.
 
-        Both answers come from one pass over the download records and one probe
-        each, so the row's Delete button and the platform's Delete BIOS count
-        cannot disagree about what is deletable — and a file is probed once
-        rather than once per consumer.
+        One pass over the download records and one probe each, so every answer
+        on the pane comes from the same set: a row's own Delete button and the
+        platform's ``Delete BIOS (N)`` cannot disagree about what would go.
 
         The delete is authorised by the record and unlinks the path that record
         holds, so this is exactly that set: recorded paths under one of the
-        platform's firmware slugs that are still on disk. The COUNT is of
-        distinct paths, because two records naming one file are one unlink; the
-        NAMES are what a row can be matched on, since a row knows its file name
-        and not our record.
+        platform's firmware slugs that are still on disk. The platform count is
+        of distinct paths, because two records naming one file are one unlink.
 
-        Neither is ``downloaded`` and neither may be replaced by it: that is
-        ``os.path.exists`` at the row's own destination, equally true of
+        **A row's count is answered two ways, because a row is one of two
+        things.** A declared FILE matches a record by name — the row knows its
+        file name and not our record. A declared FOLDER has no name a record
+        could carry, so it matches the records written *underneath* it: the
+        emulator lists that folder and whatever we downloaded into it is ours to
+        remove, which is a rule about files and is independent of the separate
+        rule that a folder is never offered as a download. The folder path is
+        used to NARROW the record set and never to widen it, so a destination
+        that has since moved can only offer fewer files, never something the
+        plugin did not place.
+
+        None of this is ``downloaded``, and none of it may be replaced by that:
+        it is ``os.path.exists`` at the row's own destination, equally true of
         firmware the emulator shipped with. ``local_count`` is a third set again
         — the library's progress ratio, which includes files the plugin never
         placed and drops our own downloads once RomM stops listing them; used
@@ -277,9 +286,18 @@ class FirmwareStatusReader:
         """
         slugs = set(firmware_paths.resolve_firmware_slugs(platform_slug))
         mine = [record for record in records if record.platform_slug in slugs]
-        present = {record.file_path for record in mine if self._firmware_file_store.exists(record.file_path)}
-        names = {record.file_name for record in mine if record.file_path in present}
-        return names, len(present)
+        present = [record for record in mine if self._firmware_file_store.exists(record.file_path)]
+        plat["deletable_count"] = len({record.file_path for record in present})
+
+        names = {record.file_name for record in present}
+        for f in plat["files"]:
+            if f.get("declared_kind") == DECLARED_DIRECTORY:
+                root = (f.get("local_path") or "").rstrip("/")
+                f["deletable_count"] = (
+                    sum(1 for record in present if record.file_path.startswith(f"{root}/")) if root else 0
+                )
+            else:
+                f["deletable_count"] = 1 if f["file_name"] in names else 0
 
     async def _enrich_platform_map(
         self,
@@ -313,7 +331,7 @@ class FirmwareStatusReader:
         listing's file names rather than one platform's slice — see
         :meth:`FirmwareDemand.wanted_beyond_server`. *records* is every BIOS
         download row, read once for the same reason and sliced per platform by
-        :meth:`_deletable`. The folder verdicts are scoped per platform and
+        :meth:`_stamp_deletable`. The folder verdicts are scoped per platform and
         memoised across them (:meth:`FirmwareDemand.folder_answers`) — the cores
         are the platform's, the answer is the core's.
         """
@@ -353,9 +371,7 @@ class FirmwareStatusReader:
             plat["files"] = [{**raw, **_wanted_fields(entry)} for raw, entry in zip(plat["files"], files, strict=True)]
             plat["has_games"] = slug in synced_slugs
             plat["all_downloaded"] = all(f["downloaded"] for f in plat["files"])
-            deletable_names, plat["deletable_count"] = self._deletable(slug, records)
-            for f in plat["files"]:
-                f["deletable"] = f["file_name"] in deletable_names
+            self._stamp_deletable(plat, slug, records)
             self._set_platform_bios_aggregates(plat, slug, files, complete)
 
     def _set_platform_bios_aggregates(self, plat: dict[str, Any], slug: str, files, complete: bool) -> None:
@@ -428,7 +444,7 @@ class FirmwareStatusReader:
 
         Read whole rather than per platform: it is one small table and the page
         asks the same question of it for each platform it renders. One short read
-        UoW, closed before the file probes :meth:`_deletable` runs.
+        UoW, closed before the file probes :meth:`_stamp_deletable` runs.
         """
         with self._uow_factory() as uow:
             return list(uow.bios_files.iter_all())

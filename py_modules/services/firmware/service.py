@@ -176,3 +176,7 @@ class FirmwareService:
     async def delete_bios_file(self, platform_slug, file_name) -> dict[str, Any]:
         """Delete one BIOS file the plugin downloaded for a platform."""
         return await self._deletion.delete_bios_file(platform_slug, file_name)
+
+    async def delete_bios_folder(self, platform_slug, folder_path) -> dict[str, Any]:
+        """Delete the BIOS files the plugin downloaded inside a declared folder."""
+        return await self._deletion.delete_bios_folder(platform_slug, folder_path)

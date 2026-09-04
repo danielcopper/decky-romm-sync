@@ -450,6 +450,10 @@ class Plugin:
     async def delete_bios_file(self, platform_slug, file_name):
         return await self._firmware_service.delete_bios_file(platform_slug, file_name)
 
+    @migration_blocked
+    async def delete_bios_folder(self, platform_slug, folder_path):
+        return await self._firmware_service.delete_bios_folder(platform_slug, folder_path)
+
     # ── Sync delegation to LibraryService ─────────────────────
 
     async def get_platforms(self):
