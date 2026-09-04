@@ -5,8 +5,11 @@
  * The row is where a platform is switched on and off. That is the page's only
  * sync control: focus is already on the row and A works the toggle, so the
  * detail does not offer a second one. Beside the toggle the row states the BIOS
- * requirement as a NUMBER — the colour of the dot only reinforces it, and a
- * platform the firmware read has nothing to say about shows neither.
+ * requirement as a NUMBER — the colour only reinforces it. Both the dot and the
+ * ratio take the shared mapping's answer, and the dot is drawn on every row
+ * even where there is no level, because one that came and went shifted every
+ * name beside it. An em dash where the number would be is an answer of its own:
+ * the platform wants no BIOS, or nothing has been read for it yet.
  *
  * Structure and vocabulary: `docs/architecture/qam-panel.md`, section Library.
  */

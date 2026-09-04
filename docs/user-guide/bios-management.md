@@ -156,16 +156,21 @@ and the row you focus is the one the right-hand pane describes.
    otherwise reads "Nothing required" with the inventory of your library's files beside it (e.g. "3 / 5 files held"). A
    system with a required row the plugin could not judge — a declared folder it could not read, say — reads "BIOS
    readiness unknown" instead — see [When readiness cannot be stated](#when-readiness-cannot-be-stated)
-7. Below it, a table lists the files themselves: what is **wanted** (each row says whether it is _needed_, _optional_,
-   _not needed_ or _unknown_), whether it is **on disk**, and its **contents**. Contents answers for a required
-   **folder**: how many BIOS images it holds — and the images themselves are listed under the row, in the emulator's own
-   words so you can match one against its picker — or that it holds none, or that its contents could not be established.
-   A plain file reads an em dash, which means the question was never asked: checking a file's contents is still to come,
-   and until it lands the em dash must not be read as "checked, and nothing there"
-8. A **Download** button sits on every row that is missing and in your RomM library. **Download required** and
+7. Below it, a table lists the files themselves: the **file**, whether it is **on disk**, and its **contents**. On disk
+   is one mark carrying two things — a green ✓ for a file that is there and required, a red ✗ for one that is required
+   and is not, and the paler green ✓ / grey ✗ for a file the core you launch with does not need either way. Amber means
+   nothing could be established: a ✓ or ✗ in amber is a file whose presence is known but which no installed emulator
+   could be asked about, and a `?` is a row that could not be checked at all. A short legend under the table names the
+   marks that are actually on it
+8. **Contents** answers for a required **folder**: how many BIOS images it holds — and the images themselves are listed
+   under the row, in the emulator's own words so you can match one against its picker — or that it holds none, or that
+   its contents could not be established. A plain file reads an em dash, which means the question was never asked:
+   checking a file's contents is still to come, and until it lands the em dash must not be read as "checked, and nothing
+   there"
+9. A **Download** button sits on every row that is missing and in your RomM library. **Download required** and
    **Download all** fetch several at once. A system nothing installed could answer for has no download buttons at all —
    see [When the requirement is unknown](#when-the-requirement-is-unknown)
-9. **Delete BIOS** removes that platform's downloaded BIOS files (see below)
+10. **Delete BIOS** removes that platform's downloaded BIOS files (see below)
 
 <!-- Screenshot: Library › Platforms with a platform selected, its core button above the BIOS table -->
 

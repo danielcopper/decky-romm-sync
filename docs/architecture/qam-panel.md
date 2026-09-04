@@ -170,7 +170,7 @@ selection, because a page may do real work on one.
 
 ### Tables
 
-Anything with more than two facts per row is a table with a header row: BIOS files (Wanted, On disk, Contents), the
+Anything with more than two facts per row is a table with a header row: BIOS files (File, On disk, Contents), the
 preview (a row per platform; New, Updated, Removed), registered devices, cleanup candidates, collections. Today those
 facts were folded into a field's label and description, which is why #1803's third axis had no slot on the rows the
 System page drew; the platform detail's BIOS table is where that column now sits.
@@ -248,9 +248,11 @@ above **Available**, each alphabetical, with the sync toggle in the row, the BIO
 an em dash where nothing is required) and a dot beside it. The number is what the row states; the dot only reinforces
 it, through the shared mapping every platform-level BIOS dot renders through (`src/utils/biosColor.ts`: green complete,
 amber partial, red missing, grey for a missing level; the per-file rows on the platform detail and the game page
-hard-code the same four colours). Showing no dot for a platform the firmware read has nothing to say about is the list's
-own rule on top of the helper, which would answer grey. Enable all and Disable all sit above the groups, in the list
-column and outside every row, so reaching them reports no selection. The order freezes while the page is open.
+hard-code the same four colours). The dot is drawn on every row, taking exactly the helper's grey where there is no
+level to state: one that came and went shifted every name beside it, and the list is meant to be scanned down its left
+edge. The ratio takes the same colour, which is what makes a red 0 / 2 findable without walking the list. Enable all and
+Disable all sit above the groups, in the list column and outside every row, so reaching them reports no selection. The
+order freezes while the page is open.
 
 The row is the page's only sync control — focus is already there and A works the toggle — so the detail opens with one
 header line instead of a Sync section: the platform's name, `N on RomM · M in Steam · <core label>`, and its BIOS number
