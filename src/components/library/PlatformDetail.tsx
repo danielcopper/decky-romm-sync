@@ -80,12 +80,11 @@ const FLAT_BUTTON = { flex: "1 1 auto", minWidth: 0, padding: "6px 10px", fontSi
  * The core picker's button in the header line — the game page's icon button, at
  * this line's scale.
  *
- * The chrome is written out rather than reusing `.romm-gear-btn`: that class is
- * injected into the SharedJSContext document by the game page's own style
- * injector, and the QAM panel is a different document (`#quickaccess_content_999`
- * lives in Steam's QuickAccess view), so the class would simply not apply here.
- * What IS shared is what the user asked to be shared — the icon and its two
- * colours.
+ * The chrome is written out rather than reusing `.romm-gear-btn`, for a reason
+ * that needs no claim about which document the class reaches: that class is
+ * 36×36 (`styleInjector.ts`), which is the game page's play row, and this line
+ * is 28px tall. What IS shared is what the user asked to be shared — the icon
+ * and its two colours.
  */
 const CORE_BUTTON = {
   alignSelf: "center",
@@ -333,7 +332,7 @@ const BiosTableHeader: FC = () => (
  * "no image" covers both ways a folder fails its core — one holding nothing the
  * core would boot, and a plain file sitting where the core opens a folder —
  * because the core's listing reaches no image either way. Which of the two it is
- * belongs to the row's On-disk note, whose wording is {@link biosFileNote}'s.
+ * belongs to the line under the row, whose wording is {@link biosFileNote}'s.
  */
 function contentsCell(file: FirmwareRow): string {
   if (file.declared_kind !== "directory") return "—";
@@ -350,13 +349,16 @@ function contentsCell(file: FirmwareRow): string {
  *
  * Full width, because the alternative is a 48px cell wrapping one sentence
  * across three lines — the cost the marks were introduced to stop paying. A
- * note here is also rare: measured over the `.info` corpus, the only rows that
- * carry one are the handful RetroDECK supplies itself and PS2's folder row.
+ * note here is also rare in the ordinary case: over the `.info` corpus the rows
+ * that carry one are the handful RetroDECK supplies itself and PS2's folder
+ * row. That is a statement about a healthy install, not about the vocabulary —
+ * `biosFileNote`'s caveat wording appears wherever a destination cannot be
+ * read, which no corpus can predict.
  *
  * Each image string is the resolver's verbatim, and `pre-wrap` keeps the column
  * padding PCSX2 puts in its own option labels — that alignment is what makes a
  * line matchable against the emulator's own picker. They sit under the row
- * rather than in the Contents cell because the cell is 92px and one of these
+ * rather than in the Contents cell because the cell is 84px and one of these
  * labels is not; the cell counts them instead.
  */
 const BiosRowLines: FC<{ lines: string[] }> = ({ lines }) =>
@@ -381,19 +383,21 @@ const BiosRowLines: FC<{ lines: string[] }> = ({ lines }) =>
  *
  * Measured over the 292 `.info` files a stock RetroDECK ships — 695 declared
  * firmware entries — the description's relation to the row's own `file_name`
- * (which is `os.path.basename` of the declared path) falls into four shapes:
+ * (which is `os.path.basename` of the declared path) falls into five shapes:
  *
  * | 245 | 35% | it IS the name — `"macventure.dat"`                          |
  * | 328 | 47% | the name, a space, then prose — `"scph5500.bin (PS1 JP BIOS)"` |
  * | 115 | 17% | the same, but the name carries its directory — `"dc/dc_boot.bin (Dreamcast BIOS)"` |
- * |   6 |  1% | the description does not open with the name — `"Dolphin 'Sys' folder"`, and two upstream typos |
- * |   1 |  0% | it does, but the name has a space in it — `"7800 BIOS (U).rom (7800 BIOS)"` |
+ * |   5 |  1% | the first token names something else — a folder the file sits in (`"'Databases' folder"`), or a misspelling of it (two upstream typos) |
+ * |   1 |  0% | it names the file, but the name has a space in it — `"7800 BIOS (U).rom (7800 BIOS)"` |
+ * |   1 |  0% | it names the whole DECLARATION, in quotes — `"'pcsx2/bios' folder"`, the corpus's only folder |
  *
  * So the rule has two halves: strip the name where the description opens with
  * it verbatim (which is the only way a name containing spaces can be seen), and
- * otherwise strip a first token that names this file as itself or at the end of
- * a path. Together they fire on 689 of the 695 and on the no-placement case;
- * the remaining six say something real and are printed whole. The name half is
+ * otherwise strip a first token that names this file — as itself, at the end of
+ * a path, or as the whole declared path, with surrounding quotes ignored.
+ * Together they fire on 690 of the 695 and on the no-placement case; the
+ * remaining five say something real and are printed whole. The name half is
  * anchored at the start rather than searched for anywhere, because a rule that
  * scanned the whole string would cut into prose that merely quotes the name.
  * The prose is kept verbatim, parentheses and all, because it is the packager's
@@ -408,15 +412,20 @@ function fileDescription(file: FirmwareRow): string | null {
   const description = file.description.trim();
   if (!description) return null;
   // A name with a space in it is not one token, so the token rule cannot see it.
-  // Two of the 695 are spelled that way ("7800 BIOS (U).rom"), and both printed
-  // the name twice until this line. Anchored at the start rather than searched
-  // for anywhere, so prose that merely quotes the name is left alone.
+  // Exactly one of the 695 is spelled that way ("7800 BIOS (U).rom"), and it
+  // printed the name twice until this line. Anchored at the start rather than
+  // searched for anywhere, so prose that merely quotes the name is left alone.
   if (description.startsWith(`${file.file_name} `)) {
     return description.slice(file.file_name.length).trim() || null;
   }
   const [head, ...tail] = description.split(" ");
-  const names = head === undefined ? "" : (head.split("/").pop() ?? "");
-  if (names !== file.file_name) return description;
+  // Quotes are stripped before the comparison, and the whole declared path is
+  // compared as well as the basename, because the one folder declaration in the
+  // corpus is described as `'pcsx2/bios' folder` — a token that names the
+  // declaration exactly, and that the row's own name line is already showing.
+  const token = (head ?? "").replace(/^['"]|['"]$/g, "");
+  const names = token.split("/").pop() ?? "";
+  if (names !== file.file_name && token !== file.declared_path) return description;
   const rest = tail.join(" ").trim();
   return rest || null;
 }
@@ -497,7 +506,16 @@ const BiosFileRow: FC<{ file: FirmwareRow; download: ReactNode }> = ({ file, dow
   const cells = (
     <>
       <div style={{ display: "grid", gridTemplateColumns: TABLE_COLUMNS, gap: "8px", alignItems: "center" }}>
-        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {/* The cell ellipsises, and with the folder in front of it what gets cut
+            is now the NAME rather than the description that used to sit here —
+            `scummvm/extra/hadesch_translations.dat` does not fit 202px in any
+            arrangement. The title is the mouse's way back to it; a reader on the
+            controller has none, and the only real fix is width the list column
+            currently holds. */}
+        <span
+          title={file.declared_path ?? file.file_name}
+          style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+        >
           {folder && <span style={{ color: MUTED }}>{folder}</span>}
           {file.file_name}
         </span>
@@ -567,13 +585,23 @@ function coreOffer(row: PlatformRow, core: CoreAnswer): CoreOffer {
   if (!core.emulator_data_available) {
     return { kind: "say", text: "RetroDECK was not found, so there is no emulator list to choose from." };
   }
-  // Zero and one are different sentences. A platform ES-DE offers nothing for
-  // has no launch at all, which the header's own clause also states; saying it
-  // "offers one emulator" there would be a count of something that is not
-  // there.
-  if (core.emulators.length === 0) {
-    return { kind: "say", text: "RetroDECK offers no emulator for this platform, so its games cannot launch." };
+  // Ahead of the counts, because it is not one: `active_core_label` is null when
+  // nothing ES-DE lists for the platform is BAKEABLE, which says nothing about
+  // how many entries there are. A platform whose only entry is a standalone
+  // emulator this RetroDECK has not installed lands here with one option, and
+  // one with two uninstalled ones lands here with two — where a count-shaped
+  // branch would have said "offers one emulator" or nothing at all.
+  if (core.active_core_label === null) {
+    return {
+      kind: "say",
+      text: "None of this platform's emulators can be pinned from here, so RetroDECK picks one when a game launches.",
+    };
   }
+  // Only one count branch is left, and it is now exactly true: an empty menu
+  // cannot reach here (no options means nothing bakeable, which the branch above
+  // answered), so a single option here is a single BAKEABLE one — there really
+  // is nothing to switch to. The branch that used to say a platform with no
+  // emulator could not launch its games was both unreachable and wrong.
   if (core.emulators.length === 1) {
     return { kind: "say", text: "This platform offers one emulator, so there is nothing to switch." };
   }
@@ -856,22 +884,25 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
   // on the pane, and the in-flight one is a beat rather than a state.
   //
   // The clause NAMES the core, and "Default" is not one of the names it can
-  // take: `resolve_platform_label` already answers with the real label in both
-  // ordinary cases — the per-platform override where it still resolves, else the
-  // es_systems default — and answers `null` for exactly one thing, which is a
-  // platform with no bakeable emulator at all. Printing "Default" there said the
-  // opposite of what was true.
+  // take: `resolve_platform_label` answers with the real label in both ordinary
+  // cases — the per-platform override where it still resolves, else the
+  // es_systems default. Printing "Default" said the opposite of what was true.
+  //
+  // `null` is not a failure either. It means no option is BAKEABLE, and what
+  // follows from that is written at `select_default_option`: the launch is baked
+  // as the plain RetroDECK one and RetroDECK resolves the emulator itself. The
+  // games still start; the plugin is simply not the one choosing, which is what
+  // the clause says.
   const activeLabel = core ? core.active_core_label : null;
   // The platform-level twin of the game page's `activeCoreIsDefault`, read off
   // the payload's own `is_default`, which marks the single option
-  // `select_default_option` picks. Both ends of the label come from these
-  // options, so a label matching none of them cannot arise; it would read as an
-  // override, which is the direction that draws attention rather than hiding it.
+  // `select_default_option` picks. One expression feeds the clause AND the
+  // icon, so the two cannot disagree — and no active label is muted rather than
+  // gold, because `find` on a null label returns nothing and "not the default"
+  // is not the same statement as "an override".
   const activeIsDefault = core?.emulators.find((option) => option.label === activeLabel)?.is_default ?? false;
-  const coreClause =
-    core == null
-      ? null
-      : { text: activeLabel ?? "no emulator", color: activeLabel === null ? RED : activeIsDefault ? MUTED : AMBER };
+  const coreColor = activeLabel === null || activeIsDefault ? MUTED : AMBER;
+  const coreClause = core == null ? null : { text: activeLabel ?? "RetroDECK decides", color: coreColor };
   const requiredCount = firmware?.required_count ?? 0;
   const biosBadge =
     firmware && requiredCount > 0 ? `BIOS ${firmware.required_downloaded ?? 0} / ${requiredCount}` : null;
@@ -916,7 +947,7 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
               )
             }
           >
-            <FaMicrochip size={16} color={activeIsDefault ? MUTED : AMBER} />
+            <FaMicrochip size={16} color={coreColor} />
           </DialogButton>
         )}
       </Focusable>

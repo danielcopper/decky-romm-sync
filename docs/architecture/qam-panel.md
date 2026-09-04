@@ -285,10 +285,13 @@ the core picker's icon button, right-aligned. Under it, for the focused platform
   same sentence twice.
 
   **The clause names the core; "Default" is not one of the names it can take.** `resolve_platform_label` answers with
-  the real label in both ordinary cases and answers `null` for exactly one thing — a platform with no bakeable emulator
-  at all — so the clause reads `no emulator` in red there, and the line under it says nothing can launch the platform's
-  games. Printing "Default" for that state, which is what the pane did until the second device round, said the opposite
-  of what was true.
+  the real label in both ordinary cases. `null` means no option is **bakeable**, which is not the same as there being
+  none — a platform whose only ES-DE entry is a standalone emulator this RetroDECK has not installed answers `null` with
+  one option on the wire — and it is not a failure: `select_default_option` says what follows, which is that the plain
+  RetroDECK launch is baked and RetroDECK resolves the emulator itself. So the clause reads `RetroDECK decides` in the
+  muted colour, the line under it says the plugin cannot pin one, and the chip is withheld. Printing "Default" for that
+  state said the plugin had chosen; printing `no emulator` in red said the games would not start. Both were wrong, in
+  opposite directions.
 
   The button appears only when there is something to pick: the platform has games in Steam, the core read landed,
   RetroDECK was found, and at least two emulators exist. Each of the other cases is a sentence under the header instead
@@ -342,8 +345,10 @@ the core picker's icon button, right-aligned. Under it, for the focused platform
   images — because a 48px cell wraps one sentence across three lines. The one note that does not appear there is the
   library one ("not in your RomM library" and its missing variant), which mark 2 now carries: the helper flags it as
   `fromLibrary` so this surface can drop it without re-deriving the helper's precedence, and the game page's BIOS tab,
-  which has room, still prints it. Notes are rare on this pane by construction — over the `.info` corpus the only rows
-  that can carry one are the handful RetroDECK supplies itself and PS2's folder declaration.
+  which has room, still prints it. Notes are rare on a healthy install — over the `.info` corpus the rows that carry one
+  are the handful RetroDECK supplies itself and PS2's folder declaration. That is not a bound on the vocabulary:
+  `biosFileNote`'s caveat wording ("its location could not be read", "a folder is here, where the emulator opens a
+  file") appears wherever a destination cannot be read, which no corpus predicts.
 
   The file name is printed once. The description beside it is **not RomM's** — `_group_server_firmware` builds no
   description at all and `_wanted_fields` overwrites what came in, so what arrives is the core's own `firmwareN_desc`,
@@ -352,8 +357,10 @@ the core picker's icon button, right-aligned. Under it, for the focused platform
   the name then prose (47%), or the name with its directory then prose (17%). The rule is to drop a leading token that
   names this file — as itself or at the end of a path — and keep the rest verbatim, with a first half that strips the
   name where the description opens with it verbatim, which is the only way a name containing spaces can be seen
-  (`"7800 BIOS (U).rom (7800 BIOS)"`). Together they fire on 689 of the 695; the remaining six name the file nowhere and
-  are printed whole.
+  (`"7800 BIOS (U).rom (7800 BIOS)"`). A third form ignores surrounding quotes and compares the whole declared path,
+  which is what the corpus's one folder declaration is described by (`"'pcsx2/bios' folder"`, on a row whose name line
+  already shows that path). Together they fire on 690 of the 695; of the five printed whole, three name a folder the
+  file sits in and two are upstream misspellings of the file.
 
   **The description is on its own line under the row**, muted and clipped to one line, not beside the name: at the
   Deck's scale the `File` column is ~150 px and a fifty-character parenthesis was clipped mid-word on every row that had

@@ -217,10 +217,14 @@ def resolve_platform_label(options: list[EmulatorOption], override: str | None) 
     label (the first bakeable command). A stale / no-longer-installed override
     degrades to the default — never fatal — mirroring the launch-bake resolver so
     the label a surface shows and the actual launch agree. ``None`` when the
-    platform has no bakeable emulator at all (empty menu, or ``es_systems.xml``
-    unreadable) — a real answer with one meaning: nothing here can launch the
-    platform's games. A surface states that; it is never a name, and least of
-    all "Default", which says the opposite.
+    platform has no BAKEABLE option — which is not the same as having none, and
+    not a failure: an empty menu, an unreadable ``es_systems.xml``, and a menu
+    whose only entries are ``needs_setup`` or uninstalled standalone emulators
+    all answer ``None`` alike. What follows is written at
+    :func:`select_default_option`: the caller bakes the plain RetroDECK launch
+    and RetroDECK resolves the emulator itself, so the games still start. A
+    surface states THAT; it is never a name, and least of all "Default", which
+    says the plugin picked one.
     """
     if override is not None and label_to_invocation(options, override) is not None:
         return override

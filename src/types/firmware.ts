@@ -120,8 +120,10 @@ export interface CoreInfo {
  * `active_core_label` is the platform-layer resolution — the per-platform
  * override when it still resolves to a bakeable emulator, else the es_systems
  * default — so in both ordinary cases it IS the emulator's name. `null` means
- * one thing only: the platform has no bakeable emulator at all, which the
- * Library page states as such rather than as a name.
+ * no option is BAKEABLE, which is not the same as there being none: a menu of
+ * uninstalled standalone emulators answers `null` with `emulators.length >= 1`.
+ * RetroDECK then resolves the emulator itself at launch, and the Library page
+ * says that rather than printing a name or claiming a failure.
  *
  * There is no `success`, for the reason its sibling has none: the callable has
  * no in-band failure to report. What can go wrong — an unreadable

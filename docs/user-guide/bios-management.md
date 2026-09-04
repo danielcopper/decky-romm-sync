@@ -151,8 +151,9 @@ and the row you focus is the one the right-hand pane describes.
 3. Move down the list to pick a platform; the pane on the right changes with the focus
 4. The pane's first line names the platform, how many ROMs it has on RomM, how many are in Steam, and the emulator it
    launches with — by name, in grey when it is the platform's default and in gold when you have picked something else.
-   If the line reads **no emulator** in red, RetroDECK offers nothing that can launch this platform and the sentence
-   below says so
+   If it reads **RetroDECK decides**, the plugin could not pin any of this platform's emulators — they may need setting
+   up, or not be installed — so RetroDECK chooses one itself when a game starts. The games still launch; the sentence
+   below the line says the same thing
 5. The **chip button** at the right of that line opens a menu of the platform's emulators — the same button, in the same
    two colours, as the one on a game's page. It appears once the platform has games in Steam and there is more than one
    emulator to choose between; otherwise a sentence under the line says why there is nothing to pick
@@ -436,9 +437,10 @@ platform. A "Switching cores may affect save compatibility" note is the first li
 3. Press the chip button and pick an emulator from the menu
 4. The BIOS table below updates to show what the new choice needs
 
-A platform that offers one emulator says so instead of showing a button, and one ES-DE offers nothing for says that its
-games cannot launch. If RetroDECK can't be found (no `es_systems.xml`), the pane says the emulator list is unavailable
-rather than showing an empty picker.
+A platform that offers one emulator says so instead of showing a button. A platform whose emulators the plugin cannot
+pin — none installed, or all of them needing setup first — says that too, and RetroDECK picks one itself when a game
+starts. If RetroDECK can't be found (no `es_systems.xml`), the pane says the emulator list is unavailable rather than
+showing an empty picker.
 
 The plugin stores the choice in its own settings and **immediately re-applies it** to every installed game on that
 platform — the change takes effect right away, with no sync needed (games that already have a per-game core keep their

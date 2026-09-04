@@ -574,24 +574,39 @@ describe("Library › Platforms", () => {
       expect(coreButton(container)!.querySelector("svg")!.style.color).toBe(AMBER);
     });
 
-    it("says no emulator, not Default, when nothing can launch the platform", async () => {
-      // `active_core_label: null` means the platform has no bakeable emulator at
-      // all. The pane used to print "Default" for it, which said the opposite of
-      // what was true.
-      vi.mocked(backend.getSystemCoreInfo).mockResolvedValue(coreInfo({ emulators: [], active_core_label: null }));
+    it.each([
+      ["no options at all", []],
+      ["one option, not bakeable", [{ ...MGBA, is_default: false, bakeable: false, reason: "not_installed" }]],
+      [
+        "two options, neither bakeable",
+        [
+          { ...MGBA, is_default: false, bakeable: false, reason: "not_installed" },
+          { ...VBA, bakeable: false, reason: "inject" },
+        ],
+      ],
+    ])("says RetroDECK decides, not Default, when no option can be pinned (%s)", async (_shape, emulators) => {
+      // `active_core_label: null` means no option is BAKEABLE — never that there
+      // are none. All three shapes reach it, and `select_default_option` says
+      // what follows: the plain RetroDECK launch is baked and RetroDECK resolves
+      // the emulator, so the games do start and the clause must not say
+      // otherwise. The two- option shape is the one that used to draw a GOLD
+      // chip beside a clause claiming there was no core.
+      vi.mocked(backend.getSystemCoreInfo).mockResolvedValue(coreInfo({ emulators, active_core_label: null }));
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
       const clause = [...container.querySelectorAll<HTMLElement>("span")].find(
-        (el) => el.textContent === " · no emulator",
+        (el) => el.textContent === " · RetroDECK decides",
       );
       expect(clause).toBeTruthy();
-      expect(clause!.style.color).toBe(RED);
+      expect(clause!.style.color).toBe(GREY);
       expect(container.textContent).not.toContain("Default");
-      // And the line under it says what that means, rather than counting one
-      // emulator that is not there.
-      expect(container.textContent).toContain("RetroDECK offers no emulator for this platform");
+      expect(container.textContent).not.toContain("no emulator");
+      // One sentence for all three, keyed off the label rather than off a count
+      // that says nothing about bakeability.
+      expect(container.textContent).toContain("None of this platform's emulators can be pinned from here");
       expect(container.textContent).not.toContain("offers one emulator");
+      // No chip at all — and so no gold icon claiming an override.
       expect(coreButton(container)).toBeNull();
     });
 
@@ -731,6 +746,68 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("Nothing is known about this platform");
       expect(container.textContent).toContain("may be out of date");
       expect(container.textContent).not.toContain("Could not read the BIOS state.");
+    });
+
+    it("keeps the no-entry wording after a failed refresh of an overview that spoke for nobody", async () => {
+      // A successful read that names no platform is an answer set too. Counting
+      // the map's keys called that "never read", so a later failed refresh took
+      // back "nothing is known" on every pane — the exact wording the failed-
+      // re-read fix put there.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({ success: true, platforms: [] });
+      vi.mocked(backend.setSystemCore).mockResolvedValue({ success: true, rebake_items: [] });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(container.textContent).toContain("Nothing is known about this platform");
+
+      // A core change is what re-reads the overview; this one fails.
+      vi.mocked(backend.getFirmwareStatus).mockRejectedValue(new Error("net"));
+      await act(async () => {
+        fireEvent.click(coreButton(container)!);
+        await Promise.resolve();
+      });
+      await pickFromCoreMenu("VBA Next");
+      await flushAsync();
+
+      expect(container.textContent).toContain("Nothing is known about this platform");
+      expect(container.textContent).toContain("may be out of date");
+      expect(container.textContent).not.toContain("Could not read the BIOS state.");
+    });
+
+    it("goes back to the spinner while a failed saves count is retried", async () => {
+      // Three states, and the failure line is not one of the other two: leaving
+      // the previous `null` in place showed "could not be read" for the whole of
+      // the second attempt, which is the one moment "not read yet" is true.
+      vi.mocked(backend.getPlatforms).mockResolvedValue({
+        success: true,
+        platforms: [
+          platform({ id: 1, name: "Game Boy Advance", slug: "gba", sync_enabled: true }),
+          platform({ id: 2, name: "Dreamcast", slug: "dc", sync_enabled: true }),
+        ],
+      });
+      let answer: (v: { count: number }) => void = () => {};
+      vi.mocked(backend.countPlatformSaves)
+        .mockRejectedValueOnce(new Error("db"))
+        .mockReturnValue(
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+        );
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(container.textContent).toContain("Pick the platform again to retry");
+
+      await focusRow(container, "Game Boy Advance");
+      await focusRow(container, "Dreamcast");
+
+      // Mid-retry: the spinner is back and the failure line is gone.
+      expect(container.querySelector('[data-testid="spinner"]')).toBeTruthy();
+      expect(container.textContent).not.toContain("Pick the platform again to retry");
+
+      await act(async () => {
+        answer({ count: 2 });
+        for (let i = 0; i < 6; i++) await Promise.resolve();
+      });
+      expect(buttonByText(container, "Delete 2 save files")).toBeTruthy();
     });
 
     it("retries the saves count when the platform is picked again", async () => {
@@ -1092,7 +1169,7 @@ describe("Library › Platforms", () => {
       ]);
       // The sentence the mark replaces is said once, in the legend, and on no
       // row: on the rows it was the same words twice over, wrapped across three
-      // lines of a 68px cell.
+      // lines of a 48px cell.
       expect(container.textContent.match(/not in your RomM library/g)).toHaveLength(1);
       const legend = container.querySelector('[data-testid="bios-legend"]');
       expect(legend?.textContent).toContain("not in your RomM library");
@@ -1157,7 +1234,7 @@ describe("Library › Platforms", () => {
     it("puts a row's own note under the row, out of the marks column", async () => {
       // Everything `biosFileNote` says that is NOT the library sentence still
       // has to reach the reader — it just gets the full width instead of a
-      // 68px cell. `provided by` is the note that outranks all the others.
+      // 48px cell. `provided by` is the note that outranks all the others.
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
@@ -1225,6 +1302,33 @@ describe("Library › Platforms", () => {
       expect(text).toContain("(Dreamcast BIOS)");
       expect(text).toContain("(7800 BIOS)");
       expect(text).toContain("Dolphin 'Sys' folder");
+    });
+
+    it("does not print the PS2 folder's path a second time under its own name", async () => {
+      // The one folder declaration in the corpus is described as
+      // `'pcsx2/bios' folder`. The name line already shows `pcsx2/bios`, and the
+      // quote around the token is what stopped the rule seeing it.
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          firmwarePlatform({
+            files: [
+              firmwareFile({
+                file_name: "bios",
+                declared_path: "pcsx2/bios",
+                declared_kind: "directory",
+                description: "'pcsx2/bios' folder",
+                on_server: false,
+                satisfied: true,
+              }),
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent.split("pcsx2/bios").length - 1).toBe(1);
     });
 
     it("says which folder a declared file belongs in, beside its name", async () => {
