@@ -57,7 +57,6 @@ const VBA = {
 
 function coreInfo(overrides: Partial<SystemCoreInfo> = {}): SystemCoreInfo {
   return {
-    success: true,
     emulators: [MGBA, VBA],
     emulator_data_available: true,
     active_core_label: "mGBA",

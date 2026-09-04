@@ -518,7 +518,7 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
 export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ row, state }) => {
   const core = state.coreFor(row.slug);
   const firmware = row.firmware;
-  const coreLabel = core && core.success ? (core.active_core_label ?? "Default") : null;
+  const coreLabel = core ? (core.active_core_label ?? "Default") : null;
   const requiredCount = firmware?.required_count ?? 0;
   const biosBadge =
     firmware && requiredCount > 0 ? `BIOS ${firmware.required_downloaded ?? 0} / ${requiredCount}` : null;

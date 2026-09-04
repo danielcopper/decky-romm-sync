@@ -114,14 +114,16 @@ export interface CoreInfo {
  * override when it still resolves to a bakeable emulator, else the es_systems
  * default — and is `null` when the platform has no bakeable emulator at all,
  * which renders as "Default".
+ *
+ * There is no `success`, for the reason its sibling has none: the callable has
+ * no in-band failure to report. What can go wrong — an unreadable
+ * `es_systems.xml` — is already `emulator_data_available: false`, and anything
+ * else raises, which reaches the caller as a rejected promise.
  */
 export interface SystemCoreInfo {
-  success: boolean;
   emulators: EmulatorOption[];
   emulator_data_available: boolean;
   active_core_label: string | null;
-  reason?: string;
-  message?: string;
 }
 
 /**

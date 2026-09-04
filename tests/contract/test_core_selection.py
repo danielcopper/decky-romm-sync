@@ -169,8 +169,9 @@ async def test_get_system_core_info_payload_shape(harness):
 
     result = await harness.plugin.get_system_core_info("gba")
 
-    assert set(result) == {"success", "emulators", "emulator_data_available", "active_core_label"}
-    assert result["success"] is True
+    # No `success`: the callable has no in-band failure branch, so a key that
+    # could only ever read True would be an offer of an answer it never gives.
+    assert set(result) == {"emulators", "emulator_data_available", "active_core_label"}
     assert result["emulator_data_available"] is True
     assert result["emulators"] == [_MGBA_ENTRY, _VBA_NEXT_ENTRY]
     assert result["active_core_label"] == "mGBA"

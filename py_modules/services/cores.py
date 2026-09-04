@@ -158,7 +158,6 @@ class CoreService:
         system = self._resolve_system(platform_slug)
         options = self._core_info.get_emulator_options(system)
         return {
-            "success": True,
             "emulators": options_to_payload(options["options"]),
             "emulator_data_available": options["available"],
             "active_core_label": resolve_platform_label(

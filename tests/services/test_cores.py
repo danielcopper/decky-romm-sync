@@ -318,7 +318,6 @@ class TestGetSystemCoreInfo:
     def test_happy_path(self, event_loop, service, core_info):
         result = event_loop.run_until_complete(service.get_system_core_info("snes"))
         assert result == {
-            "success": True,
             "emulators": options_to_payload(core_info.options),
             "emulator_data_available": True,
             "active_core_label": "Snes9x",
