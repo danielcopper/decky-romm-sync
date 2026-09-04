@@ -31,6 +31,15 @@ inventory would do under verification — there the sweep takes in every
 unclaimed file under the BIOS root as well. Nothing is cached in either — a
 firmware answer is about files on disk that the user is actively adding and
 removing, and a cached one would outlive the download that changed it.
+
+Both resolve **one entry per core**, and neither reads the frontend's emulator
+catalogue: the inventory walks the installed ``.so`` files, one entry each,
+reading every core's ``.info`` for what it declares, and the per-core question
+takes the single core whose stem matches. A third question would not —
+``firmware_for_system`` resolves a core once per catalogue entry, and an ES-DE
+catalogue can list one core under two of a system's entries — so an answer from
+it carries a core twice, and every piece of per-destination indexing below would
+have to be read again in that light before it could be believed.
 """
 
 from __future__ import annotations
@@ -175,7 +184,7 @@ class AtlasFolderVerdictAdapter:
         answer = installations[0].firmware_for_core(f"{core_so}{_CORE_SO_SUFFIX}", verify=True)
         if answer.root is None:
             return {}
-        caveats = _deduplicated(_every_caveat(answer))
+        caveats = _every_caveat(answer)
         verdicts: dict[str, FolderVerdict] = {}
         for core in answer.cores:
             for requirement in _requirement_entries(core):
@@ -202,6 +211,13 @@ def _folder_verdict(requirement: Any, caveats: tuple[Any, ...]) -> FolderVerdict
     core's own option-label text. Only a satisfied verdict has any: an image the
     core's own test rejected, or one it never got to read, is not something the
     folder holds for the purpose of this row.
+
+    The two halves count differently, which is why the codes are collapsed and
+    the descriptions are not. One statement per image is what the read states —
+    the reference machine's PS2 folder answers three
+    ``firmware-image-identified``, one per BIOS image in it — and the row wants
+    all three descriptions and the code once, because the code says what kind of
+    finding these are and repeating it says nothing further.
     """
     here = [caveat for caveat in caveats if _names_destination(caveat.data, requirement.path)]
     return FolderVerdict(
@@ -228,24 +244,6 @@ def _names_destination(data: Mapping[str, Any], destination: str) -> bool:
         return True
     path = data.get("path")
     return isinstance(path, str) and destination in (path, os.path.dirname(path))
-
-
-def _deduplicated(caveats: tuple[Any, ...]) -> tuple[Any, ...]:
-    """*caveats* with byte-identical repeats of one statement collapsed to the first.
-
-    RetroDECK's ES-DE catalogue lists ``pcsx2_libretro.so`` under two PS2
-    entries, so a caveat about that core can be stated twice with identical data
-    (emu-atlas #361). Keyed on ``(code, data)`` rather than on the code alone:
-    two statements of one code about two different files are two findings.
-    """
-    seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
-    kept: list[Any] = []
-    for caveat in caveats:
-        key = (caveat.code, tuple(sorted((k, str(v)) for k, v in caveat.data.items())))
-        if key not in seen:
-            seen.add(key)
-            kept.append(caveat)
-    return tuple(kept)
 
 
 def _caveat_codes(answer: Any) -> tuple[str, ...]:
@@ -475,10 +473,15 @@ def _caveats_by_destination(answer: Any) -> tuple[dict[str, tuple[str, ...]], di
     (``firmware_for_system``) would need this keying revisited before a search
     finding could land on a folder row.
 
-    Deduplicated on the code within one destination, because the same statement
-    arrives more than once: RetroDECK's ES-DE catalogue lists
-    ``pcsx2_libretro.so`` under two PS2 entries, so every caveat about that core
-    is stated twice with byte-identical data (emu-atlas #361).
+    Collapsed on the code within one destination, because the index holds codes
+    where the answer holds statements. The resolver tells two findings about one
+    place apart by their data, and a row carries only the code, so two
+    statements reaching one destination under one code would list it twice.
+    Nothing here guards against one statement arriving twice, and nothing has
+    to: the resolver states an identical ``code`` and ``data`` once on an
+    answer's own caveat list (``atlas.firmware``, ``stated_once``), and a core's
+    list — which that rule leaves untouched — names no destination, so nothing
+    from it reaches this index at all.
     """
     at_path: dict[str, list[str]] = {}
     in_folder: dict[str, list[str]] = {}

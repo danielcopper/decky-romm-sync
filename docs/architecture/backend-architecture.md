@@ -1695,7 +1695,12 @@ again.
 - **Two questions, and their scopes are the cost model.** The whole-machine inventory is asked **unverified**:
   verification there hashes every unclaimed file under the BIOS root, plus each declared file the packaged identity
   table covers at a matching size. The verified question — what a declared folder holds, read the way the core reads it
-  — is asked one core at a time through `FirmwareFolderVerdictFn`, and only where a folder row is still open.
+  — is asked one core at a time through `FirmwareFolderVerdictFn`, and only where a folder row is still open. Both
+  resolve **one entry per core** and neither reads the frontend's emulator catalogue: the inventory walks the installed
+  `.so` files, one entry each, reading every core's `.info` for what it declares, and the per-core question takes the
+  single core whose stem matches. A third question would not — `firmware_for_system` resolves a core once per catalogue
+  entry, and an ES-DE catalogue can list one core under two of a system's entries — so an answer from it carries a core
+  twice, and the per-destination indexing below would have to be re-read in that light before it could be believed.
 - **Failure is "unknown", never "nothing needed".** The resolver raises on its own invariant violations and promises
   nothing about not raising, so the adapter wraps every call and answers an unresolved catalogue. Downstream that
   classifies every file `unknown` — a BIOS warning is never cleared on ignorance (#1693).
@@ -1768,9 +1773,9 @@ anything is there, and the safe direction, since the row then shows work outstan
 established. What the reading found travels per row beside it — `supplied_by` (the distribution whose own copy sits at
 the destination, named as the resolver's own display form for that distribution, never one mapped here) and `caveats`
 (the resolver's stable codes for whatever else it found at or in that destination, attributed as the paragraph on folder
-words below sets out, and deduplicated on the code within one destination because RetroDECK's catalogue lists one core
-under two system entries and states each of its caveats twice) — so both surfaces can say what a row IS instead of
-describing every one of them as a gap in the library. All of it goes silent with the location, for the same reason.
+words below sets out, and collapsed on the code within one destination, because the row carries codes where the answer
+carries statements and requirements resolving to one place share them) — so both surfaces can say what a row IS instead
+of describing every one of them as a gap in the library. All of it goes silent with the location, for the same reason.
 `declared_kind` does not: it is what the emulator OPENS the destination at, a property of the declaration rather than of
 the destination, so it survives an empty one — a folder that is not there is still a folder to create, and both the
 System page's download filter and `_download_firmware_batch` key off it so such a row is never offered as a fetch.
