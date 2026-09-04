@@ -608,6 +608,62 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("what is below may be out of date");
     });
 
+    it("keeps a no-entry pane's answer after a failed re-read", async () => {
+      // "Nothing is known about this platform" is an answer, and a failed
+      // REFRESH does not take it away: the answer set still stands, this
+      // platform's part of it is still "nothing", and the notice above says the
+      // whole of it may be stale. Only a first read that never landed leaves the
+      // pane with nothing to say — which is the test above this one.
+      vi.mocked(backend.getPlatforms).mockResolvedValue({
+        success: true,
+        platforms: [
+          platform({ id: 1, name: "Game Boy Advance", slug: "gba", sync_enabled: true }),
+          platform({ id: 2, name: "Nintendo 64", slug: "n64", sync_enabled: true }),
+        ],
+      });
+      vi.mocked(backend.downloadRequiredFirmware).mockResolvedValue({
+        success: true,
+        message: "Downloaded 1 required firmware files",
+        downloaded: 1,
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      vi.mocked(backend.getFirmwareStatus).mockRejectedValue(new Error("net"));
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Download required (1)")!);
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+      });
+      await focusRow(container, "Nintendo 64");
+
+      expect(container.textContent).toContain("Nothing is known about this platform");
+      expect(container.textContent).toContain("may be out of date");
+      expect(container.textContent).not.toContain("Could not read the BIOS state.");
+    });
+
+    it("retries the saves count when the platform is picked again", async () => {
+      // The only failure on this pane a reader can clear without reopening the
+      // page, and the line under the button is what tells them so.
+      vi.mocked(backend.getPlatforms).mockResolvedValue({
+        success: true,
+        platforms: [
+          platform({ id: 1, name: "Game Boy Advance", slug: "gba", sync_enabled: true }),
+          platform({ id: 2, name: "Dreamcast", slug: "dc", sync_enabled: true }),
+        ],
+      });
+      vi.mocked(backend.countPlatformSaves).mockRejectedValueOnce(new Error("db")).mockResolvedValue({ count: 4 });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("Pick the platform again to retry");
+
+      await focusRow(container, "Game Boy Advance");
+      await focusRow(container, "Dreamcast");
+
+      expect(buttonByText(container, "Delete 4 save files")).toBeTruthy();
+      expect(container.textContent).not.toContain("Pick the platform again to retry");
+    });
+
     it("keeps the removal group and disables what there is nothing to delete", async () => {
       // Never hidden: a platform whose shortcuts are gone but whose saves remain
       // must still offer the button that reaches them, and this is the only page

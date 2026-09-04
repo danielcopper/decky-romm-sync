@@ -348,7 +348,9 @@ shortcuts would empty the header, withdraw the core picker behind "sync this pla
 three claims about a platform nothing was learned about; the counts go to `null` instead, which is not zero, and a line
 under the header says the number is missing while the removal stays live (it needs only the slug). A failed
 `get_firmware_status` is worded apart from a platform the overview genuinely has no entry for, which is a finished
-answer.
+answer — and a failed **re-read** is that finished answer again, not a third state: an answer set is still held, so a
+pane with no entry of its own goes on saying "nothing is known about this platform's BIOS files" and the notice above it
+warns that the whole answer may be stale. Only a first read that never landed leaves a pane with nothing to say.
 
 The other two are **per-platform-slug reads issued once per selection** and cached for the life of the page.
 `get_system_core_info` exists because neither list read can answer for the focused platform: `get_platform_core_info` is
@@ -356,15 +358,22 @@ keyed by ROM and layers that ROM's own pin on top, and the firmware overview car
 has nothing to say about. It costs one ES-DE options read and a `settings.json` lookup, and opens no database
 transaction. `count_platform_saves` answers how many save files the platform holds, for the Delete _N_ save files
 button: nothing else knows the number, because the delete finds its files through the platform's installed ROMs and
-counts only what it removed, afterwards. It walks that same path without deleting, and **that path is N+1 short
-`BEGIN IMMEDIATE` transactions**, not one: the id read opens its own, and `find_save_files` →
-`RomInfo.get_rom_save_info` opens one per ROM. With `sort_by_core` recorded it is 2N+1 plus an ES-DE probe per ROM,
-because `resolve_retroarch_corename` → `ActiveCoreResolver.active_core_for_rom` opens a second and resolves through
-`get_default_emulator`. That cost is deliberate and is not the read's to fix: it must walk exactly what the delete
-walks, or the number offered stops being the number taken. What keeps it out of the way is that it is offloaded off the
-event loop and asked once per selection, and that a failure — `SQLITE_BUSY` among them — degrades to a line saying the
-count could not be read rather than to a wrong number. It is asked again after a delete, so the button stops offering
-saves that are gone.
+counts only what it removed, afterwards. It walks that same path without deleting, and **that path is 3N+1 short
+`BEGIN IMMEDIATE` transactions** in the ordinary case, not one. The platform's id read opens one
+(`SaveService._installed_rom_ids_on_platform`), and `find_save_files` → `RomInfo.get_rom_save_info` opens three more per
+ROM: `rom_installs.get`, then `current_save_sorting()` — which is unconditional — asking `pending_sort_settings()` and,
+because nothing is normally pending, `_read_current_sort_settings()` behind the same `or`. Nothing memoises the sorting
+answer, so both are re-read for every ROM. A pending save-sort migration makes it **2N+1**: the `or` short-circuits.
+`sort_by_core` recorded makes it **4N+1** and adds an ES-DE read per ROM, because `resolve_retroarch_corename` →
+`ActiveCoreResolver.active_core_for_rom` opens a fourth transaction for the ROM and its install and then resolves
+through `get_emulator_options(system)` — the heavy read, which globs each option's emulator install through the find
+rules, not the cheaper `get_default_emulator`. On a 128-ROM platform that is 385 lock acquisitions ordinarily and 513
+with sort-by-core. That cost is deliberate and is not the read's to fix: it must walk exactly what the delete walks, or
+the number offered stops being the number taken. What keeps it out of the way is that it is offloaded off the event loop
+and asked once per selection, and that a failure — `SQLITE_BUSY` among them — degrades to a line saying the count could
+not be read rather than to a wrong number — and that failure forgets the slug, so re-selecting the platform asks again,
+which is what the line says and is the only failure on this pane that does not need the page reopened. It is asked again
+after a delete, so the button stops offering saves that are gone.
 
 **Collections** has no per-entry detail, so it is one wide list: the favorites toggle and the Mine / All owner scope on
 top, the kind filter (Standard, Smart, Virtual — with the Franchise / IGDB Collection split inside Virtual), the fuzzy

@@ -2103,16 +2103,20 @@ describe("index.tsx — where entry focus lands on a page swap", () => {
     const plugin = pluginFactory();
     const { container } = render(plugin.content);
 
-    // Fired on the DEEPEST element of the mounted page and allowed to bubble, so
-    // the binding has to sit on an ANCESTOR of the page body to answer it. Steam
-    // dispatches a gamepad button along the focus path — its own tabbed page
-    // relies on exactly that, binding onCancelButton on the container that wraps
-    // the tab's content rather than on the content itself — so a binding on a
-    // sibling of the body would never see the press with focus inside the page.
-    // Firing on the wrapper itself would pass on that broken shape.
+    // Fired on the page's own content and allowed to bubble, so the binding has
+    // to sit on an ANCESTOR of that content to answer it. Steam dispatches a
+    // gamepad button along the focus path — its own tabbed page relies on
+    // exactly that, binding onCancelButton on the container that wraps the tab's
+    // content rather than on the content itself — so a binding on a sibling of
+    // the page would never see the press with focus inside it. The target is the
+    // page's own element rather than whatever element happens to come last in
+    // the container: a binding rendered on an empty node after the page would
+    // BE that last node, and the press would land on the binding itself.
     const pressB = () => {
-      const leaf = [...container.querySelectorAll<HTMLElement>("*")].filter((el) => el.children.length === 0).pop();
-      fireEvent(leaf ?? container, new CustomEvent("decky-button-down", { detail: { button: 2 }, bubbles: true }));
+      fireEvent(
+        screen.getByText("downloads page"),
+        new CustomEvent("decky-button-down", { detail: { button: 2 }, bubbles: true }),
+      );
     };
 
     // On Main the router wraps nothing, so there is no Focusable to answer B.

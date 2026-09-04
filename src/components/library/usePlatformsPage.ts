@@ -121,6 +121,11 @@ export interface PlatformsPageState {
   /** The BIOS overview could not be read. Distinct from a platform the read
    *  simply has nothing to say about, which is a finished answer. */
   firmwareFailed: boolean;
+  /** An answer set from a successful read is held. With `firmwareFailed` it is
+   *  what separates a failed REFRESH from a failed first read: the panes still
+   *  carry their last good answers, including the "nothing known" one, which a
+   *  pane with no entry of its own must go on saying. */
+  firmwareHeld: boolean;
   /** The Steam shortcut counts could not be read — every row's `shortcutCount`
    *  is `null` and the detail says so where the number would have been. */
   shortcutCountsFailed: boolean;
@@ -258,6 +263,11 @@ export function usePlatformsPage(): PlatformsPageState {
       .then((result) => setSaveCounts((prev) => ({ ...prev, [slug]: result.count })))
       .catch((e) => {
         logWarn(`Failed to count the save files for ${slug}: ${e}`);
+        // Forget the slug, so walking away and coming back asks again. Every
+        // other failure on this pane is recovered by reopening the page; this
+        // one is recovered by re-selecting the platform, which is cheaper, and
+        // the line under the button says so.
+        saveCountRequested.current.delete(slug);
         setSaveCounts((prev) => ({ ...prev, [slug]: null }));
       });
   }, []);
@@ -576,6 +586,7 @@ export function usePlatformsPage(): PlatformsPageState {
     failed,
     serverOffline,
     firmwareFailed,
+    firmwareHeld: Object.keys(firmware).length > 0,
     shortcutCountsFailed,
     selectedSlug,
     select,

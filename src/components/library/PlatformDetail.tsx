@@ -671,14 +671,15 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
 /**
  * Taking a platform back out of Steam, and taking its save files off the disk.
  *
- * Both buttons are always rendered and disable when there is nothing to delete;
- * neither is ever hidden. Hiding the group on the shortcut count alone strands a
- * platform whose shortcuts were removed but whose saves remain — those saves are
- * then unreachable from this page, and this is the only page that offers them.
+ * Neither button is hidden when its own count is zero. Hiding the group on the
+ * shortcut count alone strands a platform whose shortcuts were removed but whose
+ * saves remain: those saves are then unreachable, and this is the only page that
+ * offers them.
  *
- * The saves count is its own read (`count_platform_saves`), because nothing else
- * knows it: the delete finds its files through the platform's installed ROMs and
- * counts only what it removed, afterwards.
+ * The saves count is its own read (`count_platform_saves`) rather than a number
+ * taken from somewhere cheaper, because nowhere else has it — the delete finds
+ * its files through the platform's installed ROMs and counts only what it
+ * removed, afterwards.
  */
 const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ row, state }) => {
   const syncRunning = useSyncRunning();
@@ -745,7 +746,9 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
       {/* The one read of the five whose failure had nothing to say. With the
           spinner above it that became worse rather than better — a spinner that
           never stops — so the two land together. */}
-      {saveCount === null && <Muted>Could not read how many save files this platform holds.</Muted>}
+      {saveCount === null && (
+        <Muted>Could not read how many save files this platform holds. Pick the platform again to retry.</Muted>
+      )}
       {/* The hint was a ButtonItem `description`, attached to the one button it
           was about; under a row it has nowhere to hang, so it names that button
           instead. Only the shortcut removal is sync-gated — `main.py`'s
@@ -813,7 +816,7 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
           about. */}
       {state.firmwareFailed && (
         <Muted>
-          {firmware
+          {state.firmwareHeld
             ? "Could not re-read the BIOS state, so what is below may be out of date. Reopen the page to try again."
             : "Could not read the BIOS state. Reopen the page to try again."}
         </Muted>
@@ -826,8 +829,12 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
           {/* A failed read and a platform the overview has nothing to say about
               arrive the same way — an absent entry — and they are different
               sentences: one is a question that could not be asked, the other a
-              finished answer, which is why only the second is said here. */}
-          {!state.firmwareFailed && <Muted>Nothing is known about this platform&apos;s BIOS files.</Muted>}
+              finished answer. A failed RE-read is the second again: the answer
+              set still stands, this platform's part of it is still "nothing",
+              and the notice above says the whole of it may be stale. */}
+          {(!state.firmwareFailed || state.firmwareHeld) && (
+            <Muted>Nothing is known about this platform&apos;s BIOS files.</Muted>
+          )}
         </>
       )}
       <RemoveSection row={row} state={state} />
