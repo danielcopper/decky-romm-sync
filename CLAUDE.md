@@ -547,8 +547,12 @@ Format: **invariant** — tier — enforced by.
   The trap is that a bare `Focusable` is a container rather than a focus stop: the base panel sets `focusable` only from
   a caller prop or an `onActivate`/`onOKButton`, and `GetFocusable()` answers `"none"` for a node with neither and no
   focusable children. The rule spans every page the wide frame will host, and the frame cannot carry it: it holds a
-  page's content as opaque nodes, never as rows it could check. Detail: `docs/architecture/qam-panel.md`, "Building
-  blocks"
+  page's content as opaque nodes, never as rows it could check. **Its one half the frame DOES carry is the content above
+  a region's first focusable row** — a heading, a counts line, a column header, which is unreachable for the same reason
+  and has nothing below it to ride along with, so `ScrollRegion` scrolls itself to the top when focus reaches the first
+  stop in it (`revealTop`). That half is pinned by `src/components/qam/ScrollRegion.test.tsx` over mocked geometry, so
+  what is tested is the DECISION and not the scroll: whether the panel and the reader agree about which element is
+  topmost stays device-only, like the rest of this entry. Detail: `docs/architecture/qam-panel.md`, "Building blocks"
 
 When a change applies a guard / sanitize / backup / grouping pattern, sweep for sibling sites of the same pattern — the
 register is what that sweep checks against.

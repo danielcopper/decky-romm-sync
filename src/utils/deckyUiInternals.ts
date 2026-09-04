@@ -15,7 +15,7 @@
  * here, typed honestly.
  */
 
-import type { CSSProperties, FC, ReactNode } from "react";
+import type { CSSProperties, FC, FocusEventHandler, ReactNode } from "react";
 import {
   findModule,
   appActionButtonClasses as _appActionButtonClasses,
@@ -69,6 +69,11 @@ export interface ScrollPanelProps {
   children?: ReactNode;
   className?: string;
   style?: CSSProperties;
+  /** Reaches the rendered element: the panel spreads what it does not
+   *  destructure into the base panel `Focusable` renders, which is where the
+   *  attribute lands. React delivers it through `focusin`, so it fires for a
+   *  focus landing on any descendant. */
+  onFocus?: FocusEventHandler<HTMLDivElement>;
 }
 
 /**

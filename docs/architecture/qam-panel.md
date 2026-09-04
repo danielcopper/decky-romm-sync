@@ -118,6 +118,20 @@ what makes it a stop: `FocusableProps` exposes no `focusable` prop, an activate 
 a row, a hint under a group, scrolls with its neighbours and need not be reachable itself. This is what focus-driven
 scrolling costs: content nobody can focus cannot be scrolled to.
 
+**The one place a page cannot buy its way out of that is the content ABOVE its first focusable row**, and the frame
+handles it rather than each page: a heading, a counts line, a column header sitting over the topmost row is not
+focusable and has nothing below it to ride along with, so once the reader has scrolled past it Steam has no reason to
+bring it back — it scrolls only far enough to show the focused element. `ScrollRegion` therefore scrolls itself to the
+top when focus reaches the first stop in it. Two properties make that safe rather than a fight with Steam's own
+scrolling. The trigger is **"nothing focusable is above me"**, not "I am the first match" — a container `Focusable`
+renders `tabindex="0"` of its own and precedes the row inside it in document order, so an equality test would silently
+never fire on a page that wraps its rows, which `ListDetail` does for every row. And it acts only where the focused
+element still fits in the region at offset zero: where the content above it is taller than the region there is no offset
+showing both, Steam would scroll the element straight back, so nothing is done at all.
+
+The set of shapes it counts as a focus stop is measured in the running QAM, not assumed: Steam's own components render
+`div[tabindex="0"]` and a `DialogButton` is a native `button` carrying no tabindex attribute at all.
+
 `ScrollPanelGroup` — the sibling that binds gamepad direction to scrolling, and would carry unfocusable content — was
 tried on the device and rejected. It is focusable and its OK button focuses its first visible child, so each region
 became a focus stop of its own: the whole list outlined as one block, A to step into it, and only then rows taking

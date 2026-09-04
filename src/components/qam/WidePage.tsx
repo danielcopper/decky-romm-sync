@@ -23,6 +23,7 @@ import { useLayoutEffect, useRef, useState, type FC, type ReactNode } from "reac
 import { DialogButton, Focusable } from "@decky/ui";
 import { ControllerGlyph, GLYPH_BUTTON_B, Tabs } from "../../utils/deckyUiInternals";
 import { WIDE_ROOT_CLASS, useWideQamPanel } from "../../utils/qamExpansion";
+import { offsetWithinScroller } from "../../utils/scrollHelpers";
 import { ScrollRegion } from "./ScrollRegion";
 
 export interface WidePageTab {
@@ -93,27 +94,6 @@ function scrollingAncestor(body: HTMLElement, view: Window): HTMLElement | null 
     if (overflowY === "auto" || overflowY === "scroll") return el;
   }
   return null;
-}
-
-/**
- * How far `body` sits below the start of `scroller`'s content, in layout terms.
- *
- * The two rects are viewport-relative and the scroller's own `scrollTop` moves
- * only one of them: scrolling it slides `body` up by exactly that much and
- * leaves the scroller's own box where it is, so adding `scrollTop` back cancels
- * it exactly. Scrolling anything ABOVE the scroller moves both boxes together
- * and cancels in the subtraction. `clientTop` is the scroller's top border,
- * which its rect includes and `clientHeight` does not.
- *
- * `body.offsetTop` would be shorter and is not taken: `offsetTop` is measured
- * against `offsetParent`, which is the scroller only while Steam's panel stays
- * positioned — it computes `position: relative` today, and that is Steam's CSS
- * to change, not ours. Nothing above reads off any element's position.
- */
-function offsetWithinScroller(body: HTMLElement, scroller: HTMLElement): number {
-  const bodyTop = body.getBoundingClientRect().top;
-  const scrollerTop = scroller.getBoundingClientRect().top;
-  return bodyTop - scrollerTop - scroller.clientTop + scroller.scrollTop;
 }
 
 /**
