@@ -62,16 +62,11 @@ const MIN_BODY_HEIGHT = 240;
 // Breathing room under the body, kept off the measurement so the page never
 // ends flush against the panel's bottom edge.
 //
-// **Not a knob for absorbing leftover scroll.** With a correctly measured body
-// the panel still reports ~38 px of overflow on the reference machine, and the
-// arithmetic localises it: the body is `clientHeight - offset - GAP`, so a
-// panel whose content runs to `clientHeight - GAP + T` puts T at about 50 px —
-// a box below the plugin's root, inside Steam's own, since the panel's padding
-// measures 0 top and bottom and no child of ours accounts for it. Growing this
-// to swallow T would pin every wide page's height to a box we do not render,
-// cannot watch change, and would not notice moving; the wheel is contained at
-// the region instead (`ScrollRegion`). Learning what T is takes one read of
-// `panel.scrollHeight - (root.offsetTop + root.offsetHeight)`.
+// **Not a knob for absorbing leftover scroll.** The ~50 px the panel used to
+// scroll by is a box Decky renders around every plugin's content, and it is
+// given back by measuring it — `ancestorOverhang` — rather than by growing this
+// number. A constant would pin every wide page to today's value of someone
+// else's markup.
 const BODY_BOTTOM_GAP = 12;
 
 /**
@@ -108,6 +103,34 @@ function scrollingAncestor(body: HTMLElement, view: Window): HTMLElement | null 
 }
 
 /**
+ * How far `body`'s own ancestors hang below their parents, up to `scroller`.
+ *
+ * Decky wraps a plugin's content in a box that overhangs: measured in the
+ * running QAM, it sits 34 px below the panel top (Decky's own plugin title) and
+ * takes `height: 100%` of a parent it is already inset within, so its bottom
+ * lands 50 px past that parent's. Nothing of ours is in those 50 px — but the
+ * panel scrolls by them, and a 38 px scroll (50 less this frame's gap) moves
+ * everything up by 38, which is exactly enough to take the Back row off the
+ * top. So the space the body may occupy is smaller than the panel's by whatever
+ * its ancestors overhang.
+ *
+ * **Measured, never a constant.** The overhang comes from someone else's
+ * markup, and a constant would pin every wide page to today's value of it. It
+ * also cannot oscillate: measured across body heights of 500, 600, 648 and 700
+ * on the reference machine it stayed 50 every time, because it is the wrapper's
+ * own inset and padding rather than anything derived from what we put inside.
+ */
+function ancestorOverhang(body: HTMLElement, scroller: HTMLElement): number {
+  let total = 0;
+  for (let el: HTMLElement | null = body; el && el !== scroller; el = el.parentElement) {
+    const parent = el.parentElement;
+    if (!parent || parent === scroller) break;
+    total += Math.max(0, el.getBoundingClientRect().bottom - parent.getBoundingClientRect().bottom);
+  }
+  return total;
+}
+
+/**
  * The space left below `body` inside whatever scrolls it — the height a wide
  * page gets to work with, because Steam's tabbed page fills its parent rather
  * than growing and nothing in the QAM chain hands the plugin's panel a height.
@@ -139,7 +162,7 @@ function scrollingAncestor(body: HTMLElement, view: Window): HTMLElement | null 
 function remainingBodyHeight(body: HTMLElement, view: Window): number {
   const scroller = scrollingAncestor(body, view);
   const remaining = scroller
-    ? scroller.clientHeight - offsetWithinScroller(body, scroller)
+    ? scroller.clientHeight - offsetWithinScroller(body, scroller) - ancestorOverhang(body, scroller)
     : view.innerHeight - body.getBoundingClientRect().top;
   return Math.max(MIN_BODY_HEIGHT, remaining - BODY_BOTTOM_GAP);
 }

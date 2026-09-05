@@ -230,6 +230,40 @@ describe("WidePage", () => {
     expect(await measure(500)).toBe(488);
   });
 
+  it("gives back the space its own ancestors hang below the panel", async () => {
+    // Decky wraps a plugin's content in a box that overhangs its parent — on
+    // the reference machine by 50 px, from its own inset plus padding. Nothing
+    // of ours is in those pixels, but the panel scrolls by them, and that is
+    // exactly enough to take the frame's Back row off the top.
+    const WidePage = await loadWidePage(StubTabs);
+    // Only the document body scrolls, so the page's own body has real ancestors
+    // between it and the scroller — which is the shape the overhang lives in.
+    vi.spyOn(window, "getComputedStyle").mockImplementation(
+      (el: Element) => ({ overflowY: el.tagName === "BODY" ? "auto" : "visible" }) as CSSStyleDeclaration,
+    );
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const isPageBody = this.dataset.testid === "wide-page-body";
+      return (isPageBody ? { top: 100, bottom: 650 } : { top: 0, bottom: 600 }) as DOMRect;
+    });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, "clientTop", "get").mockReturnValue(0);
+    vi.spyOn(Element.prototype, "scrollTop", "get").mockReturnValue(0);
+
+    try {
+      render(
+        <WidePage title="Settings" onBack={vi.fn()}>
+          <div>page body</div>
+        </WidePage>,
+      );
+      // 600 − 100 − 50 − 12. Without the overhang term it is 488, and the panel
+      // keeps 50 px of scroll it has no content for.
+      expect(Number.parseFloat(body().style.height)).toBe(438);
+    } finally {
+      vi.restoreAllMocks();
+      cleanup();
+    }
+  });
+
   it("never measures the body below its floor", async () => {
     // Undone by the `vi.unstubAllGlobals()` in src/test-setup.ts's global
     // afterEach, so the viewport is back to its default for the next test.
