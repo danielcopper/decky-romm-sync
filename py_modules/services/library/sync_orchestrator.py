@@ -50,6 +50,7 @@ from domain.sync_diff import (
     collapse_sibling_groups,
     compute_collection_diff,
     compute_platform_collection_diff,
+    platform_breakdown,
 )
 from domain.sync_stage import SyncStage
 from domain.sync_state import SyncCancelled
@@ -402,6 +403,11 @@ class SyncOrchestrator:
                         {m.name for m in collection_memberships.values()},
                         last_synced_collections,
                     ),
+                    # Per-platform rows behind the library-wide counts above,
+                    # regrouped from the same three buckets and the same
+                    # registry — no further read, so the preview stays
+                    # side-effect-free.
+                    "platform_breakdown": platform_breakdown(new, changed, stale, registry, slug_to_name),
                     "platform_collection_diff": compute_platform_collection_diff(
                         emitted,
                         platform_rom_ids,

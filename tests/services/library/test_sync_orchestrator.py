@@ -223,6 +223,18 @@ class TestSyncPreview:
         assert summary["unchanged_count"] == 1  # rom 1 unchanged
         assert summary["remove_count"] == 0
         assert "preview_id" in result
+        # The same counts, per platform: the run's own display name, the
+        # buckets in the order the domain function takes them.
+        assert summary["platform_breakdown"] == [
+            {
+                "slug": "n64",
+                "name": "N64",
+                "synced": True,
+                "new_count": 1,
+                "changed_count": 1,
+                "remove_count": 0,
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_terminal_frame_is_emitted_before_the_snapshot_goes_idle(self, plugin, fake_romm_api):

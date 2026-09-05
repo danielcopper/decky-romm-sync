@@ -9,6 +9,7 @@ from domain.sync_diff import (
     collapse_sibling_groups,
     compute_collection_diff,
     compute_platform_collection_diff,
+    platform_breakdown,
     select_stale_removals,
     should_include_in_platform_collection,
 )
@@ -912,3 +913,210 @@ class TestCollapseSiblingGroupsPartialView:
         emitted = collapse_sibling_groups(members, registry, installed_rom_ids=set(), complete_group_view=False)
         assert [e["rom_id"] for e in emitted] == [1]
         assert all(BIND_ROM_ID_KEY not in e for e in emitted)
+
+
+class TestPlatformBreakdown:
+    """platform_breakdown — the preview's library-wide counts split per platform."""
+
+    def test_groups_counts_per_platform_sorted_by_display_name(self):
+        new = [_make_sd(1, platform_slug="snes"), _make_sd(2, platform_slug="n64"), _make_sd(3, platform_slug="snes")]
+        changed = [_make_sd(4, platform_slug="n64")]
+        registry = {"9": _reg(platform_slug="gba", platform_name="Game Boy Advance")}
+        rows = platform_breakdown(
+            new, changed, [9], registry, {"n64": "Nintendo 64", "snes": "Super Nintendo", "gba": "Game Boy Advance"}
+        )
+
+        assert [row["name"] for row in rows] == ["Game Boy Advance", "Nintendo 64", "Super Nintendo"]
+        assert rows[0] == {
+            "slug": "gba",
+            "name": "Game Boy Advance",
+            "synced": True,
+            "new_count": 0,
+            "changed_count": 0,
+            "remove_count": 1,
+        }
+        assert rows[1]["new_count"] == 1
+        assert rows[1]["changed_count"] == 1
+        assert rows[2]["new_count"] == 2
+
+    def test_synced_platform_name_comes_from_the_run_map(self):
+        # The registry's own name is stale here; the run's map is what the row states.
+        registry = {"1": _reg(platform_slug="n64", platform_name="N64")}
+        rows = platform_breakdown([_make_sd(5, platform_slug="n64")], [], [], registry, {"n64": "Nintendo 64"})
+        assert rows == [
+            {
+                "slug": "n64",
+                "name": "Nintendo 64",
+                "synced": True,
+                "new_count": 1,
+                "changed_count": 0,
+                "remove_count": 0,
+            }
+        ]
+
+    def test_switched_off_platform_is_unsynced_with_removals_and_the_registry_name(self):
+        # One of the two ways out of the run: the toggle went off, so the
+        # platform is not fetched, its rows read stale, and the only name left
+        # is the registry projection's — the slug, for a platform outside the
+        # run.
+        registry = {"7": _reg(platform_slug="gg", platform_name="gg")}
+        rows = platform_breakdown([], [], [7], registry, {"n64": "Nintendo 64"})
+        assert rows == [
+            {
+                "slug": "gg",
+                "name": "gg",
+                "synced": False,
+                "new_count": 0,
+                "changed_count": 0,
+                "remove_count": 1,
+            }
+        ]
+
+    def test_collection_reached_platform_is_unsynced_with_changes_and_the_entrys_name(self):
+        # The other way out of the run: an enabled COLLECTION reaches a ROM on a
+        # platform whose toggle is off, so the entry arrives as new/changed with
+        # RomM's own platform_name on it. That name beats the registry
+        # projection, which for this platform is the bare slug.
+        new = [_make_sd(1, platform_slug="gg", platform_name="Game Gear")]
+        changed = [_make_sd(2, platform_slug="gg", platform_name="Game Gear")]
+        registry = {"2": _reg(platform_slug="gg", platform_name="gg")}
+        rows = platform_breakdown(new, changed, [], registry, {"n64": "Nintendo 64"})
+        assert rows == [
+            {
+                "slug": "gg",
+                "name": "Game Gear",
+                "synced": False,
+                "new_count": 1,
+                "changed_count": 1,
+                "remove_count": 0,
+            }
+        ]
+
+    def test_run_map_name_beats_the_entrys_own(self):
+        # A synced platform takes the run's display name even where the entry
+        # carries RomM's — the map is the run's own vocabulary.
+        rows = platform_breakdown(
+            [_make_sd(1, platform_slug="n64", platform_name="Nintendo 64 (RomM)")],
+            [],
+            [],
+            {},
+            {"n64": "Nintendo 64"},
+        )
+        assert rows[0]["name"] == "Nintendo 64"
+
+    def test_an_entry_naming_its_own_slug_never_wins_the_name(self):
+        # A skipped collection unit rebuilds its members with the slug in
+        # platform_name (fetcher.py _reconstruct_collection_members). Honouring
+        # it would make the row's name depend on which unit the work queue
+        # reached first, so the real name wins whichever order they arrive in.
+        placeholder = _make_sd(1, platform_slug="gg", platform_name="gg")
+        real = _make_sd(2, platform_slug="gg", platform_name="Game Gear")
+        assert platform_breakdown([placeholder, real], [], [], {}, {})[0]["name"] == "Game Gear"
+        assert platform_breakdown([real, placeholder], [], [], {}, {})[0]["name"] == "Game Gear"
+        # Across the two buckets as well — the placeholder is not a name in either.
+        assert platform_breakdown([placeholder], [real], [], {}, {})[0]["name"] == "Game Gear"
+
+    def test_an_entry_without_a_platform_name_falls_through_to_the_registry(self):
+        # A built entry can carry an empty platform_name; it must not shadow the
+        # registry projection with a blank.
+        new = [_make_sd(1, platform_slug="gg", platform_name="")]
+        registry = {"5": _reg(platform_slug="gg", platform_name="Game Gear")}
+        rows = platform_breakdown(new, [], [], registry, {})
+        assert rows[0]["name"] == "Game Gear"
+
+    def test_platform_with_no_counts_is_absent(self):
+        # In the run and in the registry, but nothing to do — no row.
+        registry = {"1": _reg(platform_slug="n64", platform_name="Nintendo 64")}
+        rows = platform_breakdown([], [], [], registry, {"n64": "Nintendo 64", "snes": "Super Nintendo"})
+        assert rows == []
+
+    def test_sorting_is_case_insensitive(self):
+        rows = platform_breakdown(
+            [_make_sd(1, platform_slug="a"), _make_sd(2, platform_slug="b"), _make_sd(3, platform_slug="c")],
+            [],
+            [],
+            {},
+            {"a": "zeta", "b": "Alpha", "c": "Beta"},
+        )
+        assert [row["name"] for row in rows] == ["Alpha", "Beta", "zeta"]
+
+    def test_empty_inputs_yield_no_rows(self):
+        assert platform_breakdown([], [], [], {}, {}) == []
+
+
+#: Slug → display name for the conservation tripwire's run map. ``gg`` is
+#: deliberately absent from it — a platform outside the run, so the tripwire
+#: covers the unsynced case and the three counts one such row can carry.
+_TRIPWIRE_PLATFORMS = {"n64": "Nintendo 64", "snes": "Super Nintendo", "gba": "Game Boy Advance"}
+
+#: RomM's own display name per slug, as a built entry carries it — including the
+#: one slug the run map does not hold.
+_TRIPWIRE_ENTRY_NAMES = {**_TRIPWIRE_PLATFORMS, "gg": "Game Gear"}
+
+
+def _tripwire_mix():
+    """Build a mixed classification across four platforms.
+
+    Returns ``(new, changed, stale, registry)``: every third ROM is new, every
+    third changed, the rest stale, cycling over the four platform slugs so the
+    three buckets and the platforms interleave rather than lining up.
+    """
+    slugs = ["n64", "snes", "gba", "gg"]
+    new: list[dict[str, Any]] = []
+    changed: list[dict[str, Any]] = []
+    stale: list[int] = []
+    registry: dict[str, Any] = {}
+    for rom_id in range(1, 41):
+        slug = slugs[rom_id % len(slugs)]
+        registry[str(rom_id)] = _reg(platform_slug=slug, platform_name=_TRIPWIRE_PLATFORMS.get(slug, slug))
+        entry = _make_sd(rom_id, platform_slug=slug, platform_name=_TRIPWIRE_ENTRY_NAMES[slug])
+        if rom_id % 3 == 0:
+            new.append(entry)
+        elif rom_id % 3 == 1:
+            changed.append(entry)
+        else:
+            stale.append(rom_id)
+    return new, changed, stale, registry
+
+
+def _column_sums(rows: list[dict[str, Any]]) -> tuple[int, int, int]:
+    return (
+        sum(row["new_count"] for row in rows),
+        sum(row["changed_count"] for row in rows),
+        sum(row["remove_count"] for row in rows),
+    )
+
+
+class TestPlatformBreakdownConservesTheClassification:
+    """The breakdown re-buckets the classification — it must not lose or double an item."""
+
+    def test_columns_sum_to_the_classification_and_each_slug_appears_once(self):
+        new, changed, stale, registry = _tripwire_mix()
+        rows = platform_breakdown(new, changed, stale, registry, _TRIPWIRE_PLATFORMS)
+
+        assert _column_sums(rows) == (len(new), len(changed), len(stale))
+        slugs = [row["slug"] for row in rows]
+        assert sorted(slugs) == sorted(set(slugs))
+        assert set(slugs) == {"n64", "snes", "gba", "gg"}
+        # The one slug outside the run map: flagged unsynced, named from the
+        # entry, and carrying all three counts at once — the causes of leaving
+        # the run compose, so removals and changes sit on one row.
+        outside = next(row for row in rows if row["slug"] == "gg")
+        assert outside["synced"] is False
+        assert outside["name"] == "Game Gear"
+        assert outside["new_count"]
+        assert outside["changed_count"]
+        assert outside["remove_count"]
+
+    def test_an_extra_stale_id_moves_the_sums(self):
+        """Mutation probe: the check above can fail, so its passing means something."""
+        new, changed, stale, registry = _tripwire_mix()
+        before = _column_sums(platform_breakdown(new, changed, stale, registry, _TRIPWIRE_PLATFORMS))
+
+        extra_id = 99
+        registry[str(extra_id)] = _reg(platform_slug="n64", platform_name="Nintendo 64")
+        stale.append(extra_id)
+        after = _column_sums(platform_breakdown(new, changed, stale, registry, _TRIPWIRE_PLATFORMS))
+
+        assert after == (before[0], before[1], before[2] + 1)
+        assert after[2] == len(stale)

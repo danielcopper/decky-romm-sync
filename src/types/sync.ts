@@ -242,6 +242,36 @@ export interface SyncAddItem {
   platform_name: string;
 }
 
+/**
+ * One platform's share of a preview's counts. Present only for a platform with
+ * at least one non-zero count, ordered by `name` (case-insensitively).
+ *
+ * `synced` is whether the platform is in the run's platform list. A
+ * `synced: false` row is a platform outside it: its toggle went off, RomM
+ * stopped listing it, or the only route to it is an enabled collection, which
+ * is not filtered by platform enablement. The causes compose, so one row can
+ * carry removals for the ROMs the run no longer fetches and new or changed
+ * counts for the ROMs a collection still reaches.
+ *
+ * `name` is the run's display name where there is one, else a real name carried
+ * on one of the platform's fetched new/changed entries, else what the backend
+ * recorded for the platform. A reconstructed collection member carries the slug
+ * in that field and does not count as a name. It is the bare slug where no tier
+ * answers — outside the run, no fetched entry with a real name, and the
+ * registry knows only the slug or holds no row for it.
+ *
+ * Collections are NOT a row here — `collection_diff` on the same summary already
+ * carries the added and removed collection names.
+ */
+export interface PlatformBreakdownRow {
+  slug: string;
+  name: string;
+  synced: boolean;
+  new_count: number;
+  changed_count: number;
+  remove_count: number;
+}
+
 export interface SyncPreviewSummary {
   new_count: number;
   changed_count: number;
@@ -269,6 +299,13 @@ export interface SyncPreviewSummary {
   sync_platform_count?: number;
   /** Scope of the run — how many collections this sync spans. */
   sync_collection_count?: number;
+  /**
+   * The library-wide counts above, split per platform — one row per platform
+   * with a change, ordered by display name. Regrouped from the same
+   * classification, so each column sums to its total above. Absent on older
+   * backends (treat as no breakdown, and fall back to the totals).
+   */
+  platform_breakdown?: PlatformBreakdownRow[];
   collection_diff?: {
     has_changes: boolean;
     added: string[];
