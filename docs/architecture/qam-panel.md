@@ -494,7 +494,12 @@ it, for the focused platform:
   are checked in that order: an empty menu is the case where RetroDECK's own fallback fails too, so it is answered
   before the not-bakeable one, and the surviving count branch then speaks only for a menu that really does hold one
   bakeable option. The frontend half of #1016 lands in the same place: a switch the backend refuses is reported there,
-  and the header keeps naming the core that is actually active.
+  and the header keeps naming the core that is actually active. A switch takes the page's busy hold from the moment it
+  is picked until it is over; an accepted one re-bakes the launch command of every bound shortcut, which is why the hold
+  has to cover the whole of it. The chip and the pane's buttons disable, another platform's pane says `Working on X`,
+  and the acting pane says `Switching to <emulator>…` in the same status line the outcome lands in — a success takes
+  that line back, a refusal replaces it, and a continuation cancelled by leaving the page takes it back too, because
+  such a switch either committed or never ran and there is no pane left to report to either way.
 - **BIOS files** — the summary (required, or files, and the two unknown states), then a table: File, On disk, Contents,
   and a **Download** button on every row that is missing and in the RomM library (#164) — never on a folder declaration,
   whatever its state, because the emulator opens that name as a directory — and a **Delete** button on every row a

@@ -1157,6 +1157,167 @@ describe("Library › Platforms", () => {
 
       expect(within(container).getByTestId("status-core").textContent).toBe("Could not change the core");
     });
+
+    it("holds the page busy while the switch runs, and gives it back afterwards", async () => {
+      // The re-bake walks every bound shortcut, so a second pick would start a
+      // second continuation over the same set — the page's own busy state is
+      // what forbids it, and this action used to skip it.
+      vi.mocked(backend.getPlatforms).mockResolvedValue({
+        success: true,
+        platforms: [
+          platform({ id: 1, slug: "gba", name: "Game Boy Advance" }),
+          platform({ id: 2, slug: "n64", name: "Nintendo 64" }),
+        ],
+      });
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [firmwarePlatform(), firmwarePlatform({ platform_slug: "n64" })],
+      });
+      // Both panes need a synced platform's own buttons: the chip is disabled
+      // on a platform with nothing in Steam for a reason of its own.
+      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
+        platforms: [
+          { slug: "gba", name: "GBA", count: 9 },
+          { slug: "n64", name: "N64", count: 4 },
+        ],
+      });
+      let finish: (v: { success: boolean; rebake_items: never[] }) => void = () => {};
+      vi.mocked(backend.setSystemCore).mockReturnValue(
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      );
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await openCoreMenu(container);
+      await pickFromCoreMenu("VBA Next");
+
+      expect(coreButton(container)).toBeDisabled();
+      expect(buttonByText(container, "Download required (1)")?.disabled).toBe(true);
+      // The acting pane says what it is doing, in the register the removal and
+      // the save delete use — a disabled pane with nothing said is what the
+      // other two already avoid.
+      expect(within(container).getByTestId("status-core").textContent).toBe("Switching to VBA Next…");
+      await focusRow(container, "Nintendo 64");
+      expect(container.textContent).toContain("Working on Game Boy Advance");
+
+      await act(async () => {
+        finish({ success: true, rebake_items: [] });
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+      });
+
+      expect(container.textContent).not.toContain("Working on Game Boy Advance");
+      expect(coreButton(container)).not.toBeDisabled();
+      expect(buttonByText(container, "Download required (1)")?.disabled).toBe(false);
+      await focusRow(container, "Game Boy Advance");
+      expect(container.querySelector('[data-testid="status-core"]')).toBeNull();
+    });
+
+    it("takes back a failed switch's line when the next one succeeds", async () => {
+      // The clearing half of the scoped clear. Without it the pick's own
+      // "Switching to …" line stands under a switch that is over.
+      vi.mocked(backend.setSystemCore).mockResolvedValueOnce({ success: false, message: "RetroDECK is not installed" });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await openCoreMenu(container);
+      await pickFromCoreMenu("VBA Next");
+      expect(within(container).getByTestId("status-core").textContent).toBe("RetroDECK is not installed");
+
+      vi.mocked(backend.setSystemCore).mockResolvedValue({ success: true, rebake_items: [] });
+      await openCoreMenu(container);
+      await pickFromCoreMenu("VBA Next");
+      await flushAsync();
+
+      expect(container.querySelector('[data-testid="status-core"]')).toBeNull();
+    });
+
+    it("stays silent when leaving the page cancels the switch's continuation", async () => {
+      // Teardown, not a failure: the callable rejects because the page went
+      // away, and "Could not change the core" would claim the core did not
+      // change on a screen that can no longer show whether it did.
+      const logWarnSpy = vi.spyOn(backend, "logWarn").mockImplementation(() => {});
+      try {
+        let rejectSwitch!: (error: unknown) => void;
+        vi.mocked(backend.setSystemCore).mockImplementation(
+          () =>
+            new Promise((_resolve, reject) => {
+              rejectSwitch = reject;
+            }),
+        );
+        const r = render(<LibraryPage onBack={vi.fn()} />);
+        await flushAsync();
+        await openCoreMenu(r.container);
+        await pickFromCoreMenu("VBA Next");
+        r.unmount();
+
+        await act(async () => {
+          rejectSwitch(new Error("teardown cancelled the callable"));
+          for (let i = 0; i < 6; i++) await Promise.resolve();
+        });
+
+        expect(logWarnSpy).toHaveBeenCalledWith(expect.stringContaining("Core switch continuation was cancelled"));
+        // And the failure leg did not also run: it is what would have written
+        // the line, and its own log is the only trace left once the page is
+        // gone.
+        const logged = vi.mocked(backend.debugLog).mock.calls.map((c) => c[0]);
+        expect(logged.some((m) => m.includes("setSystemCore: error"))).toBe(false);
+      } finally {
+        logWarnSpy.mockRestore();
+      }
+    });
+
+    it("gives the page back when the switch is refused", async () => {
+      vi.mocked(backend.setSystemCore).mockResolvedValue({ success: false, message: "RetroDECK is not installed" });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await openCoreMenu(container);
+      await pickFromCoreMenu("VBA Next");
+
+      // The early return out of the refusal is inside the same `finally`, so
+      // the pane comes back rather than staying dead behind a line that says
+      // the switch is over.
+      expect(within(container).getByTestId("status-core").textContent).toBe("RetroDECK is not installed");
+      expect(coreButton(container)).not.toBeDisabled();
+    });
+
+    it("keeps the switch's line on the platform it was picked on", async () => {
+      // One status for the whole page, so the line has to carry its slug: an
+      // unbound one would report this switch on every pane the reader walks to,
+      // where `Working on X` is what belongs.
+      vi.mocked(backend.getPlatforms).mockResolvedValue({
+        success: true,
+        platforms: [
+          platform({ id: 1, slug: "gba", name: "Game Boy Advance" }),
+          platform({ id: 2, slug: "n64", name: "Nintendo 64" }),
+        ],
+      });
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [firmwarePlatform(), firmwarePlatform({ platform_slug: "n64" })],
+      });
+      let finish: (v: { success: boolean; rebake_items: never[] }) => void = () => {};
+      vi.mocked(backend.setSystemCore).mockReturnValue(
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      );
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await openCoreMenu(container);
+      await pickFromCoreMenu("VBA Next");
+      expect(within(container).getByTestId("status-core").textContent).toBe("Switching to VBA Next…");
+
+      await focusRow(container, "Nintendo 64");
+      expect(container.querySelector('[data-testid="status-core"]')).toBeNull();
+      expect(container.textContent).toContain("Working on Game Boy Advance");
+
+      await act(async () => {
+        finish({ success: true, rebake_items: [] });
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+      });
+      await focusRow(container, "Game Boy Advance");
+      expect(container.querySelector('[data-testid="status-core"]')).toBeNull();
+    });
   });
 
   // ------------------------------------------------------------------

@@ -183,9 +183,10 @@ export interface PlatformsPageState {
    */
   listStatus: string | null;
   /**
-   * The platform whose action is in flight, or `null`. Every action on every
-   * platform disables while one is running, and the slug is what lets a pane
-   * that is not the one acting say why its buttons are dead.
+   * The platform whose action is in flight, or `null`. Every action the detail
+   * offers disables on every platform while one is running; the list's own sync
+   * writes are outside the hold. The slug is what lets a pane that is not the
+   * one acting say why its buttons are dead.
    *
    * **What forbids running two at once is this page's own state, not a lock
    * anywhere else.** `status`, `removalProgress` and `busySlug` are each
@@ -517,6 +518,14 @@ export function usePlatformsPage(): PlatformsPageState {
     );
   }, []);
 
+  /** Take back the core line this pick wrote, and only that one. The page holds
+   *  a single status, and the clear runs after an await: naming the line means a
+   *  line that landed in the meantime is left where it is rather than taken by
+   *  a clear that was about something else. */
+  const clearCoreLine = useCallback((slug: string) => {
+    setStatus((prev) => (prev?.slug === slug && prev.scope === "core" ? null : prev));
+  }, []);
+
   const changeCore = useCallback(
     (slug: string, pickedLabel: string) => {
       const answer = cores[slug];
@@ -524,11 +533,15 @@ export function usePlatformsPage(): PlatformsPageState {
       // (empty label → follow the es_systems default); any other pins it.
       const defaultLabel = answer?.emulators.find((e) => e.is_default)?.label;
       const label = pickedLabel === defaultLabel ? "" : pickedLabel;
+      setBusySlug(slug);
+      setStatus({ slug, scope: "core", text: `Switching to ${pickedLabel}…` });
+      // Captured before the continuation starts, so the catch can tell a
+      // cancelled continuation from a failed switch.
+      const admission = capturePruneLeaseAdmission(LEASE_OWNER);
       detach(debugLog(`setSystemCore: slug=${slug} label=${label} (selected=${pickedLabel})`));
       detach(
         (async () => {
           try {
-            const admission = capturePruneLeaseAdmission(LEASE_OWNER);
             const result = await setSystemCore(slug, label);
             detach(debugLog(`setSystemCore: result success=${result.success}`));
             if (!result.success) {
@@ -551,7 +564,7 @@ export function usePlatformsPage(): PlatformsPageState {
               LEASE_OWNER,
               admission,
             );
-            setStatus(null);
+            clearCoreLine(slug);
             reloadCore(slug);
             // A different core wants different BIOS files, so the table below
             // the picker is stale until the overview is read again.
@@ -560,13 +573,24 @@ export function usePlatformsPage(): PlatformsPageState {
               new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: slug } }),
             );
           } catch (e) {
+            // Leaving the page cancels the continuation, which is teardown
+            // rather than a failure: the switch either committed or never ran
+            // (`isPruneLeaseCancellation`), and either way there is no pane
+            // left to report to. The line the pick put up goes with it.
+            if (isPruneLeaseCancellation(e, admission)) {
+              logWarn(`Core switch continuation was cancelled: ${e}`);
+              clearCoreLine(slug);
+              return;
+            }
             detach(debugLog(`setSystemCore: error: ${e}`));
             setStatus({ slug, scope: "core", text: "Could not change the core" });
+          } finally {
+            setBusySlug(null);
           }
         })(),
       );
     },
-    [cores, refreshFirmware, reloadCore],
+    [clearCoreLine, cores, refreshFirmware, reloadCore],
   );
 
   /** Hold the pressed button on a red `Failed` for a moment before everything
