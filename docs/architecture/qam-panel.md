@@ -399,19 +399,27 @@ it, for the focused platform:
     reads `command[1]` for the system, finds nothing, and exits 1 (`libexec/run_game.sh`). The clause reads
     `no emulator` in **red** and the line says the games will not launch, because they will not.
 
-  The chip is withheld for all three. Printing "Default" for any of them said the plugin had chosen; printing
-  `no emulator` for all three said the games would not start where they do. Both were wrong, in opposite directions, and
-  the middle state is why the split is three rather than two: it is unpinnable like the first and does not start like
-  the last.
+  The chip is disabled for all three, never withheld. Printing "Default" for any of them said the plugin had chosen;
+  printing `no emulator` for all three said the games would not start where they do. Both were wrong, in opposite
+  directions, and the middle state is why the split is three rather than two: it is unpinnable like the first and does
+  not start like the last.
 
-  The button appears only when there is something to pick: the platform has games in Steam, the core read landed,
-  RetroDECK was found, at least one option is bakeable, and there are at least two. Each of the other cases is a
-  sentence under the header instead — sync this first, the read is in flight, the read failed, RetroDECK was not found,
-  **ES-DE lists no emulator at all**, nothing on its menu is bakeable, or the platform offers one emulator. The first
-  two of those three are the split above and they are checked in that order: an empty menu is the case where RetroDECK's
-  own fallback fails too, so it is answered before the not-bakeable one, and the surviving count branch then speaks only
-  for a menu that really does hold one bakeable option. The frontend half of #1016 lands in the same place: a switch the
-  backend refuses is reported there, and the header keeps naming the core that is actually active.
+  **The button is always rendered**, and opens a menu only when there is something to pick: the platform has games in
+  Steam, the core read landed, RetroDECK was found, at least one option is bakeable, and there are at least two. In
+  every other case it is the same chip, disabled, with the reason in its `title` — the ruling the Remove group already
+  follows, and what keeps the header's shape constant across panes. A disabled button is still a focus stop and the wide
+  page's own sheet gives it Steam's focus outline, so a reader walking the header lands on it and is told why.
+
+  **Which of those cases also keeps a line under the header is a judgement about what it reports, not about the chip.**
+  "Nothing to switch" states — sync this platform first, the read in flight, one emulator on the menu — say it in the
+  tooltip alone: a sentence would spend a row of the pane reporting that nothing can be done, which is what the device
+  round asked to remove. States that report a PROBLEM keep their line, because a tooltip is a hover and the Deck's
+  controller cannot perform one: the read failed, RetroDECK was not found, **ES-DE lists no emulator at all**, nothing
+  on its menu is bakeable, and the fallback is not installed. The first two of those three are the split above and they
+  are checked in that order: an empty menu is the case where RetroDECK's own fallback fails too, so it is answered
+  before the not-bakeable one, and the surviving count branch then speaks only for a menu that really does hold one
+  bakeable option. The frontend half of #1016 lands in the same place: a switch the backend refuses is reported there,
+  and the header keeps naming the core that is actually active.
 - **BIOS files** — the summary (required, or files, and the two unknown states), then a table: File, On disk, Contents,
   and a **Download** button on every row that is missing and in the RomM library (#164) — never on a folder declaration,
   whatever its state, because the emulator opens that name as a directory — and a **Delete** button on every row a

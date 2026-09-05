@@ -123,8 +123,11 @@ async function focusRow(container: HTMLElement, name: string): Promise<void> {
 /** The core picker's button — an icon in the header line, so it has no text to
  *  find it by. `title` is what Steam's own icon buttons are identified by, and
  *  it is what a mouse user sees on hover. */
+/** The header's core chip. Always rendered since the device round — disabled
+ *  with the reason in its title where there is nothing to pick — so it is found
+ *  by position rather than by the one title it carries when it is live. */
 function coreButton(container: HTMLElement): HTMLButtonElement | null {
-  return container.querySelector<HTMLButtonElement>('button[title="Emulator Core"]');
+  return container.querySelector<HTMLButtonElement>('[data-testid="wide-page-body"] button[title]');
 }
 
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement | undefined {
@@ -639,7 +642,9 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("RetroDECK lists no emulator for this platform");
       expect(container.textContent).not.toContain("RetroDECK decides");
       expect(container.textContent).not.toContain("Default");
-      expect(coreButton(container)).toBeNull();
+      // Rendered and dead rather than absent, so the header keeps its shape
+      // and a reader who lands on it is told why it cannot be pressed.
+      expect(coreButton(container)).toBeDisabled();
     });
 
     it.each([
@@ -671,7 +676,9 @@ describe("Library › Platforms", () => {
       expect(container.textContent).toContain("RetroDECK would launch these with mGBA, which is not installed");
       expect(container.textContent).not.toContain("RetroDECK decides");
       expect(container.textContent).not.toContain("Default");
-      expect(coreButton(container)).toBeNull();
+      // Rendered and dead rather than absent, so the header keeps its shape
+      // and a reader who lands on it is told why it cannot be pressed.
+      expect(coreButton(container)).toBeDisabled();
     });
 
     it("says RetroDECK decides where its fallback can actually run", async () => {
@@ -695,7 +702,9 @@ describe("Library › Platforms", () => {
       expect(clause!.style.color).toBe(GREY);
       expect(container.textContent).toContain("None of this platform's emulators can be pinned from here");
       expect(container.textContent).not.toContain("not installed");
-      expect(coreButton(container)).toBeNull();
+      // Rendered and dead rather than absent, so the header keeps its shape
+      // and a reader who lands on it is told why it cannot be pressed.
+      expect(coreButton(container)).toBeDisabled();
     });
 
     it("leaves the save-compatibility warning to the picker that carries it", async () => {
@@ -712,8 +721,12 @@ describe("Library › Platforms", () => {
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
-      expect(container.textContent).toContain("Sync this platform first");
-      expect(coreButton(container)).toBeNull();
+      // The chip stays and goes grey with the reason in its tooltip: a sentence
+      // would spend a row of the pane saying there is nothing to press.
+      const chip = coreButton(container);
+      expect(chip).toBeDisabled();
+      expect(chip?.title).toContain("Sync this platform first");
+      expect(container.textContent).not.toContain("Sync this platform first");
     });
 
     it("offers nothing to switch when the platform has one emulator", async () => {
@@ -721,8 +734,10 @@ describe("Library › Platforms", () => {
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
 
-      expect(container.textContent).toContain("offers one emulator");
-      expect(coreButton(container)).toBeNull();
+      const chip = coreButton(container);
+      expect(chip).toBeDisabled();
+      expect(chip?.title).toContain("offers one emulator");
+      expect(container.textContent).not.toContain("offers one emulator");
     });
 
     it("says RetroDECK was not found rather than showing an empty picker", async () => {

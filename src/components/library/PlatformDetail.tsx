@@ -594,21 +594,37 @@ const BiosFileRow: FC<{ file: FirmwareRow; action: ReactNode }> = ({ file, actio
  * disagree, which is a sentence saying there is nothing to switch under a
  * button that switches.
  */
-type CoreOffer = { kind: "pick"; core: SystemCoreInfo } | { kind: "say"; text: string };
+/**
+ * What the header's core control can do, and what to say about it.
+ *
+ * `pick` opens the menu. `blocked` renders the SAME chip, disabled, with
+ * `reason` in its tooltip — a control that is always there and greyed when
+ * there is nothing to press, which is the ruling the Remove group already
+ * follows. A sentence costs a row to report that nothing can be done; the
+ * tooltip costs none and keeps the header's shape constant across panes.
+ *
+ * `notice` is for the branches that are not "nothing to switch" but a problem
+ * with the platform or the install — a failed read, no RetroDECK, no emulator
+ * at all. Those keep their line, because a greyed chip would hide a failure
+ * behind a hover the Deck's controller has no way to perform.
+ */
+type CoreOffer = { kind: "pick"; core: SystemCoreInfo } | { kind: "blocked"; reason: string; notice?: string };
 
 function coreOffer(row: PlatformRow, core: CoreAnswer): CoreOffer {
   // Strictly zero, so an unread shortcut count does not withdraw the picker:
   // "sync this first" would be a claim about a platform nothing was learned
   // about, and the core read is independent of the count anyway.
   if (row.shortcutCount === 0) {
-    return { kind: "say", text: "Sync this platform first — the core applies to the games it puts in Steam." };
+    return { kind: "blocked", reason: "Sync this platform first — the core applies to the games it puts in Steam." };
   }
-  if (core === undefined) return { kind: "say", text: "Reading the emulators for this platform…" };
+  if (core === undefined) return { kind: "blocked", reason: "Reading the emulators for this platform…" };
   if (core === null) {
-    return { kind: "say", text: "Could not read the emulators for this platform. Reopen the page to try again." };
+    const failed = "Could not read the emulators for this platform. Reopen the page to try again.";
+    return { kind: "blocked", reason: failed, notice: failed };
   }
   if (!core.emulator_data_available) {
-    return { kind: "say", text: "RetroDECK was not found, so there is no emulator list to choose from." };
+    const absent = "RetroDECK was not found, so there is no emulator list to choose from.";
+    return { kind: "blocked", reason: absent, notice: absent };
   }
   // An EMPTY menu first, because it is the one case where the fallback fails
   // too. `_resolve_system` hands back the raw RomM slug for a platform its map
@@ -619,7 +635,8 @@ function coreOffer(row: PlatformRow, core: CoreAnswer): CoreOffer {
   // system, finds nothing, logs "No valid emulator found for system" and exits
   // 1 (`libexec/run_game.sh`), so the games really do not start.
   if (core.emulators.length === 0) {
-    return { kind: "say", text: "RetroDECK lists no emulator for this platform, so its games will not launch." };
+    const none = "RetroDECK lists no emulator for this platform, so its games will not launch.";
+    return { kind: "blocked", reason: none, notice: none };
   }
   // Then the not-bakeable menu, ahead of the counts because it is not one:
   // `active_core_label` is null when nothing ES-DE lists is BAKEABLE, which says
@@ -644,20 +661,22 @@ function coreOffer(row: PlatformRow, core: CoreAnswer): CoreOffer {
     const fallback = core.emulators[0];
     if (fallback?.reason === "not_installed") {
       return {
-        kind: "say",
-        text: `RetroDECK would launch these with ${fallback.label}, which is not installed — and nothing here can pin a different one.`,
+        kind: "blocked",
+        reason: `RetroDECK would launch these with ${fallback.label}, which is not installed — and nothing here can pin a different one.`,
+        notice: `RetroDECK would launch these with ${fallback.label}, which is not installed — and nothing here can pin a different one.`,
       };
     }
     return {
-      kind: "say",
-      text: "None of this platform's emulators can be pinned from here, so RetroDECK picks one when a game launches.",
+      kind: "blocked",
+      reason: "None of this platform's emulators can be pinned from here, so RetroDECK picks one when a game launches.",
+      notice: "None of this platform's emulators can be pinned from here, so RetroDECK picks one when a game launches.",
     };
   }
   // One count branch, and it is exactly true: an empty menu was answered two
   // branches up and a not-bakeable one the branch after it, so a single option
   // here is a single BAKEABLE one — there really is nothing to switch to.
   if (core.emulators.length === 1) {
-    return { kind: "say", text: "This platform offers one emulator, so there is nothing to switch." };
+    return { kind: "blocked", reason: "This platform offers one emulator, so there is nothing to switch." };
   }
   return { kind: "pick", core };
 }
@@ -674,7 +693,7 @@ function coreOffer(row: PlatformRow, core: CoreAnswer): CoreOffer {
  */
 const CoreNotice: FC<{ row: PlatformRow; state: PlatformsPageState; offer: CoreOffer }> = ({ row, state, offer }) => (
   <>
-    {offer.kind === "say" && <Muted>{offer.text}</Muted>}
+    {offer.kind === "blocked" && offer.notice !== undefined && <Muted>{offer.notice}</Muted>}
     <GroupStatus state={state} slug={row.slug} scope="core" />
   </>
 );
@@ -1101,29 +1120,33 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
           {row.reachableCount === null ? "" : ` · ${row.reachableCount} in Steam`}
           {coreClause && <span style={{ color: coreClause.color }}>{` · ${coreClause.text}`}</span>}
         </span>
-        {offer.kind === "pick" && (
-          <DialogButton
-            style={CORE_BUTTON}
-            title="Emulator Core"
-            disabled={state.busySlug !== null}
-            onClick={(e: MouseEvent) =>
-              showContextMenu(
-                buildEmulatorMenu({
-                  emulators: offer.core.emulators,
-                  emulatorDataAvailable: offer.core.emulator_data_available,
-                  activeLabel: offer.core.active_core_label,
-                  // Null on purpose: this pane IS the platform level, so marking
-                  // an entry "(system)" would restate where the reader already is.
-                  platformCoreLabel: null,
-                  onPick: (label) => state.changeCore(row.slug, label),
-                }),
-                getEventTarget(e),
-              )
-            }
-          >
-            <FaMicrochip size={16} color={coreColor} />
-          </DialogButton>
-        )}
+        {/* Always rendered, disabled when there is nothing to pick, with the
+            reason in the tooltip — the same ruling the Remove group follows.
+            A disabled button is still a focus stop, and the wide page's own
+            sheet gives it Steam's focus outline, so a reader walking the header
+            still lands on it and is told why it is dead. */}
+        <DialogButton
+          style={CORE_BUTTON}
+          title={offer.kind === "pick" ? "Emulator Core" : offer.reason}
+          disabled={offer.kind !== "pick" || state.busySlug !== null}
+          onClick={(e: MouseEvent) => {
+            if (offer.kind !== "pick") return;
+            showContextMenu(
+              buildEmulatorMenu({
+                emulators: offer.core.emulators,
+                emulatorDataAvailable: offer.core.emulator_data_available,
+                activeLabel: offer.core.active_core_label,
+                // Null on purpose: this pane IS the platform level, so marking
+                // an entry "(system)" would restate where the reader already is.
+                platformCoreLabel: null,
+                onPick: (label) => state.changeCore(row.slug, label),
+              }),
+              getEventTarget(e),
+            );
+          }}
+        >
+          <FaMicrochip size={16} color={coreColor} />
+        </DialogButton>
       </Focusable>
       {/* The count is what failed, not the removal: taking the platform's games
           out of Steam needs only the slug. So the line says the number is
