@@ -155,14 +155,14 @@ tabbed body gets none from the frame: see "Building blocks → Tabs" for whose j
 
 ## Pages
 
-| Page            | Width | Holds                                                                                                         | Today                                                                                                       |
-| --------------- | ----- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Main            | 348   | notices, status, the Sync button, the download summary, the menu                                              | also holds the preview card, Skip preview, Force Full Sync and the session-budget card                      |
-| Sync            | 854   | preview as a table, the import choice, Skip preview, Force Full Sync, Steam memory, session budget, last runs | does not exist; its controls sit on Main, and the run list and the per-platform breakdown exist nowhere yet |
-| Library         | 854   | Platforms as list and detail (sync, core, BIOS files, removal); Collections as filter and list                | Platforms is built; Collections still carries the narrow page's controls and list                           |
-| Settings        | 854   | five sections, list and detail                                                                                | narrow; eight sections stacked                                                                              |
-| Data Management | 854   | five library-wide operations, list and detail                                                                 | narrow; opens the cleanup in a modal                                                                        |
-| Downloads       | 348   | the queue with its controls                                                                                   | unchanged                                                                                                   |
+| Page            | Width | Holds                                                                                                         | Today                                                                                                         |
+| --------------- | ----- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Main            | 348   | notices, status, the Sync button, the download summary, the menu                                              | also holds the preview card, Skip preview, Force Full Sync and the session-budget card                        |
+| Sync            | 854   | preview as a table, the import choice, Skip preview, Force Full Sync, Steam memory, session budget, last runs | does not exist; its controls sit on Main. Its backend half is built: the breakdown, the run read, the setting |
+| Library         | 854   | Platforms as list and detail (sync, core, BIOS files, removal); Collections as filter and list                | Platforms is built; Collections still carries the narrow page's controls and list                             |
+| Settings        | 854   | five sections, list and detail                                                                                | narrow; eight sections stacked                                                                                |
+| Data Management | 854   | five library-wide operations, list and detail                                                                 | narrow; opens the cleanup in a modal                                                                          |
+| Downloads       | 348   | the queue with its controls                                                                                   | unchanged                                                                                                     |
 
 `Page` is `"main" | "library" | "settings" | "data" | "downloads"`, and becomes
 `"main" | "sync" | "library" | "settings" | "data" | "downloads"` once the Sync page lands. **System is gone** — its
@@ -290,17 +290,28 @@ result stays on Main for a moment after a run, as today; the run itself is on th
 
 Wide. Left, the preview: a table with one row per platform that changes and one for collections, columns New, Updated,
 Removed, a total row, the estimated duration, the hints about progress being saved and long runs. Under it the import
-choice (#1364, later; the page leaves the space) and Apply / Cancel. Right: Skip preview as a persisted setting (today
-it is local state and off again on the next mount), Force Full Sync with its explanation, Steam memory now and the last
-run's delta, the session-budget card with **Restart Steam now** and Resume, and the last runs.
+choice (#1364, later; the page leaves the space) and Apply / Cancel. Right: Skip preview as a persisted setting (the
+setting exists; the control on Main is still local state and off again on the next mount), Force Full Sync with its
+explanation, Steam memory now and the last run's delta, the session-budget card with **Restart Steam now** and Resume,
+and the last runs.
 
-What the backend has and lacks for it: the preview answer carries library-wide totals (`SyncPreviewSummary`: new,
-changed, unchanged and removed counts, the platform and collection counts, and more), the names of new and changed
-games, and the added and removed collection names (`collection_diff`), not a per-platform breakdown — that breakdown is
-the Sync page's backend half. The run list reads the `sync_runs` history (`SyncRun`: started, finished, status, planned
-counts, completed platforms and collections), which exists and needs a read callable. Skip preview becomes a user-intent
-setting in `settings.json`, written by its owner (`adapters/persistence.py`). Everything else the page shows is what
-Main shows today, moved.
+What the backend holds for it: the preview answer carries library-wide totals (`SyncPreviewSummary`: new, changed,
+unchanged and removed counts, the platform and collection counts, and more), the names of new and changed games, and the
+added and removed collection names (`collection_diff`). The same counts split per platform ride the summary as
+`platform_breakdown` — one row per platform holding at least one non-zero count, ordered by display name, each carrying
+`synced` for whether the platform is in the run's platform list. A `synced: false` row is a platform outside it: its
+toggle went off, RomM stopped listing it, or the only route to it is an enabled collection, which is not filtered by
+platform enablement. The causes compose, so one row can carry removals for the ROMs the run no longer fetches and new or
+changed counts for the ROMs a collection still reaches. Its name is the run's where there is one, else a real name
+carried on one of the platform's fetched entries — a reconstructed collection member carries the slug there and does not
+count — else what the backend recorded, and the bare slug where no tier answers. There is no collections row there:
+`collection_diff` on the same summary already carries the added and removed collection names. `get_sync_runs` answers
+the ten newest `sync_runs` rows of any status, newest first, each verbatim from the `SyncRun` aggregate (id, started,
+finished, status, planned counts, completed platforms and collections, error) — a field a run never recorded stays null,
+and the status is what says why. Skip preview is a user-intent setting in `settings.json` written by its owner
+(`adapters/persistence.py`) and reported by `get_settings`. No backend sync path consults it and nothing reads it back
+yet: it is the value the page's toggle will choose between the preview and the run with. Everything else the page shows
+is what Main shows today, moved.
 
 ## Library
 
@@ -643,7 +654,7 @@ The pages land in this order under #1808, each with the open work that already s
    landed**; Collections keeps the narrow page's controls and list until its own PR.
 3. **Sync** ([#1814](https://github.com/danielcopper/romm-tender/issues/1814)) — the new page, Main's four-state button
    and the Last sync row, Skip preview persisted, the run-list read, the per-platform preview breakdown. Carries #886's
-   presentation half.
+   presentation half. **The backend half has landed**; the page and Main's button are still to come.
 4. **Settings** ([#1816](https://github.com/danielcopper/romm-tender/issues/1816)) — the sections, Steam Library, the
    homes for the `input_driver` fix and the save-sort migration with their notices on Main. Carries #1020's URL and
    double-press fixes.
