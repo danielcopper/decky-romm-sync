@@ -260,9 +260,9 @@ class TestRealRepository:
     def test_every_backend_package_with_python_is_governed(self) -> None:
         """The mirror of the entry-exists check: a new package under ``py_modules/`` must not escape the gate.
 
-        ``_vendor/`` is the one deliberate exemption — a checksum-pinned verbatim copy whose size is upstream's
-        decision, not ours (the reasoning is recorded beside ``SCOPE_DIRS``). Every other package holding Python
-        belongs in scope, so do not widen this exemption to silence a failure.
+        ``_vendor/`` is the one deliberate exemption — it holds checksum-pinned upstream copies whose size is
+        upstream's decision, not ours (the reasoning is recorded beside ``SCOPE_DIRS``). Every other package holding
+        Python belongs in scope, so do not widen this exemption to silence a failure.
         """
         governed = {d.split("/", 1)[1] for d in check.SCOPE_DIRS if d.startswith("py_modules/")}
         ungoverned = sorted(
