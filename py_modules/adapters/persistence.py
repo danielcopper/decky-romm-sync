@@ -61,6 +61,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # next normal sync via the reporter key + complete-set reconcile.
     "collection_naming_mode": "merge",
     "preferred_region": "auto",
+    # User intent for the sync button: apply without being asked first. Stored
+    # for a reader to choose between a preview and a run; no backend sync path
+    # consults it.
+    "skip_preview": False,
     "steam_input_mode": "default",
     "steamgriddb_api_key": "",
     "romm_allow_insecure_ssl": False,

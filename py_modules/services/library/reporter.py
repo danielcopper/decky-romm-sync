@@ -8,9 +8,10 @@ each acked ROM into the ``roms`` aggregate, stamping its cached
 FK-safe). The terminal
 ``finalize_per_unit_run`` step builds the cross-unit collection
 mappings, refreshes the ``platform_slug → display_name`` cache, and
-emits the ``sync_complete`` event. Also owns the registry-derived
-query methods (``get_registry_platforms``, ``get_sync_stats``,
-``get_rom_by_steam_app_id``) and the ``clear_sync_cache`` reset.
+emits the ``sync_complete`` event. Also owns the registry- and
+run-history-derived query methods (``get_registry_platforms``,
+``get_sync_stats``, ``get_sync_runs``, ``get_rom_by_steam_app_id``)
+and the ``clear_sync_cache`` reset.
 Anything that mutates the ``roms`` registry as a side-effect of a
 finished sync run belongs here; anything that decides "what should
 this sync do?" belongs in the orchestrator.
@@ -58,6 +59,11 @@ if TYPE_CHECKING:
 # ``roms``-derived queries (DangerZone label, game-detail platform name) so a
 # RomM-down panel shows "Nintendo 64" rather than the bare "n64" slug.
 _PLATFORM_NAMES_KEY = "platform_names"
+
+# How many of the newest sync runs ``get_sync_runs`` answers with — the run
+# list is a recent-history panel, not an archive, and its repository offers no
+# delete, so ``sync_runs`` only grows.
+SYNC_RUN_HISTORY_LIMIT = 10
 
 
 @dataclass(frozen=True)
@@ -998,6 +1004,36 @@ class SyncReporter:
         if completed is not None and (terminal.finished_at or "") <= (completed.finished_at or ""):
             return None
         return {"finished_at": terminal.finished_at or "", "status": terminal.status}
+
+    def get_sync_runs(self) -> dict[str, Any]:
+        """Return the newest recorded sync runs, newest first.
+
+        At most :data:`SYNC_RUN_HISTORY_LIMIT` runs of any status, each carrying
+        its plan, its outcome and its timestamps verbatim from the ``SyncRun``
+        aggregate. A field the run never recorded stays ``None`` — a run that
+        did not complete has no completed platform/collection lists, and its
+        status is what says so, so an empty list would claim it finished having
+        synced nothing.
+        """
+        return {"success": True, "runs": self._read_sync_runs_io()}
+
+    def _read_sync_runs_io(self) -> list[dict[str, Any]]:
+        with self._uow_factory() as uow:
+            runs = uow.sync_runs.iter_recent(SYNC_RUN_HISTORY_LIMIT)
+        return [
+            {
+                "id": run.id,
+                "started_at": run.started_at,
+                "finished_at": run.finished_at,
+                "status": run.status,
+                "platforms_planned": run.platforms_planned,
+                "roms_planned": run.roms_planned,
+                "platforms_completed": run.platforms_completed,
+                "collections_completed": run.collections_completed,
+                "error": run.error,
+            }
+            for run in runs
+        ]
 
     def get_rom_by_steam_app_id(self, app_id):
         return self._read_rom_by_app_id_io(int(app_id))

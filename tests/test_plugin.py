@@ -813,6 +813,9 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     # read (distinct regions in the local library) is a pure local DB read.
     "save_preferred_region",
     "get_known_regions",
+    # Sync-button intent — a settings.json-only write, never touches RetroDECK
+    # state; it records which action the sync button should take.
+    "save_skip_preview",
     # Persistent corrupt-settings-reset notice — the read (banner/card) and the
     # user's explicit QAM ack must both work regardless of a pending migration.
     "get_settings_reset_notice",
@@ -889,6 +892,9 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "fetch_cover_base64",
     "get_sync_status",
     "get_sync_stats",
+    # Read-only run-history listing — reads the sync_runs table and nothing
+    # else, so a pending migration has nothing to protect from it.
+    "get_sync_runs",
     "get_session_budget_status",
     # Read-only pending-preview query (plus the lazy drop of an expired
     # snapshot) — it starts no run and touches no RetroDECK path, and the panel

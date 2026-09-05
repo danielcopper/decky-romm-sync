@@ -2431,3 +2431,80 @@ class TestFinalizePerUnitRun:
         stats = await plugin.get_sync_stats()
         assert stats["roms"] == 1
         assert stats["total_shortcuts"] == 1
+
+
+class TestGetSyncRuns:
+    """get_sync_runs — the newest recorded runs, serialised verbatim."""
+
+    @staticmethod
+    def _save(uow, run):
+        with uow:
+            uow.sync_runs.save(run)
+
+    @staticmethod
+    def _start(run_id: str, started: str):
+        from domain.sync_run import SyncRun
+
+        return SyncRun.start(id=run_id, at=started, platforms_planned=2, roms_planned=7)
+
+    @pytest.mark.asyncio
+    async def test_no_runs_answers_an_empty_list(self, plugin):
+        assert await plugin.get_sync_runs() == {"success": True, "runs": []}
+
+    @pytest.mark.asyncio
+    async def test_completed_run_serialised_field_for_field(self, plugin):
+        run = self._start("run-1", "2026-01-01T09:00:00")
+        run.complete("2026-01-01T09:30:00", ["N64", "SNES"], ["Favourites"])
+        self._save(plugin._uow, run)
+
+        result = await plugin.get_sync_runs()
+        assert result["success"] is True
+        assert result["runs"] == [
+            {
+                "id": "run-1",
+                "started_at": "2026-01-01T09:00:00",
+                "finished_at": "2026-01-01T09:30:00",
+                "status": "completed",
+                "platforms_planned": 2,
+                "roms_planned": 7,
+                "platforms_completed": ["N64", "SNES"],
+                "collections_completed": ["Favourites"],
+                "error": None,
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_cancelled_run_keeps_null_lists_and_carries_its_reason(self, plugin):
+        """A run that did not complete recorded no lists — they stay null, not empty."""
+        run = self._start("run-c", "2026-01-02T09:00:00")
+        run.mark_cancelled("2026-01-02T09:05:00", "Sync cancelled")
+        self._save(plugin._uow, run)
+
+        record = (await plugin.get_sync_runs())["runs"][0]
+        assert record["status"] == "cancelled"
+        assert record["platforms_completed"] is None
+        assert record["collections_completed"] is None
+        assert record["error"] == "Sync cancelled"
+
+    @pytest.mark.asyncio
+    async def test_running_run_is_listed_with_null_terminal_fields(self, plugin):
+        self._save(plugin._uow, self._start("run-live", "2026-01-03T09:00:00"))
+
+        record = (await plugin.get_sync_runs())["runs"][0]
+        assert record["status"] == "running"
+        assert record["finished_at"] is None
+        assert record["error"] is None
+
+    @pytest.mark.asyncio
+    async def test_newest_first_and_capped_at_the_history_limit(self, plugin):
+        from services.library.reporter import SYNC_RUN_HISTORY_LIMIT
+
+        for minute in range(SYNC_RUN_HISTORY_LIMIT + 3):
+            self._save(plugin._uow, self._start(f"run-{minute:02d}", f"2026-01-01T09:{minute:02d}:00"))
+
+        runs = (await plugin.get_sync_runs())["runs"]
+        assert len(runs) == SYNC_RUN_HISTORY_LIMIT
+        newest = SYNC_RUN_HISTORY_LIMIT + 2
+        assert [run["id"] for run in runs] == [
+            f"run-{n:02d}" for n in range(newest, newest - SYNC_RUN_HISTORY_LIMIT, -1)
+        ]

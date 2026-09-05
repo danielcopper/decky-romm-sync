@@ -3,6 +3,7 @@ import { detach } from "../utils/detach";
 import type {
   PluginSettings,
   SyncStats,
+  SyncRunsAnswer,
   SyncStatusAnswer,
   DownloadItem,
   InstalledRom,
@@ -260,6 +261,8 @@ export const getSyncStatus = callable<[], SyncStatusAnswer>("get_sync_status");
 export const getSessionBudgetStatus = callable<[], SessionBudgetStatus>("get_session_budget_status");
 export const clearSyncCache = callable<[], BackendResult>("clear_sync_cache");
 export const getSyncStats = callable<[], SyncStats>("get_sync_stats");
+// The newest recorded sync runs, newest first — the Sync page's run list.
+export const getSyncRuns = callable<[], SyncRunsAnswer>("get_sync_runs");
 /**
  * Start a download. `replaceExisting` is the user's answer to a
  * `target_occupied` or `adoption_candidates` refusal: pass `true` only after the
@@ -899,6 +902,11 @@ export const saveLogLevel = callable<[string], { success: boolean }>("save_log_l
 // Preferred sibling-group region (ADR-0021 §3). "auto" = build-time default
 // order; any RomM region string heads the ranking on the next sync.
 export const savePreferredRegion = callable<[string], { success: boolean }>("save_preferred_region");
+// Sync-button intent, persisted so the choice can survive the panel closing:
+// with it on, the sync button starts the run instead of asking for a preview.
+// Read back from get_settings. Main's toggle still holds its own local state
+// and does not call this; no backend sync path consults the value either.
+export const saveSkipPreview = callable<[boolean], { success: boolean }>("save_skip_preview");
 // Distinct region values present in the locally synced library — the non-anchor
 // options for the Preferred-region dropdown. Pure local DB read, no server call.
 export const getKnownRegions = callable<[], string[]>("get_known_regions");

@@ -271,6 +271,9 @@ class Plugin:
     async def save_preferred_region(self, region):
         return self._settings_service.save_preferred_region(region)
 
+    async def save_skip_preview(self, enabled):
+        return self._settings_service.save_skip_preview(enabled)
+
     async def get_known_regions(self):
         return self._settings_service.get_known_regions()
 
@@ -585,6 +588,9 @@ class Plugin:
 
     async def get_sync_stats(self):
         return self._sync_service.get_sync_stats()
+
+    async def get_sync_runs(self):
+        return self._sync_service.get_sync_runs()
 
     @prune_active_blocked
     async def evaluate_launch(self, steam_app_id):

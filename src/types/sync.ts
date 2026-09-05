@@ -209,6 +209,39 @@ export interface SyncStats {
   has_completion_stamp?: boolean;
 }
 
+/**
+ * One recorded sync run, verbatim from the backend's `sync_runs` history.
+ *
+ * `status` is the run's lifecycle state: `"running"` for the one in flight,
+ * and the five terminals a run ends in exactly once. `cancelled` is the user's
+ * own Cancel, `interrupted` an external death, `paused` a session-budget stop
+ * at a chunk boundary, `errored` a failure.
+ *
+ * `finished_at` and the two completed lists are `null` on a run that has not
+ * reached that point. A stopped run's lists are `null` rather than empty: it
+ * never recorded them, and `status` is what says why — an empty list would read
+ * as a run that finished having synced nothing. `error` is `null` on a run that
+ * has not stopped AND on one that completed cleanly; only the four stopped
+ * terminals carry text there.
+ */
+export interface SyncRunRecord {
+  id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: "running" | "completed" | "cancelled" | "interrupted" | "paused" | "errored";
+  platforms_planned: number;
+  roms_planned: number;
+  platforms_completed: string[] | null;
+  collections_completed: string[] | null;
+  error: string | null;
+}
+
+/** Answer of `get_sync_runs`: the newest recorded runs, newest first. */
+export interface SyncRunsAnswer {
+  success: boolean;
+  runs: SyncRunRecord[];
+}
+
 export interface RegistryPlatform {
   name: string;
   slug: string;
@@ -242,6 +275,36 @@ export interface SyncAddItem {
   platform_name: string;
 }
 
+/**
+ * One platform's share of a preview's counts. Present only for a platform with
+ * at least one non-zero count, ordered by `name` (case-insensitively).
+ *
+ * `synced` is whether the platform is in the run's platform list. A
+ * `synced: false` row is a platform outside it: its toggle went off, RomM
+ * stopped listing it, or the only route to it is an enabled collection, which
+ * is not filtered by platform enablement. The causes compose, so one row can
+ * carry removals for the ROMs the run no longer fetches and new or changed
+ * counts for the ROMs a collection still reaches.
+ *
+ * `name` is the run's display name where there is one, else a real name carried
+ * on one of the platform's fetched new/changed entries, else what the backend
+ * recorded for the platform. A reconstructed collection member carries the slug
+ * in that field and does not count as a name. It is the bare slug where no tier
+ * answers — outside the run, no fetched entry with a real name, and the
+ * registry knows only the slug or holds no row for it.
+ *
+ * Collections are NOT a row here — `collection_diff` on the same summary already
+ * carries the added and removed collection names.
+ */
+export interface PlatformBreakdownRow {
+  slug: string;
+  name: string;
+  synced: boolean;
+  new_count: number;
+  changed_count: number;
+  remove_count: number;
+}
+
 export interface SyncPreviewSummary {
   new_count: number;
   changed_count: number;
@@ -269,6 +332,13 @@ export interface SyncPreviewSummary {
   sync_platform_count?: number;
   /** Scope of the run — how many collections this sync spans. */
   sync_collection_count?: number;
+  /**
+   * The library-wide counts above, split per platform — one row per platform
+   * with a change, ordered by display name. Regrouped from the same
+   * classification, so each column sums to its total above. Absent on older
+   * backends (treat as no breakdown, and fall back to the totals).
+   */
+  platform_breakdown?: PlatformBreakdownRow[];
   collection_diff?: {
     has_changes: boolean;
     added: string[];

@@ -105,6 +105,110 @@ def classify_roms(
     return ClassificationResult(new, changed, unchanged_ids, stale, disabled_count)
 
 
+def platform_breakdown(
+    new: list[dict[str, Any]],
+    changed: list[dict[str, Any]],
+    stale: list[int],
+    registry: dict[str, Any],
+    synced_platforms: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Regroup one classification's buckets into per-platform rows.
+
+    *new* and *changed* are the built entries :func:`classify_roms` returned
+    (each carrying ``platform_slug`` and a ``platform_name``); *stale* are its
+    stale rom ids, whose platform is read off their *registry* entry.
+    *registry* is the ``do_read_preview_baseline`` projection keyed by
+    ``str(rom_id)``, carrying ``platform_slug`` plus the ``platform_name``
+    resolved for it. *synced_platforms* is the run's ``slug → display name``
+    map — every platform unit in the work queue that carries a slug — so
+    membership in it is what ``synced`` reports.
+
+    Returns one row per platform holding at least one of the three counts —
+    ``{"slug", "name", "synced", "new_count", "changed_count", "remove_count"}``
+    — ordered by display name (case-insensitively, the slug breaking a tie).
+    The name is resolved in this order: *synced_platforms*, then a real name
+    carried on a *new* / *changed* entry for the slug, then the registry
+    projection's ``platform_name``, then the bare slug. An entry naming its own
+    slug does not count as a real name: an entry rebuilt from a skipped
+    collection unit carries exactly that, so honouring it would make the row's
+    name depend on the order the work queue happened to take.
+
+    ``synced`` is False for a platform outside the run's platform list. Its
+    toggle went off, RomM stopped listing it, or the only route to it is an
+    enabled collection — collection units are not filtered by platform
+    enablement. The causes compose, so one row can carry removals for the ROMs
+    the run no longer fetches and new or changed counts for the ROMs a
+    collection still reaches.
+
+    The counts mirror the summary's library-wide ``new_count`` /
+    ``changed_count`` / ``remove_count``, over the same three buckets, so a
+    column's sum is that total.
+    """
+    counts: dict[str, dict[str, int]] = {}
+    entry_names: dict[str, str] = {}
+    registry_names: dict[str, str] = {}
+
+    for reg in registry.values():
+        slug = reg.get("platform_slug") or ""
+        registry_names.setdefault(slug, reg.get("platform_name") or slug)
+
+    _count_entries(new, "new_count", counts, entry_names)
+    _count_entries(changed, "changed_count", counts, entry_names)
+    for rom_id in stale:
+        slug = registry.get(str(rom_id), {}).get("platform_slug") or ""
+        counts.setdefault(slug, _zero_counts())["remove_count"] += 1
+
+    names = {slug: _resolve_platform_name(slug, synced_platforms, entry_names, registry_names) for slug in counts}
+    return [
+        {
+            "slug": slug,
+            "name": names[slug],
+            "synced": slug in synced_platforms,
+            **counts[slug],
+        }
+        for slug in sorted(counts, key=lambda slug: (names[slug].casefold(), slug))
+    ]
+
+
+def _zero_counts() -> dict[str, int]:
+    """A fresh all-zero count row for one platform."""
+    return {"new_count": 0, "changed_count": 0, "remove_count": 0}
+
+
+def _count_entries(
+    entries: list[dict[str, Any]],
+    column: str,
+    counts: dict[str, dict[str, int]],
+    entry_names: dict[str, str],
+) -> None:
+    """Add each entry to its platform's *column*, recording a usable display name.
+
+    Mutates *counts* and *entry_names*, the accumulators
+    :func:`platform_breakdown` owns. An entry whose ``platform_name`` is its own
+    slug contributes no name: an entry rebuilt from a skipped collection unit
+    carries exactly that (``fetcher.py`` ``_reconstruct_collection_members``,
+    which skips unbound rows, so such an entry is bound and lands in
+    ``changed``), and accepting it would let work-queue order decide the row's
+    name — whichever unit arrives first wins the ``setdefault``.
+    """
+    for sd in entries:
+        slug = sd.get("platform_slug") or ""
+        counts.setdefault(slug, _zero_counts())[column] += 1
+        name = sd.get("platform_name")
+        if name and name != slug:
+            entry_names.setdefault(slug, name)
+
+
+def _resolve_platform_name(
+    slug: str,
+    synced_platforms: dict[str, str],
+    entry_names: dict[str, str],
+    registry_names: dict[str, str],
+) -> str:
+    """The display name for *slug*, by the tier order :func:`platform_breakdown` states."""
+    return synced_platforms.get(slug) or entry_names.get(slug) or registry_names.get(slug) or slug
+
+
 def collapse_sibling_groups(
     shortcuts_data: list[dict[str, Any]],
     registry: dict[str, dict[str, Any]],

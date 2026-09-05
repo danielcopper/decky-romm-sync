@@ -85,6 +85,10 @@ export interface PluginSettings {
   // ranking with that region on the next sync. Optional: the backend always
   // sends it, but older payloads / test fixtures may omit it.
   preferred_region?: string;
+  // Sync-button intent: start the run without asking for a preview first.
+  // Optional: the backend always sends it, but older payloads / test fixtures
+  // may omit it, treated as false.
+  skip_preview?: boolean;
 }
 
 export interface RomMetadata {
