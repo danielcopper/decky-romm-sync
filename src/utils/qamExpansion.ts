@@ -11,6 +11,14 @@
  * clears it: a wide page that leaks it leaves Steam's QAM expanded until the
  * Friends tab toggles it back. `useWideQamPanel` covers the three paths a
  * mounted page can observe; `collapseQamOnDismount` is the fourth.
+ *
+ * The injected sheet carries one rule that is not about width: a focus outline
+ * for a DISABLED button, which Steam's own stylesheet omits. It rides here
+ * because the sheet is already scoped to the wide root and a second injector
+ * for one selector would be a second thing to clear. A wide page keeps its
+ * buttons rendered-and-disabled rather than hidden, so a reader walking the
+ * page with the stick lands on them, and without the rule the focus ring
+ * simply vanishes for that row.
  */
 
 import { useEffect, type RefObject } from "react";
@@ -38,9 +46,23 @@ const TAB_PANEL_SELECTOR = quickAccessMenuClasses?.TabGroupPanel
 // line covers a child carrying a cap of its own, which was never separately
 // measured and costs one selector to keep. `:has()` scopes the lift to a panel
 // holding a wide page of ours.
+//
+// The second rule is about focus rather than width, and rides along because it
+// needs the same sheet in the same document. A DISABLED button is still a focus
+// stop — the device pass walked one with the stick — but Steam's own disabled
+// treatment (`opacity: .4` over `rgba(61,67,77,.35)`, `library.css`) leaves
+// almost nothing for a focus fill to change, so the reader loses their place on
+// a row of buttons where one is disabled. Steam answers this for its own
+// variants with `background: #000` on `.DialogButton[disabled].gpfocus`, but
+// those rules are scoped to hashed class names ours does not carry. The outline
+// is Steam's other focus form, taken verbatim from the one it uses where a fill
+// will not read (`outline: outset #fff 2px`, `chunk~2dcc5aaf7.css`), and it is
+// scoped to a wide page of ours.
 const WIDE_PANEL_CSS = `
 ${TAB_PANEL_SELECTOR}:has(.${WIDE_ROOT_CLASS}) { max-width: none; }
 ${TAB_PANEL_SELECTOR}:has(.${WIDE_ROOT_CLASS}) > * { max-width: none; }
+.${WIDE_ROOT_CLASS} button.DialogButton[disabled].gpfocus,
+.${WIDE_ROOT_CLASS} button.DialogButton.Disabled.gpfocus { outline: outset #fff 2px; }
 `;
 
 // The stylesheet a wide page has up, held by reference rather than looked up by
@@ -134,8 +156,13 @@ export function useWideQamPanel(rootRef: RefObject<HTMLElement | null>): void {
     // Switching QAM tabs changes the parent's class and unmounts nothing, so the
     // observer is the only thing that sees it.
     let observer: MutationObserver | null = null;
-    if (activeTabClass && panelParent) {
-      observer = new MutationObserver(syncPanelWidth);
+    const panelView = panelParent?.ownerDocument.defaultView;
+    if (activeTabClass && panelParent && panelView) {
+      // The view's own constructor, not this module's. Whether a cross-realm
+      // observer would deliver here is not established either way — unlike an
+      // `instanceof`, which is measurably false — and taking it from the node
+      // costs a property read, so the question does not need answering.
+      observer = new panelView.MutationObserver(syncPanelWidth);
       observer.observe(panelParent, { attributes: true, attributeFilter: ["class"] });
     }
 

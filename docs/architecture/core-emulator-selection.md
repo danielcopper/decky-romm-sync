@@ -442,8 +442,8 @@ next download/sync.
 
 ### Per-platform (`CoreService.set_system_core`)
 
-The System-page **Emulator Core** picker — a menu button (`ButtonItem`) that opens the same context menu as the
-game-detail picker, so standalone emulators and disabled un-bakeable entries render identically (#1210) — calls
+The platform detail's **Change core** button — a `ButtonItem` opening the same context menu as the game-detail picker,
+so standalone emulators and disabled un-bakeable entries render identically (#1210) — calls
 **`set_system_core(platform_slug, core_label)`**:
 
 1. It writes the choice into `settings["platform_cores"]` — storing the LABEL under the slug, or popping the slug when
@@ -461,16 +461,20 @@ per-platform core change applies **immediately** to every installed game on the 
 `PlatformCoreReaderAdapter` holds the live settings dict, the fan-out resolves the value just written rather than a
 stale snapshot.
 
-The System page reads its per-platform data from the multi-platform `get_firmware_status` payload (not
-`get_platform_core_info`, which is the game-detail path). Each entry's **`active_core_label`** is the resolved display
-label the Emulator Core button shows: the per-platform override (`platform_cores`) when it is set and still resolves to
-a bakeable emulator, else the es_systems **default emulator** label (the first bakeable command — libretro _or_
-standalone). This is the platform-level projection of the read-path precedence (`FirmwareStatusReader`'s
-`_resolve_platform_emulator_label`, injected the same `PlatformCoreReader` the resolver uses), so after a per-platform
-pick the button reflects the applied selection on the next `refreshSystem` — the same way the game-detail menu does —
-and a standalone default reads its standalone label rather than the libretro system default. It is intentionally
-distinct from the payload's `active_core` (`core_so`), which stays the **libretro** system default the BIOS filter keys
-on (standalone-default BIOS accuracy is deferred by ADR-0020).
+The Library page's platform detail reads its core through **`get_system_core_info(platform_slug)`**, a read of its own
+rather than a slice of another payload: `get_platform_core_info` is keyed by ROM and layers that ROM's own pin on top,
+and the `get_firmware_status` overview carries no entry for a platform it has nothing to say about, so neither can
+answer for a platform the user has merely focused. It costs one ES-DE options read and a `settings.json` lookup, opens
+no Unit of Work, and is issued once per selection.
+
+Its **`active_core_label`**, and the identically-named field `get_firmware_status` still carries per platform, are both
+`domain.emulator_commands.resolve_platform_label` — the platform-level projection of the read-path precedence: the
+per-platform override (`platform_cores`) when it is set and still resolves to a bakeable emulator, else the es_systems
+**default emulator** label (the first bakeable command — libretro _or_ standalone). One function, so the two readers
+cannot drift; a stale override degrades to the default rather than naming an emulator that would not launch, and a
+standalone default reads its standalone label rather than the libretro system default. It is intentionally distinct from
+the firmware payload's `active_core` (`core_so`), which stays the **libretro** system default the BIOS filter keys on
+(standalone-default BIOS accuracy is deferred by ADR-0020).
 
 ## Why the plugin always bakes the core, never the gamelist
 
@@ -507,7 +511,7 @@ imported (per
 and a per-platform core previously set as a system-level `<alternativeEmulator>` is **not** imported into
 `platform_cores` either — `platform_cores` starts empty. This is by design: a gamelist-import path would revive the
 multi-root-XML parse failures and folder-collapse ambiguity the plugin-owned model was chosen to avoid. Re-apply any
-per-platform core once through the System-page Emulator Core picker (the menu button) and it sticks from then on.
+per-platform core once through the platform detail's Change core button and it sticks from then on.
 
 ### A frozen default needs a Force Full Sync
 

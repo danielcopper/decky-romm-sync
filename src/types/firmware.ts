@@ -53,6 +53,13 @@ interface FirmwareFile extends FirmwareVerdict {
   size: number;
   md5: string;
   local_path: string;
+  /** Where the emulator said the file goes, relative to the firmware root —
+   *  `dc/dc_boot.bin` where a subdirectory was declared, the bare name
+   *  otherwise. `file_name` is its basename and `local_path` is it joined under
+   *  a root this side does not know, so this is the only field that can answer
+   *  which folder a file placed by hand belongs in. Optional because a payload
+   *  from before the field existed carries none. */
+  declared_path?: string;
   downloaded: boolean;
   description: string;
   wanted: FirmwareWanted;
@@ -62,6 +69,18 @@ interface FirmwareFile extends FirmwareVerdict {
   required_by_active: boolean;
   on_server: boolean;
   supplied_by?: string | null;
+  /** How many of the plugin's own downloads a delete on THIS row would remove:
+   *  1 for a declared file a download record names and still holds, and for a
+   *  declared FOLDER the number of recorded files written underneath it — the
+   *  emulator lists the folder, but whatever we downloaded into it is ours.
+   *  Having placed a file is the whole authority to remove it.
+   *
+   *  **Never substitute `downloaded` for this.** That is `os.path.exists` at the
+   *  row's recomputed destination, equally true of firmware the emulator shipped
+   *  with (`dolphin-emu/Sys/codehandler.bin`) and of a file the user placed by
+   *  hand — neither of which any RomM library can hand back. Absent means the
+   *  payload never spoke about it, which offers no delete rather than guessing. */
+  deletable_count?: number;
 }
 
 interface FirmwarePlatform {
@@ -89,11 +108,10 @@ export interface EmulatorOption {
  * Response shape of the `get_platform_core_info` callable — the dedicated
  * single-platform emulator-info path, decoupled from the per-game BIOS payload
  * (#923). The per-game detail page (`RomMPlaySection` / `RomMGameInfoPanel`)
- * reads emulator data from here. The System page's multi-platform overview
- * instead reads it off the `get_firmware_status` payload (`FirmwarePlatformExt`),
- * which enumerates every platform in one call — see that interface below.
- * `emulator_data_available` is false when `es_systems.xml` cannot be read
- * (RetroDECK not detected), so the picker can say so instead of an empty list.
+ * reads emulator data from here; the platform-keyed twin for a caller with no
+ * ROM to layer is {@link SystemCoreInfo}. `emulator_data_available` is false
+ * when `es_systems.xml` cannot be read (RetroDECK not detected), so the picker
+ * can say so instead of an empty list.
  */
 export interface CoreInfo {
   emulators: EmulatorOption[];
@@ -105,11 +123,40 @@ export interface CoreInfo {
 }
 
 /**
- * Per-platform entry in the `get_firmware_status` overview. Carries the
- * platform's active/available cores alongside its BIOS file state so the System
- * page can render the combined core+BIOS overview for every platform from one
- * call. This is the system-wide overview path — distinct from the per-game
- * `check_platform_bios` payload, which no longer carries any core fields (#923).
+ * Response shape of the `get_system_core_info` callable — the platform-keyed
+ * core read the Library page's Platforms detail issues once per selected
+ * platform (#1815). Carries what the core picker needs and nothing else: no
+ * per-game layer (there is no ROM), and no BIOS data (the detail's table reads
+ * that off `get_firmware_status`).
+ *
+ * `active_core_label` is the platform-layer resolution — the per-platform
+ * override when it still resolves to a bakeable emulator, else the es_systems
+ * default — so in both ordinary cases it IS the emulator's name. `null` means
+ * no option is BAKEABLE, which is not the same as there being none: a menu of
+ * uninstalled standalone emulators answers `null` with `emulators.length >= 1`.
+ * RetroDECK then resolves the emulator itself at launch, and the Library page
+ * says that rather than printing a name or claiming a failure.
+ *
+ * There is no `success`, for the reason its sibling has none: the callable has
+ * no in-band failure to report. What can go wrong — an unreadable
+ * `es_systems.xml` — is already `emulator_data_available: false`, and anything
+ * else raises, which reaches the caller as a rejected promise.
+ */
+export interface SystemCoreInfo {
+  emulators: EmulatorOption[];
+  emulator_data_available: boolean;
+  active_core_label: string | null;
+}
+
+/**
+ * Per-platform entry in the `get_firmware_status` overview: the BIOS file state
+ * of every platform the payload can speak for, in one call. This is the
+ * library-wide overview path — distinct from the per-game `check_platform_bios`
+ * payload, which no longer carries any core fields (#923). Its core fields are
+ * a second answer to {@link SystemCoreInfo}'s question, kept because they cost
+ * nothing extra here; a platform this payload has nothing to say about carries
+ * no entry at all, which is why the Platforms detail asks the core read
+ * directly rather than joining onto this one.
  *
  * `files` is the union of what the RomM library offers for the platform and what
  * the platform's emulators ask for, so a row can be present with `on_server`
@@ -123,10 +170,11 @@ export interface FirmwarePlatformExt extends FirmwarePlatform {
   emulators?: EmulatorOption[];
   emulator_data_available?: boolean;
   // Per-platform BIOS aggregates computed by the backend from the same
-  // core-aware classified files (`compute_bios_level`), so the System page reads
-  // the unknown/ok/partial/missing decision and display counts off the payload
-  // instead of re-deriving the threshold logic. The optional-missing breakdown
-  // stays a local file-level computation (a richer axis the level doesn't model).
+  // core-aware classified files (`compute_bios_level`), so the platform detail
+  // reads the unknown/ok/partial/missing decision and display counts off the
+  // payload instead of re-deriving the threshold logic. The optional-missing
+  // breakdown stays a local file-level computation (a richer axis the level
+  // doesn't model).
   bios_level?: BiosLevel | null;
   required_count?: number;
   required_downloaded?: number;
@@ -157,6 +205,13 @@ export interface BiosFileStatus extends FirmwareVerdict {
   file_name: string;
   downloaded: boolean;
   local_path: string;
+  /** Where the emulator said the file goes, relative to the firmware root —
+   *  `dc/dc_boot.bin` where a subdirectory was declared, the bare name
+   *  otherwise. `file_name` is its basename and `local_path` is it joined under
+   *  a root this side does not know, so this is the only field that can answer
+   *  which folder a file placed by hand belongs in. Optional because a payload
+   *  from before the field existed carries none. */
+  declared_path?: string;
   description: string;
   wanted: FirmwareWanted;
   /** Whether the core THIS game launches with requires the file. `wanted` is the

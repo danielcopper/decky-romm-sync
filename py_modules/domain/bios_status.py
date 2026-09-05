@@ -88,11 +88,21 @@ class BiosFileEntry:
     so the surfaces can say what a row is instead of describing every one of them
     as a file the library is missing. It defaults to the silent answer, which is
     the one a row nothing declares has.
+
+    ``declared_path`` is where the emulator said the file goes, relative to the
+    firmware root — ``dc/dc_boot.bin`` where a subdirectory was declared, the
+    bare name otherwise. It is carried because ``file_name`` is its basename and
+    ``local_path`` is it joined under a root the frontend does not know, so
+    without it no surface can state the one thing a user placing a file by hand
+    needs: which folder it goes in. 207 of the 695 declarations a stock
+    RetroDECK ships name a subdirectory, and their descriptions spell it in only
+    115 of those, so the description is not a substitute.
     """
 
     file_name: str
     downloaded: bool
     local_path: str
+    declared_path: str
     description: str
     wanted: str
     required_by_active: bool
@@ -150,6 +160,7 @@ def format_bios_status(
                 file_name=f.get("file_name", ""),
                 downloaded=f.get("downloaded", False),
                 local_path=f.get("local_path", ""),
+                declared_path=f.get("declared_path", "") or f.get("file_name", ""),
                 description=f.get("description", ""),
                 wanted=f.get("wanted", WANTED_UNKNOWN),
                 required_by_active=f.get("required_by_active", False),
@@ -227,6 +238,7 @@ def build_file_entry(
         file_name=file_name,
         downloaded=downloaded,
         local_path=dest,
+        declared_path=placement.destination if placement is not None else file_name,
         description=placement.description if placement is not None else file_name,
         wanted=classify_wanted(placement, complete),
         required_by_active=required_by_active,
@@ -296,12 +308,16 @@ def collect_firmware_status(
 def count_required(files: tuple[BiosFileEntry, ...]) -> tuple[int, int]:
     """``(required, of those downloaded)`` for the core the game will launch with.
 
-    The badge's two numbers, derived in one place so the System page and the
-    game-detail page can never disagree about which files count. A file the
+    The badge's two numbers, derived in one place so the platform detail and
+    the game-detail page can never disagree about which files count. A file the
     library does not hold counts here — it is genuinely required and genuinely
-    absent, and excluding it would make the badge read ready for a game that
-    cannot launch. What it must never do is imply a download; whether anything
-    is fetchable is a separate question, asked where the buttons are.
+    absent, and excluding it would make the badge read ready over a file the
+    core declares and does not have. What the count must never do is imply a
+    download (whether anything is fetchable is a separate question, asked where
+    the buttons are) — nor a LAUNCH outcome: at the RetroArch revision RetroDECK
+    ships, the ``.info`` firmware list is read only by display surfaces
+    (``menu_displaylist.c``), and neither ``task_content.c`` nor ``runloop.c``
+    consults it, so a declaration cannot say whether a game starts.
 
     The second number is the row VERDICT, not ``downloaded``: for a folder
     declaration the two come apart, since RetroDECK links LRPS2's ``pcsx2/bios``
@@ -338,8 +354,8 @@ def _nothing_established(status: BiosStatus) -> bool:
     the finished answer "no emulator here wants anything", while under an
     incomplete one it is silence, and silence read as an answer is a claim about
     a question nothing finished asking. Which surface that claim reaches depends
-    on the caller: the System page renders this level whether or not there are
-    rows, so it is where an empty list would read green.
+    on the caller: the platform detail renders this level whether or not there
+    are rows, so it is where an empty list would read green.
 
     ``reading_complete`` is False whenever ANY core in the platform's scope went
     unread, not only when nothing could be asked at all; the two are the same

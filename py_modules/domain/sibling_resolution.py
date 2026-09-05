@@ -1,8 +1,12 @@
 """Deterministic sibling-group representative resolution + canonical naming (ADR-0021 §3).
 
 A sibling group is one game with several released dumps (region / language /
-revision variants). Two questions are answered here, both a pure, shuffle-stable
-compute over the group's fetched members:
+revision variants). :func:`group_rows` is the partition of a **row list** — which
+rows in it form a group, and the rule that a NULL key is a singleton. It is not
+the only route to a group: a caller that wants one group by its key queries the
+repository for it (``uow.roms.iter_by_group_key``) and guards the NULL case
+itself, which several do. The rest answers two questions about a group, both a
+pure, shuffle-stable compute over its fetched members:
 
 * **Which version does the group bind to** — :func:`resolve_group_representative`.
   The resolution chain::
@@ -38,7 +42,12 @@ from __future__ import annotations
 import functools
 import os
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from domain.rom import Rom
 
 # Build-time region ranking: the order a group's representative and canonical
 # name fall back to once no installed / binding / default leg decides. World >
@@ -213,6 +222,26 @@ def _rank_key(
         str(member.get("fs_name_no_ext") or "").lower(),
         int(member["rom_id"]),
     )
+
+
+def group_rows(rows: Iterable[Rom]) -> list[list[Rom]]:
+    """Group sibling rows; a NULL group key is always a singleton.
+
+    The partition every consumer of a group must agree on, which is why it is
+    stated here rather than re-derived: a NULL key was never computed for that
+    row, so it relates the row to nothing, and folding NULL-keyed rows together
+    on that shared absence would make them one game.
+    """
+    grouped: dict[str, list[Rom]] = {}
+    singletons: list[list[Rom]] = []
+    for row in rows:
+        if row.sibling_group_key is None:
+            singletons.append([row])
+        else:
+            grouped.setdefault(row.sibling_group_key, []).append(row)
+    groups = [sorted(group, key=lambda row: row.rom_id) for group in grouped.values()]
+    groups.extend(singletons)
+    return sorted(groups, key=lambda group: group[0].rom_id)
 
 
 def resolve_group_representative(

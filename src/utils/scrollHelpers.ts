@@ -11,6 +11,28 @@
  * Steam's gamepad engine when injected via routerHook.addPatch.
  */
 
+/**
+ * How far `el` sits below the start of `scroller`'s content, in layout terms.
+ *
+ * The two rects are viewport-relative and the scroller's own `scrollTop` moves
+ * only one of them: scrolling it slides `el` up by exactly that much and leaves
+ * the scroller's own box where it is, so adding `scrollTop` back cancels it
+ * exactly. Scrolling anything ABOVE the scroller moves both boxes together and
+ * cancels in the subtraction. `clientTop` is the scroller's top border, which
+ * its rect includes and `clientHeight` does not.
+ *
+ * `el.offsetTop` would be shorter and is not taken: `offsetTop` is measured
+ * against `offsetParent`, which is the scroller only while the scroller stays
+ * positioned — Steam's QAM panel computes `position: relative` today, and that
+ * is Steam's CSS to change, not ours. Nothing above reads any element's
+ * position.
+ */
+export function offsetWithinScroller(el: HTMLElement, scroller: HTMLElement): number {
+  const elTop = el.getBoundingClientRect().top;
+  const scrollerTop = scroller.getBoundingClientRect().top;
+  return elTop - scrollerTop - scroller.clientTop + scroller.scrollTop;
+}
+
 /** Find the nearest ancestor that is actually scrollable (overflow:scroll|auto
  *  AND scrollHeight > clientHeight). */
 export function findScrollParent(el: HTMLElement): HTMLElement | null {

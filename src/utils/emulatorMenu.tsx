@@ -1,8 +1,8 @@
 /**
  * Shared builder for the emulator-picker context menu (#1210).
  *
- * Both pickers — the game-detail core menu (`RomMPlaySection`) and the System
- * page per-platform menu (`SystemPage`) — render the same list: every ES-DE
+ * Both pickers — the game-detail core menu (`RomMPlaySection`) and the Library
+ * page's per-platform menu (`PlatformDetail`) — render the same list: every ES-DE
  * `<command>` classified for bakeability, with the bakeable ones clickable and
  * the un-bakeable ones shown disabled with a short reason. The frontend owns the
  * reason copy; the backend only ships the reason slug. Keys are the emulator
@@ -34,12 +34,13 @@ export interface EmulatorMenuConfig {
   emulatorDataAvailable: boolean;
   /** The active emulator's label — marked with a checkmark. */
   activeLabel: string | null;
-  /** The per-platform override label — marked "(system)". Null on the System page (redundant there). */
+  /** The per-platform override label — marked "(system)". Null in the platform
+   *  detail, where the reader already is at the system level. */
   platformCoreLabel: string | null;
   /**
    * Game-detail only: the "Use System Override" reset item that CLEARS the
-   * per-game pin. Omit on the System page, where picking the default entry is
-   * itself the clear-to-empty-label action.
+   * per-game pin. Omit in the platform detail, where picking the default entry
+   * is itself the clear-to-empty-label action.
    */
   followSystem?: { hasGameOverride: boolean; onFollowSystem: () => void };
   /** Called with the picked emulator LABEL when a bakeable entry is chosen. */

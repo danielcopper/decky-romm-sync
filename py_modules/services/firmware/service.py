@@ -1,6 +1,6 @@
 """FirmwareService façade.
 
-Owns the public callable surface exposed via ``main.py`` (the System-page
+Owns the public callable surface exposed via ``main.py`` (the whole-library
 overview, the per-platform BIOS check, the download entry points, the delete)
 and composes the four sub-services behind it. Implementation lives in those
 modules: :class:`FirmwareListing` for what the RomM library holds and its
@@ -161,6 +161,10 @@ class FirmwareService:
         """Download all firmware the library holds for a platform."""
         return await self._downloads.download_all_firmware(platform_slug)
 
+    async def download_platform_firmware_file(self, platform_slug, file_name) -> dict[str, Any]:
+        """Download the one firmware file the library holds for a platform under that name."""
+        return await self._downloads.download_platform_firmware_file(platform_slug, file_name)
+
     async def download_required_firmware(self, platform_slug) -> dict[str, Any]:
         """Download only the firmware the platform's launching core will not run without."""
         return await self._downloads.download_required_firmware(platform_slug)
@@ -168,3 +172,11 @@ class FirmwareService:
     async def delete_platform_bios(self, platform_slug) -> dict[str, Any]:
         """Delete the BIOS files the plugin downloaded for a platform."""
         return await self._deletion.delete_platform_bios(platform_slug)
+
+    async def delete_bios_file(self, platform_slug, file_name) -> dict[str, Any]:
+        """Delete one BIOS file the plugin downloaded for a platform."""
+        return await self._deletion.delete_bios_file(platform_slug, file_name)
+
+    async def delete_bios_folder(self, platform_slug, folder_path) -> dict[str, Any]:
+        """Delete the BIOS files the plugin downloaded inside a declared folder."""
+        return await self._deletion.delete_bios_folder(platform_slug, folder_path)

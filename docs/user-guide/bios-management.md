@@ -5,8 +5,9 @@ to launch. The plugin can download BIOS files directly from your RomM server.
 
 Which BIOS files a system needs depends on the **emulator core** in use — some cores need BIOS, some don't. Because the
 two concerns are related but independent, the plugin presents the **active core** and its **BIOS state** together in one
-place: the **System** page, a top-level QAM destination. Core selection and BIOS file management can each be used on
-their own — they share a screen only because the active core determines which BIOS files matter.
+place: the **Platforms** tab of the **Library** page, where picking a platform on the left shows everything about it on
+the right. Core selection and BIOS file management can each be used on their own — they share a pane only because the
+active core determines which BIOS files matter.
 
 ## What Are BIOS Files?
 
@@ -51,14 +52,16 @@ Beside the Play button there is also a short **BIOS** badge, which is a shortcut
 condition and no other: a file the active core **requires** is shown to be absent from your BIOS folder. If that core
 requires nothing, or requires only files you already have, there is no badge — however many optional files are missing,
 and whether or not the requirement could be worked out at all. A required **folder** counts here like any other
-requirement: once the plugin has established that it holds no BIOS image, the badge appears, because the game will not
-launch. What raises no badge is a requirement nothing could settle — a folder the plugin could not read, say — since it
-has not shown anything to be absent. Those cases are worth reading, but not worth a warning next to Play, so they live
-in the tab.
+requirement: once the plugin has established that it holds no BIOS image, the badge appears, because what satisfies the
+requirement is a file inside the folder and there is none. What raises no badge is a requirement nothing could settle —
+a folder the plugin could not read, say — since it has not shown anything to be absent. Those cases are worth reading,
+but not worth a warning next to Play, so they live in the tab.
 
 The badge is always **red**. It is a warning, not a status: the four-colour dot above belongs to the tab's readiness
-line, and every state that raises the badge is one the game will not launch in. Having one of three required files is
-not a milder version of the problem, so it does not get a milder colour.
+line, and every state that raises the badge is one where a file the emulator asks for is not there. Having one of three
+required files is not a milder version of the problem, so it does not get a milder colour. The badge does not predict
+whether a game starts — that is between the emulator and the file, and the declaration the badge counts is not what
+decides it.
 
 A BIOS warning only ever disappears on an **answer**. When a check cannot be run at all — most often right after a BIOS
 download or delete, before the state has been read again — the plugin keeps showing the last status it knew rather than
@@ -129,36 +132,71 @@ reads them the way the core does:
 A folder that is **absent** is red like any other requirement that is not there, with no note beside it: there is
 nothing to have found, so there is nothing to say. It is never offered as a download either — what the emulator opens
 there is a folder, so there is no file to fetch into it. On a stock RetroDECK that will not happen for `pcsx2/bios`,
-which RetroDECK links onto the BIOS folder itself. (The **System** page words that row _Missing_, because that page
-spells absence out where this tab leaves it to the dot.)
+which RetroDECK links onto the BIOS folder itself. (The Library page's platform detail words that row _Missing_, because
+it spells absence out where this tab leaves it to the dot.)
 
 <!-- Screenshot: Game detail page showing orange BIOS status with "2/5 required files ready" -->
 
 ![BIOS file list overlay showing individual required files with checkmarks and "Missing" labels](../assets/screenshot-bios.jpg)
 
-## System Page
+## Library › Platforms
 
-The **System** page is the per-system emulator settings page: for each platform it shows the **active emulator core**
-first, then the BIOS files that core needs. It lists only your **currently-synced systems** — platforms with at least
-one synced game (whether synced by platform or by collection). Systems you have no synced games for don't appear, even
-if your RomM server has BIOS files for them.
+The **Platforms** tab of the **Library** page holds everything about one system: its sync toggle, the **active emulator
+core**, the BIOS files that core needs, and the two ways to take the platform back out of Steam. The list on the left
+holds every platform your RomM server reports with at least one ROM, in two groups — **Synced** above **Available** —
+and the row you focus is the one the right-hand pane describes.
 
-1. From the main QAM page, tap **System**
-2. Platforms with synced games that still need required BIOS files are marked with "BIOS needed"
-3. For platforms with more than one emulator, an **Emulator Core** button is shown at the top of the platform's section
-   — this is the primary per-system control; it opens a menu of the platform's emulators
-4. Below the core, each platform shows how many required files are ready (e.g. "1 / 2 required") when the system has
-   any, and otherwise reads "Nothing required" with the inventory of your library's files beside it (e.g. "3 / 5 files
-   held"). A system with a required file the plugin could not judge reads "BIOS readiness unknown" instead — see
-   [When readiness cannot be stated](#when-readiness-cannot-be-stated)
-5. Tap **Show Files** to see the individual file list for a platform — each row says whether it is _needed_, _optional_,
-   _not needed_ or _unknown_ for that platform. A system whose requirement could not be worked out and that has no files
-   to list shows **"BIOS requirement unknown"** with no **Show Files** button
-6. Tap **Download All** to download all missing BIOS files for a platform. A system nothing installed could answer for
-   has no download buttons at all — see [When the requirement is unknown](#when-the-requirement-is-unknown)
-7. Tap **Delete BIOS** to remove that platform's downloaded BIOS files (see below)
+1. From the main QAM page, tap **Library**, then move to the **Platforms** tab with L1/R1
+2. Each row is a coloured dot, the platform's name and the sync toggle. The dot is the BIOS state at a glance — green
+   ready, amber partly there, red missing, grey where there is nothing to say — and the numbers behind it are on the
+   right-hand pane, which also states them in full. With a mouse, hovering the row says the same thing in words
+3. Move down the list to pick a platform; the pane on the right changes with the focus
+4. The pane's first line names the platform, how many ROMs it has on RomM, how many are in Steam, and the emulator it
+   launches with — by name, in grey when it is the platform's default and in gold when you have picked something else.
+   If it reads **RetroDECK decides**, the plugin could not pin any of this platform's emulators — they may need setting
+   up, or ES-DE's command for them is not one the plugin can bake — so RetroDECK chooses one itself when a game starts.
+   If it reads **no emulator installed** in red, the emulator RetroDECK would have fallen back to is not on this
+   machine, and the sentence below names it. If it reads **no emulator** in red, RetroDECK has none for this platform at
+   all. The sentence below the line says which of the three it is
+5. The **chip button** at the right of that line opens a menu of the platform's emulators — the same button, in the same
+   two colours, as the one on a game's page. It is always there: it opens the menu once the platform has games in Steam
+   and there is more than one emulator to choose between, and is greyed out otherwise, with the reason shown if you
+   hover it. Where the reason is a problem rather than simply nothing to choose — no emulator for the platform, or
+   RetroDECK not found — a line under the header says so as well, since a tooltip needs a mouse
+6. **BIOS files** states how many required files are ready (e.g. "1 / 2 required") when the system needs any, and
+   otherwise reads "Nothing required" with the inventory of your library's files beside it (e.g. "3 / 5 files held"). A
+   system with a required row the plugin could not judge — a declared folder it could not read, say — reads "BIOS
+   readiness unknown" instead — see [When readiness cannot be stated](#when-readiness-cannot-be-stated)
+7. Below it, a table lists the files themselves: the **file**, whether it is **on disk**, and its **contents**. Where
+   the emulator asks for the file in a subfolder, the folder is shown in front of the name (`dc/` **`dc_boot.bin`**) —
+   that is where it has to go, and it is the one thing you need when placing a file by hand. The description in
+   parentheses is printed under the row rather than beside the name, so it is not cut off. On disk holds marks and no
+   words. The first mark carries two things — a green ✓ for a file that is there and required, a red ✗ for one that is
+   required and is not, and the paler green ✓ / grey ✗ for a file the core you launch with does not need either way.
+   Amber means nothing could be established: a ✓ or ✗ in amber is a file whose presence is known but which no installed
+   emulator could be asked about, and a `?` is a row that could not be checked at all. A violet ⊘ appears **beside**
+   that mark — never in place of it — when your RomM library does not hold the file: a file you already have keeps its
+   green ✓, one you still need keeps its red ✗, and the ⊘ adds that the plugin cannot fetch it for you. A legend under
+   the table, one line per mark, names the marks that are actually on it. Anything else a row has to say is printed
+   **under** the row rather than in the column — that a file was provided by RetroDECK, that a folder holds no image,
+   that a location could not be read
+8. **Contents** answers for a required **folder**: how many BIOS images it holds — and the images themselves are listed
+   under the row, in the emulator's own words so you can match one against its picker — or that it holds none, or that
+   its contents could not be established. A plain file reads an em dash, which means the question was never asked:
+   checking a file's contents is still to come, and until it lands the em dash must not be read as "checked, and nothing
+   there"
+9. A **Download** button sits on every row that is missing and in your RomM library, and a **Delete** button on every
+   row this plugin downloaded and still has on disk — that is the only thing it will remove, so a file your emulator
+   came with never offers one. A **folder** row (PS2's `pcsx2/bios`) offers `Delete (N)` for the files we downloaded
+   into it. While a download runs, the button you pressed becomes a spinner and the other download buttons grey out;
+   when it finishes the list re-reads itself. **If it fails**, that button turns red and says **Failed** for about two
+   seconds — the other buttons stay greyed until it clears — and a line under the section says what went wrong
+10. **Download required** and **Download all** fetch several at once, and **Delete BIOS** removes everything this plugin
+    downloaded for the platform (see below). All three are always there and grey out when there is nothing to do — a
+    system nothing installed could answer for has all of them greyed, see
+    [When the requirement is unknown](#when-the-requirement-is-unknown)
 
-<!-- Screenshot: System page showing per-platform Emulator Core button above BIOS download counts -->
+<!-- Screenshot: Library › Platforms with a platform selected, its core button above the BIOS table -->
 
 BIOS files are downloaded to your RetroDECK bios directory (e.g. `~/retrodeck/bios/`). Some platforms use
 subdirectories: Dreamcast BIOS goes into `bios/dc/`, because that is the location the Dreamcast core declares. The
@@ -171,14 +209,20 @@ in both places at once. There is one copy, not two.
 
 ### Deleting BIOS Files
 
-You can remove a platform's downloaded BIOS files directly from the **System** page. The **Delete BIOS** button appears
-only when there is at least one file it would actually remove — a file the plugin downloaded that is still on disk — and
-its label shows how many (e.g. "Delete BIOS (3)"). Because deletion is local, the button works even when your RomM
-server is offline.
+You can remove BIOS files from a platform's pane in **Library › Platforms**, one at a time or all at once. Both only
+ever remove what this plugin downloaded and still has on disk; because deletion is local, both work with your RomM
+server offline.
 
-1. On the **System** page, find the platform whose BIOS files you want to remove
-2. Tap **Delete BIOS**
-3. Confirm the action in the dialog that appears
+The **Delete BIOS** button under the table takes all of them, and its label shows how many (e.g. "Delete BIOS (3)"). It
+is always there and greys out when there is nothing to remove.
+
+Each row also carries its own **Delete** where the plugin downloaded that file — so a file your emulator came with never
+offers one. A row that is a **folder** the emulator reads (PS2's `pcsx2/bios`) offers `Delete (N)` for the files we
+downloaded into it; the folder itself stays.
+
+1. In **Library › Platforms**, pick the platform whose BIOS files you want to remove
+2. Tap **Delete BIOS**, or the **Delete** on a single row
+3. Confirm the action in the dialog that appears — every one of them asks first
 
 This is a destructive action, so a confirmation dialog asks you to confirm before anything is deleted. Once confirmed,
 the plugin removes the BIOS files **it downloaded** for that system from your RetroDECK bios directory and reports the
@@ -204,8 +248,8 @@ The count on the button is the same set: it counts the plugin's own downloads th
 the delete reports. A file it downloaded that you have since removed by hand does not appear in it, and the leftover
 bookkeeping entry is cleared the next time you run the delete.
 
-The same per-platform delete is also available from the **Data Management** page (under per-platform actions) for
-bulk-cleanup workflows.
+This is the only place a platform's BIOS files are deleted. The Data Management page used to offer the same action
+without a confirmation; that copy is gone.
 
 ## Which Systems Need BIOS?
 
@@ -267,8 +311,7 @@ The second is a system with **no files on the page at all**, where the plugin al
 offers. An empty list means "nothing here wants anything" only when every core was asked; with even one of them unread
 it means nothing, and reporting it as ready would be an all-clear over firmware nobody checked. This is the shape a PS3
 page has when your RomM library holds no PS3 firmware: no rows, no cores to ask, and a grey "BIOS requirement unknown".
-The system keeps its block on the **System** page for the same reason — dropping it would say there is nothing to
-manage.
+The system keeps its place in the platform list for the same reason — dropping it would say there is nothing to manage.
 
 Note that the two shapes weigh an unread core differently, and deliberately: with files on the page one unreadable core
 costs only its own rows, while with no files at all there is nothing left for the readable cores to have answered, so
@@ -286,11 +329,13 @@ system reads as ready.
 
 #### Such a system offers no downloads
 
-A system in that state has no **Download All** or **Download Required** button, and says so in words: _BIOS management
-is not supported for this system yet, so there is nothing to download here. You can still put BIOS files in your BIOS
-folder by hand._ Fetching files the plugin cannot reason about — beside a line admitting it cannot — would be offering
-to act on an answer it does not have. Downloading them from RomM's own web interface and dropping them in your BIOS
-folder works exactly as it always did; nothing about the files changes, only what this page will claim about them.
+A system in that state offers no **Download All** or **Download Required**, and adds the one thing you can still do:
+_You can still put BIOS files in your BIOS folder by hand._ Fetching files the plugin cannot reason about — beside a
+line admitting it cannot — would be offering to act on an answer it does not have. What the page does **not** say is
+that BIOS management is unsupported here: that would describe the plugin, and the plugin is not the limitation. Install
+an emulator that declares firmware for this system and the page answers for it, with nothing changed on our side.
+Downloading them from RomM's own web interface and dropping them in your BIOS folder works exactly as it always did;
+nothing about the files changes, only what this page will claim about them.
 
 This is scoped to the **whole system**, never to single files. A system whose reading finished may well hold files no
 installed emulator asks for — a PlayStation page typically lists a good number of regional BIOS dumps that nothing wants
@@ -360,15 +405,15 @@ your setup.
   replacement
 - With **gpSP**, `gba_bios.bin` is shown as _required_ — gpSP cannot run without it
 
-The active core name appears in both the game detail page (the **Emulator** column) and the **System** page. This tells
-you at a glance which core the plugin is filtering for.
+The active core name appears on the game detail page (the **Emulator** column) and on the platform's header line in
+**Library › Platforms**. This tells you at a glance which core the plugin is filtering for.
 
 **How the core is determined:**
 
 1. If you set a **per-game core** for this game in the plugin, that wins. (Per-game cores are stored by the plugin
    itself — see [Per-Game (Game Detail Page)](#per-game-game-detail-page) below.)
-2. If no per-game core, the plugin checks for a **per-platform core** you set on the System page — stored by the plugin
-   in its own settings, not in ES-DE.
+2. If no per-game core, the plugin checks for a **per-platform core** you set in Library › Platforms — stored by the
+   plugin in its own settings, not in ES-DE.
 3. The plugin reads RetroDECK's ES-DE configuration (`es_systems.xml`) from the flatpak installation to find the default
    emulator for each platform — for BIOS filtering it uses the platform's first RetroArch core. This live file is the
    only source; there is no bundled fallback snapshot.
@@ -397,32 +442,38 @@ directly into each game's Steam shortcut, so your choice applies reliably for an
 - **Per-game** changes set the core for a single game and take priority over the platform choice. Stored by the plugin
   on the game, so they survive uninstalling and re-downloading.
 
-### Per-Platform (System Page)
+### Per-Platform (Library Platforms tab)
 
-On the **System** page, platforms with more than one emulator show an **Emulator Core** button as the first control in
-the platform's section, above the BIOS file list. The button opens a menu listing every emulator ES-DE offers for that
-platform — both RetroArch cores and **standalone emulators** (e.g. PCSX2, RPCS3, Dolphin, PPSSPP). Some entries appear
-**disabled** with a short reason (for example "script/shortcut form" or "needs setup files (launch via ES-DE once)")
-when the plugin can't launch them directly from Steam; those can't be picked. Picking an enabled emulator sets it as the
-default for all games on that platform. A "Switching cores may affect save compatibility" note appears at the top of the
-menu.
+In **Library › Platforms**, a platform with more than one emulator shows a **chip button** at the right of its header
+line — the same button a game's page carries, grey when the platform is on its default emulator and gold when you have
+picked another. It opens a menu listing every emulator ES-DE offers for that platform — both RetroArch cores and
+**standalone emulators** (e.g. PCSX2, RPCS3, Dolphin, PPSSPP). Some entries appear **disabled** with a short reason (for
+example "script/shortcut form" or "needs setup files (launch via ES-DE once)") when the plugin can't launch them
+directly from Steam; those can't be picked. Picking an enabled emulator sets it as the default for all games on that
+platform. A "Switching cores may affect save compatibility" note is the first line of the menu.
 
-1. Open the **System** page from the main QAM page
-2. Find the platform you want to change
-3. Press the **Emulator Core** button and pick an emulator from the menu
-4. The BIOS file list below updates immediately to show files relevant to the new choice
+1. Open **Library** from the main QAM page and move to the **Platforms** tab
+2. Move to the platform you want to change
+3. Press the chip button and pick an emulator from the menu
+4. The BIOS table below updates to show what the new choice needs
 
-If RetroDECK can't be found (no `es_systems.xml`), the menu shows "Emulator list unavailable — RetroDECK installation
-not found" instead of a list.
+A platform that offers one emulator says so instead of showing a button. A platform whose emulators the plugin cannot
+pin — they may need setting up, or ES-DE's command for them may not be one the plugin can bake — says that too, and
+RetroDECK picks one itself when a game starts. Where the emulator RetroDECK would have fallen back to is **not
+installed**, the pane names it and says nothing here can pin a different one; those games will not start until it is
+installed. And a platform RetroDECK lists **no** emulator for says so, which is a different thing again: there is
+nothing for RetroDECK to fall back to at all. If RetroDECK can't be found (no `es_systems.xml`), the pane says the
+emulator list is unavailable rather than showing an empty picker.
 
 The plugin stores the choice in its own settings and **immediately re-applies it** to every installed game on that
 platform — the change takes effect right away, with no sync needed (games that already have a per-game core keep their
-own choice). The System page works even when your RomM server is offline — core switching and BIOS status are available,
-only download buttons are disabled.
+own choice). If the switch cannot be made, the pane says so under the button and the header keeps naming the core that
+is actually in effect. The page works even when your RomM server is offline — core switching and BIOS status are
+available, only the download buttons are withdrawn.
 
 !!! note "A RetroDECK default-core change needs a Force Full Sync"
 
-    Setting a per-platform core on the System page re-bakes your installed games right away. But if a **RetroDECK
+    Setting a per-platform core here re-bakes your installed games right away. But if a **RetroDECK
     update** ships a _new default core_ for a platform (and you have not picked a core yourself), that new default does
     **not** take effect on a normal sync — a normal sync skips platforms whose games haven't changed, so the
     previously-baked core stays. Run a **Force Full Sync** to re-bake every game and pick up RetroDECK's new default.
@@ -430,7 +481,7 @@ only download buttons are disabled.
 ### Per-Game (Game Detail Page)
 
 On the game detail page, a **CPU button** (microchip icon) appears between the RomM and Steam gear buttons when the
-game's platform offers more than one emulator. The menu lists the same emulators as the System page — RetroArch cores
+game's platform offers more than one emulator. The menu lists the same emulators as the platform pane — RetroArch cores
 and **standalone emulators** — and shows the ones the plugin can't launch from Steam as **disabled** with a short
 reason.
 
@@ -440,15 +491,15 @@ reason.
 4. The BIOS status, core badge, and game info panel update immediately
 
 At the top of the menu, above the core list, is a dedicated **Use System Override (X)** item. Selecting it **clears**
-the per-game core so the game follows whatever the system would pick — the per-platform core you set on the System page,
-or the platform's default core when no per-platform override is set. **X** is that fallback core's name, shown in
-parentheses so you know what the game will fall back to.
+the per-game core so the game follows whatever the system would pick — the per-platform core you set in Library ›
+Platforms, or the platform's default core when no per-platform override is set. **X** is that fallback core's name,
+shown in parentheses so you know what the game will fall back to.
 
 Each core in the list below can show up to three markers, one per role:
 
 - **(default)** — the RetroDECK/es_systems default core for this platform.
-- **(system)** — the per-platform core you picked on the [System page](#per-platform-system-page) (stored in the
-  plugin's settings). Absent when the platform has no per-platform override.
+- **(system)** — the per-platform core you picked in [Library › Platforms](#per-platform-library-platforms-tab) (stored
+  in the plugin's settings). Absent when the platform has no per-platform override.
 - **✓** (checkmark) — the core this game actually launches with right now.
 
 The three roles are independent, so a single core can carry more than one marker: "(default) (system)" when your
@@ -481,8 +532,8 @@ upgrading from an older build or who edits ES-DE directly:
 
 - **Per-platform cores set in ES-DE are not carried over — re-apply them once.** Earlier builds stored a per-system core
   as a `<alternativeEmulator>` in ES-DE's `gamelist.xml`; the plugin now stores per-platform cores in its own settings
-  and does **not** read or import that ES-DE entry. If you had set a per-system core, re-apply it once on the **System**
-  page (the Emulator Core button/menu) and it sticks from then on.
+  and does **not** read or import that ES-DE entry. If you had set a per-system core, re-apply it once in **Library ›
+  Platforms** (the Emulator Core button/menu) and it sticks from then on.
 - **Per-game cores set with an older plugin build are not carried over.** Earlier builds stored per-game cores in
   ES-DE's `gamelist.xml`; the plugin now stores them itself and does not import the old entries. Re-apply any per-game
   core once through the CPU-button menu and it sticks from then on (including across uninstall/re-download).
@@ -490,7 +541,7 @@ upgrading from an older build or who edits ES-DE directly:
   interface, the plugin's BIOS badge, per-core save path, and core-change warning will **not** reflect it — those follow
   the core the plugin knows about, and the plugin's launches always use the core it has baked in. ES-DE-native launches
   still honour your ES-DE setting. To keep the plugin's badges, save paths, and launches in sync, set the core through
-  the plugin (the CPU-button menu for one game, the System page for a whole platform) instead.
+  the plugin (the CPU-button menu for one game, Library › Platforms for a whole platform) instead.
 
 ### Non-Default Core Indicator
 

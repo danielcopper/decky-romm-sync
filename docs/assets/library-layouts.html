@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tender Library Layouts</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --bg: #eef0f3; --surface: #ffffff; --ink: #1b2027; --muted: #5b6470; --line: #d5d9df;
+    --line-strong: #b9c0c9; --mark: #c4731a; --mark-ink: #ffffff; --chip: #e3e7ec;
+    --chip-on: #1b2027; --chip-on-ink: #ffffff; --rec: #2b6a3e; --rec-bg: #e6f2ea;
+    --font-ui: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+    --font-mock: "Motiva Sans", "Noto Sans", "Segoe UI", Roboto, system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151a; --surface: #1a1e25; --ink: #e4e8ee; --muted: #9aa3ae; --line: #2a3038;
+      --line-strong: #3a424c; --mark: #d98a2e; --mark-ink: #12151a; --chip: #262c35;
+      --chip-on: #e4e8ee; --chip-on-ink: #12151a; --rec: #8fd3a5; --rec-bg: #1c2f23;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12151a; --surface: #1a1e25; --ink: #e4e8ee; --muted: #9aa3ae; --line: #2a3038;
+    --line-strong: #3a424c; --mark: #d98a2e; --mark-ink: #12151a; --chip: #262c35;
+    --chip-on: #e4e8ee; --chip-on-ink: #12151a; --rec: #8fd3a5; --rec-bg: #1c2f23;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font-ui); }
+  button { font: inherit; color: inherit; }
+  button:focus-visible { outline: 2px solid var(--mark); outline-offset: 2px; }
+
+  .top { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 28px; padding: 18px 28px;
+         border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 5; }
+  .top h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  .top h1 small { font-family: var(--font-mono); font-weight: 400; color: var(--muted); margin-left: 10px; font-size: 12px; }
+  .switch { display: flex; align-items: center; gap: 8px; }
+  .switch .lab { font-family: var(--font-mono); font-size: 12px; color: var(--muted); letter-spacing: .04em; }
+  .chip { border: 1px solid var(--line-strong); background: var(--chip); border-radius: 3px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+  .chip[aria-pressed="true"] { background: var(--chip-on); color: var(--chip-on-ink); border-color: var(--chip-on); }
+  .chip .rec { font-family: var(--font-mono); font-size: 10px; margin-left: 6px; color: var(--rec); letter-spacing: .06em; }
+  .chip[aria-pressed="true"] .rec { color: inherit; opacity: .75; }
+
+  main { padding: 26px 28px 80px; max-width: 1180px; }
+  h2 { margin: 0 0 4px; font-size: 22px; font-weight: 600; text-wrap: balance; }
+  .sub { margin: 0 0 18px; color: var(--muted); max-width: 74ch; }
+  h3 { margin: 0 0 8px; font-size: 13px; font-family: var(--font-mono); letter-spacing: .06em;
+       text-transform: uppercase; color: var(--muted); font-weight: 500; }
+
+  .stage { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: #0e1116; }
+  .caption { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 8px 0 26px; font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+  .variant { display: none; }
+  .variant.on { display: block; }
+
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px 36px; margin-bottom: 26px; }
+  .notes ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+  .notes ol > li { display: grid; grid-template-columns: 22px 1fr; gap: 10px; max-width: 62ch; }
+  .notes ol > li p { margin: 0; }
+  .notes ul { margin: 0; padding-left: 18px; max-width: 62ch; display: grid; gap: 6px; }
+  .mk { width: 20px; height: 20px; border-radius: 50%; background: var(--mark); color: var(--mark-ink);
+        font: 600 11px/20px var(--font-mono); text-align: center; margin-top: 2px; }
+  .recbox { border-left: 3px solid var(--rec); background: var(--rec-bg); padding: 10px 14px; border-radius: 0 3px 3px 0; max-width: 66ch; margin-bottom: 26px; }
+  .recbox b { color: var(--rec); font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em;
+              text-transform: uppercase; display: block; margin-bottom: 4px; font-weight: 500; }
+
+  .facts { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 16px 20px; margin-bottom: 26px; max-width: 900px; }
+  .facts dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 8px 20px; }
+  .facts dt { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+  .facts dd { margin: 0; }
+
+  .cmp { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); font-size: 14px; margin-bottom: 26px; }
+  .cmp th, .cmp td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .cmp th { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  .cmp td.y { color: var(--rec); } .cmp td.n { color: #b3401e; }
+
+  /* ---------- the Steam mock ---------- */
+  .deck { position: absolute; top: 0; left: 0; transform-origin: 0 0; overflow: hidden;
+          background: radial-gradient(900px 520px at 24% 20%, #262c39, #0e1116 70%);
+          --p: #23262e; --p2: #1a1d23; --t: #dcdedf; --mu: #8b929a; --ln: rgba(255,255,255,.07);
+          --ln2: rgba(255,255,255,.14); --blue: #1a9fff; --ok: #59bf40; --warn: #f0a030; --dng: #e8686a;
+          --fill: rgba(255,255,255,.08); --fill2: rgba(255,255,255,.14);
+          font-family: var(--font-mock); color: var(--t); font-size: 14px; line-height: 1.35; }
+  .deck::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 80px; background: #0b0d11; }
+  .deck::after { content: "95 %   13:28"; position: absolute; top: 28px; right: 24px; font: 600 15px/1 var(--font-mock); color: #dcdedf; }
+  .bgtile { position: absolute; border-radius: 6px; background: rgba(255,255,255,.035); }
+  .qam { position: absolute; top: 80px; right: 0; bottom: 0; width: 854px; display: flex; box-shadow: -12px 0 40px rgba(0,0,0,.45); }
+  .rail { width: 48px; background: var(--p2); display: flex; flex-direction: column; align-items: center; padding-top: 14px; gap: 16px; flex: none; }
+  .rail i { width: 18px; height: 18px; border: 2px solid #5a6270; border-radius: 4px; display: block; }
+  .rail i.c { border-radius: 50%; }
+  .rail i.on { border-color: #fff; background: rgba(255,255,255,.15); }
+  .content { flex: 1; min-width: 0; background: var(--p); display: flex; flex-direction: column; overflow: hidden; }
+  .dtitle { height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px; font-weight: 600; font-size: 15px; border-bottom: 1px solid var(--ln); color: #fff; }
+  .dtitle .ar { color: var(--mu); font-size: 18px; line-height: 1; }
+  .phead { display: flex; align-items: center; gap: 12px; padding: 7px 16px 3px; flex: none; }
+  .back { background: var(--fill); padding: 4px 10px; border-radius: 2px; font-size: 13px; color: #fff; }
+  .ptitle { font-size: 17px; font-weight: 600; color: #fff; }
+  .tabs { display: flex; align-items: center; gap: 16px; padding: 4px 16px 0; border-bottom: 1px solid var(--ln2); flex: none; }
+  .tab { padding: 6px 2px 6px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--mu); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tab.on { color: #fff; border-color: #fff; }
+  .bump { font-size: 10px; padding: 1px 7px; border: 1px solid rgba(255,255,255,.4); border-radius: 10px; color: #c7cbd1; }
+  .bump.r { margin-left: auto; }
+
+  .cols { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: 16px; padding: 8px 16px 10px; flex: 1; min-height: 0; }
+  .list, .pane { overflow: auto; min-height: 0; }
+  .grp { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--mu); padding: 6px 0 3px; }
+  .lrow { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--ln); }
+  .lrow .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lrow .ct { font-size: 11px; font-variant-numeric: tabular-nums; flex: none; }
+  .lrow.sel { background: var(--fill2); outline: 2px solid #fff; outline-offset: -2px; border-radius: 2px; }
+  .sec-t { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--mu); padding: 10px 0 3px; display: flex; align-items: center; gap: 8px; }
+  .sec-t .sp { margin-left: auto; letter-spacing: 0; text-transform: none; font-size: 12px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--ln); }
+  .row .val { color: var(--mu); font-variant-numeric: tabular-nums; text-align: right; display: flex; align-items: center; gap: 8px; flex: none; }
+  .row .val.t { color: var(--t); }
+  .desc { font-size: 12px; color: var(--mu); margin-top: 1px; }
+  .tg { width: 34px; height: 18px; border-radius: 9px; background: rgba(255,255,255,.22); position: relative; flex: none; }
+  .tg::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
+  .tg.on { background: var(--blue); }
+  .tg.on::after { left: 18px; }
+  .btn { display: flex; justify-content: space-between; align-items: center; gap: 10px; background: var(--fill); padding: 6px 10px; border-radius: 2px; font-weight: 500; margin-top: 6px; color: #fff; font-size: 13px; }
+  .btn.dng { color: var(--dng); }
+  .btn.foc { outline: 2px solid #fff; outline-offset: -2px; background: var(--fill2); }
+  .btn .ar { color: var(--mu); }
+  .btns { display: flex; gap: 6px; margin-top: 6px; }
+  .btns .btn { flex: 1; justify-content: center; margin: 0; }
+  .btn.sm { padding: 3px 8px; font-size: 12px; margin: 0; }
+  .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .tbl th { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--mu); text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--ln2); font-weight: 500; }
+  .tbl td { padding: 5px 6px; border-bottom: 1px solid var(--ln); vertical-align: middle; font-variant-numeric: tabular-nums; }
+  .tbl td.n, .tbl th.n { text-align: right; }
+  .tbl tr.sel td { background: var(--fill2); }
+  .tbl tr.sel td:first-child { box-shadow: inset 3px 0 0 #fff; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--ok); flex: none; }
+  .dot.w { background: var(--warn); } .dot.r { background: var(--dng); } .dot.g { background: #6b7280; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .mu { color: var(--mu); } .dngt { color: var(--dng); }
+  .m { display: inline-block; width: 17px; height: 17px; border-radius: 50%; background: #c4731a; color: #fff;
+      font: 600 10px/17px var(--font-mono); text-align: center; vertical-align: middle; margin-left: 6px; flex: none; }
+  .inl { background: rgba(255,255,255,.045); border-left: 2px solid var(--blue); }
+  .field { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,.25); border: 1px solid var(--ln2); border-radius: 2px; padding: 5px 8px; color: var(--mu); font-size: 12px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chp { font-size: 12px; padding: 2px 8px; border-radius: 12px; background: var(--fill); color: var(--t); }
+  .chp.on { background: #fff; color: #1a1d23; font-weight: 600; }
+</style>
+
+</head>
+<body>
+<header class="top">
+  <h1>Tender Library Layouts <small>#1815 · panel 854 px wide, 454 px tall on the Deck</small></h1>
+  <div class="switch" role="group" aria-label="Layout">
+    <span class="lab">LAYOUT</span>
+    <button class="chip" data-v="a" aria-pressed="true">A · list and detail</button>
+    <button class="chip" data-v="b" aria-pressed="false">B · detail with a header<span class="rec">RECOMMENDED</span></button>
+    <button class="chip" data-v="c" aria-pressed="false">C · one wide table<span class="rec" style="color:#b3401e">RULED OUT</span></button>
+  </div>
+</header>
+
+<main>
+
+  <div class="facts">
+    <dl>
+      <dt>Width</dt><dd>The panel is <strong>854 px</strong> and the content <strong>806 px</strong> — the same on every display. On the Deck that is the whole screen; on a desktop Big Picture window the library stays visible beside it. <strong>Nothing here needs to be responsive in width.</strong></dd>
+      <dt>Height</dt><dd>The scarce axis. On the Deck the panel is <strong>454 px</strong> and the page's body about <strong>263 px</strong> after the title bar, Back, the page title and the tab row. A taller window simply gives the two regions more rows. Every layout below is drawn at the Deck's height — the worst case.</dd>
+      <dt>Navigation</dt><dd>Focus selects in a list, A works the control in the row, L1/R1 switch the tabs, and a row must be focusable to be reachable at all.</dd>
+    </dl>
+  </div>
+
+  <!-- ============ A ============ -->
+  <section class="variant on" id="v-a">
+    <h2>A · List and detail</h2>
+    <p class="sub">The platform list on the left, everything about the focused platform stacked on the right. This is the layout the design record already describes.</p>
+
+    <div class="stage" data-w="854" data-h="534"><div class="deck">
+      <div class="bgtile" style="left:40px;top:120px;width:300px;height:200px"></div>
+      <div class="qam">
+        <div class="rail"><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="on"></i></div>
+        <div class="content">
+          <div class="dtitle"><span class="ar">‹</span> Tender</div>
+          <div class="phead"><span class="back">‹ Back</span><span class="ptitle">Library</span></div>
+          <div class="tabs"><span class="bump">L1</span><span class="tab on">Platforms</span><span class="tab">Collections</span><span class="bump r">R1</span></div>
+          <div class="cols">
+            <div class="list">
+              <div class="btns" style="margin:2px 0 4px"><div class="btn sm">Enable all</div><div class="btn sm">Disable all</div></div>
+              <div class="grp">Synced <span class="m">1</span></div>
+              <div class="lrow sel"><span class="dot"></span><span class="nm">PlayStation</span><span class="ct ok">3 / 5</span><span class="tg on"></span></div>
+              <div class="lrow"><span class="dot r"></span><span class="nm">Dreamcast</span><span class="ct dngt">0 / 2</span><span class="tg on"></span></div>
+              <div class="lrow"><span class="dot w"></span><span class="nm">Nintendo DS</span><span class="ct warn">1 / 2</span><span class="tg on"></span></div>
+              <div class="lrow"><span class="dot g"></span><span class="nm">Sega Game Gear</span><span class="ct mu">—</span><span class="tg on"></span></div>
+              <div class="lrow"><span class="dot g"></span><span class="nm">SNES</span><span class="ct mu">—</span><span class="tg on"></span></div>
+              <div class="grp">Available</div>
+              <div class="lrow"><span class="dot g"></span><span class="nm">Game Boy</span><span class="ct mu">—</span><span class="tg"></span></div>
+              <div class="lrow"><span class="dot g"></span><span class="nm">PSP</span><span class="ct mu">—</span><span class="tg"></span></div>
+            </div>
+            <div class="pane">
+              <div style="display:flex;align-items:baseline;gap:10px"><span class="ptitle" style="font-size:16px">PlayStation</span><span class="desc">132 on RomM · 128 in Steam</span></div>
+              <div class="sec-t">Emulator core <span class="m">2</span></div>
+              <div class="btn"><span>Beetle PSX HW<div class="desc">Default: Beetle PSX</div></span><span class="ar">›</span></div>
+              <div class="sec-t">BIOS files <span class="m">3</span><span class="sp">3 / 5 required</span></div>
+              <table class="tbl">
+                <thead><tr><th>Wanted</th><th>On disk</th><th>Contents</th><th></th></tr></thead>
+                <tbody>
+                  <tr><td>scph5500.bin <span class="mu">Japan</span></td><td class="ok">✓</td><td class="mu">—</td><td></td></tr>
+                  <tr><td>scph5501.bin <span class="mu">USA</span></td><td class="ok">✓</td><td class="mu">—</td><td></td></tr>
+                  <tr><td>scph5502.bin <span class="mu">Europe</span></td><td class="ok">✓</td><td class="mu">—</td><td></td></tr>
+                  <tr><td>scph1001.bin <span class="mu">USA, alt</span></td><td class="warn">missing</td><td class="mu">—</td><td class="n"><span class="btn sm">Download</span></td></tr>
+                  <tr><td>psxonpsp660.bin <span class="mu">optional</span></td><td class="warn">missing</td><td class="mu">—</td><td class="n"><span class="btn sm">Download</span></td></tr>
+                </tbody>
+              </table>
+              <div class="btns"><div class="btn">Download required (2)</div><div class="btn">Download all</div><div class="btn dng">Delete BIOS (3)</div></div>
+              <div class="sec-t">Remove <span class="m">4</span></div>
+              <div class="btns"><div class="btn dng">Remove 128 shortcuts</div><div class="btn dng">Delete save files</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="caption"><span>List 264 px · detail 526 px</span><span>Detail scrolls: BIOS table and Remove are below the fold</span></div>
+
+    <div class="notes">
+      <div><h3>Notes</h3>
+        <ol>
+          <li><span class="mk">1</span><p><strong>Two groups, frozen order.</strong> Synced above Available, alphabetical inside. Toggling a row does not move it while the page is open. The row carries the BIOS state as a number — <em>3 / 5</em>, <em>0 / 2</em>, a dash where the platform wants none — so the colour only reinforces it. The toggle in the row is the only sync control: focus is already there and A works it, so the detail does not repeat it.</p></li>
+          <li><span class="mk">2</span><p><strong>Core.</strong> One row that opens the same context menu the System page uses today. Needs the new per-platform read.</p></li>
+          <li><span class="mk">3</span><p><strong>BIOS as a table.</strong> Wanted · On disk · Contents, Download on a missing row. Contents stays empty until #1803's backend half exists.</p></li>
+          <li><span class="mk">4</span><p><strong>Remove last.</strong> The two actions from today's platform modal, red, confirmed.</p></li>
+        </ol>
+      </div>
+      <div><h3>What it costs</h3>
+        <ul>
+          <li>Only about four rows of the detail are visible at the Deck's height; core, BIOS and Remove are a scroll away.</li>
+          <li>Every fact about a platform is in one column, so nothing competes for width.</li>
+          <li>You see one platform's state at a time — comparing two means walking the list.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ B ============ -->
+  <section class="variant" id="v-b">
+    <h2>B · Detail with a header</h2>
+    <p class="sub">Same two columns, but the detail's top is one compact header line instead of three stacked sections — so the BIOS table, the part with the most rows, starts near the top.</p>
+
+    <div class="stage" data-w="854" data-h="534"><div class="deck">
+      <div class="bgtile" style="left:40px;top:120px;width:300px;height:200px"></div>
+      <div class="qam">
+        <div class="rail"><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="on"></i></div>
+        <div class="content">
+          <div class="dtitle"><span class="ar">‹</span> Tender</div>
+          <div class="phead"><span class="back">‹ Back</span><span class="ptitle">Library</span></div>
+          <div class="tabs"><span class="bump">L1</span><span class="tab on">Platforms</span><span class="tab">Collections</span><span class="bump r">R1</span></div>
+          <div class="cols">
+            <div class="list">
+              <div class="btns" style="margin:2px 0 4px"><div class="btn sm">Enable all</div><div class="btn sm">Disable all</div></div>
+              <div class="grp">Synced</div>
+              <div class="lrow sel"><span class="dot"></span><span class="nm">PlayStation</span><span class="ct ok">3 / 5</span><span class="tg on"></span></div>
+              <div class="lrow"><span class="dot r"></span><span class="nm">Dreamcast</span><span class="ct dngt">0 / 2</span><span class="tg on"></span></div>
+              <div class="lrow"><span class="dot w"></span><span class="nm">Nintendo DS</span><span class="ct warn">1 / 2</span><span class="tg on"></span></div>
+              <div class="lrow"><span class="dot g"></span><span class="nm">Sega Game Gear</span><span class="ct mu">—</span><span class="tg on"></span></div>
+              <div class="lrow"><span class="dot g"></span><span class="nm">SNES</span><span class="ct mu">—</span><span class="tg on"></span></div>
+              <div class="grp">Available</div>
+              <div class="lrow"><span class="dot g"></span><span class="nm">Game Boy</span><span class="ct mu">—</span><span class="tg"></span></div>
+              <div class="lrow"><span class="dot g"></span><span class="nm">PSP</span><span class="ct mu">—</span><span class="tg"></span></div>
+            </div>
+            <div class="pane">
+              <div class="row" style="padding:4px 0 6px"><div><span class="ptitle" style="font-size:16px">PlayStation</span><div class="desc">132 on RomM · 128 in Steam · Beetle PSX HW <span class="m">1</span></div></div><div class="val ok">BIOS 3 / 5</div></div>
+              <div class="btns" style="margin-top:0"><div class="btn sm">Change core ›</div></div>
+              <div class="sec-t">BIOS files <span class="sp">3 / 5 required</span><span class="m">2</span></div>
+              <table class="tbl">
+                <thead><tr><th>Wanted</th><th>On disk</th><th>Contents</th><th></th></tr></thead>
+                <tbody>
+                  <tr><td>scph5500.bin <span class="mu">Japan</span></td><td class="ok">✓</td><td class="mu">—</td><td></td></tr>
+                  <tr><td>scph5501.bin <span class="mu">USA</span></td><td class="ok">✓</td><td class="mu">—</td><td></td></tr>
+                  <tr><td>scph5502.bin <span class="mu">Europe</span></td><td class="ok">✓</td><td class="mu">—</td><td></td></tr>
+                  <tr><td>scph1001.bin <span class="mu">USA, alt</span></td><td class="warn">missing</td><td class="mu">—</td><td class="n"><span class="btn sm">Download</span></td></tr>
+                  <tr><td>psxonpsp660.bin <span class="mu">optional</span></td><td class="warn">missing</td><td class="mu">—</td><td class="n"><span class="btn sm">Download</span></td></tr>
+                </tbody>
+              </table>
+              <div class="btns"><div class="btn">Download required (2)</div><div class="btn">Download all</div><div class="btn dng">Delete BIOS (3)</div></div>
+              <div class="btns"><div class="btn dng">Remove 128 shortcuts</div><div class="btn dng">Delete save files</div><span class="m" style="align-self:center">3</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="caption"><span>List 264 px · detail 526 px</span><span>The whole BIOS table fits without scrolling; the two removals sit under it</span></div>
+
+    <div class="notes">
+      <div><h3>Notes</h3>
+        <ol>
+          <li><span class="mk">1</span><p><strong>One header line</strong> carries the name, the counts, the core and the BIOS state. Core and Remove become two buttons instead of two sections. The sync toggle stays in the list row, where the focus already is.</p></li>
+          <li><span class="mk">2</span><p><strong>The BIOS table gets the space</strong>, which is the only part of a platform with a variable number of rows. Contents is #1803's column: whether the file on disk is the right one. Its backend half does not exist yet — the vendored resolver can verify, the plugin asks it not to — so every row reads a dash until that lands.</p></li>
+          <li><span class="mk">3</span><p><strong>The two removals are named and sit last</strong>, under the BIOS buttons, red. Reaching them takes a scroll, which is right for what they do.</p></li>
+        </ol>
+      </div>
+      <div><h3>What it costs</h3>
+        <ul>
+          <li>Changing the core moves behind a press. The core is readable in the header but not changeable there.</li>
+          <li>Denser header — four facts on one line at 526 px.</li>
+          <li>A platform with no BIOS at all shows a nearly empty pane.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ C ============ -->
+  <section class="variant" id="v-c">
+    <h2>C · One wide table</h2>
+    <p class="sub">No detail pane. Every platform is a row across the full width with its facts as columns, and A opens the focused row in place.</p>
+
+    <div class="stage" data-w="854" data-h="534"><div class="deck">
+      <div class="bgtile" style="left:40px;top:120px;width:300px;height:200px"></div>
+      <div class="qam">
+        <div class="rail"><i></i><i class="c"></i><i></i><i class="c"></i><i></i><i class="on"></i></div>
+        <div class="content">
+          <div class="dtitle"><span class="ar">‹</span> Tender</div>
+          <div class="phead"><span class="back">‹ Back</span><span class="ptitle">Library</span></div>
+          <div class="tabs"><span class="bump">L1</span><span class="tab on">Platforms</span><span class="tab">Collections</span><span class="bump r">R1</span></div>
+          <div style="flex:1;min-height:0;overflow:auto;padding:6px 16px 10px">
+            <div class="btns" style="margin:0 0 4px"><div class="btn sm">Enable all</div><div class="btn sm">Disable all</div></div>
+            <table class="tbl">
+              <thead><tr><th>Platform <span class="m">1</span></th><th class="n">RomM</th><th class="n">Steam</th><th>Core</th><th>BIOS</th><th class="n">Sync</th></tr></thead>
+              <tbody>
+                <tr class="sel"><td><span class="dot"></span> PlayStation</td><td class="n">132</td><td class="n">128</td><td>Beetle PSX HW</td><td class="ok">3 / 5</td><td class="n"><span class="tg on"></span></td></tr>
+                <tr class="sel inl"><td colspan="6" style="padding:6px 10px">
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span class="m">2</span>
+                    <span class="btn sm">Change core</span><span class="btn sm">Download required (2)</span><span class="btn sm">Download all</span><span class="btn sm dng">Delete BIOS</span><span class="btn sm dng">Remove shortcuts</span><span class="btn sm dng">Delete saves</span></div>
+                  <table class="tbl" style="margin-top:6px">
+                    <thead><tr><th>Wanted</th><th>On disk</th><th>Contents</th><th></th></tr></thead>
+                    <tbody>
+                      <tr><td>scph5500.bin</td><td class="ok">✓</td><td class="mu">—</td><td></td></tr>
+                      <tr><td>scph1001.bin</td><td class="warn">missing</td><td class="mu">—</td><td class="n"><span class="btn sm">Download</span></td></tr>
+                    </tbody>
+                  </table>
+                </td></tr>
+                <tr><td><span class="dot r"></span> Dreamcast</td><td class="n">37</td><td class="n">37</td><td>Flycast</td><td class="dngt">0 / 2</td><td class="n"><span class="tg on"></span></td></tr>
+                <tr><td><span class="dot w"></span> Nintendo DS</td><td class="n">64</td><td class="n">64</td><td>melonDS</td><td class="warn">1 / 2</td><td class="n"><span class="tg on"></span></td></tr>
+                <tr><td><span class="dot g"></span> SNES</td><td class="n">301</td><td class="n">301</td><td>Snes9x</td><td class="mu">—</td><td class="n"><span class="tg on"></span></td></tr>
+                <tr><td><span class="dot g"></span> Game Boy</td><td class="n">210</td><td class="n mu">0</td><td class="mu">not synced</td><td class="mu">—</td><td class="n"><span class="tg"></span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="caption"><span>One region, 806 px wide</span><span>The open row pushes the rest down</span></div>
+
+    <div class="notes">
+      <div><h3>Notes</h3>
+        <ol>
+          <li><span class="mk">1</span><p><strong>Everything at a glance.</strong> Core and BIOS state are columns, so you compare platforms without walking them one by one.</p></li>
+          <li><span class="mk">2</span><p><strong>A opens the row in place</strong> — actions as a button row, then the BIOS files. Closing it restores the list.</p></li>
+        </ol>
+      </div>
+      <div><h3>What it costs</h3>
+        <ul>
+          <li>Height is the scarce axis and this spends it twice: the open row plus the rows below it. At 263 px you see the open platform and about two others.</li>
+          <li>The core label is needed for every visible row, not just the focused one — with a per-platform read that is one call per row.</li>
+          <li>Six columns at 806 px means a truncated core name on the longer ones.</li>
+          <li>It is the layout closest to today's System page, which the redesign set out to replace.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <table class="cmp">
+    <thead><tr><th>&nbsp;</th><th>A · list and detail</th><th>B · detail with a header</th><th>C · one wide table</th></tr></thead>
+    <tbody>
+      <tr><td>Visible without scrolling (Deck)</td><td>7 platforms + core and the first BIOS rows</td><td class="y">7 platforms + all five BIOS rows and their buttons</td><td class="n">1 open platform + 2 rows</td></tr>
+      <tr><td>Compare platforms</td><td class="n">one at a time</td><td class="n">one at a time</td><td class="y">all at once</td></tr>
+      <tr><td>Core reads needed</td><td class="y">1 per focused platform</td><td class="y">1 per focused platform</td><td class="n">1 per visible row</td></tr>
+      <tr><td>Change the core</td><td>a row in the detail</td><td>a button in the header</td><td>inside the open row</td></tr>
+      <tr><td>Uses a taller display</td><td class="y">more list and more detail</td><td class="y">more list and more detail</td><td>more rows</td></tr>
+      <tr><td>Matches the design record</td><td class="y">yes</td><td>yes, header instead of sections</td><td class="n">no — it is the layout being replaced</td></tr>
+    </tbody>
+  </table>
+
+  <div class="recbox"><b>Recommendation</b>
+    <strong>B.</strong> The two differ in one thing: what the top of the detail costs. A spends four rows on a name line and a core section, so the BIOS table starts below the fold; B spends one line on name, counts, core and BIOS state, and the table fits whole. Everything else — the list, the navigation, one core read per focused platform — is identical. A stays right if changing the core should be a visible row rather than a button.
+  </div>
+
+</main>
+
+<script>
+  (function () {
+    var KEY = "tender-library-layouts";
+    var state = { v: "a" };
+    try { Object.assign(state, JSON.parse(localStorage.getItem(KEY) || "{}")); } catch (e) {}
+
+    function fit() {
+      document.querySelectorAll(".variant.on .stage").forEach(function (s) {
+        var w = s.clientWidth; if (!w) return;
+        var dw = Number(s.dataset.w), dh = Number(s.dataset.h);
+        var sc = Math.min(1, w / dw);
+        var deck = s.querySelector(".deck");
+        deck.style.width = dw + "px";
+        deck.style.height = dh + "px";
+        deck.style.transform = "scale(" + sc + ")";
+        s.style.height = Math.round(dh * sc) + "px";
+      });
+    }
+    function apply() {
+      document.querySelectorAll(".variant").forEach(function (el) { el.classList.toggle("on", el.id === "v-" + state.v); });
+      document.querySelectorAll(".chip[data-v]").forEach(function (c) { c.setAttribute("aria-pressed", String(c.dataset.v === state.v)); });
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+      fit();
+    }
+    document.querySelectorAll(".chip[data-v]").forEach(function (c) {
+      c.addEventListener("click", function () { state.v = c.dataset.v; apply(); window.scrollTo({ top: 0 }); });
+    });
+    if ("ResizeObserver" in window) new ResizeObserver(fit).observe(document.body);
+    window.addEventListener("resize", fit);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+    apply();
+  })();
+</script>
+
+</body>
+</html>

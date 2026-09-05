@@ -5,6 +5,12 @@ record is the only evidence of that, so the records are this module's whole
 input: it iterates them, unlinks the path each one holds, and prunes the row.
 Nothing here consults a status listing, a file's existence, or what the library
 currently offers.
+
+Three buttons reach it — the platform's Delete BIOS, a file row's Delete, a
+declared folder's Delete — and they share ONE removal loop, differing only in
+which records they select. A second copy of that loop is what the register's
+BIOS-delete rule warns about: the copies would drift silently, and this is the
+loop that once destroyed a user's file.
 """
 
 from __future__ import annotations
@@ -50,8 +56,15 @@ class PlatformBiosDeleter:
         self._loop = config.loop
         self._logger = config.logger
 
-    def _delete_platform_bios_io(self, platform_slug):
-        """Sync worker for delete_platform_bios — file deletions then DB prune.
+    def _delete_recorded_io(self, platform_slug, selects=None) -> tuple[int, list[str]]:
+        """Remove the plugin's own downloads for *platform_slug*, filtered by *selects*.
+
+        The one removal loop, and deliberately the only one: three buttons reach
+        it — the platform's Delete BIOS, a file row's Delete, a declared folder's
+        Delete — and they differ only in **which records they select**, never in
+        what a removal is. A second copy of this loop is what the register warns
+        about, because a divergence between the copies would be silent and this
+        is the loop that once destroyed a user's file.
 
         Runs in an executor. Every filesystem removal happens outside any
         transaction: the records are read in one short UoW before the loop and
@@ -84,6 +97,12 @@ class PlatformBiosDeleter:
         refusing that row would strand our own download with nothing in the UI
         able to clean it up.
 
+        *selects* is a predicate over records this platform already owns, so
+        the worst a wrong one can do is act on that whole set — never on a file
+        the plugin did not place. ``None`` selects all of them, which is the
+        platform-wide button; the folder button guards its own degenerate path
+        so that "a folder's files" cannot quietly become "the platform's".
+
         A record whose file is already gone is not a deletion and not an error —
         the row is dropped and nothing is counted. That is also what makes two
         rows for one file name under different firmware slugs harmless: they
@@ -91,9 +110,11 @@ class PlatformBiosDeleter:
         over an absence.
         """
         deleted = 0
-        errors = []
+        errors: list[str] = []
         pruned: list[tuple[str, str]] = []
         for record in self._recorded_bios_files(platform_slug):
+            if selects is not None and not selects(record):
+                continue
             if self._firmware_file_store.exists(record.file_path):
                 try:
                     self._firmware_file_store.remove_file(record.file_path)
@@ -136,16 +157,83 @@ class PlatformBiosDeleter:
             for slug, file_name in keys:
                 uow.bios_files.delete(slug, file_name)
 
+    async def delete_bios_folder(self, platform_slug, folder_path) -> dict[str, Any]:
+        """Delete the BIOS files the plugin downloaded inside *folder_path*.
+
+        The folder row's twin of :meth:`delete_bios_file`, and the same
+        :meth:`_delete_recorded_io` again under a containment predicate. A
+        declared folder has no name a record could carry, so its files are
+        matched by being written underneath it — a filter over this platform's
+        own records, which narrows and can never widen. The folder itself is
+        never removed: the emulator lists it, and it is not ours.
+
+        This is deliberately not the same rule as the download side's: a folder
+        is never offered as a DOWNLOAD, because there is no file to fetch into a
+        name the emulator lists. That says nothing about the files already
+        inside it.
+        """
+        # A degenerate path would make the predicate "/" and select every
+        # absolute recorded path — still only this platform's own downloads, but
+        # the platform-wide set rather than a folder's, which is not what the
+        # button offered. Unreachable from the UI (a folder row with no
+        # `local_path` is stamped `deletable_count: 0`), refused here so the
+        # narrowing claim holds for whoever calls it next.
+        root = folder_path.rstrip("/")
+        if not root:
+            return {"success": True, "deleted_count": 0, "message": "Nothing to delete in this folder"}
+        prefix = f"{root}/"
+        deleted, errors = await self._loop.run_in_executor(
+            None, self._delete_recorded_io, platform_slug, lambda record: record.file_path.startswith(prefix)
+        )
+        self._listing.invalidate()
+
+        if errors:
+            return {
+                "success": False,
+                "reason": ErrorCode.UNKNOWN.value,
+                "deleted_count": deleted,
+                "message": f"Could not delete every file: {errors[0]}",
+            }
+        if deleted == 0:
+            return {"success": True, "deleted_count": 0, "message": "Nothing to delete in this folder"}
+        return {"success": True, "deleted_count": deleted, "message": f"Deleted {deleted} BIOS file(s)"}
+
+    async def delete_bios_file(self, platform_slug, file_name) -> dict[str, Any]:
+        """Delete one BIOS file the plugin downloaded, by name.
+
+        The per-row twin of :meth:`delete_platform_bios`, running the same
+        :meth:`_delete_recorded_io` under a name predicate rather than a copy of
+        it: a ``downloaded_bios`` record is the only evidence the plugin placed
+        the file, and a row with no record removes nothing and says so. A caller
+        cannot widen this into a presence-based delete by passing a different
+        name.
+        """
+        deleted, errors = await self._loop.run_in_executor(
+            None, self._delete_recorded_io, platform_slug, lambda record: record.file_name == file_name
+        )
+        self._listing.invalidate()
+
+        if errors:
+            return {
+                "success": False,
+                "reason": ErrorCode.UNKNOWN.value,
+                "deleted_count": deleted,
+                "message": f"Could not delete {file_name}: {errors[0]}",
+            }
+        if deleted == 0:
+            return {"success": True, "deleted_count": 0, "message": f"Nothing to delete for {file_name}"}
+        return {"success": True, "deleted_count": deleted, "message": f"Deleted {file_name}"}
+
     async def delete_platform_bios(self, platform_slug) -> dict[str, Any]:
         """Delete the BIOS files the plugin downloaded for a platform.
 
         Scoped to the plugin's own downloads, never to everything sitting in the
-        platform's BIOS locations — see ``_delete_platform_bios_io``. The
+        platform's BIOS locations — see :meth:`_delete_recorded_io`. The
         download records are the only input: a status listing would re-introduce
         the library as a gate, and our own download is deletable long after RomM
         stops offering it (the case that used to hide the button entirely).
         """
-        deleted, errors = await self._loop.run_in_executor(None, self._delete_platform_bios_io, platform_slug)
+        deleted, errors = await self._loop.run_in_executor(None, self._delete_recorded_io, platform_slug)
         self._listing.invalidate()
 
         if errors:

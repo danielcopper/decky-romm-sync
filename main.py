@@ -342,6 +342,9 @@ class Plugin:
     async def get_platform_core_info(self, rom_id):
         return await self._core_service.get_platform_core_info(rom_id)
 
+    async def get_system_core_info(self, platform_slug):
+        return await self._core_service.get_system_core_info(platform_slug)
+
     # ── Disc picker delegation to DiscService ──────────────
 
     async def get_disc_selection(self, rom_id):
@@ -427,6 +430,10 @@ class Plugin:
     async def download_required_firmware(self, platform_slug):
         return await self._firmware_service.download_required_firmware(platform_slug)
 
+    @migration_blocked
+    async def download_platform_firmware_file(self, platform_slug, file_name):
+        return await self._firmware_service.download_platform_firmware_file(platform_slug, file_name)
+
     async def check_platform_bios(self, platform_slug):
         # Platform-level BIOS check (the frontend callable sends only the slug);
         # no per-game core to thread, so the system default drives the filter.
@@ -438,6 +445,14 @@ class Plugin:
     @migration_blocked
     async def delete_platform_bios(self, platform_slug):
         return await self._firmware_service.delete_platform_bios(platform_slug)
+
+    @migration_blocked
+    async def delete_bios_file(self, platform_slug, file_name):
+        return await self._firmware_service.delete_bios_file(platform_slug, file_name)
+
+    @migration_blocked
+    async def delete_bios_folder(self, platform_slug, folder_path):
+        return await self._firmware_service.delete_bios_folder(platform_slug, folder_path)
 
     # ── Sync delegation to LibraryService ─────────────────────
 
@@ -800,6 +815,9 @@ class Plugin:
     @prune_active_blocked
     async def delete_local_saves(self, rom_id):
         return self._save_sync_service.delete_local_saves(rom_id)
+
+    async def count_platform_saves(self, platform_slug):
+        return await self._save_sync_service.count_platform_saves(platform_slug)
 
     @migration_blocked
     @prune_active_blocked

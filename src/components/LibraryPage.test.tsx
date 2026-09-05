@@ -6,8 +6,6 @@
 // .catch.
 //
 // LibraryPage catch sites (all asserted below):
-//   - handleToggle catch → rollback setSyncPlatforms (sync_enabled flips back)
-//   - handleSetAll catch → restore previous platforms snapshot
 //   - handleCollectionToggle catch → rollback setCollections
 //   - handleSetAllCollections catch → restore previous collections snapshot
 //   - platform-groups inline catch → setPlatformGroups(!value) rollback
@@ -15,15 +13,13 @@
 //   - getSettings .catch → owner-scope stays at its "all" default; the two
 //     fetches are decoupled so a settings-read failure never blanks the list.
 //
-// The System view (per-platform core + BIOS state) lives in SystemPage, a
-// top-level QAM page — its tests are in SystemPage.test.tsx, not here.
+// The Platforms tab — its list, its detail, and the reads behind them — is
+// driven through this same page in src/components/library/PlatformsTab.test.tsx.
+// What is pinned here is the frame the two tabs hang in, and the Collections tab.
 //
 // MUTATION CHECKS (by inspection — auto-mode classifier likely blocks on
 // React state internals, so confidence is recorded here):
-//   1. Removing the rollback inside handleToggle's catch would break the
-//      "platform toggle rejection reverts checked state" test — the captured
-//      ToggleField checked prop would remain at the optimistic value.
-//   2. Removing the `!collectionsLoaded.current` guard would break the
+//   1. Removing the `!collectionsLoaded.current` guard would break the
 //      "switching back to collections tab does not refetch" test — getCollections
 //      would be called twice instead of once.
 
@@ -34,11 +30,36 @@ import { LibraryPage } from "./LibraryPage";
 import * as backend from "../api/backend";
 import { scrollElementToTop } from "../utils/scrollHelpers";
 import { showModal } from "@decky/ui";
-import type { PlatformSyncSetting, CollectionSyncSetting, PluginSettings } from "../types";
+import type { CollectionSyncSetting, PluginSettings } from "../types";
 
 // scroll helpers are no-ops in happy-dom; mock so the search-field scroll and
 // the Back-button scroll can be asserted without a real layout engine.
 vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn(), scrollElementToTop: vi.fn() }));
+
+// The wide frame reaches Steam's tabbed page and its scroll panel through this
+// module, which is a webpack probe with no answer under happy-dom. The stub tabs
+// render a button per title plus the active tab's content, which is what makes a
+// tab switch drivable here.
+vi.mock("../utils/deckyUiInternals", async () => {
+  const { createElement: ce } = await import("react");
+  type TabShape = { id: string; title: string; content: unknown };
+  return {
+    quickAccessMenuClasses: undefined,
+    ScrollPanel: undefined,
+    findSP: () => undefined,
+    // The Back chip's glyph probe misses under happy-dom, so the chip renders
+    // its text fallback — which is what the back-button test clicks.
+    ControllerGlyph: undefined,
+    GLYPH_BUTTON_B: 1,
+    Tabs: ({ tabs, activeTab, onShowTab }: { tabs: TabShape[]; activeTab: string; onShowTab: (id: string) => void }) =>
+      ce(
+        "div",
+        { "data-testid": "steam-tabs" },
+        ...tabs.map((tab) => ce("button", { key: tab.id, onClick: () => onShowTab(tab.id) }, tab.title)),
+        ce("div", { key: "content" }, tabs.find((tab) => tab.id === activeTab)?.content as never),
+      ),
+  };
+});
 
 // Re-mock @decky/ui locally so the component tree renders with inspectable
 // stubs (ToggleField checked-prop, Field label/description, DialogButton click).
@@ -64,7 +85,10 @@ vi.mock("@decky/ui", async () => {
         ce("span", { "data-testid": "field-label" }, p.label as never),
         ce("span", { "data-testid": "field-desc" }, p.description as never),
       ),
-    Focusable: passthrough("div"),
+    // onFocus is forwarded: it is how the list-and-detail layout learns focus
+    // moved to a row, so dropping it would make selection vacuously untestable.
+    Focusable: (p: AnyProps & { onFocus?: (e: unknown) => void }) =>
+      ce("div", { "data-testid": "focusable", onFocus: p.onFocus }, p.children as never),
     DialogButton: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
       ce("button", { onClick, disabled }, children as never),
     TextField: (
@@ -88,6 +112,11 @@ vi.mock("@decky/ui", async () => {
     // inspected off the showModal mock, not the DOM.
     ConfirmModal: () => null,
     showModal: vi.fn(),
+    showContextMenu: vi.fn(),
+    Menu: passthrough("div"),
+    MenuItem: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
+      ce("button", { type: "button", onClick, disabled }, children as never),
+    MenuSeparator: () => ce("hr"),
     ToggleField: (
       p: AnyProps & {
         checked?: boolean;
@@ -114,6 +143,9 @@ vi.mock("@decky/ui", async () => {
         typeof p.label === "string" ? p.label : null,
       ),
     Spinner: () => ce("div", { "data-testid": "spinner" }),
+    // The QAM is open for any test that renders a wide page; the hook's
+    // clear-on-close path is exercised in src/utils/qamExpansion.test.tsx.
+    useQuickAccessVisible: () => true,
   };
 });
 
@@ -145,17 +177,6 @@ function defaultSettings(): PluginSettings {
   };
 }
 
-function makePlatform(overrides: Partial<PlatformSyncSetting> = {}): PlatformSyncSetting {
-  return {
-    id: 1,
-    name: "Genesis",
-    slug: "genesis",
-    rom_count: 10,
-    sync_enabled: false,
-    ...overrides,
-  };
-}
-
 function makeCollection(overrides: Partial<CollectionSyncSetting> = {}): CollectionSyncSetting {
   return {
     id: "c1",
@@ -176,14 +197,8 @@ describe("LibraryPage", () => {
       success: true,
       platforms: [],
     });
-    vi.mocked(backend.savePlatformSync).mockResolvedValue({
-      success: true,
-      message: "",
-    });
-    vi.mocked(backend.setAllPlatformsSync).mockResolvedValue({
-      success: true,
-      message: "",
-    });
+    vi.mocked(backend.getFirmwareStatus).mockResolvedValue({ success: true, platforms: [] });
+    vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({ platforms: [] });
     vi.mocked(backend.getCollections).mockResolvedValue({
       success: true,
       collections: [],
@@ -197,14 +212,23 @@ describe("LibraryPage", () => {
   });
 
   // ------------------------------------------------------------------
-  // A. Initial render + tab switching (lazy loading)
+  // A. The wide frame + tab switching (lazy loading)
   // ------------------------------------------------------------------
-  describe("initial render + tab switching", () => {
-    it("mounts with the platforms tab active and calls getPlatforms once", async () => {
-      render(<LibraryPage onBack={vi.fn()} />);
+  describe("the frame and its tabs", () => {
+    it("renders as a wide page titled Library with a Back row", async () => {
+      const onBack = vi.fn();
+      const { getByText } = render(<LibraryPage onBack={onBack} />);
       await flushAsync();
+      expect(getByText("Library")).toBeTruthy();
+      fireEvent.click(getByText("‹ Back"));
+      expect(onBack).toHaveBeenCalledTimes(1);
+    });
+
+    it("opens on the Platforms tab and leaves the collections read until it is asked for", async () => {
+      const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(getByText("Platforms")).toBeTruthy();
       expect(vi.mocked(backend.getPlatforms)).toHaveBeenCalledTimes(1);
-      // collections lazy data not yet fetched
       expect(vi.mocked(backend.getCollections)).not.toHaveBeenCalled();
     });
 
@@ -239,195 +263,6 @@ describe("LibraryPage", () => {
       });
       // Still 1 — the ref guard prevents a re-fetch.
       expect(vi.mocked(backend.getCollections)).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  // ------------------------------------------------------------------
-  // B. Platforms tab — mount (getPlatforms)
-  // ------------------------------------------------------------------
-  describe("platforms tab — mount", () => {
-    it("renders a ToggleField per platform when getPlatforms succeeds", async () => {
-      vi.mocked(backend.getPlatforms).mockResolvedValue({
-        success: true,
-        platforms: [makePlatform({ id: 1, name: "Genesis" }), makePlatform({ id: 2, name: "SNES" })],
-      });
-      const { container } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-      expect(container.textContent).toContain("Genesis");
-      expect(container.textContent).toContain("SNES");
-    });
-
-    it("surfaces a 'Failed to load platforms' button when getPlatforms returns success=false", async () => {
-      vi.mocked(backend.getPlatforms).mockResolvedValue({
-        success: false,
-        platforms: [],
-      });
-      const { container } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-      expect(container.textContent).toContain("Failed to load platforms");
-    });
-
-    it("surfaces 'Failed to load platforms' when getPlatforms throws (catch sets syncError=true)", async () => {
-      vi.mocked(backend.getPlatforms).mockRejectedValue(new Error("net"));
-      const { container } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-      expect(container.textContent).toContain("Failed to load platforms");
-    });
-
-    it("clicking the failure-state button invokes onBack", async () => {
-      const onBack = vi.fn();
-      vi.mocked(backend.getPlatforms).mockResolvedValue({
-        success: false,
-        platforms: [],
-      });
-      const { getByText } = render(<LibraryPage onBack={onBack} />);
-      await flushAsync();
-      fireEvent.click(getByText("Failed to load platforms"));
-      // onBack is also wired to the top-level "Back" button — only one ButtonItem
-      // surfaces the failure label, but counting once is what we want.
-      expect(onBack).toHaveBeenCalledTimes(1);
-    });
-
-    it("removes the Spinner once getPlatforms resolves (finally setSyncLoading(false))", async () => {
-      const { queryByTestId } = render(<LibraryPage onBack={vi.fn()} />);
-      // Initial render — getPlatforms not yet resolved
-      expect(queryByTestId("spinner")).not.toBeNull();
-      await flushAsync();
-      expect(queryByTestId("spinner")).toBeNull();
-    });
-
-    it("shows the collapsed shortcut count in the toggle description when present (#1382)", async () => {
-      vi.mocked(backend.getPlatforms).mockResolvedValue({
-        success: true,
-        platforms: [makePlatform({ id: 1, name: "Genesis", rom_count: 10, collapsed_count: 7 })],
-      });
-      const { container } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-      const toggle = container.querySelector('[data-label="Genesis"]');
-      expect(toggle?.getAttribute("data-description")).toBe("7 ROMs");
-    });
-
-    it("falls back to the raw rom_count when no collapsed count is present (never synced / old backend)", async () => {
-      vi.mocked(backend.getPlatforms).mockResolvedValue({
-        success: true,
-        platforms: [makePlatform({ id: 1, name: "Genesis", rom_count: 10 })],
-      });
-      const { container } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-      const toggle = container.querySelector('[data-label="Genesis"]');
-      expect(toggle?.getAttribute("data-description")).toBe("10 ROMs");
-    });
-  });
-
-  // ------------------------------------------------------------------
-  // C. Platforms tab — handleToggle (optimistic + rollback)
-  // ------------------------------------------------------------------
-  describe("platforms tab — handleToggle", () => {
-    it("optimistically flips sync_enabled and calls savePlatformSync", async () => {
-      vi.mocked(backend.getPlatforms).mockResolvedValue({
-        success: true,
-        platforms: [makePlatform({ id: 7, name: "Genesis", sync_enabled: false })],
-      });
-      const { container } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-      const toggleInputs = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]');
-      // Only one platform → one toggle for that platform
-      const platformToggle = toggleInputs[0]!;
-      expect(platformToggle.checked).toBe(false);
-
-      await act(async () => {
-        fireEvent.click(platformToggle);
-        await Promise.resolve();
-      });
-
-      expect(vi.mocked(backend.savePlatformSync)).toHaveBeenCalledWith(7, true);
-      const afterClick = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]')[0]!;
-      expect(afterClick.checked).toBe(true);
-    });
-
-    it("reverts sync_enabled when savePlatformSync rejects", async () => {
-      vi.mocked(backend.getPlatforms).mockResolvedValue({
-        success: true,
-        platforms: [makePlatform({ id: 7, sync_enabled: false })],
-      });
-      vi.mocked(backend.savePlatformSync).mockRejectedValue(new Error("nope"));
-      const { container } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-      const toggleInput = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]')[0]!;
-
-      await act(async () => {
-        fireEvent.click(toggleInput);
-        // Allow optimistic update, the awaited rejected promise, and the
-        // rollback setState to flush.
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      // CATCH-REJECTION assert: rolled back to false
-      const reverted = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]')[0]!;
-      expect(reverted.checked).toBe(false);
-    });
-  });
-
-  // ------------------------------------------------------------------
-  // D. Platforms tab — handleSetAll (optimistic + rollback)
-  // ------------------------------------------------------------------
-  describe("platforms tab — handleSetAll", () => {
-    it("enables all platforms optimistically and calls setAllPlatformsSync(true)", async () => {
-      vi.mocked(backend.getPlatforms).mockResolvedValue({
-        success: true,
-        platforms: [makePlatform({ id: 1, sync_enabled: false }), makePlatform({ id: 2, sync_enabled: false })],
-      });
-      const { container, getByText } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-
-      await act(async () => {
-        fireEvent.click(getByText("Enable All"));
-        await Promise.resolve();
-      });
-
-      expect(vi.mocked(backend.setAllPlatformsSync)).toHaveBeenCalledWith(true);
-      const inputs = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]');
-      expect(inputs[0]?.checked).toBe(true);
-      expect(inputs[1]?.checked).toBe(true);
-    });
-
-    it("disables all platforms optimistically and calls setAllPlatformsSync(false)", async () => {
-      vi.mocked(backend.getPlatforms).mockResolvedValue({
-        success: true,
-        platforms: [makePlatform({ id: 1, sync_enabled: true }), makePlatform({ id: 2, sync_enabled: true })],
-      });
-      const { container, getByText } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-      await act(async () => {
-        fireEvent.click(getByText("Disable All"));
-        await Promise.resolve();
-      });
-      expect(vi.mocked(backend.setAllPlatformsSync)).toHaveBeenCalledWith(false);
-      const inputs = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]');
-      expect(inputs[0]?.checked).toBe(false);
-      expect(inputs[1]?.checked).toBe(false);
-    });
-
-    it("restores the previous snapshot when setAllPlatformsSync rejects", async () => {
-      vi.mocked(backend.getPlatforms).mockResolvedValue({
-        success: true,
-        platforms: [makePlatform({ id: 1, sync_enabled: true }), makePlatform({ id: 2, sync_enabled: false })],
-      });
-      vi.mocked(backend.setAllPlatformsSync).mockRejectedValue(new Error("x"));
-      const { container, getByText } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-      await act(async () => {
-        fireEvent.click(getByText("Enable All"));
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      // CATCH-REJECTION assert: snapshot restored
-      const inputs = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]');
-      expect(inputs[0]?.checked).toBe(true);
-      expect(inputs[1]?.checked).toBe(false);
     });
   });
 
@@ -1739,7 +1574,7 @@ describe("LibraryPage", () => {
       const onBack = vi.fn();
       const { getByText } = render(<LibraryPage onBack={onBack} />);
       await flushAsync();
-      fireEvent.click(getByText("Back"));
+      fireEvent.click(getByText("‹ Back"));
       expect(onBack).toHaveBeenCalledTimes(1);
     });
   });

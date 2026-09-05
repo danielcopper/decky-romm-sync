@@ -1,11 +1,11 @@
 import { definePlugin, addEventListener, removeEventListener, toaster } from "@decky/api";
 import { showToast, PLUGIN_NAME } from "./utils/toast";
 import { useState, useRef, useEffect, FC, type ReactNode } from "react";
+import { Focusable } from "@decky/ui";
 import { FaGamepad } from "react-icons/fa";
 import { MainPage } from "./components/MainPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { LibraryPage } from "./components/LibraryPage";
-import { SystemPage } from "./components/SystemPage";
 import { DangerZone } from "./components/DangerZone";
 import { DownloadQueue } from "./components/DownloadQueue";
 import { OWNS_ENTRY_FOCUS_ATTR } from "./components/qam/WidePage";
@@ -153,14 +153,21 @@ const QAMPanel: FC = () => {
     case "downloads":
       content = <DownloadQueue onBack={() => setPage("main")} />;
       break;
-    case "system":
-      content = <SystemPage onBack={() => setPage("main")} />;
-      break;
     default:
       content = <MainPage onNavigate={(p) => setPage(p)} />;
   }
 
-  return <div ref={rootRef}>{content}</div>;
+  // B goes back one page, from wherever focus is — bound here rather than on a
+  // page so the narrow pages get it too, and bound only while there IS a page to
+  // go back to. On Main nothing is bound, so B stays Decky's own and still
+  // leaves the plugin: the escape route is never removed, it is exactly as far
+  // away as the user walked in, and the last press is never swallowed. Steam
+  // already prints "B ZURÜCK" in its footer legend, which this makes true.
+  return (
+    <div ref={rootRef}>
+      {page === "main" ? content : <Focusable onCancelButton={() => setPage("main")}>{content}</Focusable>}
+    </div>
+  );
 };
 
 /**

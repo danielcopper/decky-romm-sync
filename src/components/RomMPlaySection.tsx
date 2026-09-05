@@ -1013,8 +1013,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // One appearance, always red. This badge is not rendering the four-valued
   // verdict — the BIOS tab is, off `biosColorForLevel` — it is a warning that
   // shows only for a state that is never anything but bad. Amber for "1 of 3
-  // required present" would suggest a degree where there is none: the game
-  // still will not launch.
+  // required present" would suggest a degree where there is none: a file the
+  // core asks for is absent either way, and how many of its siblings are there
+  // does not soften that.
   if (detail.biosRequiredMissing) {
     infoItems.push(
       // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- pointer-only shortcut into the BIOS tab, which the tab bar's DialogButton already reaches from the focus ring; a role/tabIndex here would add a gamepad focus stop to the play row.

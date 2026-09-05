@@ -6,14 +6,11 @@ import pytest
 
 from domain.prune import (
     _READABLE_KINDS,
-    group_rows,
     recovery_bundle_id,
     render_bundle_readme,
     sanitize_package_name,
     selected_prune_ids,
 )
-from domain.rom import Rom
-from domain.version_metadata import VersionMetadata
 
 if TYPE_CHECKING:
     from domain.prune import BundleReadmeContext
@@ -33,18 +30,6 @@ _PRODUCED_KINDS = {
     "cover_validator",
     "sgdb_cache",
 }
-
-
-def _rom(rom_id: int, group: str | None) -> Rom:
-    return Rom.synced(
-        rom_id=rom_id,
-        platform_slug="dc",
-        name=str(rom_id),
-        fs_name=f"{rom_id}.gdi",
-        shortcut_app_id=None,
-        synced_at="now",
-        version=VersionMetadata(sibling_group_key=group),
-    )
 
 
 def _readme_context() -> BundleReadmeContext:
@@ -117,11 +102,6 @@ def test_readme_names_every_artifact_kind_in_plain_words():
     for kind in sorted(_PRODUCED_KINDS):
         assert _READABLE_KINDS[kind] in readme
         assert kind not in readme
-
-
-def test_null_group_keys_are_independent_singletons():
-    groups = group_rows([_rom(3, None), _rom(2, "same"), _rom(1, None), _rom(4, "same")])
-    assert [[row.rom_id for row in group] for group in groups] == [[1], [2, 4], [3]]
 
 
 @pytest.mark.parametrize("remove_fully_vanished", [False, True])

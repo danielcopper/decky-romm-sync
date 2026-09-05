@@ -172,6 +172,7 @@ vi.mock("@decky/ui", async () => {
     quickAccessMenuClasses: undefined,
     Tabs: undefined,
     ScrollPanel: undefined,
+    findModule: vi.fn(() => undefined),
     findSP: vi.fn(() => undefined),
     ConfirmModal: (p: AnyProps) => ce("div", { "data-testid": "confirm-modal" }, p.children as never),
     DialogButton: ({
@@ -3763,7 +3764,7 @@ describe("RomMPlaySection", () => {
     });
 
     it("showCoreMenu marks the per-platform override core with (system), and only that core (#954)", async () => {
-      // BlastEm is the per-platform override set on the System page; the active
+      // BlastEm is the per-platform override set on the platform detail; the active
       // core is the default Snes9x. The (system) marker sits on BlastEm only —
       // Snes9x carries (default) ✓ but NOT (system).
       const items = await setupCoreMenuStructure({

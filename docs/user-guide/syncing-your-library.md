@@ -219,23 +219,28 @@ the extra versions.
 
 ## Per-Platform Toggles
 
-Not every platform in your RomM library needs to be synced to Steam. Use the **Platforms** page to enable or disable
-individual platforms.
+Not every platform in your RomM library needs to be synced to Steam. The **Platforms** tab of the **Library** page is
+where you enable or disable them.
 
-1. From the main page, tap **Platforms**
-2. Each platform shows its name and ROM count
-3. Toggle platforms on or off
-4. Use **Enable All** / **Disable All** for bulk changes
+1. From the main page, tap **Library**; the **Platforms** tab opens first (L1/R1 switch tabs)
+2. The list holds every platform your server reports with at least one ROM, in two groups: **Synced** above
+   **Available**
+3. Each row carries the platform's name, its BIOS requirement as a number, and its sync toggle. Press A on the row to
+   toggle it
+4. **Enable all** / **Disable all** sit above the groups
 5. Only enabled platforms are included in the next sync
 
-For a platform you have already synced, the count shows the number of **games** it syncs into Steam — multiple versions
-of the same game (regional dumps, revisions) collapse into one shortcut, so this can be lower than the raw file count on
-your server. A platform you have never synced shows the server's raw ROM count until its first sync.
+The groups are worked out when you open the page and stay put while it is open, so a platform you switch off does not
+jump out from under you mid-list. The next time you open the page it will be in its new group.
+
+Picking a platform shows everything else about it on the right: how many of its ROMs are on RomM and how many are in
+Steam, the emulator core it launches with, its BIOS files, and the two ways to take it back out of Steam. See
+[BIOS and Emulator Core Management](bios-management.md#library-platforms).
 
 All platforms are enabled by default until you change a toggle. Turning one platform off affects only that platform —
 every other platform stays enabled and keeps syncing.
 
-<!-- Screenshot: Platforms page with toggle switches and ROM counts -->
+<!-- Screenshot: Library › Platforms with the list on the left and one platform's detail on the right -->
 
 ## Collections
 
@@ -250,8 +255,8 @@ Collections appear in Steam's library sidebar and can be used to browse games by
 
 ### Syncing RomM collections
 
-The **Collections** page groups collections into three kinds, selected by a **Standard / Smart / Virtual** button row,
-plus a dedicated top-level toggle for RomM favorites.
+The **Collections** tab of the Library page groups collections into three kinds, selected by a **Standard / Smart /
+Virtual** button row, plus a dedicated top-level toggle for RomM favorites.
 
 - **Sync RomM favorites** (top-level toggle) — the standard collection RomM auto-manages as your favorites. Always
   exactly one per account, so it sits above the kind buttons as a single switch. It stays visible but grayed out when
@@ -349,12 +354,13 @@ returning that id. Removing that state requires the separate confirmed
 
 ## Removing Shortcuts
 
-To remove synced games, use the **Danger Zone** page. See
-[Troubleshooting — Danger Zone](troubleshooting.md#danger-zone) for details on the available removal options.
+To remove one platform's games, use that platform's pane in **Library › Platforms** — see
+[Removing a platform from Steam](managing-games.md#removing-a-platform-from-steam). For the library-wide removals, use
+the **Danger Zone** page; see [Troubleshooting — Danger Zone](troubleshooting.md#danger-zone) for the options it offers.
 
-If you delete a synced game directly from **Steam's own library** (rather than the Danger Zone), the next sync brings it
-back. The plugin notices the shortcut is gone at sync start and re-creates it, so deleting through Steam is not a
-permanent way to remove a RomM game — use the Danger Zone for that.
+If you delete a synced game directly from **Steam's own library**, the next sync brings it back. The plugin notices the
+shortcut is gone at sync start and re-creates it, so deleting through Steam is not a permanent way to remove a RomM game
+— use one of those two places for that.
 
 ---
 

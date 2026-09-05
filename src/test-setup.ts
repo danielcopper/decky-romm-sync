@@ -176,19 +176,29 @@ vi.mock("@decky/ui", () => {
     // Focusable forwards onButtonDown as a real DOM "decky-button-down"
     // listener so tests can drive gamepad input via
     // fireEvent(el, new CustomEvent("decky-button-down", { detail: { button } })).
+    // onCancelButton rides the same event, filtered to CANCEL (B), because that
+    // is how Steam delivers it — one gamepad stream, dispatched to the handler
+    // the button maps to — so a test drives it the same way.
     // onFocus is forwarded because a Focusable is how the list-and-detail layout
     // learns that focus moved to a row — dropping it would make focus-selects
     // vacuously untestable. Other FooterLegend-only props (flow-children,
-    // actionDescriptionMap, …) are dropped — they have no DOM effect under happy-dom.
+    // actionDescriptionMap, the on…ActionDescription labels Steam draws in its
+    // footer legend, …) are dropped — they have no DOM effect under happy-dom.
     Focusable: ({
       children,
       style,
       onButtonDown,
+      onCancelButton,
       onFocus,
       role,
       tabIndex,
       "aria-label": ariaLabel,
-    }: AnyProps & { style?: unknown; onButtonDown?: (evt: unknown) => void; onFocus?: (evt: unknown) => void }) =>
+    }: AnyProps & {
+      style?: unknown;
+      onButtonDown?: (evt: unknown) => void;
+      onCancelButton?: (evt: unknown) => void;
+      onFocus?: (evt: unknown) => void;
+    }) =>
       createElement(
         "div",
         {
@@ -202,8 +212,12 @@ vi.mock("@decky/ui", () => {
             if (!el) return;
             const prev = (el as unknown as { _deckyButtonDown?: EventListener })._deckyButtonDown;
             if (prev) el.removeEventListener("decky-button-down", prev);
-            if (!onButtonDown) return;
-            const listener = ((e: Event) => onButtonDown(e)) as EventListener;
+            if (!onButtonDown && !onCancelButton) return;
+            const listener = ((e: Event) => {
+              onButtonDown?.(e);
+              const button = (e as CustomEvent<{ button?: number } | null>).detail?.button;
+              if (button === 2) onCancelButton?.(e);
+            }) as EventListener;
             (el as unknown as { _deckyButtonDown?: EventListener })._deckyButtonDown = listener;
             el.addEventListener("decky-button-down", listener);
           },
@@ -239,7 +253,10 @@ vi.mock("@decky/ui", () => {
           checked: p.checked ?? false,
           onChange: (e: { target: { checked: boolean } }) => p.onChange?.(e.target.checked),
         }),
-        typeof p.label === "string" ? p.label : null,
+        // Rendered whatever its type: the real ToggleField takes a ReactNode
+        // label, and a list row that lays its label out itself (a status dot, a
+        // name, a count) would otherwise render as an unlabelled checkbox.
+        p.label as never,
         // Mirrors the ButtonItem stub: a toggle's description carries real
         // user-facing copy, so it has to be assertable rather than dropped.
         p.description == null ? null : createElement("span", { "data-testid": "toggle-desc" }, p.description as never),
@@ -264,6 +281,7 @@ vi.mock("@decky/ui", () => {
     // against behavior the real UI does not have.
     MenuItem: ({ children, onClick, disabled }: AnyProps) =>
       createElement("button", { type: "button", onClick, disabled }, children as never),
+    MenuSeparator: () => createElement("hr"),
     Navigation: { NavigateToExternalWeb: vi.fn(), Navigate: vi.fn() },
     // findSP locates Steam's <SteamRoot> iframe document for stylesheet
     // injection. Tests run in happy-dom — no Steam, no iframe — so the
@@ -283,6 +301,10 @@ vi.mock("@decky/ui", () => {
     quickAccessMenuClasses: undefined,
     Tabs: undefined,
     ScrollPanel: undefined,
+    // No webpack registry to walk, so every probe misses and the caller's
+    // fallback is what the suite exercises — which is the point: the fallback
+    // is what a Steam build that renamed the module would render.
+    findModule: vi.fn(() => undefined),
     // The QAM is open for any test that renders a wide page; the hook's
     // clear-on-close path is exercised in src/utils/qamExpansion.test.tsx.
     useQuickAccessVisible: () => true,

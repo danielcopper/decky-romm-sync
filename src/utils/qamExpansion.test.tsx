@@ -283,6 +283,12 @@ describe("useWideQamPanel", () => {
     expect(css).toContain(`.${TAB_PANEL_CLASS}:has(.${mod.WIDE_ROOT_CLASS})`);
     expect(css).toContain("max-width: none");
     expect(css).not.toContain("quickaccess_content_");
+    // A disabled button is still a focus stop, and Steam's disabled treatment
+    // leaves a focus FILL almost nothing to change — so the reader loses their
+    // place on a row where one button is disabled. Scoped to a wide page of
+    // ours, because it is Steam's own button class.
+    expect(css).toContain(`.${mod.WIDE_ROOT_CLASS} button.DialogButton[disabled].gpfocus`);
+    expect(css).toContain("outline: outset #fff 2px");
   });
 
   it("falls back to the panel's id prefix when the probe is undefined", async () => {

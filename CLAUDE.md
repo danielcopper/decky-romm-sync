@@ -118,6 +118,16 @@ locally with `mise run docs`.
   callables, and chunk bulk lists (the library apply emits shortcuts in batches; the metadata cache loads page-by-page).
 - **No `BIsModOrShortcut` bypass**: the bypass counter was removed deliberately. Shortcuts return `true` (natural
   state); we own the game detail UI. Do not reintroduce a bypass.
+- **`instanceof` against a DOM global is false in QAM code**: plugin code runs in the **SharedJSContext** window while
+  the QAM panel's nodes belong to the QAM view's own document — two realms, confirmed live (the two documents do not
+  share a URL, and neither can see the other's elements). What is **measured** is the `instanceof`: such a test is false
+  for **every** node such code will ever see, so a guard written that way rejects everything and the feature is simply
+  inert. Whether a constructor that takes the node as an argument — `new ResizeObserver(...)`,
+  `new MutationObserver(...)` — also misbehaves across realms is **not** established here in either direction; those are
+  named because taking the constructor from the node costs a property read, so the question need not be answered. Take
+  the constructor from the node — `el.ownerDocument.defaultView` — as `WidePage` and `ScrollRegion` do. **The frontend
+  suite cannot see this**: happy-dom has one realm, so the wrong global and the right one are the same object and every
+  test passes.
 
 ## Current State
 
@@ -264,15 +274,18 @@ Format: **invariant** — tier — enforced by.
 - **A firmware row the RomM library does not hold (`on_server: False`) counts towards readiness, and never towards a
   download affordance or a progress ratio** — test + prompt-only — `tests/services/test_firmware.py` pins the row's
   shape (`id` absent, `on_server` clear), that it raises `required_count`, and that it stays out of `server_count`;
-  `src/components/SystemPage.test.tsx` pins that the buttons key off the fetchable set. **The three axes live in three
-  places and nothing joins them.** `domain/bios_status.py::count_required` is readiness and counts every required row;
-  `services/firmware/status.py::_bios_aggregates` scopes `server_count` / `local_count` to `on_server` rows; the
-  download buttons' condition is a filter inside `SystemPage.tsx` and exists nowhere else. Each fold has its own quiet
-  failure: drop the row from readiness and a platform reads ready while a required file is absent; add it to the ratio
-  and a SNES page reports `0 / 26 files, 26 missing` for twenty-six optional files no core wants; add it to the buttons
-  and the page offers a download that cannot succeed. `on_server` is the one field all three read; the row's `id: None`
-  is an honest absence with no consumer at all, so nothing breaks if it is filled in and nothing is guarded by leaving
-  it empty
+  `src/components/library/PlatformsTab.test.tsx` pins that the buttons key off the fetchable set. **The three axes live
+  in three places and nothing joins them.** `domain/bios_status.py::count_required` is readiness and counts every
+  required row; `services/firmware/status.py::_bios_aggregates` scopes `server_count` / `local_count` to `on_server`
+  rows; the download buttons' condition is a filter inside `src/components/library/PlatformDetail.tsx` and exists
+  nowhere else — and since #1815 the per-row Download button reads the same filtered set, so a fourth reader of the axis
+  now exists in that one file. A fifth reads it in the same file for the On-disk cell's second mark (`⊘`), and that one
+  is display alone: it neither counts nor gates, which is what keeps it out of all three folds below. Each fold has its
+  own quiet failure: drop the row from readiness and a platform reads ready while a required file is absent; add it to
+  the ratio and a SNES page reports `0 / 26 files, 26 missing` for twenty-six optional files no core wants; add it to
+  the buttons and the page offers a download that cannot succeed. `on_server` is the one field all three read; the row's
+  `id: None` is an honest absence with no consumer at all, so nothing breaks if it is filled in and nothing is guarded
+  by leaving it empty
 - **No BIOS answer outlives the page that asked for it** — test + prompt-only —
   `tests/services/test_game_detail.py::TestGetCachedGameDetailCarriesNoBiosAnswer` and the two contract cases in
   `tests/contract/test_game_detail_read.py`. `get_cached_game_detail` carries none and says so (`bios_status_unknown`,
@@ -361,7 +374,7 @@ Format: **invariant** — tier — enforced by.
   status builder calling `_firmware_file_store.exists(dest)` directly would go green, and its rows would silently answer
   from the weaker source — `os.path.exists` on a path the plugin assembled, which is what this cut removed after it
   rendered a satisfied requirement as missing. `services/firmware/status.py` holds that store itself, for
-  `_deletable_count`'s records-still-on-disk count, so the wrong probe is one line away from every row builder that
+  `_stamp_deletable`'s records-still-on-disk probe, so the wrong probe is one line away from every row builder that
   should be asking `FirmwareDemand`. Related and separate: presence is not the row's verdict (CONTEXT.md → Row verdict),
   and a withheld verdict is not an absence — its cause is read off the row's caveat codes, never off the verdict itself
 - **A firmware row's verdict is `BiosFileEntry.satisfied`, and for a folder declaration it is what the folder HOLDS —
@@ -379,10 +392,10 @@ Format: **invariant** — tier — enforced by.
   declining with a real answer, so the same field access brings it straight back. The same holds for the third value: a
   required row answered `None` takes the level to `unknown`, and folding it into `False` claims an absence nothing
   established. `declared_kind` carries a second rule with **no check at all**: a folder declaration is never offered as
-  a download — the emulator lists that name, so there is no file to fetch into it. Two places refuse it today
-  (`SystemPage.tsx`'s fetchable filter and `FirmwareDownloader._download_firmware_batch`);
-  `FirmwareDownloader.download_firmware(firmware_id)` does not, and is unreachable only because no callable exposes it
-  (`main.py` offers the two batch entry points and `src/api/backend.ts` names no single-file download). It is the
+  a download — the emulator lists that name, so there is no file to fetch into it. Three places refuse it today
+  (`PlatformDetail.tsx`'s fetchable filter, `FirmwareDownloader._download_firmware_batch`, and
+  `FirmwareDownloader.download_platform_firmware_file`, which answers one named file and so refuses with a reason where
+  the batch simply passes the row over); `FirmwareDownloader.download_firmware(firmware_id)` still does not. It is the
   DECLARATION's kind, so it survives an absent folder, which is exactly the case a presence check would let through
 - **The whole-machine firmware inventory is never asked with content verification** — prompt-only —
   `firmware_inventory()` is asked unverified and the verified question goes through `FirmwareFolderVerdictFn`, one core
@@ -412,26 +425,35 @@ Format: **invariant** — tier — enforced by.
   directory it is given, so a savestate's backup lands in `<states>/.romm-backup/`
 - **A BIOS file is deleted only where a `downloaded_bios` record names it under one of the platform's firmware slugs,
   and only at the path that record holds** — test + prompt-only —
-  `tests/services/test_firmware.py::TestDeletePlatformBios` pins every direction end-to-end: an emulator-shipped file
-  survives, a hand-placed file under a server file's name survives, our own download is still removed once RomM no
-  longer holds it, and a download whose placement has since moved is unlinked where it was written rather than where the
-  placement now points. What makes the destructive-op rule (the `backup-or-confirm` entry) concrete for BIOS files is
-  that authority to delete comes from having placed the file, and the record is the only evidence of that, because
-  `BiosFile.mark_downloaded` is written in the download path and nowhere else. So the records are the delete's whole
-  input: it iterates them, not a status listing, which is also what keeps a download RomM has since dropped deletable
-  instead of gated behind a file list that no longer names it. The authorisations a reader reaches for instead are wrong
-  in opposite directions. `downloaded` is `os.path.exists` and nothing more: authorise on it and Delete BIOS destroys
-  firmware RetroDECK ships with its own components, which no RomM library holds and nothing here can fetch back — it did
-  exactly that to `<bios>/dolphin-emu/Sys/codehandler.bin` on a real device. `on_server` describes what the library
-  holds _now_, not who wrote the file: authorise on it and a file dropped from RomM after we downloaded it is stranded
-  on disk with nothing in the UI able to remove it. The PATH has its own version of the same trap: a status row's
-  `local_path` is recomputed from today's placement, so for a file fetched before an emu-atlas bump moved it the name
-  still matches our record while the path names whatever now occupies the new destination — RetroDECK's own
-  `codehandler.bin`, in the case that motivated this. The count the UI offers is bound to the same set:
-  `deletable_count` on the `get_firmware_status` payload is records-still-on-disk, because `local_count` is the
-  library's progress ratio and is wrong in both directions — it hid the button entirely for a platform whose downloads
-  had all left the library. **Nothing mechanical stands behind any of this.** A second delete path looping a status list
-  on `downloaded` alone would go green — which is exactly the shape this one had when it destroyed that file
+  `tests/services/test_firmware.py::TestDeletePlatformBios` and `::TestDeleteOneBiosFile` pin every direction
+  end-to-end: an emulator-shipped file survives, a hand-placed file under a server file's name survives, our own
+  download is still removed once RomM no longer holds it, a download whose placement has since moved is unlinked where
+  it was written rather than where the placement now points, and a per-row delete takes only the record it names. What
+  makes the destructive-op rule (the `backup-or-confirm` entry) concrete for BIOS files is that authority to delete
+  comes from having placed the file, and the record is the only evidence of that, because `BiosFile.mark_downloaded` is
+  written in the download path and nowhere else. So the records are the delete's whole input: it iterates them, not a
+  status listing, which is also what keeps a download RomM has since dropped deletable instead of gated behind a file
+  list that no longer names it. The authorisations a reader reaches for instead are wrong in opposite directions.
+  `downloaded` is `os.path.exists` and nothing more: authorise on it and Delete BIOS destroys firmware RetroDECK ships
+  with its own components, which no RomM library holds and nothing here can fetch back — it did exactly that to
+  `<bios>/dolphin-emu/Sys/codehandler.bin` on a real device. `on_server` describes what the library holds _now_, not who
+  wrote the file: authorise on it and a file dropped from RomM after we downloaded it is stranded on disk with nothing
+  in the UI able to remove it. The PATH has its own version of the same trap: a status row's `local_path` is recomputed
+  from today's placement, so for a file fetched before an emu-atlas bump moved it the name still matches our record
+  while the path names whatever now occupies the new destination — RetroDECK's own `codehandler.bin`, in the case that
+  motivated this. The count the UI offers is bound to the same set: `deletable_count` on the `get_firmware_status`
+  payload is records-still-on-disk, because `local_count` is the library's progress ratio and is wrong in both
+  directions — it hid the button entirely for a platform whose downloads had all left the library. **Since #1815 the
+  same field is stamped per ROW** (`_stamp_deletable`), and the frontend authorises a destructive action on it: a row's
+  Delete is offered where `deletable_count` is non-zero and nowhere else, and a folder row's counts the records written
+  underneath it, because a folder is never a download but what we put inside one is still ours. That is a wire field a
+  page reads to decide whether to offer a delete, so deriving it from `downloaded` — the same substitution as below, one
+  layer out — puts the button on `codehandler.bin`; `TestGetFirmwareStatusDeletableCount` pins the row's answer for a
+  file the plugin did not place. **Three buttons now reach one removal loop**
+  (`PlatformBiosDeleter._delete_recorded_io`, under a record predicate per button): a second copy of that loop is the
+  shape this rule is about, because the copies would drift silently. **Nothing mechanical stands behind any of this.** A
+  delete path looping a status list on `downloaded` alone would go green — which is exactly the shape this one had when
+  it destroyed that file
 - **Every read-mutate-write of a `RomSaveSyncState` runs under `SyncEngine.rom_lock(rom_id)`** — prompt-only — sync
   paths, `get_save_status`, and the four slot mutations hold the lock; mechanize via a `rom_save_sync_states.save`
   call-site audit
@@ -535,8 +557,12 @@ Format: **invariant** — tier — enforced by.
   The trap is that a bare `Focusable` is a container rather than a focus stop: the base panel sets `focusable` only from
   a caller prop or an `onActivate`/`onOKButton`, and `GetFocusable()` answers `"none"` for a node with neither and no
   focusable children. The rule spans every page the wide frame will host, and the frame cannot carry it: it holds a
-  page's content as opaque nodes, never as rows it could check. Detail: `docs/architecture/qam-panel.md`, "Building
-  blocks"
+  page's content as opaque nodes, never as rows it could check. **Its one half the frame DOES carry is the content above
+  a region's first focusable row** — a heading, a counts line, a column header, which is unreachable for the same reason
+  and has nothing below it to ride along with, so `ScrollRegion` scrolls itself to the top when focus reaches the first
+  stop in it (`revealTop`). That half is pinned by `src/components/qam/ScrollRegion.test.tsx` over mocked geometry, so
+  what is tested is the DECISION and not the scroll: whether the panel and the reader agree about which element is
+  topmost stays device-only, like the rest of this entry. Detail: `docs/architecture/qam-panel.md`, "Building blocks"
 
 When a change applies a guard / sanitize / backup / grouping pattern, sweep for sibling sites of the same pattern — the
 register is what that sweep checks against.

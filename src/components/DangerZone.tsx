@@ -1,24 +1,9 @@
-import { useState, useEffect, useMemo, FC, ReactNode } from "react";
+import { useState, useEffect, useMemo, FC } from "react";
+import { PanelSection, PanelSectionRow, ButtonItem, Field, TextField, ToggleField } from "@decky/ui";
 import {
-  PanelSection,
-  PanelSectionRow,
-  ButtonItem,
-  ConfirmModal,
-  Field,
-  TextField,
-  ToggleField,
-  ModalRoot,
-  DialogButton,
-  showModal,
-} from "@decky/ui";
-import {
-  getRegistryPlatforms,
-  removePlatformShortcuts,
   removeAllShortcuts,
   reportRemovalResults,
   uninstallAllRoms,
-  deletePlatformSaves,
-  deletePlatformBios,
   cleanupOrphanedGridImages,
   logInfo,
   logWarn,
@@ -30,11 +15,10 @@ import { getAllNonSteamShortcutAppIds, getLiveRomMShortcutAppIds } from "../util
 import { removeShortcutsPaced } from "../utils/shortcutRemoval";
 import { LoadingRow } from "./LoadingRow";
 import { batchConfirmLaunchOptions } from "../utils/launchOptionsReconcile";
-import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
+import { SYNC_RUNNING_HINT, useSyncRunning } from "../utils/syncRunning";
 import { scrollToTop } from "../utils/scrollHelpers";
-import { clearPlatformCollection, clearAllRomMCollections } from "../utils/collections";
+import { clearAllRomMCollections } from "../utils/collections";
 import { formatUninstallStatus } from "../utils/formatters";
-import type { RegistryPlatform } from "../types";
 import { detach } from "../utils/detach";
 import { fuzzyMatch } from "../utils/fuzzyMatch";
 import { RemovedGamesCleanupSection } from "./RemovedGamesCleanup";
@@ -74,21 +58,6 @@ interface NonSteamApp {
   name: string;
 }
 
-// Shown as the disabled-state hint on the removal controls while a library
-// sync is in flight — the backend refuses those callables with reason
-// "sync_active" (#1390), so the UI disables them up front.
-const SYNC_RUNNING_HINT = "Unavailable while a library sync is running.";
-
-// Live "is a library sync in flight?" flag off the module-level sync-progress
-// store. Each consumer subscribes itself: PlatformActionModal is rendered by
-// showModal into a detached tree that never re-renders with the panel, so a
-// prop snapshot taken at open time would go stale while the modal is open.
-const useSyncRunning = (): boolean => {
-  const [syncRunning, setSyncRunning] = useState(getSyncProgress().running);
-  useEffect(() => onSyncProgressChange(() => setSyncRunning(getSyncProgress().running)), []);
-  return syncRunning;
-};
-
 const SETTLE_POLL_MS = 250;
 const SETTLE_TIMEOUT_MS = 3000;
 
@@ -119,56 +88,6 @@ async function recountAfterStoreSettles(removedCount: number, loadNonSteamApps: 
   loadNonSteamApps();
 }
 
-const PlatformActionModal: FC<{
-  platform: RegistryPlatform;
-  closeModal?: () => void;
-  onRemoveShortcuts: () => void;
-  onDeleteSaves: () => void;
-  onDeleteBios: () => void;
-}> = ({ platform, closeModal, onRemoveShortcuts, onDeleteSaves, onDeleteBios }) => {
-  const syncRunning = useSyncRunning();
-  return (
-    <ModalRoot closeModal={closeModal}>
-      <div style={{ padding: "16px", minWidth: "320px" }}>
-        <div style={{ fontSize: "16px", fontWeight: "bold", color: "#fff", marginBottom: "16px" }}>
-          Actions for {platform.name}
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          <DialogButton
-            disabled={syncRunning}
-            onClick={() => {
-              closeModal?.();
-              onRemoveShortcuts();
-            }}
-          >
-            Remove Shortcuts ({platform.count} game{platform.count === 1 ? "" : "s"})
-          </DialogButton>
-          {syncRunning && <div style={{ fontSize: "12px", opacity: 0.6 }}>{SYNC_RUNNING_HINT}</div>}
-          <DialogButton
-            onClick={() => {
-              closeModal?.();
-              onDeleteSaves();
-            }}
-          >
-            Delete Save Files
-          </DialogButton>
-          <DialogButton
-            onClick={() => {
-              closeModal?.();
-              onDeleteBios();
-            }}
-          >
-            Delete BIOS Files
-          </DialogButton>
-          <DialogButton onClick={() => closeModal?.()} style={{ opacity: 0.5 }}>
-            Cancel
-          </DialogButton>
-        </div>
-      </div>
-    </ModalRoot>
-  );
-};
-
 /** Live progress of an in-flight bulk removal. */
 type RemovalProgress = { removed: number; total: number };
 
@@ -181,9 +100,6 @@ type RemovalProgress = { removed: number; total: number };
 type RunRemoval = (work: (onProgress: (removed: number, total: number) => void) => Promise<void>) => Promise<void>;
 
 interface ShortcutRemovalSectionProps {
-  platforms: RegistryPlatform[];
-  loading: boolean;
-  refreshPlatforms: () => Promise<void>;
   loadNonSteamApps: () => void;
   status: string;
   setStatus: (s: string) => void;
@@ -192,108 +108,17 @@ interface ShortcutRemovalSectionProps {
 }
 
 const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
-  platforms,
-  loading,
-  refreshPlatforms,
   loadNonSteamApps,
   status,
   setStatus,
   busy,
   runRemoval,
 }) => {
-  const [actionStatus, setActionStatus] = useState("");
   const [uninstallStatus, setUninstallStatus] = useState("");
   const [confirmRemoveAllRomm, setConfirmRemoveAllRomm] = useState(false);
   const [confirmUninstall, setConfirmUninstall] = useState(false);
   const syncRunning = useSyncRunning();
   const removalDisabled = busy || syncRunning;
-
-  const handleRemoveShortcuts = (p: RegistryPlatform) =>
-    runRemoval(async (onProgress) => {
-      setActionStatus(`Removing ${p.name} shortcuts...`);
-      const admission = capturePruneLeaseAdmission(DANGER_ZONE_LEASE_OWNER);
-      try {
-        const result = await removePlatformShortcuts(p.slug);
-        // The @migration_blocked / @sync_active_blocked gates short-circuit to
-        // { success: false, message, ... } with no app_ids/rom_ids — surface
-        // that message instead of cosmetically reporting a removal.
-        if (!result.success) {
-          setActionStatus(result.message ?? "Failed to remove shortcuts");
-          return;
-        }
-        await withPruneLease(
-          result.prune_lease_token,
-          "Platform shortcut removal",
-          async (signal) => {
-            await removeShortcutsPaced(result.app_ids ?? [], onProgress, signal);
-            if (isPruneLeaseCancelled(signal)) return;
-            await clearPlatformCollection(result.platform_name || p.name, signal);
-            if (isPruneLeaseCancelled(signal)) return;
-            if (result.rom_ids?.length || result.prune_lease_token) {
-              await withTimeout(
-                reportRemovalResults(result.rom_ids ?? [], result.prune_lease_token ?? null),
-                REMOVAL_REPORT_TIMEOUT_MS,
-              );
-            }
-          },
-          DANGER_ZONE_LEASE_OWNER,
-          admission,
-        );
-        setActionStatus(`Removed ${p.count} ${p.name} game${p.count === 1 ? "" : "s"}`);
-        await refreshPlatforms();
-        loadNonSteamApps();
-      } catch (e) {
-        // Leaving the Danger Zone cancels the removal continuation — the backend
-        // removal already committed, so this is teardown, not a failed removal.
-        if (isPruneLeaseCancellation(e, admission)) {
-          logWarn(`Platform shortcut removal continuation was cancelled: ${e}`);
-          return;
-        }
-        setActionStatus("Failed to remove shortcuts");
-      }
-    });
-
-  const handleDeleteSaves = (p: RegistryPlatform) => {
-    const platformName = p.name || p.slug;
-    showModal(
-      <ConfirmModal
-        strTitle={`Delete all save files for ${platformName}?`}
-        strDescription="This will delete every local save file for ROMs on this platform. Any local changes that haven't been uploaded to RomM yet will be lost permanently. Make sure saves are synced first."
-        strOKButtonText="Delete Save Files"
-        strCancelButtonText="Cancel"
-        onOK={() => {
-          detach(
-            (async () => {
-              setActionStatus(`Deleting ${p.name} saves...`);
-              try {
-                const result = await deletePlatformSaves(p.slug);
-                setActionStatus(result.message);
-                globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync" } }));
-              } catch {
-                setActionStatus("Failed to delete saves");
-              }
-            })(),
-          );
-        }}
-      />,
-    );
-  };
-
-  const handleDeleteBios = async (p: RegistryPlatform) => {
-    setActionStatus(`Deleting ${p.name} BIOS...`);
-    try {
-      const result = await deletePlatformBios(p.slug);
-      setActionStatus(result.message);
-      if (result.success) {
-        // Notify an open game-detail page so it re-checks BIOS status (#939).
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: p.slug } }),
-        );
-      }
-    } catch {
-      setActionStatus("Failed to delete BIOS files");
-    }
-  };
 
   const handleRemoveAllRomm = async () => {
     if (!confirmRemoveAllRomm) {
@@ -370,7 +195,6 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         }
         setStatus("Failed to remove shortcuts");
       }
-      await refreshPlatforms();
       await recountAfterStoreSettles(removedCount, loadNonSteamApps);
     });
   };
@@ -414,48 +238,8 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
       setUninstallStatus("Failed to uninstall ROMs");
     }
     setConfirmUninstall(false);
-    await refreshPlatforms();
     loadNonSteamApps();
   };
-
-  let platformsBody: ReactNode;
-  if (loading) {
-    platformsBody = <LoadingRow />;
-  } else if (platforms.length === 0) {
-    platformsBody = (
-      <PanelSectionRow>
-        <Field label="No synced platforms" />
-      </PanelSectionRow>
-    );
-  } else {
-    platformsBody = platforms.map((p) => (
-      <PanelSectionRow key={p.slug || p.name}>
-        <ButtonItem
-          layout="below"
-          // Busy-only (not sync): a sync leaves the platform modal openable — its
-          // own Remove Shortcuts button carries the sync gate (#1390). A busy
-          // removal disables opening the modal so no second run can be started.
-          disabled={busy}
-          onClick={() => {
-            showModal(
-              <PlatformActionModal
-                platform={p}
-                onRemoveShortcuts={() => {
-                  detach(handleRemoveShortcuts(p));
-                }}
-                onDeleteSaves={() => handleDeleteSaves(p)}
-                onDeleteBios={() => {
-                  detach(handleDeleteBios(p));
-                }}
-              />,
-            );
-          }}
-        >
-          {p.name} ({p.count})
-        </ButtonItem>
-      </PanelSectionRow>
-    ));
-  }
 
   return (
     <>
@@ -483,15 +267,6 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         {status && (
           <PanelSectionRow>
             <Field label={status} />
-          </PanelSectionRow>
-        )}
-      </PanelSection>
-
-      <PanelSection title="Per-Platform Actions">
-        {platformsBody}
-        {actionStatus && (
-          <PanelSectionRow>
-            <Field label={actionStatus} />
           </PanelSectionRow>
         )}
       </PanelSection>
@@ -739,7 +514,6 @@ interface RetroDeckSectionProps {
   customNames: string[];
   settingsLoaded: boolean;
   persistWhitelist: (newDisabled: string[], newCustom: string[]) => void;
-  refreshPlatforms: () => Promise<void>;
   loadNonSteamApps: () => void;
   setStatus: (s: string) => void;
   busy: boolean;
@@ -753,7 +527,6 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
   customNames,
   settingsLoaded,
   persistWhitelist,
-  refreshPlatforms,
   loadNonSteamApps,
   setStatus,
   busy,
@@ -794,7 +567,6 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
         onProgress,
       );
       setStatus(`Removed ${toRemove.length} non-steam game${toRemove.length === 1 ? "" : "s"}`);
-      refreshPlatforms().catch((e) => logError(`Failed to refresh platforms: ${e}`));
       await recountAfterStoreSettles(toRemove.length, loadNonSteamApps);
     });
   };
@@ -871,8 +643,6 @@ interface DangerZoneProps {
 
 export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
   const [status, setStatus] = useState("");
-  const [platforms, setPlatforms] = useState<RegistryPlatform[]>([]);
-  const [loading, setLoading] = useState(true);
   const [disabledDefaults, setDisabledDefaults] = useState<string[]>([]);
   const [customNames, setCustomNames] = useState<string[]>([]);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
@@ -911,17 +681,6 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
     return set;
   }, [nonSteamApps, activeDefaults, customNames]);
 
-  const refreshPlatforms = async () => {
-    setLoading(true);
-    try {
-      const result = await getRegistryPlatforms();
-      setPlatforms(result.platforms);
-    } catch {
-      setPlatforms([]);
-    }
-    setLoading(false);
-  };
-
   const loadNonSteamApps = () => {
     const apps: NonSteamApp[] = [];
     try {
@@ -958,7 +717,6 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
   useEffect(() => {
     mountPruneLeaseOwner(DANGER_ZONE_LEASE_OWNER);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial async data loads on mount are the standard React pattern; the rule is overzealous here
-    refreshPlatforms().catch((e) => logError(`Failed to refresh platforms: ${e}`));
     loadNonSteamApps();
     getWhitelistSettings()
       .then((s) => {
@@ -1006,9 +764,6 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
       <RemovedGamesCleanupSection />
 
       <ShortcutRemovalSection
-        platforms={platforms}
-        loading={loading}
-        refreshPlatforms={refreshPlatforms}
         loadNonSteamApps={loadNonSteamApps}
         status={status}
         setStatus={setStatus}
@@ -1025,7 +780,6 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
         customNames={customNames}
         settingsLoaded={settingsLoaded}
         persistWhitelist={persistWhitelist}
-        refreshPlatforms={refreshPlatforms}
         loadNonSteamApps={loadNonSteamApps}
         setStatus={setStatus}
         busy={busy}

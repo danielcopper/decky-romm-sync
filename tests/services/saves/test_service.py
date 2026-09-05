@@ -629,73 +629,59 @@ class TestDeleteSaves:
         assert result["deleted_count"] == 0
 
 
-class TestEmulatorTag:
-    def test_upload_uses_emulator_tag_from_core(self, tmp_path):
-        """When core resolver returns a core, upload uses retroarch-{core} tag."""
-        svc, fake = make_service(
-            tmp_path,
-            active_core=FakeActiveCoreResolver(default=("mgba_libretro", "mGBA")),
-        )
-        svc._config.settings["save_sync_enabled"] = True
-        _install_rom(svc, tmp_path)
-        _create_save(tmp_path)
+class TestPlatformSaves:
+    """A whole platform's save files: how many there are, and removing them.
 
-        svc._sync_engine.do_upload_save(
-            42,
-            str(tmp_path / "saves" / "gba" / "pokemon.srm"),
-            "pokemon.srm",
-            RomSaveSyncState(),
-            "dev-1",
-            "gba",
-            "mgba_libretro",
-        )
+    The count and the delete are one subject read in two directions — the
+    count's whole contract is that it answers what the delete would remove — so
+    they belong beside each other. Both had drifted into ``TestEmulatorTag``,
+    whose subject is the tag an upload carries.
+    """
 
-        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
-        assert len(upload_calls) == 1
-        _name, args, _kwargs = upload_calls[0]
-        assert args[2] == "retroarch-mgba"  # emulator argument
+    @pytest.mark.asyncio
+    async def test_count_platform_saves_is_what_the_delete_would_remove(self, tmp_path):
+        """The count and the delete walk the same path, so they cannot disagree."""
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _install_rom(svc, tmp_path, rom_id=2, system="gba", file_name="game2.gba")
+        _create_save(tmp_path, system="gba", rom_name="game1")
+        _create_save(tmp_path, system="gba", rom_name="game2")
 
-    def test_upload_uses_fallback_when_no_core(self, tmp_path):
-        """When the resolved core is None, upload falls back to 'retroarch'."""
-        svc, fake = make_service(tmp_path)  # default: active_core returns (None, None)
-        svc._config.settings["save_sync_enabled"] = True
-        _install_rom(svc, tmp_path)
-        _create_save(tmp_path)
+        assert (await svc.count_platform_saves("gba"))["count"] == 2
 
-        svc._sync_engine.do_upload_save(
-            42,
-            str(tmp_path / "saves" / "gba" / "pokemon.srm"),
-            "pokemon.srm",
-            RomSaveSyncState(),
-            "dev-1",
-            "gba",
-            None,
-        )
+        assert svc.delete_platform_saves("gba")["deleted_count"] == 2
+        # Counting again after the delete answers zero — it looked, it did not
+        # remember.
+        assert (await svc.count_platform_saves("gba"))["count"] == 0
 
-        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
-        assert len(upload_calls) == 1
-        _name, args, _kwargs = upload_calls[0]
-        assert args[2] == "retroarch"
+    @pytest.mark.asyncio
+    async def test_count_platform_saves_deletes_nothing(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        save = _create_save(tmp_path, system="gba", rom_name="game1")
 
-    def test_resolve_core_differs_by_per_game_override(self, tmp_path):
-        """RESULT-FLIP: two installed gba ROMs, one pinned + one default, stamp different cores.
+        assert (await svc.count_platform_saves("gba"))["count"] == 1
+        assert save.exists()
 
-        ``SyncEngine.resolve_core`` feeds the upload emulator tag. The pinned ROM
-        resolves to its override core; the NULL ROM resolves to the system default.
-        The stamped core flips on the override alone — keyed by rom_id, never by a
-        per-call filename argument.
-        """
-        active_core = FakeActiveCoreResolver(
-            default=("snes9x_libretro", "Snes9x"),
-            per_rom={42: ("supafaust_libretro", "Supafaust")},
-        )
-        svc, _ = make_service(tmp_path, active_core=active_core)
-        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pinned.gba")
-        _install_rom(svc, tmp_path, rom_id=43, system="gba", file_name="default.gba")
+    @pytest.mark.asyncio
+    async def test_count_platform_saves_is_scoped_to_its_platform(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
+        _create_save(tmp_path, system="gba", rom_name="game1")
+        _create_save(tmp_path, system="snes", rom_name="game2")
 
-        assert svc._sync_engine.resolve_core(42) == "supafaust_libretro"
-        assert svc._sync_engine.resolve_core(43) == "snes9x_libretro"
-        assert active_core.calls == [42, 43]
+        assert (await svc.count_platform_saves("gba"))["count"] == 1
+        assert (await svc.count_platform_saves("snes"))["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_count_platform_saves_answers_zero_for_a_platform_with_nothing(self, tmp_path):
+        """Zero rather than an absent answer — the button disables on it."""
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+
+        assert (await svc.count_platform_saves("gba"))["count"] == 0
+        assert (await svc.count_platform_saves("n64"))["count"] == 0
 
     @pytest.mark.asyncio
     async def test_delete_platform_saves(self, tmp_path):
@@ -787,6 +773,75 @@ class TestEmulatorTag:
         assert "game2.srm" in snes_entry.files
         assert snes_entry.active_slot == "default"
         assert snes_entry.slot_confirmed is True
+
+
+class TestEmulatorTag:
+    def test_upload_uses_emulator_tag_from_core(self, tmp_path):
+        """When core resolver returns a core, upload uses retroarch-{core} tag."""
+        svc, fake = make_service(
+            tmp_path,
+            active_core=FakeActiveCoreResolver(default=("mgba_libretro", "mGBA")),
+        )
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+
+        svc._sync_engine.do_upload_save(
+            42,
+            str(tmp_path / "saves" / "gba" / "pokemon.srm"),
+            "pokemon.srm",
+            RomSaveSyncState(),
+            "dev-1",
+            "gba",
+            "mgba_libretro",
+        )
+
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        _name, args, _kwargs = upload_calls[0]
+        assert args[2] == "retroarch-mgba"  # emulator argument
+
+    def test_upload_uses_fallback_when_no_core(self, tmp_path):
+        """When the resolved core is None, upload falls back to 'retroarch'."""
+        svc, fake = make_service(tmp_path)  # default: active_core returns (None, None)
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+
+        svc._sync_engine.do_upload_save(
+            42,
+            str(tmp_path / "saves" / "gba" / "pokemon.srm"),
+            "pokemon.srm",
+            RomSaveSyncState(),
+            "dev-1",
+            "gba",
+            None,
+        )
+
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        _name, args, _kwargs = upload_calls[0]
+        assert args[2] == "retroarch"
+
+    def test_resolve_core_differs_by_per_game_override(self, tmp_path):
+        """RESULT-FLIP: two installed gba ROMs, one pinned + one default, stamp different cores.
+
+        ``SyncEngine.resolve_core`` feeds the upload emulator tag. The pinned ROM
+        resolves to its override core; the NULL ROM resolves to the system default.
+        The stamped core flips on the override alone — keyed by rom_id, never by a
+        per-call filename argument.
+        """
+        active_core = FakeActiveCoreResolver(
+            default=("snes9x_libretro", "Snes9x"),
+            per_rom={42: ("supafaust_libretro", "Supafaust")},
+        )
+        svc, _ = make_service(tmp_path, active_core=active_core)
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pinned.gba")
+        _install_rom(svc, tmp_path, rom_id=43, system="gba", file_name="default.gba")
+
+        assert svc._sync_engine.resolve_core(42) == "supafaust_libretro"
+        assert svc._sync_engine.resolve_core(43) == "snes9x_libretro"
+        assert active_core.calls == [42, 43]
 
 
 class TestSaveSyncSettingsSlotAndCleanup:

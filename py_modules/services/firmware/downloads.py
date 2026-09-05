@@ -167,21 +167,35 @@ class FirmwareDownloader:
         self._logger.info(f"Firmware downloaded: {file_name} -> {dest}")
         return {"success": True, "file_path": dest, "md5_match": md5_match}
 
-    async def download_all_firmware(self, platform_slug) -> dict[str, Any]:
-        """Download all firmware for a given platform slug."""
+    async def _platform_firmware_rows(self, platform_slug) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        """The library rows filed under *platform_slug*, or the failure to return instead.
+
+        The three download entry points ask the same two questions first — what
+        does the library hold, and which of it is this platform's — and the
+        second is not a plain slug match: ``psx`` is filed under ``psx`` and
+        ``ps`` both. Answering it in one place is what keeps a button from
+        fetching a set the button beside it would not.
+
+        The second element is a ready-made failure response when the listing
+        could not be read; a caller returns it as it stands.
+        """
         try:
             firmware_list = await self._loop.run_in_executor(None, self._listing.get_firmware_list)
         except Exception as e:
             self._logger.error(f"Failed to fetch firmware: {e}")
             resp = error_response(e)
             resp["downloaded"] = 0
-            return resp
+            return [], resp
 
-        # Filter by platform slug (use mapped slugs, e.g. "psx" -> ["psx", "ps"])
         fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        platform_firmware = [
-            fw for fw in firmware_list if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
-        ]
+        rows = [fw for fw in firmware_list if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs]
+        return rows, None
+
+    async def download_all_firmware(self, platform_slug) -> dict[str, Any]:
+        """Download all firmware for a given platform slug."""
+        platform_firmware, failure = await self._platform_firmware_rows(platform_slug)
+        if failure is not None:
+            return failure
 
         placements = await self._loop.run_in_executor(None, self._demand.placement_index)
         downloaded, errors = await self._download_firmware_batch(platform_firmware, placements)
@@ -225,27 +239,79 @@ class FirmwareDownloader:
                 errors.append(fw.get("file_name", str(fw["id"])))
         return downloaded, errors
 
+    async def download_platform_firmware_file(self, platform_slug, file_name) -> dict[str, Any]:
+        """Download the one firmware file *file_name* the library holds for *platform_slug*.
+
+        The per-row Download button's backend. Addressed by name within the
+        platform rather than by RomM's firmware id: the id is the server's, and
+        the row it would come from is a status row the page may have been holding
+        for a while — resolving the name against the current listing here keeps
+        the platform scoping identical to :meth:`download_all_firmware` and the
+        two buttons beside it. A name the platform's listing does not hold is a
+        ``not_in_library`` refusal, never a silent no-op — and a plain reason
+        rather than ``NOT_FOUND``, which is RomM's entity layer answering and
+        carries deletion authority downstream.
+
+        A folder declaration is refused on the same condition the batch skips it
+        on, and for the same reason: the emulator opens that name as a directory,
+        so there is no file to fetch into it. Where the batch is sweeping a set
+        and simply passes over the row, this answers one file the user named, so
+        it says why — a silent success over a download that never happened would
+        leave the row unchanged with nothing to explain it.
+
+        Answers in the batch shape (``downloaded`` 0 or 1) because the file may
+        already be at its destination, which the batch skips — the same outcome
+        as pressing Download all with nothing left to fetch. What it does not
+        borrow from the batch is the error fold: one press wants the reason the
+        one file failed, so the single fetch's own failure response is returned
+        as it stands rather than collapsed into a name in a list.
+        """
+        rows, failure = await self._platform_firmware_rows(platform_slug)
+        if failure is not None:
+            return failure
+
+        wanted = [fw for fw in rows if fw.get("file_name") == file_name]
+        if not wanted:
+            return {
+                "success": False,
+                "reason": "not_in_library",
+                "message": f"{file_name} is not in your RomM library for {platform_slug}",
+                "downloaded": 0,
+            }
+
+        placements = await self._loop.run_in_executor(None, self._demand.placement_index)
+        fw = wanted[0]
+        placement = placements.get(file_name)
+        if placement is not None and placement.declares_directory:
+            return {
+                "success": False,
+                "reason": "declares_directory",
+                "message": f"{file_name} is a folder the emulator opens, not a file to download",
+                "downloaded": 0,
+            }
+
+        # The already-there skip probes the disk rather than reading the
+        # catalogue, for the reason the batch states: the catalogue's answer
+        # predates every download since it was read.
+        dest = self._demand.safe_dest_path(fw, placement)
+        if dest is not None and self._firmware_file_store.exists(dest):
+            return {"success": True, "message": f"{file_name} is already here", "downloaded": 0}
+
+        result = await self._download_one(fw["id"], placements)
+        if not result.get("success"):
+            result["downloaded"] = 0
+            return result
+        return {**result, "message": f"Downloaded {file_name}", "downloaded": 1}
+
     async def download_required_firmware(self, platform_slug) -> dict[str, Any]:
         """Download only the firmware the platform's launching core will not run without."""
-        try:
-            firmware_list = await self._loop.run_in_executor(None, self._listing.get_firmware_list)
-        except Exception as e:
-            self._logger.error(f"Failed to fetch firmware: {e}")
-            resp = error_response(e)
-            resp["downloaded"] = 0
-            return resp
+        rows, failure = await self._platform_firmware_rows(platform_slug)
+        if failure is not None:
+            return failure
 
-        system = self._resolve_system(platform_slug)
-        fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        core_so, _ = self._core_info.get_active_core(system)
+        core_so, _ = self._core_info.get_active_core(self._resolve_system(platform_slug))
         placements = await self._loop.run_in_executor(None, self._demand.placement_index)
-
-        platform_firmware = [
-            fw
-            for fw in firmware_list
-            if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
-            and _required_by(placements.get(fw.get("file_name", "")), core_so)
-        ]
+        platform_firmware = [fw for fw in rows if _required_by(placements.get(fw.get("file_name", "")), core_so)]
 
         downloaded, errors = await self._download_firmware_batch(platform_firmware, placements)
 

@@ -33,6 +33,28 @@ def _seed_rom(
         uow.roms.save(rom)
 
 
+def _stamp_fetch(uow, slug: str, *, rom_count: int, fetch_id: str | None, seen: list[int]) -> None:
+    """Record a completed fetch of *slug* and mark which of its rows it returned.
+
+    ``seen`` is the rom_ids that fetch came back with; every other row of the
+    platform keeps whatever generation it had, which is how a dropped id is told
+    apart from a current one without deleting anything.
+    """
+    from domain.platform_sync_state import PlatformSyncState
+
+    with uow:
+        for rom_id in seen:
+            rom = uow.roms.get(rom_id)
+            if fetch_id is not None:
+                rom.record_fetch_generation(fetch_id)
+            uow.roms.save(rom)
+        uow.platform_sync_state.save(
+            PlatformSyncState.stamp(
+                platform_slug=slug, at="2026-01-01T00:00:00", rom_count=rom_count, fetch_id=fetch_id
+            )
+        )
+
+
 def _seed_platform_names(uow, names: dict[str, str]) -> None:
     """Seed the offline ``platform_slug → display_name`` cache."""
     with uow:
@@ -297,6 +319,127 @@ class TestGetRegistryPlatforms:
         assert len(result["platforms"]) == 1
         assert result["platforms"][0]["name"] == "n64"
         assert result["platforms"][0]["slug"] == "n64"
+
+
+class TestRegistryPlatformsReachableCount:
+    """``reachable_count`` counts ROMs a shortcut can reach, never shortcuts."""
+
+    @pytest.mark.asyncio
+    async def test_a_groups_unbound_versions_count_with_its_binding(self, plugin):
+        """One game, three versions, one shortcut — all three are reachable.
+
+        The two the binding did not go to are reached by switching version on
+        the one it did, so counting bindings here would report them as absent
+        from Steam.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="sms", group_key="igdb:1:2")
+        _seed_rom(uow, 11, app_id=None, platform_slug="sms", group_key="igdb:1:2")
+        _seed_rom(uow, 12, app_id=None, platform_slug="sms", group_key="igdb:1:2")
+
+        entry = (await plugin.get_registry_platforms())["platforms"][0]
+        assert entry["count"] == 1
+        assert entry["reachable_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_a_group_with_no_binding_reaches_nothing(self, plugin):
+        """A partly-applied platform: the two numbers differ and the gap is real.
+
+        The second game was fetched and never applied, so no shortcut anywhere
+        leads to either of its versions.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="gba", group_key="igdb:1:2")
+        _seed_rom(uow, 11, app_id=None, platform_slug="gba", group_key="igdb:1:2")
+        _seed_rom(uow, 20, app_id=None, platform_slug="gba", group_key="igdb:9:2")
+        _seed_rom(uow, 21, app_id=None, platform_slug="gba", group_key="igdb:9:2")
+
+        entry = (await plugin.get_registry_platforms())["platforms"][0]
+        assert entry["count"] == 1
+        assert entry["reachable_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_a_null_group_key_is_its_own_group(self, plugin):
+        """A NULL key relates no rows, so one binding speaks only for its own row.
+
+        The key was never computed for either row. Folding them together on
+        that shared absence would let the bound one carry the unbound one into
+        the count, which is the whole platform reading reachable off one
+        applied game.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="nes", group_key=None)
+        _seed_rom(uow, 11, app_id=None, platform_slug="nes", group_key=None)
+
+        entry = (await plugin.get_registry_platforms())["platforms"][0]
+        assert entry["count"] == 1
+        assert entry["reachable_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_version_the_last_fetch_did_not_return_is_not_reachable(self, plugin):
+        """RomM dropped a version; its row stays and stops counting.
+
+        Nothing deletes it — ADR-0007 keeps the row as an identity anchor and
+        only the cleanup flow removes one — but the picker refuses a switch to
+        it, so no reader can reach it through the group's shortcut. Counting it
+        was the header claiming a version is in Steam that nothing can select.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="dc", group_key="igdb:1:2")
+        _seed_rom(uow, 11, app_id=None, platform_slug="dc", group_key="igdb:1:2")
+        _stamp_fetch(uow, "dc", rom_count=1, fetch_id="fetch-2", seen=[10])
+
+        entry = (await plugin.get_registry_platforms())["platforms"][0]
+        assert entry["count"] == 1
+        assert entry["reachable_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_a_group_still_reaches_its_survivors_when_the_binding_vanished(self, plugin):
+        """The exclusion is from the COUNT, never from the grouping.
+
+        The shortcut exists whether or not the version it binds is still on the
+        server, so the group's other versions are still reached through it.
+        Filtering the dropped row out before grouping would leave a group with
+        no binding at all and report nothing reachable, which is a shortcut the
+        reader can plainly see.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="dc", group_key="igdb:1:2")
+        _seed_rom(uow, 11, app_id=None, platform_slug="dc", group_key="igdb:1:2")
+        # The BOUND row is the one the fetch did not return.
+        _stamp_fetch(uow, "dc", rom_count=1, fetch_id="fetch-2", seen=[11])
+
+        entry = (await plugin.get_registry_platforms())["platforms"][0]
+        assert entry["count"] == 1
+        assert entry["reachable_count"] == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stamp_args",
+        [
+            None,
+            {"rom_count": 1, "fetch_id": None},
+            {"rom_count": 0, "fetch_id": "fetch-2"},
+        ],
+        ids=["no stamp", "no generation", "empty fetch"],
+    )
+    async def test_a_platform_with_no_usable_stamp_keeps_every_row(self, plugin, stamp_args):
+        """Discovery only, never deletion authority — and never a silent drop.
+
+        A stamp that is missing, carries no generation, or recorded an empty
+        fetch cannot establish what the server returned, so nothing is ruled out
+        and the count is what it was before the exclusion existed. That fallback
+        is what makes the exclusion safe: its worst case is the number already
+        printed.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="dc", group_key="igdb:1:2")
+        _seed_rom(uow, 11, app_id=None, platform_slug="dc", group_key="igdb:1:2")
+        if stamp_args is not None:
+            _stamp_fetch(uow, "dc", seen=[10], **stamp_args)
+
+        entry = (await plugin.get_registry_platforms())["platforms"][0]
+        assert entry["reachable_count"] == 2
 
 
 class TestGetRomBySteamAppId:

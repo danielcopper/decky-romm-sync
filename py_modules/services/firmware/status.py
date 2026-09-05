@@ -27,7 +27,8 @@ from domain.bios_status import (
     count_wanted,
     format_bios_status,
 )
-from domain.emulator_commands import label_to_invocation, options_to_payload, select_default_option
+from domain.emulator_commands import options_to_payload, resolve_platform_label
+from domain.firmware_wants import DECLARED_DIRECTORY
 
 if TYPE_CHECKING:
     import asyncio
@@ -69,7 +70,7 @@ class FirmwareStatusReaderConfig:
 
 
 class FirmwareStatusReader:
-    """Every status-bearing BIOS query the panel runs — the System page and the per-game check."""
+    """Every status-bearing BIOS query the panel runs — the overview and the per-game check."""
 
     def __init__(self, *, config: FirmwareStatusReaderConfig) -> None:
         self._demand = config.demand
@@ -127,7 +128,7 @@ class FirmwareStatusReader:
     def _bios_aggregates(self, files, platform_slug: str, complete: bool) -> dict[str, Any]:
         """The counts, level and label every surface reads off one classified file list.
 
-        One derivation for the per-game paths and the System page, so a platform
+        One derivation for the per-game paths and the overview, so a platform
         and its games can never show a different level for the same files.
 
         Three axes, and each counts a different set on purpose.
@@ -189,7 +190,7 @@ class FirmwareStatusReader:
         """The aggregates plus the per-file rows — what the per-game surfaces read."""
         return {**self._bios_aggregates(files, platform_slug, complete), "files": [asdict(f) for f in files]}
 
-    # ── The System page ──────────────────────────────────────
+    # ── The whole-library overview ───────────────────────────
 
     def _group_server_firmware(self, firmware_list, placements: Mapping[str, FirmwarePlacement]):
         """Group server firmware list by platform slug."""
@@ -253,23 +254,54 @@ class FirmwareStatusReader:
                 if rom.platform_slug and rom.shortcut_app_id is not None
             }
 
-    def _deletable_count(self, platform_slug: str, records: list[BiosFile]) -> int:
-        """How many files ``delete_platform_bios`` would remove for *platform_slug*.
+    def _stamp_deletable(self, plat: dict[str, Any], platform_slug: str, records: list[BiosFile]) -> None:
+        """Stamp what a delete would take — per row, and for the platform.
 
-        The delete is authorised by the download record and unlinks the path that
-        record holds, so this counts exactly that: recorded paths under one of
-        the platform's firmware slugs that are still on disk. Distinct paths,
-        because two rows naming one file are one unlink.
+        One pass over the download records and one probe each, so every answer
+        on the pane comes from the same set. The platform count and the rows are
+        not the same NUMBER, and are not meant to be: the count is over records,
+        while a row exists only where something declares the file or the library
+        offers it — a download RomM has since dropped and no core declares
+        raises the count with no row to show it, and only the platform-wide
+        button can reach it.
 
-        ``local_count`` counts a different set and cannot stand in for it: it is
-        the library's progress ratio, so it includes files the plugin never put
-        there and drops our own downloads once RomM stops listing them. Used for
-        the button it would be wrong in both directions, and zero — hiding the
-        button — for a platform whose downloads have all left the library.
+        The delete is authorised by the record and unlinks the path that record
+        holds, so this is exactly that set: recorded paths under one of the
+        platform's firmware slugs that are still on disk. The platform count is
+        of distinct paths, because two records naming one file are one unlink.
+
+        **A row's count is answered two ways, because a row is one of two
+        things.** A declared FILE matches a record by name — the row knows its
+        file name and not our record. A declared FOLDER has no name a record
+        could carry, so it matches the records written *underneath* it: the
+        emulator lists that folder and whatever we downloaded into it is ours to
+        remove, which is a rule about files and is independent of the separate
+        rule that a folder is never offered as a download. The folder path is
+        used to NARROW the record set and never to widen it, so a destination
+        that has since moved can only offer fewer files, never something the
+        plugin did not place.
+
+        None of this is ``downloaded``, and none of it may be replaced by that:
+        it is ``os.path.exists`` at the row's own destination, equally true of
+        firmware the emulator shipped with. ``local_count`` is a third set again
+        — the library's progress ratio, which includes files the plugin never
+        placed and drops our own downloads once RomM stops listing them; used
+        for the button it was wrong in both directions.
         """
         slugs = set(firmware_paths.resolve_firmware_slugs(platform_slug))
-        paths = {record.file_path for record in records if record.platform_slug in slugs}
-        return sum(1 for path in paths if self._firmware_file_store.exists(path))
+        mine = [record for record in records if record.platform_slug in slugs]
+        present = [record for record in mine if self._firmware_file_store.exists(record.file_path)]
+        plat["deletable_count"] = len({record.file_path for record in present})
+
+        names = {record.file_name for record in present}
+        for f in plat["files"]:
+            if f.get("declared_kind") == DECLARED_DIRECTORY:
+                root = (f.get("local_path") or "").rstrip("/")
+                f["deletable_count"] = (
+                    sum(1 for record in present if record.file_path.startswith(f"{root}/")) if root else 0
+                )
+            else:
+                f["deletable_count"] = 1 if f["file_name"] in names else 0
 
     async def _enrich_platform_map(
         self,
@@ -287,14 +319,14 @@ class FirmwareStatusReader:
         the BIOS-folder file lookups stay on the raw slug (their own vocabulary).
         ``active_core`` stays the libretro system default *core_so* (the BIOS
         filter keys on it — the standalone-default BIOS accuracy work is deferred
-        by ADR-0020). ``active_core_label`` is the resolved **display** label the
-        System-page control shows — the per-platform override (``platform_cores``)
-        when set and still resolvable, else the es_systems default emulator label,
-        so it reflects a just-applied per-platform pick (libretro OR standalone)
-        the same way the game-detail menu does, instead of always showing the
-        libretro system default. The ``emulators`` list is the full classified
-        picker payload and ``emulator_data_available`` flags whether
-        ``es_systems.xml`` was readable.
+        by ADR-0020). ``active_core_label`` is the resolved **display** label
+        (:func:`resolve_platform_label`) — the per-platform override
+        (``platform_cores``) when set and still resolvable, else the es_systems
+        default emulator label, so it reflects a just-applied per-platform pick
+        (libretro OR standalone) the same way the game-detail menu does, instead
+        of always showing the libretro system default. The ``emulators`` list is
+        the full classified picker payload and ``emulator_data_available`` flags
+        whether ``es_systems.xml`` was readable.
 
         *catalogue* is read once by the caller and shared across every platform:
         it is one machine-wide question costing hundreds of milliseconds, and
@@ -303,7 +335,7 @@ class FirmwareStatusReader:
         listing's file names rather than one platform's slice — see
         :meth:`FirmwareDemand.wanted_beyond_server`. *records* is every BIOS
         download row, read once for the same reason and sliced per platform by
-        :meth:`_deletable_count`. The folder verdicts are scoped per platform and
+        :meth:`_stamp_deletable`. The folder verdicts are scoped per platform and
         memoised across them (:meth:`FirmwareDemand.folder_answers`) — the cores
         are the platform's, the answer is the core's.
         """
@@ -315,7 +347,9 @@ class FirmwareStatusReader:
             core_so, _core_label = self._core_info.get_active_core(system)
             options = self._core_info.get_emulator_options(system)
             plat["active_core"] = core_so
-            plat["active_core_label"] = self._resolve_platform_emulator_label(slug, options["options"])
+            plat["active_core_label"] = resolve_platform_label(
+                options["options"], self._platform_core_reader.get_platform_core(slug)
+            )
             plat["emulators"] = options_to_payload(options["options"])
             plat["emulator_data_available"] = options["available"]
             scope = _core_scope(options)
@@ -339,29 +373,23 @@ class FirmwareStatusReader:
                 core_so,
             )
             plat["files"] = [{**raw, **_wanted_fields(entry)} for raw, entry in zip(plat["files"], files, strict=True)]
+            # Alphabetical, and only here: the two halves arrive in their own
+            # orders — the library's listing, then the rows it does not hold,
+            # appended — so a file the plugin downloaded sat below one the
+            # library still offers for no reason a reader could see. Sorted
+            # AFTER the merge, because the zip above is positional and because
+            # `declared_path` only exists once `_wanted_fields` has run.
+            #
+            # The key is what the row DISPLAYS: `declared_path` is the folder
+            # prefix and the name together (`dolphin-emu/Sys/codehandler.bin`),
+            # and the bare name where nothing declared a subdirectory. Folded to
+            # lower case, because a corpus that mixes `BS-X.bin` with
+            # `sgb_boot.bin` reads as unsorted under a case-sensitive one.
+            plat["files"].sort(key=lambda f: (f.get("declared_path") or f.get("file_name", "")).lower())
             plat["has_games"] = slug in synced_slugs
             plat["all_downloaded"] = all(f["downloaded"] for f in plat["files"])
-            plat["deletable_count"] = self._deletable_count(slug, records)
+            self._stamp_deletable(plat, slug, records)
             self._set_platform_bios_aggregates(plat, slug, files, complete)
-
-    def _resolve_platform_emulator_label(self, platform_slug: str, options: list[Any]) -> str | None:
-        """Resolve the System-page active-emulator display label for a platform.
-
-        The platform-level projection of the read-path precedence
-        (``ActiveCoreResolver`` without the per-game layer): the per-platform
-        override label (``settings.json`` ``platform_cores``) when it is set and
-        still resolves to a bakeable emulator, else the es_systems default
-        emulator label (the first bakeable command). A stale/no-longer-installed
-        override degrades to the default — never fatal — mirroring the launch-bake
-        resolver so the button and the actual launch agree. ``None`` when the
-        platform has no bakeable emulator at all (empty menu / es_systems
-        unreadable), which the frontend renders as "Default".
-        """
-        override = self._platform_core_reader.get_platform_core(platform_slug)
-        if override is not None and label_to_invocation(options, override) is not None:
-            return override
-        default = select_default_option(options)
-        return default.label if default is not None else None
 
     def _set_platform_bios_aggregates(self, plat: dict[str, Any], slug: str, files, complete: bool) -> None:
         """Stamp the per-platform BIOS aggregates onto a ``get_firmware_status`` entry.
@@ -369,8 +397,8 @@ class FirmwareStatusReader:
         Adds ``server_count`` / ``local_count`` / ``required_count`` /
         ``required_downloaded`` / ``required_withheld`` and the ``bios_level``
         state (``"unknown"`` / ``"ok"`` / ``"partial"`` / ``"missing"``) so the
-        System page reads the decision and the display counts straight off this
-        payload instead of re-deriving the threshold logic in the frontend. The
+        platform detail reads the decision and the display counts straight off
+        this payload instead of re-deriving the threshold logic in the frontend. The
         whole payload comes from the same builder the per-game path uses, so the
         level a platform shows and the level its games show cannot diverge.
 
@@ -433,7 +461,7 @@ class FirmwareStatusReader:
 
         Read whole rather than per platform: it is one small table and the page
         asks the same question of it for each platform it renders. One short read
-        UoW, closed before the file probes :meth:`_deletable_count` runs.
+        UoW, closed before the file probes :meth:`_stamp_deletable` runs.
         """
         with self._uow_factory() as uow:
             return list(uow.bios_files.iter_all())
@@ -533,7 +561,7 @@ def _core_scope(options: dict[str, Any]) -> list[str] | None:
 
 
 def _has_something_to_say(plat: dict[str, Any]) -> bool:
-    """Is a seeded platform worth a block on the System page?
+    """Is a seeded platform worth an entry in the overview?
 
     A seeded platform is one the listing never named — it is here because the
     user syncs games for it, not because anything is known to be wanted. With a
@@ -548,10 +576,11 @@ def _has_something_to_say(plat: dict[str, Any]) -> bool:
 
 
 def _overview_row(item: dict[str, Any]) -> dict[str, Any]:
-    """The System-page row for a file the library does not hold.
+    """The overview row for a file the library does not hold.
 
-    ``on_server: False`` is the load-bearing field: both download buttons filter
-    on it (``SystemPage.tsx``), and so do the page's own progress totals. ``id``
+    ``on_server: False`` is the load-bearing field: every download affordance
+    filters on it (``src/components/library/PlatformDetail.tsx``), and so do the
+    platform detail's own progress totals. ``id``
     is ``None`` as an honest absence — there is no server record to name — and
     no consumer reads it, so filling it in with a placeholder would withhold
     nothing but would make a row that cannot be fetched look fetchable to the
@@ -569,12 +598,13 @@ def _overview_row(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _wanted_fields(entry) -> dict[str, Any]:
-    """The System-page projection of one classified file.
+    """The overview projection of one classified file.
 
     The overview's rows keep the server's own fields (id, size, md5) and gain
     only what the machine answered, so the two vocabularies stay separable.
     """
     return {
+        "declared_path": entry.declared_path,
         "description": entry.description,
         "wanted": entry.wanted,
         "required_by_active": entry.required_by_active,

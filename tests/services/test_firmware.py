@@ -339,8 +339,11 @@ class TestTheFacadeOnlyDelegates:
             "check_platform_bios",
             "download_firmware",
             "download_all_firmware",
+            "download_platform_firmware_file",
             "download_required_firmware",
             "delete_platform_bios",
+            "delete_bios_file",
+            "delete_bios_folder",
         }
 
     def test_the_facade_holds_only_its_sub_services(self, fw):
@@ -538,7 +541,7 @@ class TestPresenceComesFromTheReading:
 
 
 class TestDestinationReadingsReachBothSurfaces:
-    """``supplied_by`` and ``declared_kind`` travel to the game page and the System page."""
+    """``supplied_by`` and ``declared_kind`` travel to the game page and the platform detail."""
 
     _CORE = "flycast_libretro"
 
@@ -583,6 +586,119 @@ class TestDestinationReadingsReachBothSurfaces:
         assert row["declared_kind"] == "directory"
         assert row["supplied_by"] is None
         assert row["downloaded"] is True
+
+
+class TestTheOverviewRowsAreAlphabetical:
+    """The pane's file list is ordered as it reads, not as the two halves arrive."""
+
+    _CORE = "dolphin_libretro"
+
+    @pytest.mark.asyncio
+    async def test_local_only_rows_are_not_simply_appended(self, plugin, tmp_path):
+        """A file the plugin holds sorts among the library's, not below them.
+
+        The rows come from two sources — the library's listing, then what the
+        emulators want beyond it — and the second was appended, so
+        ``codehandler.bin`` sat under ``gc-pal-12.bin`` on a GameCube pane for
+        no reason a reader could see.
+        """
+        store = FakeFirmwareFileStore()
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            core_info=_test_core_info(),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        # Declared by an emulator and NOT in the library, so it is appended.
+        _declare(fw, ("cx4.data.rom", "CX4 data", True))
+        _stub_listing(
+            fw,
+            [
+                {
+                    "id": 1,
+                    "file_name": "sgb_boot.bin",
+                    "file_path": "bios/gc/sgb_boot.bin",
+                    "file_size_bytes": 8,
+                    "md5_hash": "",
+                },
+                {
+                    "id": 2,
+                    "file_name": "SGB1.sfc",
+                    "file_path": "bios/gc/SGB1.sfc",
+                    "file_size_bytes": 8,
+                    "md5_hash": "",
+                },
+            ],
+        )
+
+        result = await fw.get_firmware_status()
+        names = [f["file_name"] for f in next(p for p in result["platforms"] if p["platform_slug"] == "gc")["files"]]
+
+        # Case-folded, so a capitalised name does not sort above every lowercase
+        # one: the SNES pane really does mix `SGB1.sfc` with `sgb_boot.bin`, and
+        # a case-sensitive sort puts every capital first, which reads as no sort
+        # at all. `cx4.data.rom` is the appended one and lands between them.
+        assert names == ["cx4.data.rom", "SGB1.sfc", "sgb_boot.bin"]
+
+
+class TestAFolderRowCountsWhatWePutInside:
+    """The folder branch of the row field, which nothing else exercises.
+
+    A declared folder has no name a record could carry, so its ``deletable_count``
+    counts the records written UNDERNEATH it — the rule that a folder is never a
+    download says nothing about the files already in one.
+    """
+
+    _CORE = "pcsx2_libretro"
+
+    def _service(self, plugin, tmp_path, resolver, store):
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            firmware_resolver=resolver,
+            core_info=FakeCoreInfoProvider(
+                active_core=(self._CORE, "LRPS2"), options=[libretro_option(self._CORE, "LRPS2")]
+            ),
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(tmp_path / "bios")),
+        )
+        _inline_executor(fw)
+        _stub_listing(fw, [])
+        return fw
+
+    @pytest.mark.asyncio
+    async def test_the_folder_row_counts_the_records_beneath_it(self, plugin, tmp_path):
+        _seed_rom(plugin._uow, rom_id=61, platform_slug="dc", app_id=1)
+        inside = os.path.join(str(tmp_path / "bios"), "pcsx2", "bios", "scph39001.bin")
+        hand_placed = os.path.join(str(tmp_path / "bios"), "pcsx2", "bios", "scph70012.bin")
+        elsewhere = os.path.join(str(tmp_path / "bios"), "scph5501.bin")
+        store = FakeFirmwareFileStore({inside: b"\x00" * 8, hand_placed: b"\x00" * 8, elsewhere: b"\x00" * 8})
+        for name, path in (("scph39001.bin", inside), ("scph5501.bin", elsewhere)):
+            plugin._uow.bios_files.save(
+                BiosFile.mark_downloaded(
+                    platform_slug="dc",
+                    file_name=name,
+                    file_path=path,
+                    downloaded_at="2026-01-01T00:00:00+00:00",
+                    firmware_id=None,
+                )
+            )
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "bios", required_by=[self._CORE], relative_path="pcsx2/bios", present=True, declares_directory=True
+        )
+        fw = self._service(plugin, tmp_path, resolver, store)
+
+        result = await fw.get_firmware_status()
+        row = next(p for p in result["platforms"] if p["platform_slug"] == "dc")["files"][0]
+
+        assert row["declared_kind"] == "directory"
+        # One of the two records is inside the folder; the hand-placed file in
+        # there is not ours, and our own download outside it belongs to the
+        # platform button rather than to this row.
+        assert row["deletable_count"] == 1
 
 
 class TestAFolderRequirementIsAnsweredByItsContents:
@@ -925,8 +1041,8 @@ class TestGetFirmwareStatus:
 
         Seeds a standalone-first options list (the PPSSPP flip) so the *default*
         emulator label ("PPSSPP (Standalone)") differs from the libretro
-        ``active_core`` label ("PPSSPP") — the exact case the System-page label
-        must reflect. Returns the resolved ``active_core_label``.
+        ``active_core`` label ("PPSSPP") — the exact case the platform detail's
+        label must reflect. Returns the resolved ``active_core_label``.
         """
         from tests.fakes.fake_core_info_provider import libretro_option, standalone_option
 
@@ -966,7 +1082,7 @@ class TestGetFirmwareStatus:
 
     @pytest.mark.asyncio
     async def test_active_core_label_reflects_per_platform_override(self):
-        """A per-platform pin surfaces on the System-page label immediately (#1305)."""
+        """A per-platform pin surfaces on the platform detail's label immediately (#1305)."""
         label = await self._psp_active_core_label(FakePlatformCoreReader({"psp": "PPSSPP"}))
         assert label == "PPSSPP"
 
@@ -1069,7 +1185,7 @@ def _dc_core_info() -> FakeCoreInfoProvider:
 class TestGetFirmwareStatusBiosAggregates:
     """``get_firmware_status`` ships per-platform BIOS aggregates + ``bios_level``.
 
-    The System page reads the unknown/ok/partial/missing decision and display
+    The platform detail reads the unknown/ok/partial/missing decision and display
     counts off this payload instead of re-deriving the threshold logic in the
     frontend (#461). The level is computed by the same
     ``domain.bios_status.compute_bios_level`` the game-detail path uses, from the
@@ -1164,7 +1280,7 @@ class TestGetFirmwareStatusBiosAggregates:
 
     @pytest.mark.asyncio
     async def test_unanswerable_platform_projects_unknown_level(self, tmp_path):
-        """System-page projection: server files nothing could answer for → 'unknown'.
+        """Overview projection: server files nothing could answer for → 'unknown'.
 
         A platform one of whose emulators could not be read classifies every
         unmatched file ``unknown`` (known_count 0), so the aggregate stamps
@@ -1511,14 +1627,17 @@ class TestGetFirmwareStatusDeletableCount:
         """Both directions in one platform, so the two counts cannot coincide.
 
         ``IPL.bin`` and ``card.bin`` are in the library and on disk but were put
-        there by hand; ``retired.bin`` we downloaded and RomM no longer offers.
-        The library ratio sees the first two, the delete sees only the third.
+        there by hand; ``retired.bin`` we downloaded and RomM no longer offers;
+        ``ours.bin`` we downloaded and it is still listed. The library ratio sees
+        the three it holds, the delete sees the two we placed — and per row, only
+        ``ours.bin`` offers a button, because ``retired.bin`` has no row at all.
         """
         bios_dir = tmp_path / "bios"
         ipl = os.path.join(str(bios_dir), "IPL.bin")
         card = os.path.join(str(bios_dir), "card.bin")
         retired = os.path.join(str(bios_dir), "retired.bin")
-        store = FakeFirmwareFileStore({ipl: b"\x00" * 8, card: b"\x00" * 8, retired: b"\x00" * 8})
+        ours = os.path.join(str(bios_dir), "ours.bin")
+        store = FakeFirmwareFileStore({ipl: b"\x00" * 8, card: b"\x00" * 8, retired: b"\x00" * 8, ours: b"\x00" * 8})
         fw = _make_firmware_service(
             romm_api=plugin._romm_api,
             uow_factory=FakeUnitOfWorkFactory(plugin._uow),
@@ -1537,6 +1656,16 @@ class TestGetFirmwareStatusDeletableCount:
                 firmware_id=None,
             )
         )
+        # Ours, and still offered by the library, so it has a row of its own.
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="gc",
+                file_name="ours.bin",
+                file_path=ours,
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=9,
+            )
+        )
         _stub_listing(
             fw,
             [
@@ -1548,17 +1677,43 @@ class TestGetFirmwareStatusDeletableCount:
                     "file_size_bytes": 8,
                     "md5_hash": "",
                 },
+                {
+                    "id": 9,
+                    "file_name": "ours.bin",
+                    "file_path": "bios/gc/ours.bin",
+                    "file_size_bytes": 8,
+                    "md5_hash": "",
+                },
             ],
         )
 
         result = await fw.get_firmware_status()
         plat = next(p for p in result["platforms"] if p["platform_slug"] == "gc")
 
-        assert plat["local_count"] == 2
-        assert plat["deletable_count"] == 1
+        assert plat["local_count"] == 3
+        assert plat["deletable_count"] == 2
+        # And per row, which is what a row's own Delete button reads. `IPL.bin`
+        # is the shape that matters: in the library, on disk, `downloaded: True`
+        # — and not ours, so it must offer nothing. Deriving the field from
+        # `downloaded` instead of from the records flips exactly this row, and
+        # it is the shape that destroyed `codehandler.bin` on a real device.
+        rows = {f["file_name"]: f for f in plat["files"]}
+        assert rows["IPL.bin"]["downloaded"] is True
+        assert rows["IPL.bin"]["deletable_count"] == 0
+        assert rows["card.bin"]["deletable_count"] == 0
+        # And the positive direction, which is the one that fails silently: a row
+        # the plugin DID place must offer its button. Without it, forcing every
+        # file row to 0 leaves the suite green and the button simply never
+        # appears.
+        assert rows["ours.bin"]["deletable_count"] == 1
+        # `retired.bin` has no row at all: nothing declares it and the library no
+        # longer offers it. So the platform count and the rows legitimately
+        # differ — the count is over records, the rows are what the pane has to
+        # show, and only the platform-wide button can reach this one.
+        assert "retired.bin" not in rows
         # And the count means the delete: it removes ours, leaves theirs.
         deleted = await fw.delete_platform_bios("gc")
-        assert deleted["deleted_count"] == 1
+        assert deleted["deleted_count"] == 2
         assert retired not in store.files
         assert ipl in store.files
         assert card in store.files
@@ -2011,6 +2166,370 @@ class TestDownloadAllFirmware:
         assert result["downloaded"] == 0
 
 
+class TestDownloadPlatformFirmwareFile:
+    """The per-row Download button (#164): one named file, scoped to its platform."""
+
+    @staticmethod
+    def _listing() -> list[dict[str, Any]]:
+        return [
+            {
+                "id": 1,
+                "file_name": "existing.bin",
+                "file_path": "bios/dc/existing.bin",
+                "file_size_bytes": 50,
+                "md5_hash": "",
+            },
+            {
+                "id": 2,
+                "file_name": "missing.bin",
+                "file_path": "bios/dc/missing.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+            {
+                "id": 3,
+                "file_name": "missing.bin",
+                "file_path": "bios/n64/missing.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_downloads_the_named_file_of_that_platform(self, plugin, fw, tmp_path):
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        _set_loop(fw, asyncio.get_event_loop())
+        fetched = []
+
+        async def fake_download_one(fw_id, _placements):
+            fetched.append(fw_id)
+            return {"success": True, "file_path": "/bios/dc/missing.bin", "md5_match": None}
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=self._listing()),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("dc", "missing.bin")
+
+        assert result["success"] is True
+        assert result["downloaded"] == 1
+        # id 3 carries the same file name under another platform's folder.
+        assert fetched == [2]
+
+    @pytest.mark.asyncio
+    async def test_a_file_already_at_its_destination_is_not_refetched(self, plugin, fw, tmp_path):
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        (bios_dir / "existing.bin").write_bytes(b"\x00" * 50)
+        _set_loop(fw, asyncio.get_event_loop())
+
+        async def fake_download_one(fw_id, _placements):
+            raise AssertionError(f"nothing to fetch, but firmware {fw_id} was requested")
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=self._listing()),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("dc", "existing.bin")
+
+        assert result["success"] is True
+        assert result["downloaded"] == 0
+        assert "already here" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_a_name_the_platform_does_not_hold_is_refused(self, plugin, fw, tmp_path):
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        _set_loop(fw, asyncio.get_event_loop())
+
+        async def fake_download_one(fw_id, _placements):
+            raise AssertionError(f"nothing to fetch, but firmware {fw_id} was requested")
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=self._listing()),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("dc", "nowhere.bin")
+
+        assert result["success"] is False
+        assert result["reason"] == "not_in_library"
+        assert result["downloaded"] == 0
+
+    @pytest.mark.asyncio
+    async def test_the_one_fetch_s_own_failure_is_surfaced(self, plugin, fw, tmp_path):
+        # One press wants the reason: the single fetch's failure shape reaches
+        # the caller intact rather than folded into a count of errors.
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        _set_loop(fw, asyncio.get_event_loop())
+
+        async def fake_download_one(_fw_id, _placements):
+            return {"success": False, "reason": "server_unreachable", "message": "RomM is unreachable"}
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=self._listing()),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("dc", "missing.bin")
+
+        assert result["success"] is False
+        assert result["reason"] == "server_unreachable"
+        assert result["message"] == "RomM is unreachable"
+        assert result["downloaded"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_folder_declaration_is_refused_rather_than_fetched(self, plugin, fw, tmp_path):
+        """The emulator opens that name as a directory, so there is no file to fetch.
+
+        The folder is ABSENT here, which is the case the already-there skip would
+        let through: a download would write a file where the core opens a
+        directory, and stage its ``.tmp`` beside the BIOS root. Where the batch
+        passes over such a row, one press asks for one named file, so this
+        answers why instead of reporting a success nothing happened in.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        firmware_list = [
+            {"id": 3, "file_name": "bios", "file_path": "bios/ps2/bios", "file_size_bytes": 0, "md5_hash": ""}
+        ]
+        _resolver(fw).declare(
+            "bios",
+            required_by=["pcsx2_libretro"],
+            relative_path="pcsx2/bios",
+            present=False,
+            declares_directory=True,
+            folder=FolderVerdict(satisfied=False),
+        )
+        _set_loop(fw, asyncio.get_event_loop())
+
+        async def fake_download_one(fw_id, _placements):
+            raise AssertionError(f"a folder declaration must not be fetched, but firmware {fw_id} was requested")
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
+            patch.object(fw._downloads, "_download_one", side_effect=fake_download_one),
+            patch.object(fw._demand, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.download_platform_firmware_file("ps2", "bios")
+
+        assert result["success"] is False
+        assert result["reason"] == "declares_directory"
+        assert result["downloaded"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_failed_listing_fetch_answers_with_zero(self, plugin, fw):
+        _set_loop(fw, asyncio.get_event_loop())
+        fw._listing._firmware_cache = None
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=OSError("Connection reset")):
+            result = await fw.download_platform_firmware_file("dc", "missing.bin")
+
+        assert result["success"] is False
+        assert result["reason"] == "unknown"
+        assert "Connection reset" in result["message"]
+        assert result["downloaded"] == 0
+        assert fw._listing._firmware_cache is None
+
+
+class TestDeleteOneBiosFile:
+    """The per-row Delete button's backend half: one file, or one folder's contents.
+
+    Both run the platform-wide worker under a predicate, so what is pinned here
+    is which records each one selects — the authority itself is the same loop
+    ``TestDeletePlatformBios`` covers.
+    """
+
+    @pytest.mark.asyncio
+    async def test_deletes_our_own_download_at_the_recorded_path(self, plugin, fw, tmp_path):
+        """The record names the file and the path, and both are what is used."""
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        ours = bios_dir / "gc-pal-12.bin"
+        ours.write_bytes(b"\x00" * 512)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="gc",
+                file_name="gc-pal-12.bin",
+                file_path=str(ours),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=7,
+            )
+        )
+
+        result = await fw.delete_bios_file("gc", "gc-pal-12.bin")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert not ours.exists()
+        assert plugin._uow.bios_files.get("gc", "gc-pal-12.bin") is None
+
+    @pytest.mark.asyncio
+    async def test_takes_only_the_named_record_of_several(self, plugin, fw, tmp_path):
+        """One row's button removes one file, not the platform's other downloads.
+
+        The platform-wide delete is the one that takes them all; this is the
+        per-row twin and the name is the whole of the difference between them.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        for name in ("gc-pal-12.bin", "gc-ntsc-12.bin"):
+            path = bios_dir / name
+            path.write_bytes(b"\x00" * 32)
+            plugin._uow.bios_files.save(
+                BiosFile.mark_downloaded(
+                    platform_slug="gc",
+                    file_name=name,
+                    file_path=str(path),
+                    downloaded_at="2026-01-01T00:00:00+00:00",
+                    firmware_id=1,
+                )
+            )
+
+        result = await fw.delete_bios_file("gc", "gc-pal-12.bin")
+
+        assert result["deleted_count"] == 1
+        assert not (bios_dir / "gc-pal-12.bin").exists()
+        assert (bios_dir / "gc-ntsc-12.bin").exists()
+        assert plugin._uow.bios_files.get("gc", "gc-ntsc-12.bin") is not None
+
+    @pytest.mark.asyncio
+    async def test_an_empty_folder_path_selects_nothing(self, plugin, fw, tmp_path):
+        """The narrowing claim has to hold for a degenerate path too.
+
+        `"".rstrip("/") + "/"` is `"/"`, which every absolute recorded path
+        starts with — the folder button would then take the platform-wide set.
+        Unreachable from the pane, refused here so the sentence stays true.
+        """
+        bios = tmp_path / "retrodeck" / "bios"
+        bios.mkdir(parents=True)
+        ours = bios / "scph5501.bin"
+        ours.write_bytes(b"\x00" * 16)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="ps2",
+                file_name="scph5501.bin",
+                file_path=str(ours),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=5,
+            )
+        )
+
+        result = await fw.delete_bios_folder("ps2", "")
+
+        assert result["deleted_count"] == 0
+        assert ours.exists()
+
+    @pytest.mark.asyncio
+    async def test_deletes_our_downloads_inside_a_declared_folder(self, plugin, fw, tmp_path):
+        """PS2's `pcsx2/bios` is a folder declaration, and what we put in it is ours.
+
+        Two rules, not one: a folder is never offered as a DOWNLOAD, because
+        there is no file to fetch into a name the emulator lists — that says
+        nothing about the files already inside it. A recorded download under the
+        folder must be removable, and a file we never placed must not be.
+        """
+        folder = tmp_path / "retrodeck" / "bios" / "pcsx2" / "bios"
+        folder.mkdir(parents=True)
+        ours = folder / "scph39001.bin"
+        ours.write_bytes(b"\x00" * 128)
+        theirs = folder / "scph70012.bin"
+        theirs.write_bytes(b"\x01" * 128)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="ps2",
+                file_name="scph39001.bin",
+                file_path=str(ours),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=3,
+            )
+        )
+
+        result = await fw.delete_bios_folder("ps2", str(folder))
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert not ours.exists()
+        # The hand-placed file, and the folder itself, are not ours to remove.
+        assert theirs.exists()
+        assert folder.is_dir()
+
+    @pytest.mark.asyncio
+    async def test_a_folder_path_narrows_and_never_widens(self, plugin, fw, tmp_path):
+        """A record outside the folder is out of reach of that folder's button."""
+        bios = tmp_path / "retrodeck" / "bios"
+        (bios / "pcsx2" / "bios").mkdir(parents=True)
+        outside = bios / "scph5501.bin"
+        outside.write_bytes(b"\x02" * 64)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="ps2",
+                file_name="scph5501.bin",
+                file_path=str(outside),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=4,
+            )
+        )
+
+        result = await fw.delete_bios_folder("ps2", str(bios / "pcsx2" / "bios"))
+
+        assert result["deleted_count"] == 0
+        assert outside.exists()
+
+    @pytest.mark.asyncio
+    async def test_a_file_with_no_record_is_never_touched(self, plugin, fw, tmp_path):
+        """The GameCube pane's other row: RetroDECK's own copy, present on disk.
+
+        It sits one row above a real download, it is `downloaded: True`, and no
+        RomM library can hand it back — authorising on presence deleted exactly
+        this file on a real device. With no record naming it, the delete must
+        remove nothing and report nothing removed.
+        """
+        sys_dir = tmp_path / "retrodeck" / "bios" / "dolphin-emu" / "Sys"
+        sys_dir.mkdir(parents=True)
+        theirs = sys_dir / "codehandler.bin"
+        theirs.write_bytes(b"\x01" * 64)
+
+        result = await fw.delete_bios_file("gc", "codehandler.bin")
+
+        assert result["success"] is True
+        assert result["deleted_count"] == 0
+        assert theirs.exists()
+
+    @pytest.mark.asyncio
+    async def test_unlinks_where_the_record_points_not_where_the_row_would(self, plugin, fw, tmp_path):
+        """A placement that moved after the download: the record still rules.
+
+        The row's ``local_path`` is recomputed from today's placement, so for a
+        file fetched before an emu-atlas bump it names whatever now occupies the
+        new destination. Only the recorded path may be unlinked.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        (bios_dir / "dc").mkdir(parents=True)
+        written = bios_dir / "dc_boot.bin"
+        written.write_bytes(b"\x02" * 16)
+        elsewhere = bios_dir / "dc" / "dc_boot.bin"
+        elsewhere.write_bytes(b"\x03" * 16)
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="dc",
+                file_name="dc_boot.bin",
+                file_path=str(written),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=9,
+            )
+        )
+
+        result = await fw.delete_bios_file("dc", "dc_boot.bin")
+
+        assert result["deleted_count"] == 1
+        assert not written.exists()
+        assert elsewhere.exists()
+
+
 class TestDeletePlatformBios:
     @pytest.mark.asyncio
     async def test_delete_platform_bios_happy_path(self, plugin, fw, tmp_path):
@@ -2050,6 +2569,7 @@ class TestDeletePlatformBios:
                             file_name="scph5501.bin",
                             downloaded=True,
                             local_path=str(bios_file),
+                            declared_path="scph5501.bin",
                             description="PS1 BIOS",
                             wanted="needed",
                             required_by_active=True,
@@ -2076,8 +2596,9 @@ class TestDeletePlatformBios:
         Drives ``delete_platform_bios`` end-to-end through the *real*
         ``check_platform_bios`` (server-offline registry fallback), so the
         ``files`` list is the genuine ``[asdict(f) for f in files]`` payload
-        the callable hands to ``_delete_platform_bios_io``. Before the fix that
-        worker read ``f.downloaded`` / ``f.local_path`` / ``f.file_name`` as
+        the callable hands to the removal worker (``_delete_recorded_io``).
+        Before the fix that worker read ``f.downloaded`` / ``f.local_path`` /
+        ``f.file_name`` as
         attributes on those dicts, raising ``AttributeError`` in the executor
         and deleting nothing — the "Failed to delete BIOS files" the modal showed.
         """
@@ -2399,6 +2920,7 @@ class TestDeletePlatformBios:
                             file_name="bios1.bin",
                             downloaded=False,
                             local_path="/fake/path1",
+                            declared_path="bios1.bin",
                             description="bios1.bin",
                             wanted="unknown",
                             required_by_active=False,
@@ -2411,6 +2933,7 @@ class TestDeletePlatformBios:
                             file_name="bios2.bin",
                             downloaded=False,
                             local_path="/fake/path2",
+                            declared_path="bios2.bin",
                             description="bios2.bin",
                             wanted="unknown",
                             required_by_active=False,
@@ -3584,7 +4107,11 @@ class TestFirmwareCachePersistence:
 
 
 class TestDeletePlatformBiosIOLogsWarnings:
-    """Coverage for the OSError-warning path in _delete_platform_bios_io."""
+    """Coverage for the OSError-warning path in ``_delete_recorded_io``.
+
+    Reached here through the platform-wide button, and shared with the row and
+    folder ones — all three run that loop under different record predicates.
+    """
 
     @pytest.mark.asyncio
     async def test_logs_warning_and_collects_error_when_remove_fails(self, plugin, fw, caplog):

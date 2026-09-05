@@ -198,8 +198,8 @@ def _migrate_v6_to_v7(data: dict[str, Any]) -> dict[str, Any]:
     Introduces ``platform_cores`` (RomM platform slug → core label) as an
     empty ``{}`` placeholder so post-migration reads find the key. No
     existing per-platform selection is imported — the map starts empty and
-    the user re-applies any platform-wide core via the System page; nothing
-    is read out of the retired ES-DE gamelist.
+    the user re-applies any platform-wide core from the Library page's
+    platform detail; nothing is read out of the retired ES-DE gamelist.
     """
     data.setdefault("platform_cores", {})
     data["version"] = 7

@@ -5,8 +5,8 @@ import { showOfflineDriftModal } from "./OfflineDriftModal";
 
 // The global @decky/ui stub (src/test-setup.ts) renders ConfirmModal as a
 // pass-through <div> and exposes showModal as a vi.fn. We grab the element
-// handed to showModal and read its props directly — mirroring SystemPage.test's
-// lastConfirmModalProps helper — to invoke onOK / onCancel.
+// handed to showModal and read its props directly — the same shape
+// `library/PlatformsTab.test.tsx` uses — to invoke onOK / onCancel.
 interface ConfirmModalProps {
   strTitle?: string;
   strDescription?: string;

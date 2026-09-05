@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.fetch_generation import current_generation_ids
-from domain.prune import group_rows
+from domain.sibling_resolution import group_rows
 
 if TYPE_CHECKING:
     from domain.rom import Rom

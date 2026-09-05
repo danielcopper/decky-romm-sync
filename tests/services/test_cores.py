@@ -235,7 +235,7 @@ class TestGetPlatformCoreInfo:
         assert result["emulators"] == []
 
     def test_platform_core_label_surfaces_per_platform_override(self, event_loop, service, uow, settings):
-        # A per-platform override set on the System page (settings.json
+        # A per-platform override set on the platform detail (settings.json
         # platform_cores) surfaces as platform_core_label so the menu can mark
         # the system-level selection distinctly from the active core (#954).
         _seed_rom(uow, rom_id=42, platform_slug="snes")
@@ -309,6 +309,67 @@ class TestGetPlatformCoreInfo:
         # The platform-wide enumeration receives the NORMALIZED system.
         assert core_info.emulator_options_calls == [system]
         assert resolve_system.calls == [(slug, None)]
+
+
+# ── get_system_core_info (platform-slug-keyed emulator menu) ───────────
+
+
+class TestGetSystemCoreInfo:
+    def test_happy_path(self, event_loop, service, core_info):
+        result = event_loop.run_until_complete(service.get_system_core_info("snes"))
+        assert result == {
+            "emulators": options_to_payload(core_info.options),
+            "emulator_data_available": True,
+            "active_core_label": "Snes9x",
+        }
+
+    def test_answers_for_a_platform_with_no_synced_rom(self, event_loop, service, uow, core_info):
+        # The whole point of the platform-keyed read: no ROM row is consulted, so
+        # a platform the user has never synced still gets its picker.
+        assert list(uow.roms.iter_all()) == []
+        result = event_loop.run_until_complete(service.get_system_core_info("snes"))
+        assert result["emulators"] == options_to_payload(core_info.options)
+
+    def test_per_platform_override_wins_over_the_default(self, event_loop, service, settings):
+        settings["platform_cores"]["snes"] = "bsnes"
+        result = event_loop.run_until_complete(service.get_system_core_info("snes"))
+        assert result["active_core_label"] == "bsnes"
+
+    def test_unresolvable_override_degrades_to_the_default(self, event_loop, service, settings):
+        # A core the user picked and then uninstalled: the label degrades rather
+        # than naming an emulator that would not launch.
+        settings["platform_cores"]["snes"] = "Gone-o-Tron"
+        result = event_loop.run_until_complete(service.get_system_core_info("snes"))
+        assert result["active_core_label"] == "Snes9x"
+
+    def test_another_platforms_override_is_not_read(self, event_loop, service, settings):
+        settings["platform_cores"]["gba"] = "mGBA"
+        result = event_loop.run_until_complete(service.get_system_core_info("snes"))
+        assert result["active_core_label"] == "Snes9x"
+
+    def test_no_bakeable_emulator_answers_no_label(self, event_loop, service, core_info):
+        core_info.options = []
+        result = event_loop.run_until_complete(service.get_system_core_info("snes"))
+        assert result["active_core_label"] is None
+        assert result["emulators"] == []
+
+    def test_unreadable_es_systems_surfaces_the_flag(self, event_loop, service, core_info):
+        core_info.available = False
+        core_info.options = []
+        result = event_loop.run_until_complete(service.get_system_core_info("snes"))
+        assert result["emulator_data_available"] is False
+
+    def test_reads_the_options_for_the_normalized_system(self, event_loop, service, core_info, resolve_system):
+        event_loop.run_until_complete(service.get_system_core_info("dc"))
+        assert core_info.emulator_options_calls == ["dreamcast"]
+        assert resolve_system.calls == [("dc", None)]
+
+    def test_reads_the_emulator_options_outside_any_unit_of_work(self, event_loop, service, uow, core_info):
+        # get_emulator_options re-probes the ES-DE files on every call; inside a
+        # UoW that file I/O would run under BEGIN IMMEDIATE (ADR-0006).
+        observed = record_uow_open(uow, core_info, "get_emulator_options")
+        event_loop.run_until_complete(service.get_system_core_info("snes"))
+        assert observed == [False]
 
 
 # ── set_game_core (per-game pin; B4 hard-fail-before-write) ─────────────

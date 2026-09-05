@@ -5,4 +5,4 @@
 
 /** Every page the QAM panel can show. A surface that cannot navigate to itself
  *  narrows this with `Exclude<Page, "...">` rather than restating the union. */
-export type Page = "main" | "settings" | "library" | "data" | "downloads" | "system";
+export type Page = "main" | "settings" | "library" | "data" | "downloads";

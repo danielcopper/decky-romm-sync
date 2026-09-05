@@ -78,7 +78,11 @@ SCOPE_DIRS = (
 # gate, and that costs more than any module's size.
 ALLOWLIST = {
     "py_modules/services/downloads.py": 1119,
-    "py_modules/services/library/fetcher.py": 1150,
+    # Lowered 1150 → 1085 (#1815): the per-platform ``collapsed_count`` garnish
+    # on ``get_platforms`` was deleted once it was established that nothing read
+    # it, which banked 65 lines. Reclaimed rather than left as headroom, because
+    # headroom nobody has argued for is how a ceiling stops meaning anything.
+    "py_modules/services/library/fetcher.py": 1085,
 }
 
 

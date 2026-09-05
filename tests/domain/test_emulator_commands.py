@@ -22,6 +22,7 @@ from domain.emulator_commands import (
     label_to_invocation,
     option_to_invocation,
     options_to_payload,
+    resolve_platform_label,
     select_default_option,
 )
 from domain.shortcut_data import EmulatorInvocation
@@ -229,6 +230,38 @@ class TestLabelToInvocation:
 
     def test_unknown_label_returns_none(self):
         assert label_to_invocation(self.OPTIONS, "Not A Real Emulator") is None
+
+
+class TestResolvePlatformLabel:
+    """The platform-layer label two services render — one rule, one place."""
+
+    OPTIONS: ClassVar[list[EmulatorOption]] = [
+        classify_command("RPCS3 Shortcut (Standalone)", PS3_RPCS3_SHORTCUT),
+        classify_command("RPCS3 Directory (Standalone)", PS3_RPCS3_DIRECTORY),
+        classify_command("RPCS3 ISO (Standalone)", PS3_RPCS3_DIRECTORY),
+    ]
+
+    def test_no_override_falls_back_to_the_default(self):
+        assert resolve_platform_label(self.OPTIONS, None) == "RPCS3 Directory (Standalone)"
+
+    def test_a_resolvable_override_wins(self):
+        assert resolve_platform_label(self.OPTIONS, "RPCS3 ISO (Standalone)") == "RPCS3 ISO (Standalone)"
+
+    def test_an_override_naming_an_unbakeable_option_degrades(self):
+        # The label resolves to no invocation, so naming it would promise a
+        # launch that cannot happen.
+        assert resolve_platform_label(self.OPTIONS, "RPCS3 Shortcut (Standalone)") == "RPCS3 Directory (Standalone)"
+
+    def test_an_override_naming_nothing_degrades(self):
+        assert resolve_platform_label(self.OPTIONS, "Uninstalled Emulator") == "RPCS3 Directory (Standalone)"
+
+    def test_nothing_bakeable_answers_no_label(self):
+        options = [classify_command("RPCS3 Shortcut (Standalone)", PS3_RPCS3_SHORTCUT)]
+        assert resolve_platform_label(options, None) is None
+        assert resolve_platform_label(options, "RPCS3 Shortcut (Standalone)") is None
+
+    def test_empty_options_answer_no_label(self):
+        assert resolve_platform_label([], "anything") is None
 
 
 class TestOptionsToPayload:
