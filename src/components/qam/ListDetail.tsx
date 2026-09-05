@@ -33,9 +33,11 @@ export interface ListDetailProps {
   onSelect: (id: string) => void;
   renderDetail: (selectedId: string | null) => ReactNode;
   /**
-   * Controls that act on the whole list — Enable all, Disable all — rendered
-   * above the first row and scrolling with it. Outside every item, so focusing
-   * one reports no selection: these belong to the list, not to a row of it.
+   * Controls that act on the whole list — Enable all, Disable all — and anything
+   * that speaks for the list as a whole, such as a status line about one of
+   * those writes. Rendered above the first row and scrolling with it, outside
+   * every item, so focusing one reports no selection: these belong to the list,
+   * not to a row of it.
    */
   listHeader?: ReactNode;
   /**

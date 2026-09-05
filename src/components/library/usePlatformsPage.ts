@@ -65,6 +65,12 @@ const FAILED_NOTICE_MS = 2000;
 const LEASE_OWNER = "library-platforms";
 const REMOVAL_REPORT_TIMEOUT_MS = 15000;
 
+/** What a sync write that did not take says when there is no answer to quote.
+ *  A refusal always carries a message (`.claude/rules/callables.md`) and that
+ *  message is what the reader gets. A REJECTION has no answer at all — the call
+ *  never returned one — and the revert would otherwise happen in silence. */
+export const SYNC_WRITE_FAILED = "Could not save that; the change was undone.";
+
 /** Which group of the detail a status line belongs under, so a failed core
  *  switch is not reported below the removal buttons. */
 export type StatusScope = "core" | "bios" | "remove";
@@ -166,6 +172,16 @@ export interface PlatformsPageState {
   coreFor: (slug: string) => CoreAnswer;
   saveCountFor: (slug: string) => SaveCountAnswer;
   status: DetailStatus | null;
+  /**
+   * Why the last sync write did not take, or `null`. The list's own line, not a
+   * platform pane's: Enable all is about the whole list, and a row's toggle is
+   * about a row the reader is already looking at, so neither belongs in
+   * {@link DetailStatus}, which is bound to one platform's pane.
+   *
+   * Cleared by the next sync write that succeeds — a line about a toggle the
+   * reader has since put right is a line about nothing.
+   */
+  listStatus: string | null;
   /**
    * The platform whose action is in flight, or `null`. Every action on every
    * platform disables while one is running, and the slug is what lets a pane
@@ -280,6 +296,7 @@ export function usePlatformsPage(): PlatformsPageState {
   const [cores, setCores] = useState<Record<string, SystemCoreInfo | null>>({});
   const [saveCounts, setSaveCounts] = useState<Record<string, number | null>>({});
   const [status, setStatus] = useState<DetailStatus | null>(null);
+  const [listStatus, setListStatus] = useState<string | null>(null);
   const [busySlug, setBusySlug] = useState<string | null>(null);
   const [removalProgress, setRemovalProgress] = useState<{ slug: string; removed: number; total: number } | null>(null);
 
@@ -455,14 +472,28 @@ export function usePlatformsPage(): PlatformsPageState {
     platformsRef.current = platforms;
   }, [platforms]);
 
+  // Both sync writes below treat a refusal and a rejection as one outcome: the
+  // write did not take, the optimistic flip goes back, and the reader is told.
+  // A flip that silently returns to where it was is what a toggle that never
+  // moved looks like, and neither callable throws to refuse.
   const toggleSync = useCallback((row: PlatformRow, enabled: boolean) => {
     const flip = (want: boolean) =>
       setPlatforms((prev) => prev.map((p) => (p.slug === row.slug ? { ...p, sync_enabled: want } : p)));
     flip(enabled);
     detach(
-      savePlatformSync(row.id, enabled).catch(() => {
-        flip(!enabled);
-      }),
+      savePlatformSync(row.id, enabled)
+        .then((result) => {
+          if (result.success) {
+            setListStatus(null);
+            return;
+          }
+          flip(!enabled);
+          setListStatus(result.message || SYNC_WRITE_FAILED);
+        })
+        .catch(() => {
+          flip(!enabled);
+          setListStatus(SYNC_WRITE_FAILED);
+        }),
     );
   }, []);
 
@@ -470,9 +501,19 @@ export function usePlatformsPage(): PlatformsPageState {
     const previous = platformsRef.current;
     setPlatforms((prev) => prev.map((p) => ({ ...p, sync_enabled: enabled })));
     detach(
-      setAllPlatformsSync(enabled).catch(() => {
-        setPlatforms(previous);
-      }),
+      setAllPlatformsSync(enabled)
+        .then((result) => {
+          if (result.success) {
+            setListStatus(null);
+            return;
+          }
+          setPlatforms(previous);
+          setListStatus(result.message || SYNC_WRITE_FAILED);
+        })
+        .catch(() => {
+          setPlatforms(previous);
+          setListStatus(SYNC_WRITE_FAILED);
+        }),
     );
   }, []);
 
@@ -765,6 +806,7 @@ export function usePlatformsPage(): PlatformsPageState {
     coreFor,
     saveCountFor,
     status,
+    listStatus,
     busySlug,
     removalProgress,
     toggleSync,

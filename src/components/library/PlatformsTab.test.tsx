@@ -365,7 +365,7 @@ describe("Library › Platforms", () => {
       expect(toggle.checked).toBe(false);
     });
 
-    it("puts the toggle back when the write is refused", async () => {
+    it("puts the toggle back when the write is rejected, and says so", async () => {
       vi.mocked(backend.savePlatformSync).mockRejectedValue(new Error("offline"));
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -377,6 +377,54 @@ describe("Library › Platforms", () => {
       });
 
       expect(toggle.checked).toBe(true);
+      expect(within(container).getByTestId("status-list").textContent).toBe(
+        "Could not save that; the change was undone.",
+      );
+    });
+
+    it("puts the toggle back and carries the backend's words when the write is refused", async () => {
+      // A refusal resolves — the migration gate answers `{success: false, …}`
+      // without throwing — so the reverted row is the only thing the reader
+      // would otherwise see, and it is what a toggle that never moved looks
+      // like.
+      vi.mocked(backend.savePlatformSync).mockResolvedValue({
+        success: false,
+        message: "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      const toggle = container.querySelector<HTMLInputElement>('[data-testid="toggle-input"]')!;
+      await act(async () => {
+        fireEvent.click(toggle);
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+
+      expect(toggle.checked).toBe(true);
+      expect(within(container).getByTestId("status-list").textContent).toBe(
+        "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+      );
+    });
+
+    it("takes the line back on the next write that succeeds", async () => {
+      vi.mocked(backend.savePlatformSync).mockResolvedValueOnce({ success: false, message: "RomM is unreachable" });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      const toggle = container.querySelector<HTMLInputElement>('[data-testid="toggle-input"]')!;
+      await act(async () => {
+        fireEvent.click(toggle);
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+      expect(within(container).getByTestId("status-list").textContent).toBe("RomM is unreachable");
+
+      await act(async () => {
+        fireEvent.click(toggle);
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+
+      expect(container.querySelector('[data-testid="status-list"]')).toBeNull();
+      expect(toggle.checked).toBe(false);
     });
 
     it("enables and disables every platform from above the groups", async () => {
@@ -394,7 +442,7 @@ describe("Library › Platforms", () => {
       }
     });
 
-    it("restores the previous set when Enable all is refused", async () => {
+    it("restores the previous set when Enable all is rejected, and says so", async () => {
       vi.mocked(backend.getPlatforms).mockResolvedValue({ success: true, platforms: threePlatforms });
       vi.mocked(backend.setAllPlatformsSync).mockRejectedValue(new Error("offline"));
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
@@ -410,6 +458,36 @@ describe("Library › Platforms", () => {
       );
       // Dreamcast, GBA on; Nintendo 64 off — exactly the pre-press set.
       expect(checked).toEqual([true, true, false]);
+      expect(within(container).getByTestId("status-list").textContent).toBe(
+        "Could not save that; the change was undone.",
+      );
+    });
+
+    it("restores the previous set and says why when Enable all is refused", async () => {
+      // The RomM listing behind this write can fail on its own, and then the
+      // callable answers `{success: false, …}` rather than throwing — which
+      // left every toggle flipped on over a write that never landed. Reverting
+      // without the line only trades that for a silent flip back.
+      vi.mocked(backend.getPlatforms).mockResolvedValue({ success: true, platforms: threePlatforms });
+      vi.mocked(backend.setAllPlatformsSync).mockResolvedValue({
+        success: false,
+        message: "Cannot reach RomM. Check the server address.",
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Enable all")!);
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+
+      const checked = [...container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]')].map(
+        (t) => t.checked,
+      );
+      expect(checked).toEqual([true, true, false]);
+      expect(within(container).getByTestId("status-list").textContent).toBe(
+        "Cannot reach RomM. Check the server address.",
+      );
     });
 
     it("says so when the platform list itself cannot be read", async () => {

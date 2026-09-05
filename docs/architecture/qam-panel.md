@@ -391,9 +391,16 @@ is made of. The layout study still draws it; on this point the study is supersed
 finding. Do not restore it as a regression. Enable all and Disable all sit above the groups, in the list column and
 outside every row, so reaching them reports no selection. The order freezes while the page is open.
 
-The row is the page's only sync control — focus is already there and A works the toggle — so the detail opens with one
-header line instead of a Sync section: the platform's name, `N on RomM · M in Steam · <core name>`, and the core
-picker's icon button, right-aligned.
+**Every sync write is optimistic, and a write that does not take says so.** The row flips before the backend answers, so
+a write that is refused or never lands puts the row — or, for Enable all and Disable all, the whole list — back where it
+was, and states why in a line under those two buttons: in the list column, scrolling with the rows, plain text rather
+than a focus stop. It carries the backend's own message, or a short fixed sentence where there is none, and the next
+write that succeeds takes it back. A refusal resolves rather than throwing (the migration gate answers one, and so does
+the RomM listing Enable all needs), so without the line a revert is indistinguishable from a toggle that never moved.
+
+The detail offers no sync control of its own — the row already is one, focus is already there and A works the toggle,
+and the list's two header buttons act on every row at once — so it opens with one header line instead of a Sync section:
+the platform's name, `N on RomM · M in Steam · <core name>`, and the core picker's icon button, right-aligned.
 
 **Both counts on that line are ROM files.** `N` is RomM's own `rom_count` for the platform; `M` is `reachable_count` —
 how many of the platform's ROMs a reader can get to through a shortcut, which is every member of a sibling group that

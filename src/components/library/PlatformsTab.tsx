@@ -156,25 +156,42 @@ export const PlatformsTab: FC<{ state: PlatformsPageState }> = ({ state }) => {
   pushGroup(groups.available, "Available");
 
   const listHeader: ReactNode = (
-    // The pair spans exactly what a row below it spans, which is NOT symmetric:
-    // a row is inset on the left by its own marker bar and the gap after it, and
-    // runs flush to the column's right edge. Steam's `Field` contributes nothing
-    // horizontally to that — inside the QAM it renders in its `Classic` mode,
-    // whose only padding is 10px top and bottom — so there is no Field inset to
-    // match, and a right padding here would be that much of the rows' width the
-    // buttons do not have. Measured on the device through CEF: rows 79.6 →
-    // 335.9, buttons 79.9 → 335.9.
-    <Focusable
-      flow-children="horizontal"
-      style={{ display: "flex", gap: "8px", padding: `4px 0 8px ${ROW_CONTENT_INSET}px` }}
-    >
-      <DialogButton style={{ flex: 1, minWidth: 0, padding: "8px 0" }} onClick={() => state.setAllSync(true)}>
-        Enable all
-      </DialogButton>
-      <DialogButton style={{ flex: 1, minWidth: 0, padding: "8px 0" }} onClick={() => state.setAllSync(false)}>
-        Disable all
-      </DialogButton>
-    </Focusable>
+    <>
+      {/* The pair spans exactly what a row below it spans, which is NOT
+          symmetric: a row is inset on the left by its own marker bar and the gap
+          after it, and runs flush to the column's right edge. Steam's `Field`
+          contributes nothing horizontally to that — inside the QAM it renders in
+          its `Classic` mode, whose only padding is 10px top and bottom — so
+          there is no Field inset to match, and a right padding here would be
+          that much of the rows' width the buttons do not have. Measured on the
+          device through CEF: rows 79.6 → 335.9, buttons 79.9 → 335.9. */}
+      <Focusable
+        flow-children="horizontal"
+        style={{ display: "flex", gap: "8px", padding: `4px 0 8px ${ROW_CONTENT_INSET}px` }}
+      >
+        <DialogButton style={{ flex: 1, minWidth: 0, padding: "8px 0" }} onClick={() => state.setAllSync(true)}>
+          Enable all
+        </DialogButton>
+        <DialogButton style={{ flex: 1, minWidth: 0, padding: "8px 0" }} onClick={() => state.setAllSync(false)}>
+          Disable all
+        </DialogButton>
+      </Focusable>
+      {/* Why a sync write did not take, under the buttons and inset with them:
+          the writes are optimistic, so a refusal puts the row back, and a revert
+          with nothing said is what a toggle that never moved looks like. Plain
+          text for the reason the group headings are plain text — a focus stop
+          here would sit between the buttons and the first row and lead nowhere —
+          and it belongs to the list rather than to a platform's pane, because
+          Enable all is about every row at once. */}
+      {state.listStatus && (
+        <div
+          data-testid="status-list"
+          style={{ fontSize: "12px", color: "#dcdedf", padding: `0 0 8px ${ROW_CONTENT_INSET}px` }}
+        >
+          {state.listStatus}
+        </div>
+      )}
+    </>
   );
 
   return (
