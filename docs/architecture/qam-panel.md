@@ -656,6 +656,13 @@ search with its 50-row render cap, Enable all / Disable all with today's semanti
 marker (the payload carries `is_own`, not an owner name), ROM count and the toggle. The collections tab's permanent
 brick on one transient failure (#1020) is fixed as part of the rewrite.
 
+**Already shipped on the tab as it stands, and unchanged by that rewrite:** its four writes — a row's toggle, the
+whole-kind Enable all / Disable all, the batch write a search or filter narrows them to, and the Mine / All owner scope
+— are optimistic in the way the Platforms list is, and answer a refusal the same way. The control goes back where it was
+and a line under Enable all / Disable all says why, taken back by the next collection write that succeeds and by leaving
+the view it is about: entering the tab and switching sub-tab both reset the search and the filter, so the line resets
+with them.
+
 ## Settings
 
 Wide, list and detail: the sections on the left, the focused section on the right. Five sections instead of today's

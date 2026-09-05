@@ -45,7 +45,7 @@ import { fuzzyMatch } from "../utils/fuzzyMatch";
 import { LoadingRow } from "./LoadingRow";
 import { WidePage, type WidePageTab } from "./qam/WidePage";
 import { PlatformsTab } from "./library/PlatformsTab";
-import { usePlatformsPage } from "./library/usePlatformsPage";
+import { SYNC_WRITE_FAILED, usePlatformsPage } from "./library/usePlatformsPage";
 
 type CollectionSubTab = "standard" | "smart" | "virtual";
 
@@ -158,6 +158,11 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   // the sub-tab changes so each sub-tab is entered unfiltered.
   const [search, setSearch] = useState("");
   const [virtualTypeFilter, setVirtualTypeFilter] = useState<VirtualTypeFilter>("all");
+  // Why the last collection write did not take, or `null`. Every one of them is
+  // optimistic, so a refusal puts the rows — or the scope — back, and a revert
+  // with nothing said is what a control that never moved looks like. Cleared by
+  // the next write that succeeds, and by leaving the view it is about.
+  const [collectionsStatus, setCollectionsStatus] = useState<string | null>(null);
   // Wraps the search field's label + input so it can be lifted to the top of
   // the scroll view when the on-screen keyboard opens over the lower half of
   // the screen (#1539).
@@ -224,31 +229,51 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
 
   // Reset the collections sub-tab (and its search + per-type filter) on every
   // entry into the Collections tab so the user lands on a predictable view (no
-  // persistence).
+  // persistence). The status line goes with them: it is about a write on the
+  // view being left, so keeping it would stand a Virtual refusal over the
+  // Standard list the reader comes back to.
   const handleCollectionsTabClick = () => {
     setActiveSubTab("standard");
     setSearch("");
     setVirtualTypeFilter("all");
+    setCollectionsStatus(null);
     setActiveTab("collections");
   };
 
   // Switch sub-tabs and reset the per-sub-tab filters so a query typed in one
-  // sub-tab never silently hides another sub-tab's list.
+  // sub-tab never silently hides another sub-tab's list. The status line is
+  // per-view for the same reason.
   const handleSubTabChange = (sub: CollectionSubTab) => {
     setActiveSubTab(sub);
     setSearch("");
     setVirtualTypeFilter("all");
+    setCollectionsStatus(null);
   };
 
   // --- Collections tab handlers ---
+  // All four writes on this tab treat a refusal and a rejection as one outcome:
+  // the write did not take, the optimistic flip goes back, and the reader is
+  // told. None of these callables throws to refuse. The three sync writes are
+  // `@migration_blocked`, and the whole-kind one also answers a failure when the
+  // collection listings behind it cannot be fetched; the owner-scope write is
+  // not gated and refuses a scope it does not recognise.
   const handleCollectionToggle = async (id: string, kind: CollectionKind, enabled: boolean) => {
-    setCollections((prev) => prev.map((c) => (c.id === id && c.kind === kind ? { ...c, sync_enabled: enabled } : c)));
-    try {
-      await saveCollectionSync(id, kind, enabled);
-    } catch {
+    const revert = () =>
       setCollections((prev) =>
         prev.map((c) => (c.id === id && c.kind === kind ? { ...c, sync_enabled: !enabled } : c)),
       );
+    setCollections((prev) => prev.map((c) => (c.id === id && c.kind === kind ? { ...c, sync_enabled: enabled } : c)));
+    try {
+      const result = await saveCollectionSync(id, kind, enabled);
+      if (!result.success) {
+        revert();
+        setCollectionsStatus(result.message || SYNC_WRITE_FAILED);
+        return;
+      }
+      setCollectionsStatus(null);
+    } catch {
+      revert();
+      setCollectionsStatus(SYNC_WRITE_FAILED);
     }
   };
 
@@ -262,9 +287,16 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
       prev.map((c) => (filterCollectionsBySubTab([c], scope).length > 0 ? { ...c, sync_enabled: enabled } : c)),
     );
     try {
-      await setAllCollectionsSync(enabled, scope);
+      const result = await setAllCollectionsSync(enabled, scope);
+      if (!result.success) {
+        setCollections(previous);
+        setCollectionsStatus(result.message || SYNC_WRITE_FAILED);
+        return;
+      }
+      setCollectionsStatus(null);
     } catch {
       setCollections(previous);
+      setCollectionsStatus(SYNC_WRITE_FAILED);
     }
   };
 
@@ -279,9 +311,16 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
       prev.map((c) => (c.kind === kind && idSet.has(c.id) ? { ...c, sync_enabled: enabled } : c)),
     );
     try {
-      await saveCollectionsSync(ids, kind, enabled);
+      const result = await saveCollectionsSync(ids, kind, enabled);
+      if (!result.success) {
+        setCollections(previous);
+        setCollectionsStatus(result.message || SYNC_WRITE_FAILED);
+        return;
+      }
+      setCollectionsStatus(null);
     } catch {
       setCollections(previous);
+      setCollectionsStatus(SYNC_WRITE_FAILED);
     }
   };
 
@@ -318,9 +357,16 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     const previous = ownerScope;
     setOwnerScope(scope);
     try {
-      await setCollectionOwnerScope(scope);
+      const result = await setCollectionOwnerScope(scope);
+      if (!result.success) {
+        setOwnerScope(previous);
+        setCollectionsStatus(result.message || SYNC_WRITE_FAILED);
+        return;
+      }
+      setCollectionsStatus(null);
     } catch {
       setOwnerScope(previous);
+      setCollectionsStatus(SYNC_WRITE_FAILED);
     }
   };
 
@@ -528,6 +574,16 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
               </DialogButton>
             </Focusable>
           </PanelSectionRow>
+          {/* Why a write did not take, under the two buttons and above the list
+              it is about. Plain text, so it accompanies the rows rather than
+              adding a focus stop between the buttons and the first of them. */}
+          {collectionsStatus && (
+            <PanelSectionRow>
+              <div data-testid="collections-status" style={{ fontSize: "12px", color: "#dcdedf" }}>
+                {collectionsStatus}
+              </div>
+            </PanelSectionRow>
+          )}
           {renderCollectionListBody(matched, rendered, overflow, activeLabel)}
         </PanelSection>
       </>

@@ -5,9 +5,15 @@
 // happens after the call returns so the test would pass with or without the
 // .catch.
 //
+// The same rule covers a REFUSAL, which resolves rather than throwing: all four
+// Collections writes revert on `success: false` too, and each revert is asserted
+// through the reverted control and the line that says why.
+//
 // LibraryPage catch sites (all asserted below):
-//   - handleCollectionToggle catch → rollback setCollections
-//   - handleSetAllCollections catch → restore previous collections snapshot
+//   - handleCollectionToggle catch → rollback setCollections + collections line
+//   - handleSetAllCollections catch → restore previous snapshot + collections line
+//   - handleBatchCollectionsSync catch → restore previous snapshot + collections line
+//   - handleOwnerScopeChange catch → restore previous scope + collections line
 //   - platform-groups inline catch → setPlatformGroups(!value) rollback
 //   - getCollections .catch → setCollectionsError(true) (the list-driving fetch)
 //   - getSettings .catch → owner-scope stays at its "all" default; the two
@@ -24,7 +30,7 @@
 //      would be called twice instead of once.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render, fireEvent, act, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { LibraryPage } from "./LibraryPage";
 import * as backend from "../api/backend";
@@ -578,6 +584,126 @@ describe("LibraryPage", () => {
       const reverted = container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!;
       // CATCH-REJECTION assert: rolled back to original false
       expect(reverted.checked).toBe(false);
+      expect(container.querySelector('[data-testid="collections-status"]')?.textContent).toBe(
+        "Could not save that; the change was undone.",
+      );
+    });
+
+    it("reverts and says why when saveCollectionSync is refused", async () => {
+      // The callable is `@migration_blocked`, so a refusal resolves rather than
+      // throwing: without reading `success` the toggle stays where the reader
+      // put it over a write that never landed.
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "abc", name: "MyColl", kind: "standard", is_favorite: false, sync_enabled: false }),
+        ],
+      });
+      vi.mocked(backend.saveCollectionSync).mockResolvedValue({
+        success: false,
+        message: "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      fireEvent.click(container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!);
+
+      await waitFor(() =>
+        expect(container.querySelector('[data-testid="collections-status"]')?.textContent).toBe(
+          "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+        ),
+      );
+      expect(container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!.checked).toBe(false);
+    });
+
+    it("takes the line back on the next collection write that succeeds", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "abc", name: "MyColl", kind: "standard", is_favorite: false, sync_enabled: false }),
+        ],
+      });
+      vi.mocked(backend.saveCollectionSync).mockResolvedValueOnce({ success: false, message: "Cannot reach RomM" });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      fireEvent.click(container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!);
+      await waitFor(() =>
+        expect(container.querySelector('[data-testid="collections-status"]')?.textContent).toBe("Cannot reach RomM"),
+      );
+
+      fireEvent.click(container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!);
+
+      await waitFor(() => expect(container.querySelector('[data-testid="collections-status"]')).toBeNull());
+      expect(container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!.checked).toBe(true);
+    });
+
+    it("takes the line back when the tab is left and re-entered", async () => {
+      // The line is about a write on the view it was made in. Re-entering the
+      // tab resets the sub-tab, the search and the filter, so keeping the line
+      // would stand a refusal over a list the reader has not written to yet.
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "abc", name: "MyColl", kind: "standard", is_favorite: false, sync_enabled: false }),
+        ],
+      });
+      vi.mocked(backend.saveCollectionSync).mockResolvedValue({ success: false, message: "Cannot reach RomM" });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      fireEvent.click(container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!);
+      await waitFor(() =>
+        expect(container.querySelector('[data-testid="collections-status"]')?.textContent).toBe("Cannot reach RomM"),
+      );
+
+      fireEvent.click(getByText("Platforms"));
+      fireEvent.click(getByText("Collections"));
+
+      await waitFor(() => expect(container.querySelector('[data-testid="collections-status"]')).toBeNull());
+    });
+
+    it("takes the line back when the sub-tab changes", async () => {
+      // The other half of the same rule, and the one a re-entry test cannot
+      // reach: the sub-tab switch resets the search and the filter without
+      // leaving the tab, so a Standard refusal would otherwise stand over the
+      // Smart list.
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "abc", name: "MyColl", kind: "standard", is_favorite: false, sync_enabled: false }),
+          makeCollection({ id: "sc1", name: "Filter A", kind: "smart", is_favorite: false, sync_enabled: false }),
+        ],
+      });
+      vi.mocked(backend.saveCollectionSync).mockResolvedValue({ success: false, message: "Cannot reach RomM" });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      fireEvent.click(container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!);
+      await waitFor(() =>
+        expect(container.querySelector('[data-testid="collections-status"]')?.textContent).toBe("Cannot reach RomM"),
+      );
+
+      fireEvent.click(getByText("Smart"));
+
+      await waitFor(() => expect(container.querySelector('[data-testid="collections-status"]')).toBeNull());
+      expect(container.querySelector('[data-label="Filter A"]')).not.toBeNull();
     });
   });
 
@@ -675,6 +801,49 @@ describe("LibraryPage", () => {
       const b = container.querySelector<HTMLInputElement>('[data-label="B"] input');
       expect(a?.checked).toBe(true);
       expect(b?.checked).toBe(false);
+      expect(container.querySelector('[data-testid="collections-status"]')?.textContent).toBe(
+        "Could not save that; the change was undone.",
+      );
+    });
+
+    it("restores the snapshot and says why when setAllCollectionsSync is refused", async () => {
+      // The collection listings behind the whole-kind write can fail on their
+      // own, and then the callable answers `{success: false, …}` rather than
+      // throwing — which left every collection in the sub-tab flipped over a
+      // write that never landed.
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "a", name: "A", kind: "standard", is_favorite: false, sync_enabled: true }),
+          makeCollection({ id: "b", name: "B", kind: "standard", is_favorite: false, sync_enabled: false }),
+        ],
+      });
+      vi.mocked(backend.setAllCollectionsSync).mockResolvedValue({
+        success: false,
+        message: "Cannot reach RomM. Check the server address.",
+      });
+      const { container, getByText } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        fireEvent.click(getByText("Enable All"));
+        await Promise.resolve();
+      });
+      const props = lastConfirmModalProps<{ onOK?: () => void }>();
+      await act(async () => {
+        props?.onOK?.();
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+
+      expect(container.querySelector<HTMLInputElement>('[data-label="A"] input')?.checked).toBe(true);
+      expect(container.querySelector<HTMLInputElement>('[data-label="B"] input')?.checked).toBe(false);
+      expect(container.querySelector('[data-testid="collections-status"]')?.textContent).toBe(
+        "Cannot reach RomM. Check the server address.",
+      );
     });
 
     it("does not render the platform-groups toggle on the Collections tab (moved to Settings)", async () => {
@@ -1202,6 +1371,34 @@ describe("LibraryPage", () => {
       // back to "all", so the foreign collection is visible again.
       expect(vi.mocked(backend.setCollectionOwnerScope)).toHaveBeenCalledWith("own");
       expect(container.querySelector('[data-label="TheirColl"]')).not.toBeNull();
+      expect(container.querySelector('[data-testid="collections-status"]')?.textContent).toBe(
+        "Could not save that; the change was undone.",
+      );
+    });
+
+    it("rolls the scope back and says why when setCollectionOwnerScope is refused", async () => {
+      // The fourth optimistic write on this tab, and the same shape as the
+      // three sync ones: a refusal resolves, so without reading `success` the
+      // list would keep filtering by a scope the backend never stored. The
+      // message is a stand-in — the one refusal the backend has today is for a
+      // scope outside `own` / `all`, which this control cannot send — so what is
+      // pinned is the shape, not that answer.
+      vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: ownAndForeign() });
+      vi.mocked(backend.setCollectionOwnerScope).mockResolvedValue({
+        success: false,
+        reason: "config_error",
+        message: "Could not save the collection scope",
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      fireEvent.click(getByText("Mine"));
+
+      await waitFor(() =>
+        expect(container.querySelector('[data-testid="collections-status"]')?.textContent).toBe(
+          "Could not save the collection scope",
+        ),
+      );
+      expect(container.querySelector('[data-label="TheirColl"]')).not.toBeNull();
     });
 
     it("the section-header count is scope-aware (Mine drops the foreign collection)", async () => {
@@ -1563,6 +1760,41 @@ describe("LibraryPage", () => {
       await typeSearch(getByTestId, "");
       const a = container.querySelector<HTMLInputElement>('[data-label="Action Heroes"] input');
       expect(a?.checked).toBe(false);
+      expect(container.querySelector('[data-testid="collections-status"]')?.textContent).toBe(
+        "Could not save that; the change was undone.",
+      );
+    });
+
+    it("rolls back the batch flip and says why when saveCollectionsSync is refused", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({
+            id: "u1",
+            name: "Action Heroes",
+            kind: "standard",
+            is_favorite: false,
+            sync_enabled: false,
+          }),
+          makeCollection({ id: "u2", name: "Puzzle Box", kind: "standard", is_favorite: false, sync_enabled: false }),
+        ],
+      });
+      vi.mocked(backend.saveCollectionsSync).mockResolvedValue({
+        success: false,
+        message: "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+      });
+      const { getByText, getByTestId, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      await typeSearch(getByTestId, "action");
+      fireEvent.click(getByText("Enable All"));
+
+      await waitFor(() =>
+        expect(container.querySelector('[data-testid="collections-status"]')?.textContent).toBe(
+          "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+        ),
+      );
+      await typeSearch(getByTestId, "");
+      expect(container.querySelector<HTMLInputElement>('[data-label="Action Heroes"] input')?.checked).toBe(false);
     });
   });
 
