@@ -329,11 +329,13 @@ system reads as ready.
 
 #### Such a system offers no downloads
 
-A system in that state has no **Download All** or **Download Required** button, and says so in words: _BIOS management
-is not supported for this system yet, so there is nothing to download here. You can still put BIOS files in your BIOS
-folder by hand._ Fetching files the plugin cannot reason about — beside a line admitting it cannot — would be offering
-to act on an answer it does not have. Downloading them from RomM's own web interface and dropping them in your BIOS
-folder works exactly as it always did; nothing about the files changes, only what this page will claim about them.
+A system in that state offers no **Download All** or **Download Required**, and adds the one thing you can still do:
+_You can still put BIOS files in your BIOS folder by hand._ Fetching files the plugin cannot reason about — beside a
+line admitting it cannot — would be offering to act on an answer it does not have. What the page does **not** say is
+that BIOS management is unsupported here: that would describe the plugin, and the plugin is not the limitation. Install
+an emulator that declares firmware for this system and the page answers for it, with nothing changed on our side.
+Downloading them from RomM's own web interface and dropping them in your BIOS folder works exactly as it always did;
+nothing about the files changes, only what this page will claim about them.
 
 This is scoped to the **whole system**, never to single files. A system whose reading finished may well hold files no
 installed emulator asks for — a PlayStation page typically lists a good number of regional BIOS dumps that nothing wants

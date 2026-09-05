@@ -890,12 +890,13 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
           state a platform's BIOS state and they now agree by construction. */}
       <SectionTitle title="BIOS files" note={summaryLabel} noteColor={biosColorForLevel(firmware.bios_level ?? null)} />
       <Muted>{summaryDescription}</Muted>
-      {nothingEstablished && (
-        <Muted>
-          BIOS management is not supported for this system yet, so there is nothing to download here. You can still put
-          BIOS files in your BIOS folder by hand.
-        </Muted>
-      )}
+      {/* The one actionable thing in this state, and all that is left to say.
+          The line used to open "BIOS management is not supported for this
+          system yet", which is a claim about the plugin and not what the state
+          means: install an emulator that declares firmware for this platform
+          and the pane answers, with nothing changed here. It also said a third
+          time what the label and the summary above already say. */}
+      {nothingEstablished && <Muted>You can still put BIOS files in your BIOS folder by hand.</Muted>}
       {files.length > 0 && <BiosTableHeader />}
       {files.map((file) => (
         <BiosFileRow key={file.file_name} file={file} action={rowAction(row, state, file, fetchable)} />

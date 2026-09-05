@@ -2126,7 +2126,12 @@ describe("Library › Platforms", () => {
       await flushAsync();
 
       expect(container.textContent).toContain("BIOS requirement unknown");
-      expect(container.textContent).toContain("BIOS management is not supported for this system yet");
+      // The machine fact, then what the reader can do about it — and no claim
+      // that the plugin is the limitation, which it is not: an emulator that
+      // declares firmware for this platform makes the pane answer by itself.
+      expect(container.textContent).toContain("Nothing installed could answer for this system");
+      expect(container.textContent).toContain("You can still put BIOS files in your BIOS folder by hand");
+      expect(container.textContent).not.toContain("not supported for this system yet");
       expect(buttonByText(container, "Download")).toBeUndefined();
       expect(buttonByText(container, "Download all")).toBeDisabled();
     });
