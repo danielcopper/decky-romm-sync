@@ -21,6 +21,7 @@ import { biosColorForLevel } from "../../utils/biosColor";
 import { biosFileNote } from "../../utils/biosFileNote";
 import { buildEmulatorMenu } from "../../utils/emulatorMenu";
 import { getEventTarget } from "../../utils/events";
+import { pluralize } from "../../utils/pluralize";
 import { SYNC_RUNNING_HINT, useSyncRunning } from "../../utils/syncRunning";
 import type { CoreAnswer, PlatformRow, PlatformsPageState, StatusScope } from "./usePlatformsPage";
 
@@ -229,7 +230,8 @@ function diskMark(file: FirmwareRow): { glyph: string; color: string; title: str
   // unestablished rather than falling back to presence. For a declared file
   // `downloaded` IS the verdict, which is the only thing the fallback is for.
   const declaredFolder = file.declared_kind === "directory";
-  const verdict = file.satisfied !== undefined ? file.satisfied : declaredFolder ? null : file.downloaded;
+  const fallback = declaredFolder ? null : file.downloaded;
+  const verdict = file.satisfied !== undefined ? file.satisfied : fallback;
   if (verdict === null) return { glyph: "?", color: AMBER, title: "nothing could check this" };
 
   const needUnknown = file.wanted === "unknown";
@@ -465,7 +467,7 @@ function fileDescription(file: FirmwareRow): string | null {
  */
 function declaredFolder(file: FirmwareRow): string | null {
   const declared = file.declared_path;
-  if (declared === undefined || !declared.includes("/")) return null;
+  if (!declared?.includes("/")) return null;
   return `${declared.slice(0, declared.lastIndexOf("/"))}/`;
 }
 
@@ -715,6 +717,27 @@ function downloadState(row: PlatformRow, state: PlatformsPageState, id: string):
 }
 
 const FAILED_LABEL = <span style={{ color: RED }}>Failed</span>;
+
+/** The removal confirmation's title. The count is interleaved with the
+ *  platform's name, so this is the one of the three count labels `pluralize`
+ *  cannot spell; an unread count drops the number rather than guessing one. */
+function removeShortcutsTitle(row: PlatformRow): string {
+  if (row.shortcutCount === null) return `Remove ${row.name} shortcuts?`;
+  return `Remove ${row.shortcutCount} ${row.name} shortcut${row.shortcutCount === 1 ? "" : "s"}?`;
+}
+
+/**
+ * The colour the header's core clause and its chip both take.
+ *
+ * Three outcomes in priority order, which is what the nested form obscured:
+ * nothing can be pinned at all is red, an override the user chose is gold, and
+ * everything else — including a platform running its default — is muted. Both
+ * callers read it from here so the icon and the words beside it cannot disagree.
+ */
+function coreClauseColour(unpinnable: boolean, isOverride: boolean): string {
+  if (unpinnable) return RED;
+  return isOverride ? AMBER : MUTED;
+}
 
 /** What the header's core clause reads where no option can be pinned: which of
  *  the three unpinnable states the platform is in, said in the fewest words the
@@ -980,11 +1003,7 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
   const confirmRemoveShortcuts = () =>
     showModal(
       <ConfirmModal
-        strTitle={
-          row.shortcutCount === null
-            ? `Remove ${row.name} shortcuts?`
-            : `Remove ${row.shortcutCount} ${row.name} shortcut${row.shortcutCount === 1 ? "" : "s"}?`
-        }
+        strTitle={removeShortcutsTitle(row)}
         strDescription="This takes this platform's games out of your Steam library. Downloaded ROM files and save files are left where they are, and the games come back on the next sync while the platform stays enabled."
         strOKButtonText="Remove Shortcuts"
         strCancelButtonText="Cancel"
@@ -1003,9 +1022,7 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
           onClick={confirmRemoveShortcuts}
         >
           <span style={{ color: RED }}>
-            {row.shortcutCount === null
-              ? "Remove shortcuts"
-              : `Remove ${row.shortcutCount} shortcut${row.shortcutCount === 1 ? "" : "s"}`}
+            {row.shortcutCount === null ? "Remove shortcuts" : `Remove ${pluralize(row.shortcutCount, "shortcut")}`}
           </span>
         </DialogButton>
         {/* Unread is not zero and is not a failure either, and the button must
@@ -1020,9 +1037,7 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
         >
           <span style={{ color: RED, display: "inline-flex", alignItems: "center", gap: "6px" }}>
             {saveCount === undefined && <Spinner width={12} height={12} />}
-            {typeof saveCount === "number"
-              ? `Delete ${saveCount} save file${saveCount === 1 ? "" : "s"}`
-              : "Delete save files"}
+            {typeof saveCount === "number" ? `Delete ${pluralize(saveCount, "save file")}` : "Delete save files"}
           </span>
         </DialogButton>
       </Focusable>
@@ -1077,6 +1092,7 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
   // established — the definite failure claim this pane keeps having to remove,
   // and beside a sentence saying RetroDECK was not found. One premise, named
   // once, so the two readings below cannot drift apart.
+  // NOSONAR(typescript:S6582) — `core?.emulator_data_available` loses the aliased narrowing TypeScript takes from this form: `core.emulators` two lines below then fails with TS18049, twice. The optional chain is shorter and does not type-check.
   const emulatorsKnown = core != null && core.emulator_data_available;
   const noEmulator = emulatorsKnown && core.emulators.length === 0;
   // The fallback RetroDECK would use is missing, so the clause says that rather
@@ -1090,7 +1106,7 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
   // gold, because `find` on a null label returns nothing and "not the default"
   // is not the same statement as "an override".
   const activeIsDefault = core?.emulators.find((option) => option.label === activeLabel)?.is_default ?? false;
-  const coreColor = noEmulator || fallbackMissing ? RED : activeLabel === null || activeIsDefault ? MUTED : AMBER;
+  const coreColor = coreClauseColour(noEmulator || fallbackMissing, activeLabel !== null && !activeIsDefault);
   // No clause at all where the list could not be read — the same silence a
   // failed or in-flight core read gets, and for the same reason.
   const coreClause = !emulatorsKnown
