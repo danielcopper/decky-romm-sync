@@ -12,8 +12,9 @@ if TYPE_CHECKING:
 class FakeSyncRunRepository:
     """Dict-backed ``SyncRunRepository`` keyed by the run's string UUID.
 
-    ``get_latest_completed`` orders by ``started_at`` descending and
-    ``get_running`` returns any ``running`` row, matching the adapter queries.
+    ``get_latest_completed`` and ``iter_recent`` order by ``started_at``
+    descending and ``get_running`` returns any ``running`` row, matching the
+    adapter queries.
     """
 
     def __init__(self) -> None:
@@ -48,6 +49,10 @@ class FakeSyncRunRepository:
             if run.status == "running":
                 return copy.deepcopy(run)
         return None
+
+    def iter_recent(self, limit: int) -> list[SyncRun]:
+        newest = sorted(self._runs.values(), key=lambda run: run.started_at, reverse=True)
+        return [copy.deepcopy(run) for run in newest[:limit]]
 
     def _snapshot(self) -> dict[str, SyncRun]:
         return copy.deepcopy(self._runs)

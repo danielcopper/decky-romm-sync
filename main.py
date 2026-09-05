@@ -586,6 +586,9 @@ class Plugin:
     async def get_sync_stats(self):
         return self._sync_service.get_sync_stats()
 
+    async def get_sync_runs(self):
+        return self._sync_service.get_sync_runs()
+
     @prune_active_blocked
     async def evaluate_launch(self, steam_app_id):
         verdict = await self._launch_gate_service.evaluate(steam_app_id)

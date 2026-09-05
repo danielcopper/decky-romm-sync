@@ -53,6 +53,7 @@ _EXPECTED_READS = frozenset(
         "iter_by_platform",
         "iter_page",
         "iter_pending_sessions",
+        "iter_recent",
         "rom_ids_with_pending_device",
     }
 )

@@ -20,6 +20,7 @@ from domain.platform_sync_state import PlatformSyncState
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_save_sync_state import RomSaveSyncState
+from domain.sync_run import SyncRun, SyncRunStatus
 from domain.version_metadata import VersionMetadata
 
 if TYPE_CHECKING:
@@ -68,6 +69,41 @@ def seed_rom(
                 synced_at="2026-01-01T00:00:00",
             )
         )
+
+
+def seed_sync_run(
+    harness: ContractHarness,
+    run_id: str,
+    *,
+    started_at: str,
+    status: SyncRunStatus = "completed",
+    finished_at: str = "2026-01-01T01:00:00",
+    platforms_planned: int = 1,
+    roms_planned: int = 1,
+    platforms_completed: list[str] | None = None,
+    collections_completed: list[str] | None = None,
+    reason: str = "seeded",
+) -> None:
+    """Seed one ``SyncRun`` history row in *status*, built through the aggregate.
+
+    The terminal transition is taken by the aggregate's own verb, so a seeded
+    row carries exactly what a real run of that status would: a ``running`` run
+    keeps every terminal field NULL, a ``completed`` one records the two lists,
+    and a stopped one records *reason* as its error and no lists.
+    """
+    run = SyncRun.start(id=run_id, at=started_at, platforms_planned=platforms_planned, roms_planned=roms_planned)
+    if status == "completed":
+        run.complete(finished_at, platforms_completed or [], collections_completed or [])
+    elif status == "cancelled":
+        run.mark_cancelled(finished_at, reason)
+    elif status == "interrupted":
+        run.mark_interrupted(finished_at, reason)
+    elif status == "paused":
+        run.mark_paused(finished_at, reason)
+    elif status == "errored":
+        run.mark_errored(finished_at, reason)
+    with harness.uow_factory() as uow:
+        uow.sync_runs.save(run)
 
 
 def seed_platform_stamp(

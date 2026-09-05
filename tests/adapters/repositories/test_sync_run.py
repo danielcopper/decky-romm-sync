@@ -155,3 +155,40 @@ class TestUpsert:
         assert loaded is not None
         assert loaded.status == "completed"
         assert loaded.platforms_completed == ["snes"]
+
+
+class TestIterRecent:
+    def test_orders_newest_first_by_started_at(self, uow: SqliteUnitOfWork):
+        for day, run_id in ((1, "first"), (3, "third"), (2, "second")):
+            run = _running(run_id, started_at=f"2026-01-0{day}T00:00:00Z")
+            run.complete(at=f"2026-01-0{day}T01:00:00Z", platforms=[], collections=[])
+            uow.sync_runs.save(run)
+
+        assert [run.id for run in uow.sync_runs.iter_recent(10)] == ["third", "second", "first"]
+
+    def test_limit_caps_the_answer_at_the_newest(self, uow: SqliteUnitOfWork):
+        for day in range(1, 6):
+            uow.sync_runs.save(_running(f"run-{day}", started_at=f"2026-01-0{day}T00:00:00Z"))
+
+        assert [run.id for run in uow.sync_runs.iter_recent(2)] == ["run-5", "run-4"]
+
+    def test_empty_table_returns_empty_list(self, uow: SqliteUnitOfWork):
+        assert uow.sync_runs.iter_recent(10) == []
+
+    def test_running_run_is_listed_first_when_it_is_the_newest(self, uow: SqliteUnitOfWork):
+        # Any status, so the run in flight is in the list — with its terminal
+        # fields still NULL.
+        done = _running("done", started_at="2026-01-01T00:00:00Z")
+        done.complete(at="2026-01-01T01:00:00Z", platforms=["snes"], collections=[])
+        uow.sync_runs.save(done)
+        uow.sync_runs.save(_running("active", started_at="2026-01-02T00:00:00Z"))
+
+        runs = uow.sync_runs.iter_recent(10)
+        assert [run.id for run in runs] == ["active", "done"]
+        assert runs[0].status == "running"
+        assert runs[0].finished_at is None
+        assert runs[0].platforms_completed is None
+
+    def test_limit_zero_returns_nothing(self, uow: SqliteUnitOfWork):
+        uow.sync_runs.save(_running("run-1"))
+        assert uow.sync_runs.iter_recent(0) == []

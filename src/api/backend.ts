@@ -3,6 +3,7 @@ import { detach } from "../utils/detach";
 import type {
   PluginSettings,
   SyncStats,
+  SyncRunsAnswer,
   SyncStatusAnswer,
   DownloadItem,
   InstalledRom,
@@ -260,6 +261,8 @@ export const getSyncStatus = callable<[], SyncStatusAnswer>("get_sync_status");
 export const getSessionBudgetStatus = callable<[], SessionBudgetStatus>("get_session_budget_status");
 export const clearSyncCache = callable<[], BackendResult>("clear_sync_cache");
 export const getSyncStats = callable<[], SyncStats>("get_sync_stats");
+// The newest recorded sync runs, newest first — the Sync page's run list.
+export const getSyncRuns = callable<[], SyncRunsAnswer>("get_sync_runs");
 /**
  * Start a download. `replaceExisting` is the user's answer to a
  * `target_occupied` or `adoption_candidates` refusal: pass `true` only after the

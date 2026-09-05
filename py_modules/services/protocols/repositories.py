@@ -340,6 +340,19 @@ class SyncRunRepository(Protocol):
         """Return any run with status ``running``, or ``None`` (is-a-sync-running check)."""
         ...
 
+    def iter_recent(self, limit: int) -> list[SyncRun]:
+        """Return the newest *limit* runs of any status, newest first by ``started_at``.
+
+        Any status includes ``running``, so a run in flight is in the list.
+        *limit* is non-negative — the caller passes
+        ``services.library.reporter.SYNC_RUN_HISTORY_LIMIT`` — because the two
+        implementations disagree below zero: SQLite reads ``LIMIT -1`` as every
+        row, while the in-memory fake sorts newest first, so its slice drops
+        the oldest one.
+        (library/reporter.py run-history read)
+        """
+        ...
+
 
 class PlatformSyncStateRepository(Protocol):
     """Persistence seam for the ``PlatformSyncState`` aggregate (per-platform completion stamp).

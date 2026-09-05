@@ -209,6 +209,39 @@ export interface SyncStats {
   has_completion_stamp?: boolean;
 }
 
+/**
+ * One recorded sync run, verbatim from the backend's `sync_runs` history.
+ *
+ * `status` is the run's lifecycle state: `"running"` for the one in flight,
+ * and the five terminals a run ends in exactly once. `cancelled` is the user's
+ * own Cancel, `interrupted` an external death, `paused` a session-budget stop
+ * at a chunk boundary, `errored` a failure.
+ *
+ * `finished_at` and the two completed lists are `null` on a run that has not
+ * reached that point. A stopped run's lists are `null` rather than empty: it
+ * never recorded them, and `status` is what says why — an empty list would read
+ * as a run that finished having synced nothing. `error` is `null` on a run that
+ * has not stopped AND on one that completed cleanly; only the four stopped
+ * terminals carry text there.
+ */
+export interface SyncRunRecord {
+  id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: "running" | "completed" | "cancelled" | "interrupted" | "paused" | "errored";
+  platforms_planned: number;
+  roms_planned: number;
+  platforms_completed: string[] | null;
+  collections_completed: string[] | null;
+  error: string | null;
+}
+
+/** Answer of `get_sync_runs`: the newest recorded runs, newest first. */
+export interface SyncRunsAnswer {
+  success: boolean;
+  runs: SyncRunRecord[];
+}
+
 export interface RegistryPlatform {
   name: string;
   slug: string;

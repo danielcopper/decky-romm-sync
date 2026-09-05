@@ -5,7 +5,7 @@ Each callable is driven exactly as the frontend declares it in
 types — and the assertions pin the *response shape* (the contract), not the
 delegation. Covered here:
 
-- ``get_sync_status`` / ``sync_heartbeat`` / ``get_sync_stats``
+- ``get_sync_status`` / ``sync_heartbeat`` / ``get_sync_stats`` / ``get_sync_runs``
 - ``get_platforms`` (happy + server-failure)
 - ``get_collections`` (happy + server-failure)
 - ``get_registry_platforms``
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from lib.errors import RommConnectionError
 
-from ._seed import seed_platform_stamp, seed_rom
+from ._seed import seed_platform_stamp, seed_rom, seed_sync_run
 
 # ── get_sync_status ──────────────────────────────────────────────────────
 
@@ -118,6 +118,64 @@ async def test_get_sync_stats_counts_bound_roms(harness):
     result = await harness.plugin.get_sync_stats()
     assert result["roms"] == 1
     assert result["total_shortcuts"] == 1
+
+
+# ── get_sync_runs ────────────────────────────────────────────────────────
+
+
+async def test_get_sync_runs_empty_history_shape(harness):
+    """No runs recorded: the answer succeeds and carries an empty list."""
+    result = await harness.plugin.get_sync_runs()
+    assert result == {"success": True, "runs": []}
+
+
+async def test_get_sync_runs_seeded_history_shape(harness):
+    """Newest first, every field of the record present, nulls kept as nulls."""
+    seed_sync_run(
+        harness,
+        "run-ok",
+        started_at="2026-01-01T09:00:00",
+        finished_at="2026-01-01T09:30:00",
+        platforms_planned=2,
+        roms_planned=40,
+        platforms_completed=["snes", "n64"],
+        collections_completed=["Favourites"],
+    )
+    seed_sync_run(
+        harness,
+        "run-x",
+        started_at="2026-01-02T09:00:00",
+        status="cancelled",
+        finished_at="2026-01-02T09:05:00",
+        reason="Sync cancelled",
+    )
+
+    result = await harness.plugin.get_sync_runs()
+    assert result["success"] is True
+    assert [run["id"] for run in result["runs"]] == ["run-x", "run-ok"]
+    for run in result["runs"]:
+        assert set(run.keys()) == {
+            "id",
+            "started_at",
+            "finished_at",
+            "status",
+            "platforms_planned",
+            "roms_planned",
+            "platforms_completed",
+            "collections_completed",
+            "error",
+        }
+    cancelled, completed = result["runs"]
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["error"] == "Sync cancelled"
+    # A run that did not complete recorded no lists — null, not empty.
+    assert cancelled["platforms_completed"] is None
+    assert cancelled["collections_completed"] is None
+    assert completed["status"] == "completed"
+    assert completed["platforms_completed"] == ["snes", "n64"]
+    assert completed["collections_completed"] == ["Favourites"]
+    assert completed["roms_planned"] == 40
+    assert completed["error"] is None
 
 
 async def test_clear_sync_cache_preserves_last_sync(harness):
