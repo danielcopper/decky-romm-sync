@@ -109,6 +109,7 @@ class SettingsService:
             "collection_owner_scope": self._settings.get("collection_owner_scope", "all"),
             "collection_naming_mode": self._settings.get("collection_naming_mode", "merge"),
             "preferred_region": self._settings.get("preferred_region", AUTO_REGION),
+            "skip_preview": self._settings.get("skip_preview", False),
         }
 
     # ── Log level ────────────────────────────────────────────────────────
@@ -138,6 +139,25 @@ class SettingsService:
         if not isinstance(region, str):
             return {"success": False, "reason": "invalid_region", "message": "Invalid region"}
         self._settings["preferred_region"] = region.strip() or AUTO_REGION
+        self._settings_persister.save_settings()
+        return {"success": True}
+
+    # ── Skip preview (sync-button intent) ────────────────────────────────
+
+    def save_skip_preview(self, enabled: object) -> dict[str, Any]:
+        """Validate and persist whether a sync starts without asking first.
+
+        User intent, stored for a reader to choose between ``sync_preview`` and
+        ``start_sync`` when the sync button is pressed. The backend's own sync
+        behaviour does not depend on it: both callables stay reachable and
+        neither consults this value. Persisted so the choice can survive the
+        panel closing; Main's toggle holds its own local state today and does
+        not read this value. A non-bool from the untrusted frontend wire is
+        rejected.
+        """
+        if not isinstance(enabled, bool):
+            return {"success": False, "reason": "invalid_value", "message": "Invalid value"}
+        self._settings["skip_preview"] = enabled
         self._settings_persister.save_settings()
         return {"success": True}
 

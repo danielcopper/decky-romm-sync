@@ -430,6 +430,34 @@ async def test_set_collection_naming_mode_rejects_invalid(harness):
     assert harness.plugin.settings.get("collection_naming_mode", "merge") == "merge"
 
 
+async def test_save_skip_preview_persists_and_reads_back(harness):
+    """save_skip_preview stores the flag and get_settings reports it back.
+
+    The default is off, and it lands in settings.json through its owner.
+    Nothing reads it back yet — Main's toggle is still its own local state.
+    """
+    assert (await harness.plugin.get_settings())["skip_preview"] is False
+
+    assert await harness.plugin.save_skip_preview(True) == {"success": True}
+    assert harness.plugin.settings["skip_preview"] is True
+    assert (await harness.plugin.get_settings())["skip_preview"] is True
+
+    assert await harness.plugin.save_skip_preview(False) == {"success": True}
+    assert (await harness.plugin.get_settings())["skip_preview"] is False
+
+
+async def test_save_skip_preview_rejects_non_bool(harness):
+    """A non-bool from the wire returns the canonical failure shape and stores nothing."""
+    result = await harness.plugin.save_skip_preview("yes")
+    assert result["success"] is False
+    assert result["reason"] == "invalid_value"
+    assert isinstance(result["message"], str)
+    assert result["message"]
+    assert "error" not in result
+    assert "error_code" not in result
+    assert harness.plugin.settings.get("skip_preview", False) is False
+
+
 async def test_get_collections_server_failure_shape(harness):
     """User-collection fetch failure → canonical failure shape."""
     harness.romm.list_collections_side_effect = RommConnectionError("offline")

@@ -271,6 +271,9 @@ class Plugin:
     async def save_preferred_region(self, region):
         return self._settings_service.save_preferred_region(region)
 
+    async def save_skip_preview(self, enabled):
+        return self._settings_service.save_skip_preview(enabled)
+
     async def get_known_regions(self):
         return self._settings_service.get_known_regions()
 

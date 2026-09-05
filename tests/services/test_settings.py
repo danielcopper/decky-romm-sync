@@ -143,6 +143,7 @@ class TestGetSettings:
                 "collection_owner_scope": "own",
                 "collection_naming_mode": "by_label",
                 "preferred_region": "USA",
+                "skip_preview": True,
             }
         )
         steam_config.check_retroarch_input_driver.return_value = {"warning": False}
@@ -157,6 +158,7 @@ class TestGetSettings:
         assert result["collection_owner_scope"] == "own"
         assert result["collection_naming_mode"] == "by_label"
         assert result["preferred_region"] == "USA"
+        assert result["skip_preview"] is True
         assert result["retroarch_input_check"] == {"warning": False}
 
     def test_never_returns_credentials_or_token(self, service, settings):
@@ -207,6 +209,7 @@ class TestGetSettings:
         assert result["collection_owner_scope"] == "all"
         assert result["collection_naming_mode"] == "merge"
         assert result["preferred_region"] == "auto"
+        assert result["skip_preview"] is False
 
     def test_includes_retroarch_input_check_payload(self, service, steam_config):
         steam_config.check_retroarch_input_driver.return_value = {
@@ -270,6 +273,32 @@ class TestSavePreferredRegion:
         assert result["reason"] == "invalid_region"
         assert "preferred_region" not in settings
         settings_persister.save_settings.assert_not_called()
+
+
+# ── save_skip_preview ──────────────────────────────────────────────────
+
+
+class TestSaveSkipPreview:
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_bool_persists_and_is_reported_back(self, service, settings, settings_persister, steam_config, enabled):
+        steam_config.check_retroarch_input_driver.return_value = None
+        result = service.save_skip_preview(enabled)
+        assert result == {"success": True}
+        assert settings["skip_preview"] is enabled
+        settings_persister.save_settings.assert_called_once_with()
+        assert service.get_settings()["skip_preview"] is enabled
+
+    @pytest.mark.parametrize("value", ["true", 1, None, [], {"on": True}])
+    def test_non_bool_rejected_without_writing(self, service, settings, settings_persister, value):
+        result = service.save_skip_preview(value)
+        assert result == {"success": False, "reason": "invalid_value", "message": "Invalid value"}
+        assert "skip_preview" not in settings
+        settings_persister.save_settings.assert_not_called()
+
+    def test_absent_value_reads_as_off(self, service, settings, steam_config):
+        steam_config.check_retroarch_input_driver.return_value = None
+        assert "skip_preview" not in settings
+        assert service.get_settings()["skip_preview"] is False
 
 
 # ── get_known_regions ──────────────────────────────────────────────────
