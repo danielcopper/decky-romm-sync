@@ -1092,8 +1092,10 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
   // established — the definite failure claim this pane keeps having to remove,
   // and beside a sentence saying RetroDECK was not found. One premise, named
   // once, so the two readings below cannot drift apart.
-  // NOSONAR(typescript:S6582) — `core?.emulator_data_available` loses the aliased narrowing TypeScript takes from this form: `core.emulators` two lines below then fails with TS18049, twice. The optional chain is shorter and does not type-check.
-  const emulatorsKnown = core != null && core.emulator_data_available;
+  // S6582 is raised on the declaration line, so its NOSONAR must sit there; prettier-ignore keeps
+  // the formatter from wrapping the trailing comment onto its own line, which would unsuppress it.
+  // prettier-ignore
+  const emulatorsKnown = core != null && core.emulator_data_available; // NOSONAR(typescript:S6582) — `core?.emulator_data_available` loses the aliased narrowing TypeScript takes from this form, and `core.emulators` two lines below then fails TS18049 twice. The optional chain is shorter and does not type-check.
   const noEmulator = emulatorsKnown && core.emulators.length === 0;
   // The fallback RetroDECK would use is missing, so the clause says that rather
   // than naming a core nothing can run. Same shape as the empty menu: a state
