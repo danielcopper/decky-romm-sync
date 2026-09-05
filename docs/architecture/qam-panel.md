@@ -504,12 +504,12 @@ it, for the focused platform:
   and a **Download** button on every row that is missing and in the RomM library (#164) — never on a folder declaration,
   whatever its state, because the emulator opens that name as a directory — and a **Delete** button on every row a
   download record of ours still holds. That covers a declared **folder** too, where no record carries the row's name and
-  the button counts the records written underneath it (`Delete (N)`): a folder is never a download, which says nothing
-  about the files already inside one. Same authority as `Delete BIOS`, described below. Below the table one row of
-  buttons: Download required (_N_), Download all, Delete BIOS behind a `ConfirmModal`. **All three are always rendered
-  and disable when there is nothing to do**, the ruling the Remove group already had: on PS2 all three vanished at once,
-  and a button that disappears is a state the reader has to work out. A disabled `DialogButton` is still a focus stop,
-  so the row stays walkable.
+  the button counts the distinct files our records name underneath it (`Delete (N)`): a folder is never a download,
+  which says nothing about the files already inside one. Same authority as `Delete BIOS`, described below. Below the
+  table one row of buttons: Download required (_N_), Download all, Delete BIOS behind a `ConfirmModal`. **All three are
+  always rendered and disable when there is nothing to do**, the ruling the Remove group already had: on PS2 all three
+  vanished at once, and a button that disappears is a state the reader has to work out. A disabled `DialogButton` is
+  still a focus stop, so the row stays walkable.
 
   **A running download is said by the button that started it.** The pressed button — bulk or per-row — becomes a
   spinner, every other download button on the pane disables, and when it finishes the rows re-read. There is no
