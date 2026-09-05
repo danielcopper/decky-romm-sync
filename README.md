@@ -35,6 +35,9 @@ _Named after the railway car behind a steam locomotive, or the boat that shuttle
 > [support matrix](https://danielcopper.github.io/romm-tender/user-guide/save-sync-support-matrix/) has the per-system
 > detail. The [Decky Store](https://plugins.deckbrew.xyz/) listing comes with v1.0; until then it's a manual install.
 
+**How this is built.** The code is written by an AI coding agent working under my direction. The architecture, the
+design decisions and the review are mine, and changes are smoke-tested on real hardware before they ship.
+
 ## Features
 
 - **Library sync** — Pulls the platforms and collections you pick from your RomM server into Steam as non-steam

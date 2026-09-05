@@ -17,6 +17,11 @@ library into Steam as Non-Steam shortcuts. Games launch through [RetroDECK](http
     ([support matrix](user-guide/save-sync-support-matrix.md)). The Decky Store listing comes with v1.0; until then
     it's a manual install.
 
+!!! info "How this is built"
+
+    The code is written by an AI coding agent working under my direction. The architecture, the design decisions
+    and the review are mine, and changes are smoke-tested on real hardware before they ship.
+
 ## User Guide
 
 1. **[Getting Started](user-guide/getting-started.md)** — Prerequisites, installation, and first-time setup
