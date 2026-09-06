@@ -362,7 +362,7 @@ py_modules/
     sqlite_migrations.py / machine_id.py  # schema migration runner (PRAGMA user_version) + machine-id reader
     download_file.py / firmware_file.py / migration_file.py / rom_files.py / save_file.py
     retrodeck_paths.py / retroarch_config.py / retroarch_core_info.py / es_find_rules.py
-    atlas_catalogue.py / atlas_firmware.py  # the vendored emu-atlas resolver's two seams
+    atlas_catalogue.py / atlas_firmware.py  # the two adapters over the vendored emu-atlas resolver
     system_clock.py / system_uuid_gen.py / asyncio_sleeper.py / hostname.py / path_probe.py / plugin_metadata.py / debug_logger.py
   db/
     migrations/001_initial.sql       # SQLite schema DDL

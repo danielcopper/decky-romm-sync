@@ -175,17 +175,19 @@ IO_SEAM_METHODS: frozenset[str] = frozenset(
         # reads. Each is answered by the vendored emu-atlas resolver, which reads
         # ES-DE's own catalogue off the flatpak install: a system's first read
         # opens it, and the adapter's per-system cache is what a second one hits.
-        # get_emulator_options also globs every standalone option's emulator
-        # install through the find rules, on every call — that probe is not
-        # cached, because a component the user installs mid-session has to be
-        # seen. Listing one of the three would be arbitrary:
-        # services/firmware/status.py calls two of them inside one loop, and
-        # services/active_core_resolver.py the other two.
+        # get_emulator_options also globs each BAKEABLE STANDALONE option's
+        # emulator install through the find rules, on every call — that probe is
+        # not cached, because a component the user installs mid-session has to be
+        # seen. Listing one of the three would be arbitrary: every consumer pairs
+        # two of them. services/firmware/status.py:347-348 calls get_active_core
+        # beside get_emulator_options inside one loop, and
+        # services/active_core_resolver.py:115/154 calls get_emulator_options
+        # beside get_default_emulator on one resolution.
         "get_active_core",
         "get_default_emulator",
         "get_emulator_options",
         # SandboxLauncherFn (services/protocols/paths.py) — reads ES-DE's
-        # es_find_rules.xml (re-probing the flatpak roots for it and re-stating
+        # es_find_rules.xml (re-probing the flatpak roots for it and re-statting
         # it before it may answer from the parse cache) to resolve a standalone
         # command's launcher inside the RetroDECK sandbox. The Protocol is
         # call-shaped, so `_sandbox_launcher` — the attribute every consumer in

@@ -528,9 +528,10 @@ def _core_scope(options: dict[str, Any]) -> list[str] | None:
 
     The scope an absence is judged against. ``None`` means the scope itself
     is unestablished, so nothing may be ruled out for this platform — and it
-    has two causes that are the same thing to the caller: ``es_systems.xml``
-    could not be read, or it was read and offers this system no libretro
-    core at all.
+    has two causes that are the same thing to the caller: the emulator
+    catalogue could not be read (no installation detected, a refusal on the
+    answer, or the resolver raised), or it was read and offers this system no
+    libretro core at all.
 
     The second is not a corner case. 35 of ES-DE's 172 systems have no
     libretro command, ``ps3`` among them — a mapped RomM platform whose only

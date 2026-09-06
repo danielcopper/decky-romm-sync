@@ -135,10 +135,11 @@ class CoreInfoProvider(Protocol):
     default (``get_default_emulator``) and the full picker
     (``get_emulator_options``) are emulator-kind-aware (libretro OR standalone).
 
-    Resolving an emulator's binary to a host path is a different question and is
-    :class:`SandboxLauncherFn`'s: this one is answered out of the catalogue, that
-    one out of ES-DE's find rules. Holding both here would make one implementation
-    forward to the other and hide which source answered a given call.
+    Resolving an emulator to its sandbox launcher path is a different question
+    and is :class:`SandboxLauncherFn`'s: this one is answered out of the
+    catalogue, that one out of ES-DE's find rules. Holding both here would make
+    one implementation forward to the other and hide which source answered a
+    given call.
     """
 
     def get_active_core(self, system_name: str) -> tuple[str | None, str | None]: ...

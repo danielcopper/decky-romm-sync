@@ -1707,9 +1707,9 @@ again.
 false choice. A file is `needed` / `optional` when any installed libretro core declares it — one answer, so a file
 cannot read differently on two surfaces. Whether an _absence_ may be read as "nothing wants it" is a property of the
 reading, and is scoped to the libretro cores ES-DE offers for the platform being rendered: every one of them read →
-`not_needed`; one unread, or `es_systems.xml` unreadable, or the platform offering no libretro core at all (both of
-those leave the scope itself unestablished), or the resolver unable to answer → `unknown`. Collapsing `not_needed` and
-`unknown` is the defect the swap removes — a file nobody wants and a file nothing could be asked about are different
+`not_needed`; one unread, or the emulator catalogue unreadable, or the platform offering no libretro core at all (both
+of those leave the scope itself unestablished), or the resolver unable to answer → `unknown`. Collapsing `not_needed`
+and `unknown` is the defect the swap removes — a file nobody wants and a file nothing could be asked about are different
 answers, and the old boolean called both "not required".
 
 Scoping completeness machine-wide instead would retire the fourth value: a stock RetroDECK ships five bundled cores
