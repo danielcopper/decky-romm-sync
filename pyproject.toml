@@ -3,7 +3,7 @@ pythonVersion = "3.11"
 extraPaths = ["py_modules"]
 stubPath = "typings"
 typeCheckingMode = "basic"
-exclude = ["py_modules/_vendor", "node_modules", "scripts", ".venv", ".worktrees"]
+exclude = ["py_modules/_vendor", "node_modules", "scripts", ".venv", ".claude", ".worktrees"]
 reportMissingModuleSource = "none"
 reportMissingImports = "warning"
 reportPrivateUsage = "error"
@@ -32,7 +32,11 @@ reportPrivateUsage = "none"
 [tool.ruff]
 target-version = "py311"
 line-length = 120
-extend-exclude = ["py_modules/_vendor", "./scripts"]
+# `.claude/worktrees` is where this repo's git worktrees live, and `.worktrees` is
+# the convention they were kept under before; both hold whole checkouts of this
+# repo. The gate runs `ruff check .` from the repo root, which walks into them
+# and reports another branch's findings against this one.
+extend-exclude = ["py_modules/_vendor", "./scripts", ".claude", ".worktrees"]
 # Ruff applies extend-exclude to a directory walk but ignores it for a path passed
 # explicitly, unless this is set. .githooks/pre-commit passes staged paths explicitly,
 # so without it the hook reformats the vendored verbatim copies it is excluding —

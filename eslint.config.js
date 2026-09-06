@@ -12,8 +12,12 @@ export default tseslint.config(
   // `.venv` (local uv/mise Python env) and `site` (local mkdocs build output) are
   // gitignored build artifacts that don't exist in a clean CI checkout; ignoring
   // them keeps local `pnpm lint` from choking on their minified vendored JS.
+  // `.claude/worktrees` is where this repo's git worktrees live, and `.worktrees`
+  // is the convention they were kept under before; both hold whole checkouts of
+  // this repo, `node_modules` and all, which a lint run from a checkout holding
+  // one would otherwise walk until it runs out of V8 heap.
   {
-    ignores: ["dist", "node_modules", "defaults", "bin", "coverage", ".worktrees", ".venv", "site"],
+    ignores: ["dist", "node_modules", "defaults", "bin", "coverage", ".claude", ".worktrees", ".venv", "site"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
