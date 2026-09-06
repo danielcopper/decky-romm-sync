@@ -20,11 +20,12 @@ from typing import TYPE_CHECKING
 
 from adapters.adoption_move import AdoptionMoveAdapter
 from adapters.asyncio_sleeper import AsyncioSleeper
+from adapters.atlas_catalogue import AtlasCatalogueAdapter, first_detected_installation
 from adapters.atlas_firmware import AtlasFirmwareAdapter, AtlasFolderVerdictAdapter
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter
-from adapters.es_de_config import CoreResolver
+from adapters.es_find_rules import EsFindRulesAdapter
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.game_process import GameProcessAdapter
 from adapters.gavel_native import GavelNativeAdapter
@@ -95,6 +96,7 @@ if TYPE_CHECKING:
         RetroDeckPaths,
         RomFileStore,
         RommApi,
+        SandboxLauncherFn,
         SaveFileStore,
         SettingsPersister,
         SgdbArtworkCache,
@@ -176,6 +178,7 @@ class CallbackBundle:
     get_core_name: CoreNameProviderFn
     platform_core_reader: PlatformCoreReader
     m3u_support: SystemM3uSupportFn
+    sandbox_launcher: SandboxLauncherFn
     system_known: SystemKnownFn
     system_extensions: SystemSupportedExtensionsFn
     list_rom_dir_files: DirectoryFileListerFn
@@ -295,11 +298,7 @@ def bootstrap(
     retrodeck_paths = RetroDeckPathsAdapter(user_home=user_home, logger=logger)
     retroarch_config = RetroArchConfigAdapter(user_home=user_home, logger=logger)
     retroarch_core_info = RetroArchCoreInfoAdapter(user_home=user_home, logger=logger)
-    core_resolver = CoreResolver(
-        plugin_dir=plugin_dir,
-        logger=logger,
-        user_home=user_home,
-    )
+    es_find_rules = EsFindRulesAdapter(logger=logger, user_home=user_home)
 
     # SystemClock is dependency-free; construct it here so the single shared
     # instance threads into PersistenceAdapter (corrupt-settings backup stamp)
@@ -369,9 +368,19 @@ def bootstrap(
     debug_logger = SettingsAwareDebugLogger(settings=settings, logger=logger)
     # Built after the debug logger because the resolver never logs on its own:
     # its caveats are the whole degradation channel and reach the log through
-    # this seam or not at all. That holds for both firmware questions.
+    # this seam or not at all. That holds for both firmware questions and for
+    # the emulator catalogue.
     firmware_resolver = AtlasFirmwareAdapter(user_home=user_home, log_debug=debug_logger)
     firmware_folder_verdicts = AtlasFolderVerdictAdapter(user_home=user_home, log_debug=debug_logger)
+    # Detection never picks a winner, so the choice is made here rather than in
+    # the adapter: the highest-priority arrangement, which is RetroDECK wherever
+    # one is installed. Offering the others is #918; nothing in services/ learns
+    # which one answered.
+    emulator_catalogue = AtlasCatalogueAdapter(
+        choose_installation=functools.partial(first_detected_installation, user_home),
+        emulator_installed=es_find_rules.command_emulator_installed,
+        log_debug=debug_logger,
+    )
 
     adapters = AdapterBundle(
         http_adapter=http_adapter,
@@ -389,7 +398,7 @@ def bootstrap(
         rom_file_store=rom_file_store,
         save_file_store=save_file_store,
         path_probe=path_probe,
-        core_info_provider=core_resolver,
+        core_info_provider=emulator_catalogue,
         renderer_rss=renderer_rss,
         renderer_gc=renderer_gc,
         game_process=game_process,
@@ -408,9 +417,10 @@ def bootstrap(
         get_savestate_layout=retroarch_config.get_savestate_layout,
         get_core_name=retroarch_core_info.get_corename,
         platform_core_reader=platform_core_reader,
-        m3u_support=core_resolver.system_supports_m3u,
-        system_known=core_resolver.is_known_system,
-        system_extensions=core_resolver.get_supported_extensions,
+        m3u_support=emulator_catalogue.system_supports_m3u,
+        sandbox_launcher=es_find_rules.resolve_sandbox_launcher,
+        system_known=emulator_catalogue.is_known_system,
+        system_extensions=emulator_catalogue.get_supported_extensions,
         list_rom_dir_files=download_file_store.list_files,
         settings_persister=settings_persister,
         log_debug=debug_logger,

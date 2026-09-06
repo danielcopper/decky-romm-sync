@@ -13,6 +13,7 @@ is called by the child seeders.
 
 from __future__ import annotations
 
+import json
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -319,15 +320,52 @@ def _systems_linux_dir(harness: ContractHarness) -> str:
     )
 
 
-def seed_es_systems(harness: ContractHarness, xml: str | None = None) -> None:
-    """Write a real-shaped ``es_systems.xml`` for the real ``CoreResolver`` to read.
+def _retrodeck_marker_path(harness: ContractHarness) -> str:
+    """``retrodeck.json`` under the harness ``user_home`` — the installation marker."""
+    return os.path.join(
+        str(harness.tmp_path), "home", ".var", "app", "net.retrodeck.retrodeck", "config", "retrodeck", "retrodeck.json"
+    )
 
-    The harness roots ``user_home`` at ``tmp_path/home``; the resolver probes the
-    per-user flatpak files tree under it (the contract conftest repoints the
-    system root away, so this seed is the only source). The file lands at the
-    ``…/systems/linux/es_systems.xml`` path ES-DE ships. The default seeds a
-    single ``gba`` system with an mGBA default and a VBA Next alternative.
+
+def seed_retrodeck_marker(harness: ContractHarness) -> None:
+    """Write ``retrodeck.json`` so a RetroDECK installation is detected at all.
+
+    The emulator catalogue is resolved per installation, and an installation is
+    detected by this file's existence. Its paths are written to exactly what the
+    plugin's own path adapter falls back to when the file is absent, so seeding
+    it moves the catalogue from "no installation" to "readable" and changes
+    nothing else about where a contract test's roots point.
     """
+    rd_home = os.path.join(str(harness.tmp_path), "home", "retrodeck")
+    dest = _retrodeck_marker_path(harness)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "w") as f:
+        json.dump(
+            {
+                "paths": {
+                    "rd_home_path": rd_home,
+                    "roms_path": os.path.join(rd_home, "roms"),
+                    "saves_path": os.path.join(rd_home, "saves"),
+                    "states_path": os.path.join(rd_home, "states"),
+                    "bios_path": os.path.join(rd_home, "bios"),
+                }
+            },
+            f,
+        )
+
+
+def seed_es_systems(harness: ContractHarness, xml: str | None = None) -> None:
+    """Write a real-shaped ``es_systems.xml`` for the real resolver to read.
+
+    The harness roots ``user_home`` at ``tmp_path/home``; the resolver reads the
+    catalogue out of the per-user flatpak deployment under it (the contract
+    conftest repoints the system root away, so this seed is the only source).
+    The file lands at the ``…/systems/linux/es_systems.xml`` path ES-DE ships,
+    and the RetroDECK marker rides along because a catalogue is only ever read
+    through a detected installation. The default seeds a single ``gba`` system
+    with an mGBA default and a VBA Next alternative.
+    """
+    seed_retrodeck_marker(harness)
     dest = os.path.join(_systems_linux_dir(harness), "es_systems.xml")
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     with open(dest, "w") as f:
@@ -338,7 +376,8 @@ def seed_es_find_rules(harness: ContractHarness, xml: str) -> None:
     """Write ``es_find_rules.xml`` beside the seeded ``es_systems.xml``.
 
     The sandbox-launcher probe (``resolve_sandbox_launcher``) and the standalone
-    existence probe both read this file as the es_systems sibling.
+    existence probe both read this file, which ES-DE ships in the same
+    per-flavor ``systems/`` dir as its catalogue.
     """
     dest = os.path.join(_systems_linux_dir(harness), "es_find_rules.xml")
     os.makedirs(os.path.dirname(dest), exist_ok=True)

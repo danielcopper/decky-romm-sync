@@ -124,6 +124,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         config=ActiveCoreResolverConfig(
             uow_factory=cfg.callbacks.uow_factory,
             core_info=cfg.adapters.core_info_provider,
+            sandbox_launcher=cfg.callbacks.sandbox_launcher,
             platform_core_reader=cfg.callbacks.platform_core_reader,
             resolve_system=cfg.adapters.http_adapter.resolve_system,
             logger=cfg.runtime.logger,

@@ -10,7 +10,7 @@ import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from _factories import _make_testable_plugin
-from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_core_info_provider import FakeCoreInfoProvider, FakeSandboxLauncher
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_renderer_gc import FakeRendererGc
@@ -147,6 +147,7 @@ def plugin():
         config=ActiveCoreResolverConfig(
             uow_factory=FakeUnitOfWorkFactory(p._uow),
             core_info=p._core_info,
+            sandbox_launcher=FakeSandboxLauncher(),
             platform_core_reader=FakePlatformCoreReader(),
             resolve_system=p._resolve_system,
             logger=decky.logger,

@@ -276,10 +276,10 @@ class TestIoSeamsViolations:
 
     @pytest.mark.parametrize(
         "method",
-        ["get_active_core", "get_default_emulator", "get_emulator_options", "resolve_sandbox_launcher"],
+        ["get_active_core", "get_default_emulator", "get_emulator_options"],
     )
     def test_every_core_info_read_inside_uow_is_flagged(self, method: str):
-        # All four CoreInfoProvider reads re-probe the same ES-DE files, so the
+        # All three CoreInfoProvider reads reach the same catalogue read, so the
         # family covers the Protocol, not one method of it.
         findings = check.scan_source(
             "class S:\n"
@@ -293,7 +293,10 @@ class TestIoSeamsViolations:
         assert method in findings[0]
         assert "file-I/O seam" in findings[0]
 
-    @pytest.mark.parametrize("attribute", ["_resolve_system", "_system_extensions", "_system_known"])
+    @pytest.mark.parametrize(
+        "attribute",
+        ["_resolve_system", "_sandbox_launcher", "_system_extensions", "_system_known"],
+    )
     def test_call_shaped_seams_are_matched_by_their_holding_attribute(self, attribute: str):
         # These Protocols are __call__-only, so no consumer ever writes a method
         # name — the attribute each is bound to is the only thing to match, and
