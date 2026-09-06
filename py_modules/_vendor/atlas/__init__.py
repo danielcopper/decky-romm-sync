@@ -24,10 +24,19 @@ questions to every detected installation at once and answers each labelled with
 the handle it came from, so a machine carrying two arrangements gives two true
 answers instead of a silently chosen winner.
 
+One thing here is the host's to grant rather than atlas's to require. The zstd
+codec that opens an AppImage is discovered, never depended on:
+:func:`atlas.register_zstd_provider` hands over the module a host already has,
+which is what a host that vendors it under its own root needs, and
+:func:`atlas.zstd_provider` says which provider a zstd image would go through
+here and whether a host handed it over (:class:`atlas.ZstdProvider`). All three
+are re-exported here from ``atlas.squashfs``; none adds a dependency.
+
 **What this namespace is.** Everything below is the consumer API: the two entry
 points, the handles they answer with, every answer type, the vocabularies those
-answers speak, and the serializers that turn an answer into plain data. If you
-are writing a client, you never need to import from a submodule.
+answers speak, the serializers that turn an answer into plain data, and the one
+capability a host grants rather than atlas requiring it. If you are writing a
+client, you never need to import from a submodule.
 
 **What it deliberately is not.** The machine seam, the config and catalogue
 parsers, the packaged-data loaders and the module-level resolver functions are
@@ -48,11 +57,16 @@ from __future__ import annotations
 # tests/test_version.py holds it equal to pyproject — CI's package job holds
 # dist-info to pyproject in a clean venv — so drift is a red test, not a
 # silent fork.
-__version__ = "0.10.0"  # x-release-please-version
+__version__ = "0.12.0"  # x-release-please-version
 
 # --- The two entry points, and the aggregate over them -----------------------
 from .detect import detect
 from .every_installation import EveryInstallation, InstallationAnswer, every_installation
+
+# --- The one capability a host grants, rather than atlas requiring it --------
+# The zstd codec an AppImage read may need is discovered, never imported as a
+# dependency; a host whose own packaging holds it hands the module over here.
+from .squashfs import ZstdProvider, register_zstd_provider, zstd_provider
 
 # --- The vocabulary those questions take -------------------------------------
 # ES-DE's system names, and the two ways to check a name against them. A
@@ -183,6 +197,13 @@ from .placement import (
 # here because answers carry them — a requirement's `found` is a path kind, a
 # health finding's `status` is a read status.
 from .esde import KIND_LIBRETRO, KIND_STANDALONE
+from .retroarch_cfg import (
+    CFG_LAYER_CONTENT_DIR_OVERRIDE,
+    CFG_LAYER_CORE_OVERRIDE,
+    CFG_LAYER_GAME_OVERRIDE,
+    CFG_LAYER_GLOBAL,
+    CFG_LAYER_KINDS,
+)
 from .evidence import CAVEAT_ARRANGEMENT_UNVERIFIED, CAVEAT_ARRANGEMENT_VERSION_DRIFTED
 from .firmware import (
     ARCHIVE_CORE_BUNDLED,
@@ -387,6 +408,46 @@ from .placement import (
     PATCH_FORMAT_IPS,
     PATCH_FORMAT_UPS,
     PATCH_FORMAT_XDELTA,
+    CORE_MODE_UNESTABLISHED_REASONS,
+    EMULATOR_CONFIG_UNREADABLE_REASONS,
+    ENUMERATED_DATA,
+    ESTABLISHED_FOR_CONSOLE,
+    ESTABLISHED_FOR_DEFAULT_SAVE_NAME,
+    ESTABLISHED_FOR_DRIVER_NAMED_CONTENT,
+    ESTABLISHED_FOR_MENU_SLOT_SAVES,
+    ESTABLISHED_FOR_RAW_CARTRIDGE_IMAGE,
+    ESTABLISHED_FOR_SINGLE_DISK_IMAGE,
+    ESTABLISHED_FOR_UNPACKED_GAME_DIRECTORY,
+    FILES_ESTABLISHED_FOR_TOKENS,
+    REASON_ACTIVE_USER_UNRECORDED,
+    REASON_CARD_INDEX_OUTSIDE_RECORDED_NAMES,
+    REASON_CONFIGURED_USER_HAS_NO_TREE,
+    REASON_CONFIGURED_USER_ID_UNREAD,
+    REASON_CONFIGURED_USER_TREE_NAMED,
+    REASON_CONFIGURED_USER_NOT_SET_UP,
+    REASON_CONFIGURED_USER_SETUP_UNESTABLISHED,
+    REASON_CONTENT_CLASS_UNNAMED,
+    REASON_CONTENT_CLASS_UNRECORDED,
+    REASON_DATA_ROOT_DECIDED_BY_LAUNCH,
+    REASON_EMULATED_MODEL_UNRECORDED,
+    REASON_HDD_PATH_UNSET,
+    REASON_INI_OUTRANKED_BY_CASCADE,
+    REASON_INI_PRESENCE_UNESTABLISHED,
+    REASON_INI_SEARCH_PATH_UNLISTABLE,
+    REASON_KEY_UNREAD,
+    REASON_LISTED_USER_ACCOUNT_UNESTABLISHED,
+    REASON_MLC_LAUNCH_FLAG_OUTRANKS_CONFIG,
+    REASON_NO_LISTED_USER_ACCOUNT,
+    REASON_NO_USER_DIRECTORY,
+    REASON_NO_USER_PRESELECTED,
+    REASON_REGION_DECIDED_BY_DISC,
+    REASON_SAVEPATH_CONFIG_UNREADABLE,
+    REASON_SAVEPATH_UNTRANSLATABLE,
+    REASON_SESSION_OVERRIDE_SET,
+    REASON_SLOT_DEVICE_UNINTERPRETED,
+    REASON_SLOT_HOLDS_AGP_DEVICE,
+    REASON_USER_LISTING_UNESTABLISHED,
+    REASON_VIRTUAL_SD_DISABLED,
     ROLE_BATTERY,
     ROLE_NOTES,
     ROLE_DISK_DIFF,
@@ -429,6 +490,10 @@ __all__ = [
     # Entry points
     "detect",
     "every_installation",
+    # The one capability a host grants: which zstd provider opens an AppImage
+    "register_zstd_provider",
+    "zstd_provider",
+    "ZstdProvider",
     # The vocabulary the questions take, and how to check a name against it
     "from_esde_system",
     "known_systems",
@@ -602,6 +667,56 @@ __all__ = [
     # `granularity.value` / `root_kind`, so by the tiering rule (a name a client
     # acts on lives in `atlas`) their vocabularies are consumer surface too;
     # without them the only way to branch was a hardcoded string.
+    # `ENUMERATED_DATA` is not one of those tuples but the map from a
+    # `(code, key)` to the tuple its value is refused against — the registry the
+    # caveat constructors check. It is exported for the same reason: a client
+    # that wants to know which values a key can take reads the same mapping the
+    # constructor enforces, rather than a list copied out of the guide.
+    "CORE_MODE_UNESTABLISHED_REASONS",
+    "EMULATOR_CONFIG_UNREADABLE_REASONS",
+    "ENUMERATED_DATA",
+    "ESTABLISHED_FOR_CONSOLE",
+    "ESTABLISHED_FOR_DEFAULT_SAVE_NAME",
+    "ESTABLISHED_FOR_DRIVER_NAMED_CONTENT",
+    "ESTABLISHED_FOR_MENU_SLOT_SAVES",
+    "ESTABLISHED_FOR_RAW_CARTRIDGE_IMAGE",
+    "ESTABLISHED_FOR_SINGLE_DISK_IMAGE",
+    "ESTABLISHED_FOR_UNPACKED_GAME_DIRECTORY",
+    "FILES_ESTABLISHED_FOR_TOKENS",
+    "REASON_ACTIVE_USER_UNRECORDED",
+    "REASON_CARD_INDEX_OUTSIDE_RECORDED_NAMES",
+    "REASON_CONFIGURED_USER_HAS_NO_TREE",
+    "REASON_CONFIGURED_USER_ID_UNREAD",
+    "REASON_CONFIGURED_USER_TREE_NAMED",
+    "REASON_CONFIGURED_USER_NOT_SET_UP",
+    "REASON_CONFIGURED_USER_SETUP_UNESTABLISHED",
+    "REASON_CONTENT_CLASS_UNNAMED",
+    "REASON_CONTENT_CLASS_UNRECORDED",
+    "REASON_DATA_ROOT_DECIDED_BY_LAUNCH",
+    "REASON_EMULATED_MODEL_UNRECORDED",
+    "REASON_HDD_PATH_UNSET",
+    "REASON_INI_OUTRANKED_BY_CASCADE",
+    "REASON_INI_PRESENCE_UNESTABLISHED",
+    "REASON_INI_SEARCH_PATH_UNLISTABLE",
+    "REASON_KEY_UNREAD",
+    "REASON_LISTED_USER_ACCOUNT_UNESTABLISHED",
+    "REASON_MLC_LAUNCH_FLAG_OUTRANKS_CONFIG",
+    "REASON_NO_LISTED_USER_ACCOUNT",
+    "REASON_NO_USER_DIRECTORY",
+    "REASON_NO_USER_PRESELECTED",
+    "REASON_REGION_DECIDED_BY_DISC",
+    "REASON_SAVEPATH_CONFIG_UNREADABLE",
+    "REASON_SAVEPATH_UNTRANSLATABLE",
+    "REASON_SESSION_OVERRIDE_SET",
+    "REASON_SLOT_DEVICE_UNINTERPRETED",
+    "REASON_SLOT_HOLDS_AGP_DEVICE",
+    "REASON_USER_LISTING_UNESTABLISHED",
+    "REASON_VIRTUAL_SD_DISABLED",
+    "CFG_LAYER_CONTENT_DIR_OVERRIDE",
+    "CFG_LAYER_CORE_OVERRIDE",
+    "CFG_LAYER_GAME_OVERRIDE",
+    "CFG_LAYER_GLOBAL",
+    "CFG_LAYER_KINDS",
     "HOLE_CONTENT_DIR",
     "HOLE_CONTENT_DIR_NAME",
     "HOLE_CWD",

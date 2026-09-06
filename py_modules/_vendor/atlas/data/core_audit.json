@@ -326,13 +326,13 @@
       "kind": "libretro"
     },
     "mednafen_ngp": {
-      "verdict": "standard-dir",
+      "verdict": "card",
       "per_game_capable": true,
-      "note": "[V-live] RetroDECK 0.10.9b contains content-keyed SNK Gals' Fighters (USA, Europe).flash in the standard save directory.",
+      "note": "[V-source/binary, placement V-live] Answers no memory id beyond system RAM, so RetroArch writes no .srm. Writes <save dir>/<rom_stem>.flash itself — the Neo Geo Pocket's flash memory, named through one name-building function both the read and the write pass 'flash' to: read back at load, written at unload only when a flash block was registered. A content-keyed .flash was live-observed in the standard save directory (2026-07-23). Supersedes the standard-dir triage — the file set is now stated by the card.",
       "verified": {
         "retrodeck": {
           "version": "0.10.9b",
-          "core_library_version": null,
+          "core_library_version": "v1.29.0.0 139fe34",
           "date": "2026-07-23"
         },
         "emudeck": null,
@@ -487,7 +487,7 @@
     "opera": {
       "verdict": "card",
       "per_game_capable": true,
-      "note": "[V-source/binary] opera-libretro@67a29e6 — the revision the shipped binary reports — writes its NVRAM per game or shared under <save_dir>/opera (opera_lr_nvram.c:130-152, :154-175) and exposes no RETRO_MEMORY_SAVE_RAM (libretro.c:430-444), so the nvram files are the whole save. Not live-observed.",
+      "note": "[V-source/binary] opera-libretro@67a29e6 — the revision the shipped binary reports — writes one NVRAM file whose name carries both of its save switches: <save_dir>/opera/per_game/<stem>.<version>.srm or <save_dir>/opera/shared/nvram.<version>.srm (opera_lr_nvram.c:130-152, :154-175), the directory and naming scheme from opera_nvram_storage and the number from opera_nvram_version (libretro_core_options.c:177-187, :188-206). Both are registered value sets, so the twenty (storage, version) pairs are a closed product and the card states all twenty names rather than leaving the file set unverified. RETRO_MEMORY_SAVE_RAM answers NULL (libretro.c:430-444), so the nvram files are the whole save. Not live-observed: the reference machine carries no 3DO content and no opera save tree.",
       "verified": {
         "retrodeck": null,
         "emudeck": null,
@@ -691,6 +691,28 @@
       "verdict": "suspect",
       "per_game_capable": null,
       "note": "[O] The unfiltered options scan of the shipped citra_libretro.so shows two save-relevant switches nobody has verified — citra_use_libretro_save_path and citra_use_virtual_sd — beside LibRetro::GetSaveDir and the emulated SD's FileSys archives. Which directories those switches actually route, and what the core writes where, has not been read from source; no core-written save has been observed.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "puae": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] libretro-uae@0043cf9 — the revision the shipped binary names. retro_get_memory_size answers RETRO_MEMORY_SYSTEM_RAM alone (libretro-core.c:8881-8886), so the frontend writes no .srm and every save is the core's own, in two stories the content's class selects (dc_get_image_type, libretro-dc.c:825-868). Floppies: UAE's fetch_path hands every path name the frontend's save directory (misc.c:609-617), and the write file it composes there, <save dir>/<stem>_save.adf, is created by disk_setwriteprotect alone — whose only callers are the two libretro redirect helpers. So with both floppy switches off a plain image takes its writes in place while a compressed (adz/dms) or raw-disk (ipf/fdi) one is write-protected and keeps nothing; 'puae_floppy_write_protection' discards every write and outranks the other switch; 'puae_floppy_write_redirect' leaves <stem>_save.adf.gz under the save root. CDs: retro_config_kickstart appends flash_file=<save dir>/<stem>.nvr, or the shared puae_libretro(_cdtv).nvr under 'puae_shared_nvram', only for the CDTV/CD32/CD32FR models (libretro-core.c:5577-5578, :5640-5661, :5969-5978) — and for the model, so a floppy on a CD model gets one too, which is why the card's rule reads 'puae_model' and 'puae_use_boot_hd' as well. Card shipped: seven modes over the two classes, the archive, playlist, WHDLoad and hard-disk classes deliberately outside it (their save story is decided by what is inside the file, or by WHDSaves, a follow-up's subject). Two writable stores sit beside every mode and neither is claimed, which is why no group closes its candidate universe: 'puae_use_boot_hd' mounts a Boot HD read-write for floppy and CD content alike, and two .uae files under the save root are appended after everything the rule reads — the model preset is emitted before the core's own flash_file line and cannot override it. Not live-observed: no Amiga content and no Amiga save exists on the machine the audit ran on.",
+      "verified": {
+        "retrodeck": null,
+        "emudeck": null,
+        "bare": null
+      },
+      "kind": "libretro"
+    },
+    "puae2021": {
+      "verdict": "card",
+      "per_game_capable": true,
+      "note": "[V-source/binary] libretro-uae@58527ce — the revision the shipped binary names. retro_get_memory_size answers RETRO_MEMORY_SYSTEM_RAM alone (libretro-core.c:8799-8804), so the frontend writes no .srm and every save is the core's own, in two stories the content's class selects (dc_get_image_type, libretro-dc.c:825-868). Floppies: UAE's fetch_path hands every path name the frontend's save directory (misc.c:450-473), and the write file it composes there, <save dir>/<stem>_save.adf, is created by disk_setwriteprotect alone — whose only callers are the two libretro redirect helpers. So with both floppy switches off a plain image takes its writes in place while a compressed (adz/dms) or raw-disk (ipf/fdi) one is write-protected and keeps nothing; 'puae_floppy_write_protection' discards every write and outranks the other switch; 'puae_floppy_write_redirect' leaves <stem>_save.adf.gz under the save root. CDs: retro_config_kickstart appends flash_file=<save dir>/<stem>.nvr, or the shared puae_libretro(_cdtv).nvr under 'puae_shared_nvram', only for the CDTV/CD32/CD32FR models (libretro-core.c:5501-5502, :5564-5585, :5893-5902) — and for the model, so a floppy on a CD model gets one too, which is why the card's rule reads 'puae_model' and 'puae_use_boot_hd' as well. Card shipped: seven modes over the two classes, the archive, playlist, WHDLoad and hard-disk classes deliberately outside it (their save story is decided by what is inside the file, or by WHDSaves, a follow-up's subject). Two writable stores sit beside every mode and neither is claimed, which is why no group closes its candidate universe: 'puae_use_boot_hd' mounts a Boot HD read-write for floppy and CD content alike, and two .uae files under the save root are appended after everything the rule reads — the model preset is emitted before the core's own flash_file line and cannot override it. Not live-observed: no Amiga content and no Amiga save exists on the machine the audit ran on. One difference from the current generation, and it is when the file appears rather than where: this UAE creates the CD32 EEPROM on the first write (nvram_write, akiko.c:128-143) rather than at reset, while the CDTV's battery RAM is still created at reset (cdtv_battram_reset, cdtv.c:1636-1655).",
       "verified": {
         "retrodeck": null,
         "emudeck": null,

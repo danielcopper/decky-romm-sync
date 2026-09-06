@@ -59,9 +59,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Iterable, Literal, Mapping, TypeVar
+from typing import Iterable, Literal, Mapping, Sequence, TypeAlias, TypeVar
 
-from .retroarch_cfg import RetroArchCfg
+from .retroarch_cfg import CFG_LAYER_KINDS, RetroArchCfg
+from .yaml_scalars import REFUSAL_CODES
 
 # Root kinds — where the placement's directory is anchored. The closed
 # vocabularies are Literal types so an invalid state is a type error first
@@ -277,6 +278,33 @@ def _freeze(mapping: Mapping[str, _FrozenValue]) -> Mapping[str, _FrozenValue]:
     """A read-only copy — frozen dataclasses stay deeply immutable."""
     return MappingProxyType(dict(mapping))
 
+
+# What one key of a ``Caveat``'s or ``Unresolved``'s ``data`` may hold, as a
+# caller writes it: one value, several values, or a tally. The three serialize
+# as the three JSON shapes a client already knows — a string, an array, an
+# object (:func:`atlas.contract.data_contract`) — and the sequence is the one
+# this vocabulary insists on: a list of file names, keys or regions is a list,
+# never a string a client has to split on ``", "``. Order inside a sequence is
+# contractual, because it is the emitter's stated order.
+DataValue: TypeAlias = "str | Sequence[str] | Mapping[str, str]"
+# The same values once a frozen dataclass holds them: sequences are tuples and
+# mappings are read-only.
+FrozenDataValue: TypeAlias = "str | tuple[str, ...] | Mapping[str, str]"
+
+
+def _frozen_value(value: "str | Sequence[str] | Mapping[str, str]") -> "FrozenDataValue":
+    """One data value in the shape a frozen dataclass keeps it in.
+
+    ``str`` is tested first and deliberately: a string *is* a sequence of
+    strings, and reading one as a sequence would turn every message-sized
+    value into a list of characters.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        return _freeze(value)
+    return tuple(value)
+
 # Caveat codes — the stable, machine-readable identifiers clients branch on.
 # Part of the API contract; messages are for humans and may change freely.
 CAVEAT_NO_CORE = "no-core"
@@ -288,6 +316,38 @@ CAVEAT_SORTED_DIR_MISSING = "sorted-dir-missing"
 # them would put the real condition in data for a client to unpack.
 CAVEAT_FILENAMES_UNVERIFIED = "filenames-unverified"
 CAVEAT_FILENAMES_CONTENT_CONDITIONAL = "filenames-content-conditional"
+# Which class of content a declared file list was established for, under
+# ``data["files_established_for"]``. A closed vocabulary because a client picks
+# a branch on it — "does this answer hold for the content I am holding?" — and
+# a paragraph is not something a branch can be taken on. What the paragraph
+# said is not lost: the card keeps it as prose and it rides in ``message``.
+ESTABLISHED_FOR_CONSOLE = "console"
+# The emulator names the file after the driver (or romset) it identified, not
+# after the file the player passed — MAME's family and FB Alpha.
+ESTABLISHED_FOR_DRIVER_NAMED_CONTENT = "driver-named-content"
+# One disk image opened as the one disk, as against a playlist, an archive
+# member, a tape, a snapshot or a cartridge.
+ESTABLISHED_FOR_SINGLE_DISK_IMAGE = "single-disk-image"
+# An unpacked game directory, as against an archive the emulator cannot write
+# into and therefore saves beside.
+ESTABLISHED_FOR_UNPACKED_GAME_DIRECTORY = "unpacked-game-directory"
+# A raw image read as the cartridge dump it usually is, as against the same
+# extension carrying a disc header and booting as a disc.
+ESTABLISHED_FOR_RAW_CARTRIDGE_IMAGE = "raw-cartridge-image"
+# The saves the emulator's own menu writes, through its own slots.
+ESTABLISHED_FOR_MENU_SLOT_SAVES = "menu-slot-saves"
+# Content that does not rename the save: no redirect file, no legacy spelling,
+# no patch that replaces the savegame base.
+ESTABLISHED_FOR_DEFAULT_SAVE_NAME = "default-save-name"
+FILES_ESTABLISHED_FOR_TOKENS = (
+    ESTABLISHED_FOR_CONSOLE,
+    ESTABLISHED_FOR_DRIVER_NAMED_CONTENT,
+    ESTABLISHED_FOR_SINGLE_DISK_IMAGE,
+    ESTABLISHED_FOR_UNPACKED_GAME_DIRECTORY,
+    ESTABLISHED_FOR_RAW_CARTRIDGE_IMAGE,
+    ESTABLISHED_FOR_MENU_SLOT_SAVES,
+    ESTABLISHED_FOR_DEFAULT_SAVE_NAME,
+)
 CAVEAT_FILE_SET_SPANS_ROOTS = "file-set-spans-roots"
 # A directory this configuration writes save data into whose file names do not
 # follow from anything atlas reads. MAME's differencing images for CHD hard
@@ -457,6 +517,101 @@ CAVEAT_SAVE_WRITES_DISCARDED = "save-writes-discarded"
 # reason. Sibling of core-option-value-unestablished, one level up: there
 # the option's value is missing, here the rule as a whole cannot decide.
 CAVEAT_CORE_MODE_UNESTABLISHED = "core-mode-unestablished"
+
+# ``core-mode-unestablished`` says one thing everywhere — the card's selection
+# rule could not decide — and ``data["reason"]`` says which rule stopped where.
+# One code, one closed vocabulary: a client that switches on the code today
+# keeps working, and one that wants the detail switches on a slug instead of
+# matching an English sentence. Whatever a sentence used to embed is a key of
+# its own beside the slug (named in the comment on each), and the sentence
+# itself stays in ``message``.
+#
+# Which user account an emulator runs as, for the two that keep one tree per
+# user (RPCS3, Vita3K).
+REASON_ACTIVE_USER_UNRECORDED = "active-user-unrecorded"
+REASON_USER_LISTING_UNESTABLISHED = "user-listing-unestablished"
+REASON_NO_USER_DIRECTORY = "no-user-directory"
+REASON_NO_LISTED_USER_ACCOUNT = "no-listed-user-account"
+REASON_LISTED_USER_ACCOUNT_UNESTABLISHED = "listed-user-account-unestablished"
+REASON_CONFIGURED_USER_TREE_NAMED = "configured-user-tree-named"
+REASON_CONFIGURED_USER_SETUP_UNESTABLISHED = "configured-user-setup-unestablished"
+REASON_CONFIGURED_USER_NOT_SET_UP = "configured-user-not-set-up"
+REASON_CONFIGURED_USER_HAS_NO_TREE = "configured-user-has-no-tree"
+REASON_NO_USER_PRESELECTED = "no-user-preselected"
+REASON_CONFIGURED_USER_ID_UNREAD = "configured-user-id-unread"
+# Which console a launch is, and where the emulator's own root comes from.
+# ``region-decided-by-disc`` rides ``regions``, the regions found side by side.
+REASON_REGION_DECIDED_BY_DISC = "region-decided-by-disc"
+REASON_DATA_ROOT_DECIDED_BY_LAUNCH = "data-root-decided-by-launch"
+# What sits in an emulated slot (Dolphin's EXI devices): ``slot`` names the
+# slot letter, and ``value`` the raw configured device the card cannot read.
+REASON_SLOT_HOLDS_AGP_DEVICE = "slot-holds-agp-device"
+REASON_SLOT_DEVICE_UNINTERPRETED = "slot-device-uninterpreted"
+# A per-session override a movie or netplay session sets — ``key`` names it.
+REASON_SESSION_OVERRIDE_SET = "session-override-set"
+REASON_HDD_PATH_UNSET = "hdd-path-unset"
+REASON_MLC_LAUNCH_FLAG_OUTRANKS_CONFIG = "mlc-launch-flag-outranks-config"
+REASON_VIRTUAL_SD_DISABLED = "virtual-sd-disabled"
+# Which class the loaded content is, where the save story splits on it — no
+# content was named, or its extension is outside every class the card records
+# (``extension`` carries the one seen).
+REASON_CONTENT_CLASS_UNNAMED = "content-class-unnamed"
+REASON_CONTENT_CLASS_UNRECORDED = "content-class-unrecorded"
+# Which machine the core emulates decides part of the save story, and here it is
+# either outside the card's modes or not decided at all: PUAE keeps a
+# non-volatile memory file for the CDTV, CD32 and CD32FR models alone, so a
+# floppy run on one of them has a save the floppy modes do not state; and a CD
+# run with the model on 'auto' beside a boot hard drive takes its model from a
+# marker in the content's own launch path where one matches and from the
+# hard-disk model otherwise, neither of which this answer reads. ``model``
+# carries the configured value the reading saw.
+REASON_EMULATED_MODEL_UNRECORDED = "emulated-model-unrecorded"
+# ScummVM's own save directory: its ini could not be read, or the path it sets
+# has no host spelling (``path`` carries the configured value).
+REASON_SAVEPATH_CONFIG_UNREADABLE = "savepath-config-unreadable"
+REASON_SAVEPATH_UNTRANSLATABLE = "savepath-untranslatable"
+# Beetle PSX's card-image index options select card files the recorded names do
+# not cover — ``options`` maps each option key to the value read.
+REASON_CARD_INDEX_OUTSIDE_RECORDED_NAMES = "card-index-outside-recorded-names"
+# MAME's ini cascade, whose members apply by driver metadata inside the binary.
+# ``members`` names the ini files the statement is about, in the order read.
+REASON_INI_PRESENCE_UNESTABLISHED = "ini-presence-unestablished"
+REASON_INI_SEARCH_PATH_UNLISTABLE = "ini-search-path-unlistable"
+REASON_INI_OUTRANKED_BY_CASCADE = "ini-outranked-by-cascade"
+# The whole vocabulary, in the order above. Nothing else may appear under
+# ``data["reason"]`` of this code: :func:`_check_enumerations` refuses a value
+# outside it at construction, a corpus test holds every ``(code, key)`` to one
+# JSON type, and another holds this tuple against the guide's own table.
+CORE_MODE_UNESTABLISHED_REASONS = (
+    REASON_ACTIVE_USER_UNRECORDED,
+    REASON_USER_LISTING_UNESTABLISHED,
+    REASON_NO_USER_DIRECTORY,
+    REASON_NO_LISTED_USER_ACCOUNT,
+    REASON_LISTED_USER_ACCOUNT_UNESTABLISHED,
+    REASON_CONFIGURED_USER_TREE_NAMED,
+    REASON_CONFIGURED_USER_SETUP_UNESTABLISHED,
+    REASON_CONFIGURED_USER_NOT_SET_UP,
+    REASON_CONFIGURED_USER_HAS_NO_TREE,
+    REASON_NO_USER_PRESELECTED,
+    REASON_CONFIGURED_USER_ID_UNREAD,
+    REASON_REGION_DECIDED_BY_DISC,
+    REASON_DATA_ROOT_DECIDED_BY_LAUNCH,
+    REASON_SLOT_HOLDS_AGP_DEVICE,
+    REASON_SLOT_DEVICE_UNINTERPRETED,
+    REASON_SESSION_OVERRIDE_SET,
+    REASON_HDD_PATH_UNSET,
+    REASON_MLC_LAUNCH_FLAG_OUTRANKS_CONFIG,
+    REASON_VIRTUAL_SD_DISABLED,
+    REASON_CONTENT_CLASS_UNNAMED,
+    REASON_CONTENT_CLASS_UNRECORDED,
+    REASON_EMULATED_MODEL_UNRECORDED,
+    REASON_SAVEPATH_CONFIG_UNREADABLE,
+    REASON_SAVEPATH_UNTRANSLATABLE,
+    REASON_CARD_INDEX_OUTSIDE_RECORDED_NAMES,
+    REASON_INI_PRESENCE_UNESTABLISHED,
+    REASON_INI_SEARCH_PATH_UNLISTABLE,
+    REASON_INI_OUTRANKED_BY_CASCADE,
+)
 # The emulator's own configuration routes its saves to a directory outside
 # every root kind this answer format states — ScummVM's scummvm.ini can set
 # 'savepath' to any directory at all. The path is read off the machine and
@@ -554,27 +709,39 @@ class Caveat:
     machine-readable specifics (e.g. the fallback directory of a silent
     revert) as a read-only mapping. Decision-relevant → structured;
     explanatory → text.
+
+    A value a client *branches* on is never a sentence. The enumerations
+    :data:`ENUMERATED_DATA` names come from a closed set defined beside the
+    code they belong to and are refused at construction if they do not;
+    whatever fact a sentence would have embedded is a key of its own, and the
+    sentence itself stays in ``message``, where prose belongs. Which shape a
+    value has is fixed per ``(code, key)`` pair, not per key name — ``key`` is
+    one config key under a dozen codes and the list of them under the per-game
+    layer ones — so a client switches on the code first.
     """
 
     code: str
+    """The stable identifier a client branches on — a code from the ``CAVEAT_*`` or
+    ``HEALTH_ISSUE_*`` vocabularies, and part of the contract.
+    """
     message: str
-    # Values are strings, except the mapping-valued key the alternative-emulator
-    # code documents beside its constant (``emulators``) — read-only mappings
-    # here, plain objects in the serialized contract.
-    data: Mapping[str, "str | Mapping[str, str]"] = field(default_factory=dict)
+    data: Mapping[str, "DataValue"] = field(default_factory=dict)
+    """The machine-readable specifics a client acts on, as a read-only mapping.
+
+    One value, several values or a tally — see :data:`DataValue`. Sequences
+    arrive as any sequence of strings and are kept as tuples; the mapping
+    form belongs to the two pairs the guide documents, the alternative-
+    emulator tally and this code's read card-index options.
+    """
 
     def __post_init__(self) -> None:
         if not self.code:
             raise ValueError("Caveat: code must be a non-empty stable identifier")
+        _check_enumerations("Caveat", self.code, self.data)
         object.__setattr__(
             self,
             "data",
-            _freeze(
-                {
-                    key: _freeze(value) if isinstance(value, Mapping) else value
-                    for key, value in self.data.items()
-                }
-            ),
+            _freeze({key: _frozen_value(value) for key, value in self.data.items()}),
         )
 
 # The holes a ``needs`` list may carry, each one a value the CALLER fills from
@@ -698,9 +865,21 @@ class FileGroup:
     """
 
     dir: str
+    """The resolved directory this group's files lie in — groups of one answer may sit
+    under different roots.
+    """
     files: tuple[str, ...] | None
+    """The basenames lying in ``dir``, or ``None`` where save data is written here under
+    names nothing atlas reads establishes.
+    """
     granularity: str
+    """Whose data these files are — one of :data:`GRANULARITIES`, this game's or every
+    game's.
+    """
     role: str
+    """What kind of data this group holds — one of :data:`ROLES`, the word a syncing
+    client decides by.
+    """
 
     def __post_init__(self) -> None:
         if self.granularity not in GRANULARITIES:
@@ -768,10 +947,22 @@ class FileSet:
     """
 
     state: FileSetState
+    """Where these names come from: ``observed`` off disk, ``declared`` from a verified
+    rule card, or ``unknown`` for a set atlas will not guess.
+    """
     files: tuple[str, ...]
+    """The save's file names as they lie in the answer's own directory — basenames, or
+    templates keeping the holes ``needs`` lists.
+    """
     provenance: str
     complete: bool = False
+    """Whether these names close the save's candidate universe — ``False`` on every
+    answer atlas can give today, which is not the same as having no opinion.
+    """
     groups: tuple[FileGroup, ...] = ()
+    """Every place this save lives, where a card decomposed it by kind or owner — empty
+    means not decomposed, never no files.
+    """
 
     def __post_init__(self) -> None:
         if self.state not in _FILE_SET_STATES:
@@ -806,9 +997,18 @@ class OptionReading:
     """
 
     key: str
+    """The option key this reading is of, spelled the way the emulator's own file spells
+    it.
+    """
     value: str | None
+    """The live value read for ``key``, or ``None`` where nothing states it and the
+    provenance says what applies instead.
+    """
     provenance: str
     options_file: str | None
+    """The file to edit to change this switch — change it, ask again, and the new answer
+    confirms it; ``None`` where this answer resolved no such file.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -826,8 +1026,17 @@ class ModeAlternative:
     """
 
     mode: str
+    """The other mode this alternative names — what the grouping becomes if a caller
+    selects it.
+    """
     options: tuple[tuple[str, str], ...]
+    """The full option combination that reaches ``mode`` — one pair for a single-option
+    core, one pair per switch for a rule card.
+    """
     values: tuple[str, ...]
+    """Every distinct grouping among that mode's groups, in card order with the mode's
+    own first.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -851,9 +1060,20 @@ class Granularity:
     """
 
     value: str
+    """How this emulator, configured as it is, groups save data — one of
+    :data:`GRANULARITIES`, or :data:`GRANULARITY_NONE` for a mode that keeps no save
+    at all.
+    """
     mode: str | None
+    """The rule-card mode in force, for display and never for branching — ``None`` where
+    no card speaks.
+    """
     readings: tuple[OptionReading, ...]
+    """One entry per switch that went into the selection — none where nothing selects, as
+    for a core with fixed behaviour.
+    """
     alternatives: tuple[ModeAlternative, ...]
+    """The other reachable modes, each with the option combination that selects it."""
     provenance: str
 
 
@@ -898,14 +1118,38 @@ class SavefilePlacement:
     """
 
     dir: str
+    """The directory this emulator keeps the save in — concrete where the caller supplied
+    the content path, otherwise a template whose holes ``needs`` lists.
+    """
     root_kind: RootKind
+    """Which anchor ``dir`` hangs off — one of :data:`ROOT_KINDS`, from the configured
+    save root to a standalone emulator's own tree.
+    """
     needs: tuple[str, ...]
+    """The holes a caller fills, the directory template's and a declared file-set
+    template's together — an answer with none is fully resolved.
+    """
     file_set: FileSet
+    """The files the save consists of — observed, declared, or unknown, and never
+    guessed.
+    """
     sources: tuple[str, ...]
     caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
     granularity: Granularity | None = None
+    """How this emulator groups save data and how to change it, and ``None`` wherever no
+    rule card states it.
+    """
     fallback_dir: str | None = None
+    """The unsorted root RetroArch silently reverts to when it cannot create ``dir``, and
+    ``None`` where the placement is not conditional.
+    """
     physical_dir: str | None = None
+    """The fully link-resolved backing directory where ``dir`` reaches its files through
+    symlinks, and ``None`` otherwise.
+    """
 
     def __post_init__(self) -> None:
         if not self.dir:
@@ -939,11 +1183,26 @@ class ScreenshotPlacement:
     """
 
     dir: str
+    """The directory this configuration's screenshots land in — concrete where content or
+    a configured root fills it, otherwise a template whose holes ``needs`` lists.
+    """
     root_kind: ScreenshotRootKind
+    """Which anchor ``dir`` hangs off — the configured screenshot directory, or the
+    content's own.
+    """
     needs: tuple[str, ...]
+    """The holes a caller fills to make ``dir`` concrete — empty on an answer that is
+    already a path.
+    """
     sources: tuple[str, ...]
     caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
     physical_dir: str | None = None
+    """The fully link-resolved backing directory where ``dir`` reaches its files through
+    symlinks, and ``None`` otherwise.
+    """
 
     def __post_init__(self) -> None:
         if not self.dir:
@@ -998,6 +1257,48 @@ UNRESOLVED_MOD_WIRING_UNESTABLISHED = "mod-wiring-unestablished"
 # there atlas has no wiring for the emulator, here it does and the machine
 # would not let it look.
 UNRESOLVED_EMULATOR_CONFIG_UNREADABLE = "emulator-config-unreadable"
+# Why the read did not settle the question, under ``data["reason"]``, where the
+# refusal has one to state. Two sources, one vocabulary: the scalar reader's own
+# refusal codes (:data:`~atlas.yaml_scalars.REFUSAL_CODES`) say which construct
+# stopped the whole file, and ``key-unread`` says the file parsed but the one
+# key this answer hangs on is stated as a construct the reader does not read —
+# ``data["key"]`` names it. A refusal that simply could not open the file
+# states no reason at all; the file is in ``data["config"]`` either way.
+REASON_KEY_UNREAD = "key-unread"
+EMULATOR_CONFIG_UNREADABLE_REASONS = (*REFUSAL_CODES, REASON_KEY_UNREAD)
+
+# The four ``(code, key)`` pairs whose value became an enumeration in this
+# round, and the vocabulary each comes from. Checked at construction, the way
+# :class:`CfgSource` checks its kind and the card loader checks its tokens —
+# because being closed by convention is not being closed: a typo in a resolver
+# no fixture reaches would otherwise ship through the type check, the tests and
+# the vectors alike, and reach a client as a value nothing documents.
+#
+# Not every closed set in the contract is here. Older ones — an installation's
+# ``kind``, a card's ``verification`` and ``verdict``, a requirement's ``need``,
+# a health finding's ``status`` — are enforced where they are built or not at
+# all, and registering them is a change of its own rather than a rider on this
+# one. What this table holds, it holds absolutely.
+ENUMERATED_DATA: "Mapping[tuple[str, str], tuple[str, ...]]" = MappingProxyType(
+    {
+        (CAVEAT_CORE_MODE_UNESTABLISHED, "reason"): CORE_MODE_UNESTABLISHED_REASONS,
+        (CAVEAT_FILENAMES_CONTENT_CONDITIONAL, "files_established_for"): (
+            FILES_ESTABLISHED_FOR_TOKENS
+        ),
+        (CAVEAT_INVALID_SAVE_DIRECTORY, "layer"): CFG_LAYER_KINDS,
+        (UNRESOLVED_EMULATOR_CONFIG_UNREADABLE, "reason"): EMULATOR_CONFIG_UNREADABLE_REASONS,
+    }
+)
+
+
+def _check_enumerations(what: str, code: str, data: "Mapping[str, DataValue]") -> None:
+    """Refuse a value outside the vocabulary its ``(code, key)`` names."""
+    for key, value in data.items():
+        allowed = ENUMERATED_DATA.get((code, key))
+        if allowed is not None and value not in allowed:
+            raise ValueError(
+                f"{what}: {code}.{key} must be one of {list(allowed)}, got {value!r}"
+            )
 # The emulator's configuration was read, and the absolute path it states has
 # no spelling on this host from here: the value names a location only the
 # emulator's sandbox can read, and the whole answer hangs on that one path,
@@ -1028,16 +1329,28 @@ class Unresolved:
     """
 
     code: str
+    """The stable identifier a client branches on — why this question has no answer for
+    this entry.
+    """
     message: str
-    # Values are strings, except the list-valued keys an aggregate refusal
-    # documents beside its code (``paths`` on the untranslatable-path code) —
-    # tuples here, lists in the serialized contract.
-    data: Mapping[str, "str | tuple[str, ...]"] = field(default_factory=dict)
+    data: Mapping[str, "DataValue"] = field(default_factory=dict)
+    """The machine-readable specifics of the refusal, as a read-only mapping.
+
+    The same value vocabulary a caveat's data has (:data:`DataValue`): one
+    string, or the list-valued keys an aggregate refusal documents beside its
+    code (``paths`` on the untranslatable-path code) — tuples here, JSON
+    arrays in the serialized contract.
+    """
 
     def __post_init__(self) -> None:
         if not self.code:
             raise ValueError("Unresolved: code must be a non-empty stable identifier")
-        object.__setattr__(self, "data", _freeze(self.data))
+        _check_enumerations("Unresolved", self.code, self.data)
+        object.__setattr__(
+            self,
+            "data",
+            _freeze({key: _frozen_value(value) for key, value in self.data.items()}),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1069,13 +1382,34 @@ class SavestatePlacement:
     """
 
     dir: str
+    """The directory this emulator keeps savestates in — concrete where the caller
+    supplied the content path, otherwise a template whose holes ``needs`` lists.
+    """
     root_kind: StateRootKind
+    """Which anchor ``dir`` hangs off — one of :data:`STATE_ROOT_KINDS`, from the
+    configured savestate root to the launching process's own directory.
+    """
     needs: tuple[str, ...]
+    """The holes a caller fills to make ``dir`` concrete — an answer with none is fully
+    resolved.
+    """
     file_set: FileSet
+    """The files the savestates consist of — observed where a listing found them,
+    declared where a card names the emulator's own, unknown where neither did.
+    """
     sources: tuple[str, ...]
     caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
     fallback_dir: str | None = None
+    """The unsorted root RetroArch silently reverts to when it cannot create ``dir``, and
+    ``None`` where the placement is not conditional.
+    """
     physical_dir: str | None = None
+    """The fully link-resolved backing directory where ``dir`` reaches its files through
+    symlinks, and ``None`` otherwise.
+    """
 
     def __post_init__(self) -> None:
         if not self.dir:
@@ -1114,9 +1448,18 @@ class SavestateAbsence:
     """
 
     emulator: str
+    """The emulator this stated no is about, named by the token its packaged card
+    carries.
+    """
     citation: str
+    """The evidence for the no, contractual so that a client repeating the claim repeats
+    its source.
+    """
     sources: tuple[str, ...]
     caveats: tuple[Caveat, ...] = ()
+    """What qualifies the claim itself — never what qualifies a tree, since an absence
+    names no path.
+    """
 
     def __post_init__(self) -> None:
         if not self.emulator:
@@ -1170,12 +1513,30 @@ class TexturePlacement:
     """
 
     dir: str
+    """The directory this emulator reads texture packs from — concrete where every hole
+    is filled, otherwise a template whose remaining holes ``needs`` lists.
+    """
     needs: tuple[str, ...]
+    """The holes a caller fills to make ``dir`` concrete — empty on an answer that is
+    already a path.
+    """
     enabled: bool | None
+    """Whether texture replacement is switched on right now, read from the switch that
+    governs it — ``None`` where no switch answered on this route.
+    """
     keying: Keying | None
+    """How the tree below ``dir`` is divided per game — one of :data:`KEYINGS`, and
+    ``None`` wherever no cited evidence states it.
+    """
     sources: tuple[str, ...]
     caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
     physical_dir: str | None = None
+    """The fully link-resolved backing directory where ``dir`` reaches its files through
+    symlinks, and ``None`` otherwise.
+    """
 
     def __post_init__(self) -> None:
         if not self.dir:
@@ -1208,9 +1569,19 @@ class ModTree:
     """
 
     dir: str
+    """The directory the emulator opens this mod tree at."""
     keying: Keying | None
+    """How the tree below ``dir`` is divided per game — one of :data:`KEYINGS`, and
+    ``None`` wherever no cited evidence states it.
+    """
     role: str | None = None
+    """The emulator's own word for what this tree is, and ``None`` where it reads mods
+    from one directory and there is nothing to tell apart.
+    """
     physical_dir: str | None = None
+    """The link-resolved directory the bytes are really in where an arrangement wired
+    one, and ``None`` otherwise.
+    """
 
     def __post_init__(self) -> None:
         if not self.dir:
@@ -1244,10 +1615,22 @@ class ModPlacement:
     """
 
     trees: tuple[ModTree, ...]
+    """Every directory this emulator reads mods from, each a different mechanism rather
+    than an alternative to the others.
+    """
     needs: tuple[str, ...]
+    """The holes a caller fills in the trees' directories — one list, because a shared
+    root leaves the same hole for every tree hanging off it.
+    """
     enabled: bool | None
+    """Whether the switch that governs mods is on, read live where a live read exists —
+    ``None`` where nothing established it, and never to be read as off.
+    """
     sources: tuple[str, ...]
     caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
 
     def __post_init__(self) -> None:
         if not self.trees:
@@ -1288,9 +1671,21 @@ class SoftPatchCandidate:
     """
 
     format: PatchFormat
+    """The patch format this candidate is — one of :data:`PATCH_FORMATS`, listed in the
+    order RetroArch tries them.
+    """
     path: str
+    """The absolute file name RetroArch would look for: the content's own basename with
+    its last extension stripped, plus this format's extension.
+    """
     continuations: tuple[str, ...]
+    """The nine indexed follow-ups RetroArch would look for on top of this one — the
+    same name with one digit appended, 1 through 9, listed rather than described.
+    """
     attempted: bool | None = None
+    """Whether the RetroArch on this machine tries this format at all, and ``None``
+    wherever nobody established that — which is not a no.
+    """
 
     def __post_init__(self) -> None:
         if self.format not in PATCH_FORMATS:
@@ -1344,9 +1739,17 @@ class SoftPatchAnswer:
     """
 
     candidates: tuple[SoftPatchCandidate, ...]
+    """The whole candidate set beside the content, in the order RetroArch attempts them."""
     applies: bool | None
+    """Whether patching reaches the named core: ``True`` where it loads content into
+    memory, ``False`` where it never does, ``None`` where atlas could not establish
+    it.
+    """
     sources: tuple[str, ...]
     caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
 
 
 def build_soft_patch_candidates(

@@ -9,8 +9,9 @@ the launched core.
 
 Precedence (three layers, then the plain launch): DB ``emulator_override`` (top)
 → ``settings.json`` per-platform core → the live es_systems default → ``None``.
-The retired ES-DE gamelist ``<alternativeEmulator>`` is never consulted, and
-there is no offline snapshot below the live default. A pinned per-game or
+An ES-DE ``<alternativeEmulator>`` or ``<altemulator>`` never moves that default
+— the promotion is discarded where the catalogue is read (ADR-0012) — and there
+is no offline snapshot below the live default. A pinned per-game or
 per-platform label that no longer resolves to a bakeable emulator degrades to
 the next layer rather than raising — so a stale label never blocks a read or
 bakes a bogus ``-e`` override. The per-game/per-platform label may name a
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         CoreInfoProvider,
         PlatformCoreReader,
+        SandboxLauncherFn,
         SystemResolver,
         UnitOfWorkFactory,
     )
@@ -45,15 +47,16 @@ class ActiveCoreResolverConfig:
     """Frozen wiring bundle handed to ``ActiveCoreResolver.__init__``.
 
     Carries the SQLite Unit-of-Work factory (to read the ROM's
-    ``platform_slug`` + ``emulator_override``), the ES-DE core-info read seam
-    (the classified emulator options + the system-layer default), the
-    per-platform core reader (the ``settings.json`` ``platform_cores`` map), the
-    platform-slug-to-system resolver, and the logger used to warn on a stale
-    label.
+    ``platform_slug`` + ``emulator_override``), the core-info read seam (the
+    classified emulator options + the system-layer default), the sandbox-launcher
+    seam the folder-boot rewrite resolves through, the per-platform core reader
+    (the ``settings.json`` ``platform_cores`` map), the platform-slug-to-system
+    resolver, and the logger used to warn on a stale label.
     """
 
     uow_factory: UnitOfWorkFactory
     core_info: CoreInfoProvider
+    sandbox_launcher: SandboxLauncherFn
     platform_core_reader: PlatformCoreReader
     resolve_system: SystemResolver
     logger: logging.Logger
@@ -65,6 +68,7 @@ class ActiveCoreResolver:
     def __init__(self, *, config: ActiveCoreResolverConfig) -> None:
         self._uow_factory = config.uow_factory
         self._core_info = config.core_info
+        self._sandbox_launcher = config.sandbox_launcher
         self._platform_core_reader = config.platform_core_reader
         self._resolve_system = config.resolve_system
         self._logger = config.logger
@@ -166,7 +170,7 @@ class ActiveCoreResolver:
             return emulator
         if install is None or folder_boot_root(install.file_path, install.rom_dir) is None:
             return emulator
-        launcher = self._core_info.resolve_sandbox_launcher(emulator.command)
+        launcher = self._sandbox_launcher(emulator.command)
         if launcher is None:
             self._logger.warning(
                 "active_core_resolver: folder-boot rom_id=%s resolves to standalone '%s' but its sandbox "

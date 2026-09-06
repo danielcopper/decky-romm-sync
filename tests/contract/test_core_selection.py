@@ -26,7 +26,14 @@ with the emulator list present (happy) and absent (emulator data unavailable).
 
 from __future__ import annotations
 
-from ._seed import seed_es_systems, seed_install, seed_rom
+from ._seed import (
+    seed_component_launcher,
+    seed_es_find_rules,
+    seed_es_systems,
+    seed_install,
+    seed_retrodeck_marker,
+    seed_rom,
+)
 
 _GBA_FIRMWARE = [
     {
@@ -237,3 +244,103 @@ async def test_get_firmware_status_flags_unavailable_emulator_data(harness):
     gba = next(p for p in result["platforms"] if p["platform_slug"] == "gba")
     assert gba["emulator_data_available"] is False
     assert gba["emulators"] == []
+
+
+# A switch system whose only bakeable command names Ryubing — a RetroDECK
+# component that the seeded deploy does not carry, which is the shape ADR-0020's
+# existence probe exists for.
+_SWITCH_ES_SYSTEMS_XML = """\
+<?xml version="1.0"?>
+<systemList>
+  <system>
+    <name>switch</name>
+    <extension>.nsp .xci</extension>
+    <command label="Ryubing (Standalone)">%EMULATOR_RYUBING% %ROM%</command>
+    <command label="Yuzu">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/yuzu_libretro.so %ROM%</command>
+  </system>
+</systemList>
+"""
+
+_SWITCH_ES_FIND_RULES_XML = """\
+<?xml version="1.0"?>
+<ruleList>
+  <emulator name="RYUBING">
+    <rule type="staticpath">
+      <entry>/app/retrodeck/components/ryubing/component_launcher.sh</entry>
+    </rule>
+  </emulator>
+</ruleList>
+"""
+
+
+async def test_a_detected_installation_without_a_catalogue_reads_nothing_off_the_host(harness):
+    """A marker with no seeded catalogue answers unavailable — never the dev box's own.
+
+    The regression this pins is hermeticity, not behaviour. Detection triggers on
+    ``retrodeck.json``, and the resolver then resolves its ``/app`` paths through
+    the flatpak deploy — which, unguarded, is the real one on any machine with
+    RetroDECK installed, so this test answered with five ``gba`` entries and 172
+    systems off the host. Every other test in this file either seeds the per-user
+    deploy, which wins over the system one, or seeds no marker at all and is never
+    detected — so nothing else could see it.
+    """
+    seed_retrodeck_marker(harness)
+    seed_rom(harness, 60, platform_slug="gba")
+
+    result = await harness.plugin.get_platform_core_info(60)
+
+    assert result["emulator_data_available"] is False
+    assert result["emulators"] == []
+    assert result["active_core"] is None
+    assert result["active_core_label"] is None
+
+
+async def test_a_standalone_whose_component_is_absent_never_becomes_the_default(harness):
+    """The not-installed downgrade, end to end over real files (ADR-0020 §2).
+
+    Ryubing is declared first and is the only standalone; its component launcher
+    is not in the seeded deploy, so the picker must show it ``needs_setup`` /
+    ``not_installed`` and the default must fall through to the libretro entry
+    behind it. Drives the real catalogue read, the real find-rules parse and the
+    real on-disk probe.
+    """
+    seed_es_systems(harness, _SWITCH_ES_SYSTEMS_XML)
+    seed_es_find_rules(harness, _SWITCH_ES_FIND_RULES_XML)
+
+    result = await harness.plugin.get_system_core_info("switch")
+
+    assert result["emulator_data_available"] is True
+    assert result["emulators"] == [
+        {
+            "label": "Ryubing (Standalone)",
+            "kind": "standalone",
+            "core_so": None,
+            "is_default": False,
+            "bakeable": False,
+            "reason": "not_installed",
+        },
+        {
+            "label": "Yuzu",
+            "kind": "libretro",
+            "core_so": "yuzu_libretro",
+            "is_default": True,
+            "bakeable": True,
+            "reason": None,
+        },
+    ]
+    assert result["active_core_label"] == "Yuzu"
+
+
+async def test_the_same_standalone_is_the_default_once_its_component_is_there(harness):
+    """The other half of the probe: seeding the component restores the declared first."""
+    seed_es_systems(harness, _SWITCH_ES_SYSTEMS_XML)
+    seed_es_find_rules(harness, _SWITCH_ES_FIND_RULES_XML)
+    seed_component_launcher(harness, "ryubing")
+
+    result = await harness.plugin.get_system_core_info("switch")
+
+    assert [(e["label"], e["bakeable"], e["is_default"]) for e in result["emulators"]] == [
+        ("Ryubing (Standalone)", True, True),
+        ("Yuzu", True, False),
+    ]
+    assert result["active_core_label"] == "Ryubing (Standalone)"

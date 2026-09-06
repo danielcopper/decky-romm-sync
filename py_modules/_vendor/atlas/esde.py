@@ -45,7 +45,7 @@ import os
 import re
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
+from typing import Iterator, Mapping
 
 from . import _xml as ET
 
@@ -86,6 +86,16 @@ class EmulatorSpec:
     ``core_so`` is the extracted ``.so`` basename for libretro entries, ``None``
     for standalone ones. ``provenance`` names the file layer that defined the
     system (bundled or custom overlay).
+
+    ``declared_index`` is where the entry sits, counted from 0, in the launch
+    list ES-DE builds out of that layer's ``<command>`` elements — see
+    :func:`_stored_commands`, which is not simply their order. It is the
+    shipped position, which a user promotion never changes: promotion rewrites
+    ``selection`` and moves the entry to the front of the answer, and the two
+    fields together are what tell "promoted from position 3" apart from "the
+    declared first, also selected". ``None`` says no layer declared this entry
+    at all, which is the derived enumeration's case (issue #133): there is no
+    launch list for it to have a position in.
     """
 
     system: str
@@ -94,17 +104,85 @@ class EmulatorSpec:
     core_so: str | None
     command: str
     provenance: str
+    declared_index: int | None = None
     selection: str | None = None
+
+
+def _stored_commands(system_el: ET.Element) -> Iterator[tuple[int, ET.Element]]:
+    """The ``<command>`` elements ES-DE keeps for one ``<system>``, each with its position.
+
+    This mirrors ES-DE's own walk (``SystemData.cpp:1028-1071`` @ v3.4.1)
+    rather than approximating it, because ``declared_index`` claims to *be* the
+    position the frontend holds — and the frontend does not simply number the
+    elements. Three rules shape the list it builds, and the **label** decides
+    every one of them; the command's text is never consulted here:
+
+    * A **duplicate label** is dropped and takes no position. The store at
+      ``:1067-1069`` runs only ``if (!duplicateLabel)``, and the comparison at
+      ``:1056-1066`` is against every label kept so far. Numbering the elements
+      would put each later one a slot too high.
+    * A ``<command>`` carrying **no ``label`` attribute**, once anything is
+      kept, **ends the walk**: ``:1031-1038`` ("only the first command tag will
+      be processed") where one entry is kept, ``:1039-1046`` ("no additional
+      command tags will be processed") where more are. Its mirror image ends
+      the walk too — ``:1048-1055`` fires on a *labelled* element whose
+      predecessor was kept under an empty label. Between them, a first
+      ``<command>`` with no label makes the system a one-entry system whatever
+      follows, because the second element trips one branch or the other. Two
+      things leave that predecessor's label empty and so arm ``:1048``: a
+      ``label=""``, and an absent attribute, which ``as_string()`` also reads
+      as ``""`` when the element is stored at ``:1069``. ES-DE's own comment at
+      ``:1049`` names the second. The test at ``:1030`` is on the attribute's
+      **presence**, which is why ``label=""`` counts as a label and reaches
+      ``:1048`` rather than ``:1030``.
+    * Anything else is kept **whatever its text is**: ``:1068-1069`` stores
+      ``entry.text().get()`` with no emptiness test at all. An element with no
+      text, or with only whitespace, is a launch command of ``""`` that holds
+      its slot in ``mLaunchCommands`` (``:1139``) and still draws its own row
+      in the alternative-emulator list
+      (``GuiAlternativeEmulators.cpp:153-205``). The emptiness that does reach
+      a command *list* is the list's own: ``:1114`` skips a system declaring no
+      ``<command>`` at all, alongside a missing fullname, path or extension —
+      as ``:1109`` skips one with no name.
+
+    A commented-out ``<command>`` reaches none of this and takes no position:
+    this walk and ES-DE's both step through children **by name**
+    (``system.child("command")``, ``next_sibling("command")``), and no comment
+    node answers to one. That is the common case rather than a corner one —
+    RetroDECK's bundled catalogue comments out the standalone entries of many
+    systems.
+
+    Labels are compared the way ES-DE compares them, as the raw attribute
+    value; the entry a caller sees carries the stripped spelling, as it always
+    has.
+    """
+    kept: list[str] = []
+    for command_el in system_el.findall("command"):
+        label = command_el.get("label")
+        if kept and (label is None or kept[-1] == ""):
+            break
+        if (label or "") in kept:
+            continue
+        kept.append(label or "")
+        yield len(kept) - 1, command_el
 
 
 def _launch_entries(system_el: ET.Element, *, system: str, provenance: str) -> tuple[EmulatorSpec, ...]:
     """The launch entries one ``<system>`` declares, in declared order.
 
     A command naming a ``*_libretro.so`` is a libretro entry (the basename is
-    extracted); anything else is standalone. Classification only.
+    extracted); anything else is standalone. Classification only — which
+    elements count, and at which position, is :func:`_stored_commands`.
+
+    An entry is stated only where the command has text. An empty or
+    whitespace-only one names nothing to launch, and stating an entry that
+    launches ``""`` would be worse than stating none. ES-DE keeps that string
+    as it finds it where atlas strips it first, so a whitespace-only command is
+    a launch command to the frontend and no entry here — and it still consumes
+    its position, which is the one way the numbers a caller sees can skip one.
     """
     entries: list[EmulatorSpec] = []
-    for command_el in system_el.findall("command"):
+    for declared_index, command_el in _stored_commands(system_el):
         command = (command_el.text or "").strip()
         if not command:
             continue
@@ -117,6 +195,7 @@ def _launch_entries(system_el: ET.Element, *, system: str, provenance: str) -> t
                 core_so=match.group(1) if match else None,
                 command=command,
                 provenance=provenance,
+                declared_index=declared_index,
             )
         )
     return tuple(entries)

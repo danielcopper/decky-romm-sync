@@ -52,6 +52,17 @@ REFUSAL_SUBSTITUTION_UNKNOWN = "substitution-unknown"
 # ``key: value`` pair. Either way the file is not the flat mapping this reader
 # reads, and no line in it can be attributed to a key with confidence.
 REFUSAL_NOT_A_FLAT_MAPPING = "not-a-flat-mapping"
+# All of them, in one tuple: a caller that states a refusal to its own client
+# states one of these and nothing else, and enumerating them is what lets the
+# refusal vocabulary be documented and tested rather than described.
+REFUSAL_CODES = (
+    REFUSAL_SECOND_DOCUMENT,
+    REFUSAL_ANCHOR,
+    REFUSAL_TAG,
+    REFUSAL_SUBSTITUTION_CYCLE,
+    REFUSAL_SUBSTITUTION_UNKNOWN,
+    REFUSAL_NOT_A_FLAT_MAPPING,
+)
 
 # How deep a chain of ``$(Name)`` substitutions may go before the reader calls
 # it a cycle. RPCS3's file is one level deep; the bound exists so a malformed

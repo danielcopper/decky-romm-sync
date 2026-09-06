@@ -100,13 +100,13 @@ class TestBootstrap:
         assert isinstance(result.callbacks.retrodeck_paths, RetroDeckPathsAdapter)
 
     def test_returns_core_info_provider_on_adapters(self, tmp_path):
-        """``core_info_provider`` (CoreResolver) is bundled with adapters, not callbacks.
+        """``core_info_provider`` is bundled with adapters, not callbacks.
 
         The stateful adapter sits in :class:`AdapterBundle`;
         :class:`CallbackBundle` carries only provider callables and persisters.
         """
         result = _bootstrap_for(tmp_path)
-        # AdapterBundle exposes the stateful CoreResolver.
+        # AdapterBundle exposes the stateful catalogue adapter.
         assert result.adapters.core_info_provider is not None
         # CallbackBundle no longer carries it.
         assert not hasattr(result.callbacks, "core_info_provider")
@@ -284,6 +284,7 @@ class TestWireServices:
             "get_core_name": MagicMock(return_value="Snes9x"),
             "platform_core_reader": FakePlatformCoreReader(),
             "m3u_support": MagicMock(return_value=True),
+            "sandbox_launcher": MagicMock(return_value=None),
             "system_extensions": MagicMock(return_value=frozenset()),
             "system_known": MagicMock(return_value=None),
             "list_rom_dir_files": MagicMock(return_value=[]),
@@ -346,6 +347,7 @@ class TestWireServices:
                 get_core_name=deps["get_core_name"],
                 platform_core_reader=deps["platform_core_reader"],
                 m3u_support=deps["m3u_support"],
+                sandbox_launcher=deps["sandbox_launcher"],
                 system_extensions=deps["system_extensions"],
                 system_known=deps["system_known"],
                 list_rom_dir_files=deps["list_rom_dir_files"],

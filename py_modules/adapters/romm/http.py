@@ -100,10 +100,11 @@ class RommHttpAdapter:
     def load_platform_map(self) -> dict[str, str]:
         """Load the platform slug -> RetroDECK system mapping from config.json.
 
-        Degrades to an empty map on a missing or corrupt config.json (matching the
-        es_de_config loaders) so ``resolve_system`` falls back to its verbatim
-        pass-through (ADR-0010 §5) instead of raising into callers — several of
-        which (the synchronous game-detail builder) have no surrounding guard.
+        Degrades to an empty map on a missing or corrupt config.json — the same
+        default-safe direction every other config reader here takes — so
+        ``resolve_system`` falls back to its verbatim pass-through (ADR-0010 §5)
+        instead of raising into callers, several of which (the synchronous
+        game-detail builder) have no surrounding guard.
         """
         # Check plugin root first (Decky CLI moves defaults/ contents to root),
         # then defaults/ subdirectory (dev deploys via mise run deploy)

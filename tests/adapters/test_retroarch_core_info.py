@@ -141,8 +141,8 @@ class TestCaching:
 
 
 class TestCandidatePathFallback:
-    def test_falls_back_to_user_candidate(self, tmp_path):
-        """First candidate (system) missing, second (user) present — still resolves."""
+    def test_falls_back_to_the_only_candidate_there(self, tmp_path):
+        """Only the per-user tree exists — the missing system candidate is skipped."""
         cores = _user_cores_dir(tmp_path)
         cores.mkdir(parents=True)
         (cores / "mgba_libretro.info").write_text('corename = "mGBA"\n')
@@ -150,18 +150,34 @@ class TestCandidatePathFallback:
         adapter = _make_adapter(tmp_path)
         assert adapter.get_corename("mgba_libretro") == "mGBA"
 
-    def test_first_candidate_used_when_present(self, tmp_path, monkeypatch):
-        """If the first candidate dir has the file, the second isn't consulted."""
-        # Fabricate a system-root flatpak tree we can populate.
+    def test_the_user_deploy_answers_where_both_carry_the_core(self, tmp_path, monkeypatch):
+        """The deploy ``flatpak run`` would start owns the answer.
+
+        A core's ``corename`` names the save sub-directory under
+        ``sort_savefiles_enable``, so reading it from a deploy that will not run
+        would name the directory after a core the launch never loads. Both
+        deploys carry the same core here with different names, which is the only
+        way to tell which one was read.
+        """
         system_root = tmp_path / "system_root"
         system_cores = _system_cores_dir(system_root)
         system_cores.mkdir(parents=True)
         (system_cores / "snes9x_libretro.info").write_text('corename = "FromSystem"\n')
 
-        # Put a different corename at the user-level path so we can tell them apart.
         user_cores = _user_cores_dir(tmp_path)
         user_cores.mkdir(parents=True)
         (user_cores / "snes9x_libretro.info").write_text('corename = "FromUser"\n')
+
+        monkeypatch.setattr("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(system_root))
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_corename("snes9x_libretro") == "FromUser"
+
+    def test_the_system_deploy_answers_when_it_is_the_only_one(self, tmp_path, monkeypatch):
+        """The other direction: nothing in the user tree, so the system one is read."""
+        system_root = tmp_path / "system_root"
+        system_cores = _system_cores_dir(system_root)
+        system_cores.mkdir(parents=True)
+        (system_cores / "snes9x_libretro.info").write_text('corename = "FromSystem"\n')
 
         monkeypatch.setattr("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(system_root))
         adapter = _make_adapter(tmp_path)
@@ -186,13 +202,15 @@ class TestOsErrorHandling:
         real_open = open
 
         def fake_open(path, *args, **kwargs):
-            if str(path).startswith(str(system_cores)):
+            # The USER tree is the first candidate, so denying it is what makes
+            # the adapter fall through to the second.
+            if str(path).startswith(str(user_cores)):
                 raise PermissionError(f"denied: {path}")
             return real_open(path, *args, **kwargs)
 
         with patch("builtins.open", side_effect=fake_open), caplog.at_level(logging.WARNING):
             adapter = _make_adapter(tmp_path)
-            assert adapter.get_corename("snes9x_libretro") == "FromUser"
+            assert adapter.get_corename("snes9x_libretro") == "FromSystem"
         assert any("Failed to read" in rec.message for rec in caplog.records)
 
     def test_permission_error_on_info_file_in_all_candidate_dirs_returns_none(self, tmp_path, caplog):
@@ -211,22 +229,22 @@ class TestOsErrorHandling:
     def test_unicode_decode_error_logs_and_tries_next_candidate(self, tmp_path, monkeypatch, caplog):
         """First candidate has non-UTF-8 bytes — adapter logs a warning and
         falls through to the second candidate."""
-        # Fabricate the system candidate tree we can populate
         system_root = tmp_path / "system_root"
         system_cores = _system_cores_dir(system_root)
         system_cores.mkdir(parents=True)
-        # Non-UTF-8 bytes — reading with encoding="utf-8" must raise UnicodeDecodeError
-        (system_cores / "snes9x_libretro.info").write_bytes(b"\xff\xfe\x00corename")
+        # Second (system) candidate is well-formed
+        (system_cores / "snes9x_libretro.info").write_text('corename = "FromSystem"\n')
 
-        # Second (per-user) candidate is well-formed
+        # First candidate: non-UTF-8 bytes — reading with encoding="utf-8" must
+        # raise UnicodeDecodeError
         user_cores = _user_cores_dir(tmp_path)
         user_cores.mkdir(parents=True)
-        (user_cores / "snes9x_libretro.info").write_text('corename = "FromUser"\n')
+        (user_cores / "snes9x_libretro.info").write_bytes(b"\xff\xfe\x00corename")
 
         monkeypatch.setattr("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(system_root))
 
         with caplog.at_level(logging.WARNING):
             adapter = _make_adapter(tmp_path)
-            assert adapter.get_corename("snes9x_libretro") == "FromUser"
+            assert adapter.get_corename("snes9x_libretro") == "FromSystem"
 
         assert any("Failed to read" in rec.message for rec in caplog.records)

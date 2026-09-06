@@ -68,9 +68,9 @@ The principle has three parts:
 The concrete case that motivated this principle, and the bug in
 [#208](https://github.com/danielcopper/decky-romm-sync/issues/208):
 
-- `CoreResolver` (parses ES-DE) returns a tuple `(core_so, label)` for "which core is active?". `label` is ES-DE's
-  **display string** — e.g. `"Snes9x - Current"`. It is a UI-level name, chosen by the ES-DE/RetroDECK team to
-  disambiguate in the core picker UI.
+- `AtlasCatalogueAdapter` (asks the resolver, which reads ES-DE) returns a tuple `(core_so, label)` for "which core is
+  active?". `label` is ES-DE's **display string** — e.g. `"Snes9x - Current"`. It is a UI-level name, chosen by the
+  ES-DE/RetroDECK team to disambiguate in the core picker UI.
 - RetroArch, when `sort_savefiles_enable = true`, writes saves into subdirectories named by the **`corename`** field of
   the core's `.info` file — e.g. `"Snes9x"`. It is RetroArch's canonical internal name, set by the core's maintainer,
   baked into RetroArch's runtime path logic.
@@ -214,13 +214,13 @@ that need it:
 
 ```python
 retroarch_core_info = RetroArchCoreInfoAdapter(user_home=user_home, logger=logger)
-core_resolver = CoreResolver(plugin_dir=plugin_dir, logger=logger, ...)
+emulator_catalogue = AtlasCatalogueAdapter(choose_installation=..., ...)
 
 migration_service = MigrationService(
     config=MigrationServiceConfig(
         ...,
-        get_active_core=core_resolver.get_active_core,      # ES-DE question
-        get_core_name=retroarch_core_info.get_corename,     # RetroArch question
+        get_active_core=emulator_catalogue.get_active_core,  # ES-DE question
+        get_core_name=retroarch_core_info.get_corename,      # RetroArch question
     ),
 )
 ```
@@ -239,19 +239,21 @@ services independent of any single parser and makes them straightforward to test
 
 ## Current parsers
 
-| Source                         | Format                  | Parser location                                                     | Layer status                                      | What it answers                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ------------------------------ | ----------------------- | ------------------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `retrodeck.json`               | JSON                    | `adapters/retrodeck_paths.py` — `RetroDeckPathsAdapter`             | ✅ adapter (correct layering)                     | Where RetroDECK puts saves, ROMs, BIOS, and its home directory.                                                                                                                                                                                                                                                                                                                                                               |
-| `retroarch.cfg`                | INI-ish `key = "value"` | `adapters/retroarch_config.py` — `RetroArchConfigAdapter`           | ✅ adapter (correct layering)                     | Save-sorting flags (`sort_savefiles_by_content_enable`, `sort_savefiles_enable`); room to grow as more cfg fields are needed.                                                                                                                                                                                                                                                                                                 |
-| `es_systems.xml`               | XML                     | `adapters/es_de_config.py` — `CoreResolver`                         | ✅ adapter (correct layering)                     | The **sole** core/emulator source (#1210): every `<command>` per system in document order (libretro + standalone), the default emulator, the libretro active core for the BIOS filter, and the `<extension>` accept-list. The pure classifier `domain/emulator_commands.py` reads the parsed commands and decides bake-safety.                                                                                                |
-| `es_find_rules.xml`            | XML                     | `adapters/es_de_config.py` — `CoreResolver`                         | ✅ adapter (correct layering)                     | Whether a standalone emulator is **installed** in RetroDECK: parsed beside `es_systems.xml` (same systems dir, mtime-cached), it maps a command's `%EMULATOR_<NAME>%` token to its find-rule `staticpath` entries and probes them on disk. A bakeable standalone whose emulator is absent is downgraded to `needs_setup`/`not_installed` (ADR-0020 §2). Absence-only — `systempath`-only / unreadable cases assume installed. |
-| `gamelist.xml`                 | XML                     | _none — dropped in #947_                                            | ⛔ no longer read or written                      | **Removed.** The plugin used to read the system-level `<alternativeEmulator>` and write it from the retired System page; it now neither reads nor writes the gamelist. Core deviations are the plugin's own state — per-platform in `settings.json` `platform_cores`, per-game in the DB (see [Core and Emulator Selection](core-emulator-selection.md)).                                                                     |
-| `core_defaults.json` (bundled) | JSON                    | _none — dropped in #1210_                                           | ⛔ no longer read (file + generator deleted)      | **Removed.** Was a bundled snapshot generated _from_ `es_systems.xml` (via `scripts/generate_core_defaults.py`) as an offline default/standalone-curation fallback. Deleted because the live file is a strict superset and RetroDECK is a hard prerequisite, so the fallback could never help a launch (see [ADR-0020](../adr/0020-live-es-systems-emulator-resolution.md)).                                                  |
-| RetroArch `.info`              | INI-ish `key = "value"` | `adapters/retroarch_core_info.py` + `domain/retroarch_core_info.py` | ✅ adapter + pure-domain parse (correct layering) | `corename` (authoritative save subdir name), plus the full metadata dict for future use.                                                                                                                                                                                                                                                                                                                                      |
+| Source                         | Format                  | Parser location                                                     | Layer status                                      | What it answers                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------ | ----------------------- | ------------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `retrodeck.json`               | JSON                    | `adapters/retrodeck_paths.py` — `RetroDeckPathsAdapter`             | ✅ adapter (correct layering)                     | Where RetroDECK puts saves, ROMs, BIOS, and its home directory.                                                                                                                                                                                                                                                                                                                                                                                                |
+| `retroarch.cfg`                | INI-ish `key = "value"` | `adapters/retroarch_config.py` — `RetroArchConfigAdapter`           | ✅ adapter (correct layering)                     | Save-sorting flags (`sort_savefiles_by_content_enable`, `sort_savefiles_enable`); room to grow as more cfg fields are needed.                                                                                                                                                                                                                                                                                                                                  |
+| `es_systems.xml`               | XML                     | `_vendor/atlas`, through `adapters/atlas_catalogue.py`              | ✅ adapter (correct layering)                     | The **sole** core/emulator source (#1210): every `<command>` per system, the default emulator, the libretro active core for the BIOS filter, and the `<extension>` accept-list. The resolver applies ES-DE's `custom_systems` overlay and states its entries in EFFECTIVE order; the adapter re-sorts on the shipped `declared_index` so document order decides the default (ADR-0030). The pure classifier `domain/emulator_commands.py` decides bake-safety. |
+| `es_find_rules.xml`            | XML                     | `adapters/es_find_rules.py` — `EsFindRulesAdapter`                  | ✅ adapter (correct layering)                     | Where an emulator's **binary** is, which the catalogue never states. Two questions: whether a standalone emulator is installed in RetroDECK (a bakeable one that is absent is downgraded to `needs_setup`/`not_installed`, ADR-0020 §2 — absence-only, so `systempath`-only / unreadable cases assume installed), and the sandbox component launcher the folder-boot bake execs (ADR-0019). Mtime-cached parse; the on-disk probes run per call.               |
+| `gamelist.xml`                 | XML                     | _none — dropped in #947_                                            | ⛔ no longer read or written                      | **Removed.** The plugin used to read the system-level `<alternativeEmulator>` and write it from the retired System page; it now neither reads nor writes the gamelist. Core deviations are the plugin's own state — per-platform in `settings.json` `platform_cores`, per-game in the DB (see [Core and Emulator Selection](core-emulator-selection.md)).                                                                                                      |
+| `core_defaults.json` (bundled) | JSON                    | _none — dropped in #1210_                                           | ⛔ no longer read (file + generator deleted)      | **Removed.** Was a bundled snapshot generated _from_ `es_systems.xml` (via `scripts/generate_core_defaults.py`) as an offline default/standalone-curation fallback. Deleted because the live file is a strict superset and RetroDECK is a hard prerequisite, so the fallback could never help a launch (see [ADR-0020](../adr/0020-live-es-systems-emulator-resolution.md)).                                                                                   |
+| RetroArch `.info`              | INI-ish `key = "value"` | `adapters/retroarch_core_info.py` + `domain/retroarch_core_info.py` | ✅ adapter + pure-domain parse (correct layering) | `corename` (authoritative save subdir name), plus the full metadata dict for future use.                                                                                                                                                                                                                                                                                                                                                                       |
 
-The ES-DE `es_systems.xml` parser (`CoreResolver`) keeps its XML parsing inline rather than in a separate pure-domain
-module; that is acceptable because the adapter owns its I/O. New `.info`-style sources that warrant a pure-parse split
-should follow the [parser layout template](#parser-layout-template) above (pure parse in `domain/`, I/O in `adapters/`).
+`es_systems.xml` is the one source with no parser of the plugin's own: the vendored emu-atlas resolver reads it, and
+`adapters/atlas_catalogue.py` is the seam that turns its answers into plugin vocabulary — no atlas type reaches a
+service. `adapters/es_find_rules.py` keeps its XML parsing inline rather than in a separate pure-domain module; that is
+acceptable because the adapter owns its I/O. New `.info`-style sources that warrant a pure-parse split should follow the
+[parser layout template](#parser-layout-template) above (pure parse in `domain/`, I/O in `adapters/`).
 
 ### Best-effort fallback and config health (`retrodeck.json`)
 
@@ -441,20 +443,25 @@ Non-obvious design choices worth preserving:
   label ≠ corename). Fail-loud beats silent corruption; real-world `.info`-missing cases can be diagnosed from the
   warning and addressed by adding candidate paths or a bundled fallback.
 
-- **`core_so` is the full `.so` basename including `_libretro`.** `CoreResolver.get_active_core` returns
-  `(core_so, label)` where `core_so` is e.g. `"snes9x_libretro"`, not `"snes9x"`. This is set by the regex
-  `[\w-]+_libretro` when parsing `es_systems.xml`'s `<command>` elements. The `.info` filename is therefore
-  `{core_so}.info` (e.g. `snes9x_libretro.info`), not `{core_so}_libretro.info`. This is a subtle naming quirk
-  documented here so future parser users don't double the suffix.
+- **`core_so` is the full `.so` basename including `_libretro`, and without the `.so`.**
+  `AtlasCatalogueAdapter.get_active_core` returns `(core_so, label)` where `core_so` is e.g. `"snes9x_libretro"`, not
+  `"snes9x"`. The resolver states it _with_ the extension (`snes9x_libretro.so`, extracted from the `<command>`); the
+  adapter strips that, because every core identifier the plugin holds — the resolved active core, the `platform_cores`
+  override, a classified option's `core_so` — is spelled without it, and comparing the two spellings would silently
+  match nothing. The `.info` filename is therefore `{core_so}.info` (e.g. `snes9x_libretro.info`), not
+  `{core_so}_libretro.info`. This is a subtle naming quirk documented here so future parser users don't double the
+  suffix.
 
 - **RetroDECK-only path resolution, standalone RetroArch out of scope.** The `.info` adapter only looks under
-  `net.retrodeck.retrodeck` Flatpak paths (system-wide `/var/lib/flatpak/...` and per-user
-  `~/.local/share/flatpak/...`). Support for `org.libretro.RetroArch` Flatpak, native RetroArch installs, and other
-  launchers is deferred — a separate long-term issue tracks broadening the plugin's launcher support beyond RetroDECK,
-  and this parser will be extended alongside that work.
+  `net.retrodeck.retrodeck` Flatpak paths — the per-user `~/.local/share/flatpak/...` before the system-wide
+  `/var/lib/flatpak/...`, which is flatpak's own order for an app and therefore the deploy a launch would start
+  (`adapters/flatpak_install.py`; the emulator catalogue and the find rules resolve through the same order, so all three
+  describe one RetroDECK). Support for `org.libretro.RetroArch` Flatpak, native RetroArch installs, and other launchers
+  is deferred — a separate long-term issue tracks broadening the plugin's launcher support beyond RetroDECK, and this
+  parser will be extended alongside that work.
 
-- **Candidate paths use the `current/active` Flatpak symlinks.** Both candidate paths for `.info` files (system and
-  per-user) route through `current/active`, which is Flatpak's stable symlink to the installed commit. This means the
+- **Candidate paths use the `current/active` Flatpak symlinks.** Both candidate paths for `.info` files (per-user and
+  system) route through `current/active`, which is Flatpak's stable symlink to the installed commit. This means the
   adapter does not need to know the specific Flatpak commit hash, and Flatpak updates do not break path resolution.
 
 ---

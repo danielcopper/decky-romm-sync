@@ -628,28 +628,6 @@
         "source": "read at the revision the installed binary names in its library_version"
       }
     },
-    "mednafen_ngp": {
-      "identifiers": {
-        "library_name": [
-          "Beetle NeoPop"
-        ]
-      },
-      "systems": {
-        "ngp": {
-          "memory_types": [],
-          "verified_core": "v1.29.0.0 139fe34",
-          "citation": "[V] libretro.c:785-790 at beetle-ngp-libretro 139fe34 — only RETRO_MEMORY_SYSTEM_RAM answers (16384); save RAM returns 0. The core keeps Neo Geo Pocket saves in a file of its own, which this record does not describe."
-        },
-        "ngpc": {
-          "memory_types": [],
-          "verified_core": "v1.29.0.0 139fe34",
-          "citation": "[V] libretro.c:785-790 at beetle-ngp-libretro 139fe34 — only RETRO_MEMORY_SYSTEM_RAM answers (16384); save RAM returns 0. The core keeps Neo Geo Pocket saves in a file of its own, which this record does not describe."
-        }
-      },
-      "provenance": {
-        "source": "read at the revision the installed binary names in its library_version"
-      }
-    },
     "mednafen_pce": {
       "identifiers": {
         "library_name": [
@@ -1268,43 +1246,6 @@
           "memory_types": [],
           "verified_core": "1.3e acae250",
           "citation": "[V] core/libretro.c:629-634 at prosystem-libretro acae250 — only RETRO_MEMORY_SYSTEM_RAM answers; every other id returns 0."
-        }
-      },
-      "provenance": {
-        "source": "read at the revision the installed binary names in its library_version"
-      }
-    },
-    "puae": {
-      "identifiers": {
-        "library_name": [
-          "PUAE"
-        ]
-      },
-      "systems": {
-        "amiga": {
-          "memory_types": [],
-          "verified_core": "5.3.0 0043cf9",
-          "citation": "[V] libretro/libretro-core.c:8881-8886 at libretro-uae 0043cf9 — only RETRO_MEMORY_SYSTEM_RAM answers (chipmem_bank.allocated_size); every other id returns 0. An Amiga's saves live inside the disk images the core manages, which is outside what this record describes."
-        },
-        "amiga1200": {
-          "memory_types": [],
-          "verified_core": "5.3.0 0043cf9",
-          "citation": "[V] libretro/libretro-core.c:8881-8886 at libretro-uae 0043cf9 — only RETRO_MEMORY_SYSTEM_RAM answers (chipmem_bank.allocated_size); every other id returns 0. An Amiga's saves live inside the disk images the core manages, which is outside what this record describes."
-        },
-        "amiga600": {
-          "memory_types": [],
-          "verified_core": "5.3.0 0043cf9",
-          "citation": "[V] libretro/libretro-core.c:8881-8886 at libretro-uae 0043cf9 — only RETRO_MEMORY_SYSTEM_RAM answers (chipmem_bank.allocated_size); every other id returns 0. An Amiga's saves live inside the disk images the core manages, which is outside what this record describes."
-        },
-        "amigacd32": {
-          "memory_types": [],
-          "verified_core": "5.3.0 0043cf9",
-          "citation": "[V] libretro/libretro-core.c:8881-8886 at libretro-uae 0043cf9 — only RETRO_MEMORY_SYSTEM_RAM answers (chipmem_bank.allocated_size); every other id returns 0. An Amiga's saves live inside the disk images the core manages, which is outside what this record describes."
-        },
-        "cdtv": {
-          "memory_types": [],
-          "verified_core": "5.3.0 0043cf9",
-          "citation": "[V] libretro/libretro-core.c:8881-8886 at libretro-uae 0043cf9 — only RETRO_MEMORY_SYSTEM_RAM answers (chipmem_bank.allocated_size); every other id returns 0. An Amiga's saves live inside the disk images the core manages, which is outside what this record describes."
         }
       },
       "provenance": {

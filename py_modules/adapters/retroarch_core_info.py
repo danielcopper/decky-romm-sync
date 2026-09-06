@@ -7,9 +7,16 @@ under ``sort_savefiles_enable``), ``supported_extensions``,
 ``firmware_count``, ``database``, ``display_name``, and more.
 
 The adapter resolves the file by probing a small list of candidate
-directories under the RetroDECK Flatpak install tree (system-wide and
-per-user), opens the file, and delegates parsing to
-:func:`domain.retroarch_core_info.parse_core_info`. Results (including
+directories under the RetroDECK Flatpak install tree, opens the file, and
+delegates parsing to :func:`domain.retroarch_core_info.parse_core_info`.
+Which install root answers first is
+:func:`adapters.flatpak_install.flatpak_app_files_dirs`' to decide, and it
+is flatpak's own order for an app — the per-user installation before the
+system one, because ``flatpak run`` moves the user dir to the front so it
+wins where both carry the app. That matters here for the same reason it
+matters to the emulator catalogue: a core's ``corename`` names a save
+sub-directory, and reading it from a deploy that will not run would name
+the directory after a core the launch never loads. Results (including
 ``None`` for missing files) are cached per-instance; no TTL — ``.info``
 files only change when the Flatpak is updated, which in practice tears
 down the plugin process anyway.

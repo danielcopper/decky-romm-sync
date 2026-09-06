@@ -25,12 +25,19 @@ kernel reads it (little endian throughout):
 
 The zstd codec arrives in the stdlib with Python 3.14 (PEP 784,
 ``compression.zstd``); the same code is published for older interpreters as
-``backports.zstd``, and the probe accepts either — a host application that
-vendors the backport grants its runtime the capability. That is discovery,
-not a dependency: atlas requires neither. Where no provider exists, an image
-compressed with zstd raises :class:`CodecUnavailable`, which the machine seam
-reports as the capability being absent — never as the file being absent.
-gzip images decompress everywhere through ``zlib``.
+``backports.zstd``. A provider is looked for three ways, in this order: the
+object a host handed over through :func:`register_zstd_provider`, then each
+of those two names. The registration is the seam for a host that vendors the
+backport under its own root, which satisfies neither name — it hands over the
+module object itself, and atlas calls ``decompress`` on it without importing
+anything. Aliasing that module into ``sys.modules`` under a probed name keeps
+working beside the registration, because the probe goes through the import
+machinery and the import machinery consults ``sys.modules`` before it
+searches. None of the three is a dependency: atlas requires none of them.
+Where no provider answers, an image compressed with zstd raises
+:class:`CodecUnavailable`, which the machine seam reports as the capability
+being absent — never as the file being absent. gzip images decompress
+everywhere through ``zlib``.
 """
 
 from __future__ import annotations
@@ -38,7 +45,7 @@ from __future__ import annotations
 import struct
 import zlib
 import importlib
-from typing import Any, BinaryIO, Callable
+from typing import Any, BinaryIO, Callable, NamedTuple
 
 _SUPERBLOCK = struct.Struct("<4sIIIIHHHHHHQQQQQQQQ")
 _MAGIC = b"hsqs"
@@ -84,31 +91,101 @@ class EntryNotFound(SquashfsError):
     """The image is fine and carries no entry of that name."""
 
 
-# The PEP 784 zstd API, in probe order: the stdlib home first (Python 3.14),
-# then the published backport of the same code for older interpreters.
+# The PEP 784 zstd API, in import order: the stdlib home first (Python 3.14),
+# then the published backport of the same code for older interpreters. A
+# registered provider outranks both.
 _ZSTD_PROVIDERS = ("compression.zstd", "backports.zstd")
 
+# The refusal names all three routes, and takes the two importable ones from
+# the tuple above so the names cannot drift from what is actually probed.
+_NO_ZSTD_PROVIDER = (
+    "the image is zstd-compressed and this runtime has no provider for the codec: "
+    "none was registered through atlas.register_zstd_provider(), and neither "
+    f"{' nor '.join(_ZSTD_PROVIDERS)} imports (the stdlib codec from Python 3.14, "
+    "and its published backport)"
+)
 
-def _zstd_module() -> Any:
+# The provider a host handed over, or None. Process-global because the
+# capability is the process's: one runtime, one set of importable modules, one
+# answer to "can this open a zstd image".
+_registered_provider: Any = None
+
+
+def register_zstd_provider(provider: Any) -> None:
+    """Hand atlas the zstd codec this process already has — or ``None`` to forget it.
+
+    A host that vendors ``backports.zstd`` under its own root imports it as
+    ``_vendor.backports.zstd``, which is neither name the probe tries; this
+    hands over the module object instead, and it is tried before both names.
+    Anything exposing a callable ``decompress(bytes) -> bytes`` is accepted —
+    atlas duck-types the codec and imports nothing, which is what keeps the
+    zero-dependency contract intact. Anything else, ``None`` apart, is refused
+    with :class:`TypeError` at registration, where the caller can still see
+    what it handed over, rather than at the first zstd image years of reads
+    later.
+
+    Registering ``None`` clears the registration and the two names decide
+    again. The last registration wins; there is one slot, not a chain.
+    """
+    global _registered_provider
+    if provider is not None and not callable(getattr(provider, "decompress", None)):
+        raise TypeError(
+            "a zstd provider must expose a callable decompress(bytes) -> bytes; "
+            f"{provider!r} does not"
+        )
+    _registered_provider = provider
+
+
+class ZstdProvider(NamedTuple):
+    """Which provider zstd images go through here, and how it got here.
+
+    ``registered`` is the route, not a guess from the name: a host may hand
+    over the very module the probe would have imported, and then ``name`` says
+    ``compression.zstd`` while the object came from the host.
+    """
+
+    name: str
+    registered: bool
+
+
+def _provider_name(provider: Any) -> str:
+    """What to call a registered object: its own ``__name__``, else its type's."""
+    name = getattr(provider, "__name__", None)
+    return name if isinstance(name, str) else type(provider).__name__
+
+
+def _resolved_zstd() -> tuple[ZstdProvider, Any] | None:
+    """The provider that answers here, with the codec object — ``None`` where none does."""
+    if _registered_provider is not None:
+        return ZstdProvider(_provider_name(_registered_provider), True), _registered_provider
     for name in _ZSTD_PROVIDERS:
         try:
-            return importlib.import_module(name)
+            return ZstdProvider(name, False), importlib.import_module(name)
         except ModuleNotFoundError:
             continue
     return None
+
+
+def zstd_provider() -> ZstdProvider | None:
+    """Which provider a zstd image would go through here — ``None`` where none would.
+
+    The registered object's own name where a host registered one, else the
+    name the probe imported it under. It says what the runtime holds, not
+    that any image was opened with it: a gzip image is decompressed through
+    ``zlib`` and never reaches the zstd provider at all.
+    """
+    resolved = _resolved_zstd()
+    return None if resolved is None else resolved[0]
 
 
 def _decompressor(compressor: int) -> Callable[[bytes], bytes]:
     if compressor == _COMPRESSOR_GZIP:
         return zlib.decompress
     if compressor == _COMPRESSOR_ZSTD:
-        zstd = _zstd_module()
-        if zstd is None:
-            raise CodecUnavailable(
-                "the image is zstd-compressed and this runtime has neither "
-                "compression.zstd (Python >= 3.14) nor backports.zstd"
-            )
-        return zstd.decompress
+        resolved = _resolved_zstd()
+        if resolved is None:
+            raise CodecUnavailable(_NO_ZSTD_PROVIDER)
+        return resolved[1].decompress
     raise CodecUnavailable(f"unsupported squashfs compressor id {compressor}")
 
 

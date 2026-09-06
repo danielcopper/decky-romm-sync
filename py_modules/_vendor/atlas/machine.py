@@ -114,10 +114,10 @@ GlobStatus = Literal["complete", "incomplete"]
 # file that exists and is not an AppImage-with-squashfs (replaced, truncated,
 # some other executable); "entry-missing" is a healthy image without the asked
 # entry (an upstream restructuring); "capability-missing" is this runtime
-# lacking the image's codec (zstd needs Python 3.14's compression.zstd or the
-# backports.zstd package) — the file is fine, the runtime is what cannot open
-# it, and reporting it as any file state would blame the machine for the
-# process.
+# lacking the image's codec (zstd needs a provider: one the host registered,
+# Python 3.14's compression.zstd, or the backports.zstd package) — the file is
+# fine, the runtime is what cannot open it, and reporting it as any file state
+# would blame the machine for the process.
 AppImageReadStatus = Literal[
     "ok", "missing", "unreadable", "invalid-text", "not-appimage", "entry-missing", "capability-missing"
 ]

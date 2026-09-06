@@ -271,11 +271,11 @@ Format: **invariant** — tier — enforced by.
   that folds the two values back together — a truthiness test on a placement, a `wanted != "needed"` bucket, a default
   of `not_needed` where the catalogue is silent — goes green: the collapse is the upstream defect this swap removed, and
   it is one careless `or` away from returning. The scope is the second half, and there the two ends now agree rather
-  than one trusting the other: `_core_scope` answers `None` both when `es_systems.xml` is unreadable **and** when it
-  offers the platform no libretro core (35 of ES-DE's 172 systems, `ps3` among them — a mapped RomM platform whose only
-  entry is RPCS3), and `reading_complete_for` refuses an empty scope as well as a `None` one. An empty scope read as
-  complete is a finished reading of nobody: every server file classifies `not_needed`, `required_count` is 0, and the
-  platform reports a green "Nothing required" over firmware the standalone emulator will not boot without
+  than one trusting the other: `_core_scope` answers `None` both when the emulator catalogue could not be read **and**
+  when it offers the platform no libretro core (35 of ES-DE's 172 systems, `ps3` among them — a mapped RomM platform
+  whose only entry is RPCS3), and `reading_complete_for` refuses an empty scope as well as a `None` one. An empty scope
+  read as complete is a finished reading of nobody: every server file classifies `not_needed`, `required_count` is 0,
+  and the platform reports a green "Nothing required" over firmware the standalone emulator will not boot without
 - **A firmware row the RomM library does not hold (`on_server: False`) counts towards readiness, and never towards a
   download affordance or a progress ratio** — test + prompt-only — `tests/services/test_firmware.py` pins the row's
   shape (`id` absent, `on_server` clear), that it raises `required_count`, and that it stays out of `server_count`;
@@ -308,41 +308,44 @@ Format: **invariant** — tier — enforced by.
   server I/O (CONTEXT.md → Unit of Work, ADR-0006)** — check — `scripts/check_uow_seam_nesting.py`, second seam family
   (`IO_SEAM_METHODS`). The list is **the seams this checker can see and has been told about, never an inventory of the
   I/O seams that exist**: `DiscResolver.enumerate_discs` / `.resolve_for_install` (a recursive walk of the ROM's install
-  directory), all four `CoreInfoProvider` reads — `get_active_core`, `get_default_emulator`, `get_emulator_options`,
-  `resolve_sandbox_launcher` (each re-probes the flatpak roots for **its** ES-DE file and re-stats it before it may use
-  the parse cache: `es_systems.xml` for the first three, `es_find_rules.xml` for the launcher read, and both for the
-  options read, which globs each option's emulator install through the find rules), `SystemResolver` (parses the
-  plugin's **own** bundled `config.json`, not RetroDECK's `retrodeck.json`, and does no network work despite living on
-  the RomM HTTP adapter), `SystemSupportedExtensionsFn` / `SystemKnownFn` (two questions to `es_systems.xml` through
-  that same per-call probe), and `FirmwareFolderVerdictFn` (lists one core's declared folder and reads every candidate
-  inside it the way the core does — 0.26 s for LRPS2 on the reference machine, the one seam here a cost was measured
-  for). Two other real I/O seams were weighed and kept out — the reasons are in the script's docstring, and neither is
-  an exemption; nor are those two an inventory of what else touches the disk. **"It's only a read" is the reasoning this
-  rule exists to refuse**: `SqliteUnitOfWork.__enter__` issues `BEGIN IMMEDIATE`, so even a read-only UoW takes the
-  write lock. The database is in WAL, so readers are unaffected — but every other **writer** waits on the lock for up to
-  `busy_timeout=5000` and fails with `SQLITE_BUSY` if it is still held then, and `FakeUnitOfWork` shares no connection,
-  so no unit test notices. Six call sites had drifted across the rule before anything looked (#1779), for the reason the
-  check exists: nothing at a call site reveals that an injected seam touches the disk. **The rule and the gate come from
-  reading code — no measurement of how long any of those transactions actually held the lock exists, and nothing here
-  should be read as one.** What the check sees is the deadlock rule's matcher unchanged — an **attribute** call naming a
-  listed seam, lexically inside a `with <...>uow_factory()` block in the same function scope — so it inherits every
-  blind spot of that half: a seam behind a helper one level down, an alias to a local, a factory attribute whose name
-  does not end in `uow_factory`, a nested `def`/`lambda` (which resets the scope by design), a seam **passed as a bound
-  method** (`run_in_executor(None, self._disc_resolver.enumerate_discs, install)` — an attribute, not a call, and
+  directory), the three `CoreInfoProvider` reads — `get_active_core`, `get_default_emulator`, `get_emulator_options` —
+  which are answered by the vendored resolver's live read of ES-DE's catalogue (a system's first read opens it and the
+  adapter's per-system cache is what a second one hits; `get_emulator_options` additionally globs each **bakeable
+  standalone** option's emulator install through the find rules on **every** call, uncached so a component installed
+  mid-session is seen), `SandboxLauncherFn` (re-probes the flatpak roots for `es_find_rules.xml` and re-stats it before
+  it may use the parse cache), `SystemResolver` (parses the plugin's **own** bundled `config.json`, not RetroDECK's
+  `retrodeck.json`, and does no network work despite living on the RomM HTTP adapter), `SystemSupportedExtensionsFn` /
+  `SystemKnownFn` (two more questions to the same catalogue, through the same adapter cache), and
+  `FirmwareFolderVerdictFn` (lists one core's declared folder and reads every candidate inside it the way the core does
+  — 0.26 s for LRPS2 on the reference machine, the one seam here a cost was measured for). Two other real I/O seams were
+  weighed and kept out — the reasons are in the script's docstring, and neither is an exemption; nor are those two an
+  inventory of what else touches the disk. **"It's only a read" is the reasoning this rule exists to refuse**:
+  `SqliteUnitOfWork.__enter__` issues `BEGIN IMMEDIATE`, so even a read-only UoW takes the write lock. The database is
+  in WAL, so readers are unaffected — but every other **writer** waits on the lock for up to `busy_timeout=5000` and
+  fails with `SQLITE_BUSY` if it is still held then, and `FakeUnitOfWork` shares no connection, so no unit test notices.
+  Six call sites had drifted across the rule before anything looked (#1779), for the reason the check exists: nothing at
+  a call site reveals that an injected seam touches the disk. **The rule and the gate come from reading code — no
+  measurement of how long any of those transactions actually held the lock exists, and nothing here should be read as
+  one.** What the check sees is the deadlock rule's matcher unchanged — an **attribute** call naming a listed seam,
+  lexically inside a `with <...>uow_factory()` block in the same function scope — so it inherits every blind spot of
+  that half: a seam behind a helper one level down, an alias to a local, a factory attribute whose name does not end in
+  `uow_factory`, a nested `def`/`lambda` (which resets the scope by design), a seam **passed as a bound method**
+  (`run_in_executor(None, self._disc_resolver.enumerate_discs, install)` — an attribute, not a call, and
   `run_in_executor` is exactly how `disc.py` and `cores.py` reach their `_io` bodies; the same shape
   `check_read_only_module.py` records for its own gate), and the hand-maintained list itself, which cannot notice a seam
   whose implementation _grows_ a file read later. Matching only attribute calls is deliberate: the pure
   `domain.disc_selection.enumerate_discs` shares a name with the seam and does no I/O — it is safe because its call site
   imports it bare, not because of the name. The call-shaped blind spot is shared with the deadlock rule and only this
-  family closes it: for its four `__call__`-only seams the list carries the attribute each is bound to
-  (`_resolve_system`, `_system_extensions`, `_system_known`, `_firmware_folder_verdicts`) — by convention rather than by
-  construction, and only while such a name means one thing, which is exactly what keeps `_list_files` out. Three of the
-  four have no method name a consumer could write instead; `SystemResolver` does, its implementation being
-  `RommHttpAdapter.resolve_system`, which is why `resolve_system` is listed beside its attribute. The deadlock rule's
-  own call-shaped seams stay open. `SystemResolver` is the odd one out for a second reason: the adapter memoises its map
-  for the life of the process, so exactly one call ever opens the file, and the entry earns its place because that one
-  call can land inside a UoW. One `# pragma: no uow-check` covers both families — it suppresses the line, and no seam is
-  in both lists, so where a line does name two seams it silences both
+  family closes it: for its five `__call__`-only seams the list carries the attribute each is bound to
+  (`_resolve_system`, `_sandbox_launcher`, `_system_extensions`, `_system_known`, `_firmware_folder_verdicts`) — by
+  convention rather than by construction, and only while such a name means one thing, which is exactly what keeps
+  `_list_files` out. Three of the five have no method name a consumer could write instead; `SystemResolver` and
+  `SandboxLauncherFn` do, their implementations being `RommHttpAdapter.resolve_system` and
+  `EsFindRulesAdapter.resolve_sandbox_launcher`, which is why `resolve_system` and `resolve_sandbox_launcher` are listed
+  beside their attributes. The deadlock rule's own call-shaped seams stay open. `SystemResolver` is the odd one out for
+  a second reason: the adapter memoises its map for the life of the process, so exactly one call ever opens the file,
+  and the entry earns its place because that one call can land inside a UoW. One `# pragma: no uow-check` covers both
+  families — it suppresses the line, and no seam is in both lists, so where a line does name two seams it silences both
 - **Services never call clocks / sleep / uuid / random directly (inject the Protocol)** — check —
   `scripts/check_cosmic_call_bans.sh`
 - **No module in `services/`, `bootstrap/`, `adapters/`, `domain/`, `lib/` or `models/` crosses the ~1000-LOC

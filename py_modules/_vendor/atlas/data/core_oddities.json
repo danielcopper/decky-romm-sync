@@ -260,7 +260,8 @@
                 ],
                 "granularity": "per-game-files",
                 "role": "disk-diff",
-                "files_established_for": "content loaded as a single .dsk floppy image. Every disk attached to drive A gets a differencing file named after that image's own full name, extension kept — a playlist's or an archive's member disks bring their inner names. Tapes, snapshots and cartridges write nothing here, and drive B has no differencing file",
+                "files_established_for": "single-disk-image",
+                "files_established_note": "The class here is a single .dsk floppy image: every disk attached to drive A gets a differencing file named after that image's own full name, extension kept — a playlist's or an archive's member disks bring their inner names. Tapes, snapshots and cartridges write nothing here, and drive B has no differencing file.",
                 "files_citation": "libretro/retro_disk_control.c:90 at libretro-cap32 a5d96c5 — '%s%s%s.' EXT_DIFF_DSK joined from the save directory and path_basename of the attached file, with EXT_DIFF_DSK 'sav' (libretro-core.h:230)"
               }
             ]
@@ -376,7 +377,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content without a save-name redirect or a legacy save. A <name>.SAVENAME file on the emulated C: drive renames the save to <name>.pure.zip so several contents share one; an existing legacy <rom_stem>.sav keeps being used unless the strict-mode option forbids it; a 'Boot OS' setup keeps its virtual disks beside the save, '<rom_stem>-CDRIVE.sav' and hash-keyed '.sav' spellings whose names follow the installation",
+                "files_established_for": "default-save-name",
+                "files_established_note": "The class here is content with neither a save-name redirect nor a legacy save: a <name>.SAVENAME file on the emulated C: drive renames the save to <name>.pure.zip so several contents share one; an existing legacy <rom_stem>.sav keeps being used unless the strict-mode option forbids it; a 'Boot OS' setup keeps its virtual disks beside the save, '<rom_stem>-CDRIVE.sav' and hash-keyed '.sav' spellings whose names follow the installation.",
                 "files_citation": "dosbox_pure_libretro.cpp:826-844 at libretro/dosbox-pure ed5e809 ('Set version to 1.0-preview4', the version the shipped binary names) — DBP_GetSaveFile joins the save directory, the content's stem and '.pure.zip'; :808-824 finds the .SAVENAME redirect, :835-839 the legacy fallback, :845-875 the Boot OS disk spellings"
               }
             ]
@@ -432,7 +434,8 @@
                 ],
                 "granularity": "per-game-files",
                 "role": "battery",
-                "files_established_for": "content loaded as an unpacked game directory (or a file inside one), where the slots land beside the game files themselves. An archive (.zip, .easyrpg) cannot be written, so the player creates a sibling directory named after the archive's own full name with '.save' appended and the slots land in there — a directory whose name atlas cannot state as a template",
+                "files_established_for": "unpacked-game-directory",
+                "files_established_note": "The class here is content loaded as an unpacked game directory (or a file inside one), where the slots land beside the game files themselves. An archive (.zip, .easyrpg) cannot be written, so the player creates a sibling directory named after the archive's own full name with '.save' appended and the slots land in there — a directory whose name atlas cannot state as a template.",
                 "files_citation": "src/scene_save.cpp:69 at EasyRPG/Player 6a244c1 writes 'Save{:02d}.lsd' into FileFinder::Save(); src/filefinder.cpp:402 bounds the slots at 15; :88-127 derives the .save redirect for unwritable game filesystems"
               }
             ]
@@ -511,7 +514,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
                 "files_citation": "svn-current/trunk/src/burner/libretro/libretro.cpp:800 (write) and :1006 (read) at libretro/fbalpha2012 77167ce"
               },
               {
@@ -534,7 +538,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
                 "files_citation": "svn-current/trunk/src/burner/libretro/libretro.cpp:800 (write) and :1006 (read) at libretro/fbalpha2012 77167ce"
               }
             ]
@@ -585,7 +590,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
                 "files_citation": "src/burn/devices/eeprom.cpp:110 (write, fopen 'wb' at :116) and :88 (read) at libretro/fbalpha2012_cps1 v0.2.97.28"
               },
               {
@@ -650,7 +656,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
                 "files_citation": "src/burner/libretro/libretro.cpp:1036 (write) and :858 (read) at libretro/fbalpha2012_cps2 v0.2.97.28"
               },
               {
@@ -673,7 +680,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
                 "files_citation": "src/burner/libretro/libretro.cpp:1036 (write) and :858 (read) at libretro/fbalpha2012_cps2 v0.2.97.28"
               }
             ]
@@ -720,7 +728,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
                 "files_citation": "svn-current/trunk/src/burner/libretro/libretro.cpp:626 (write) and :1024 (read) at libretro/fbalpha2012_cps3 v0.2.97.29"
               },
               {
@@ -743,7 +752,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
                 "files_citation": "svn-current/trunk/src/burner/libretro/libretro.cpp:626 (write) and :1024 (read) at libretro/fbalpha2012_cps3 v0.2.97.29"
               }
             ]
@@ -790,7 +800,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is the driver's own name. FB Alpha names the file after the loaded driver, and its lookup is exact: BurnDrvGetIndexByName compares with strcmp, so a content basename that differs from the driver name in any way — case included — refuses to load at all. Where the game runs, the two strings are equal.",
                 "files_citation": "src/burner/libretro/libretro.cpp:1429 (write) and :2899 (read) at libretro/fbalpha2012_neogeo fa3bf50"
               }
             ]
@@ -1201,7 +1212,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "ST-V content whose file stem is the set's own name. The eeprom file is named after the romset the zip's contents identified as (STVGetSingle), not after the zip — for sets named as the driver list names them, the two are equal",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is ST-V content whose file stem is the set's own name. The eeprom file is named after the romset the zip's contents identified as (STVGetSingle), not after the zip — for sets named as the driver list names them, the two are equal.",
                 "files_citation": "ctrl/src/stv.c:3075 (write) and :3052 (read) at FCare/Kronos 6709c1d — '%s/%s.nv' joined from the eeprom directory and the romset name"
               }
             ]
@@ -1236,7 +1248,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "ST-V content whose file stem is the set's own name. The eeprom file is named after the romset the zip's contents identified as (STVGetSingle), not after the zip — for sets named as the driver list names them, the two are equal",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is ST-V content whose file stem is the set's own name. The eeprom file is named after the romset the zip's contents identified as (STVGetSingle), not after the zip — for sets named as the driver list names them, the two are equal.",
                 "files_citation": "ctrl/src/stv.c:3075 (write) and :3052 (read) at FCare/Kronos 6709c1d — '%s/%s.nv' joined from the eeprom directory and the romset name"
               }
             ]
@@ -1313,7 +1326,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is spelled exactly as MAME spells the driver. running_machine takes its basename straight from the driver (machine.cpp:74, m_basename(_config.gamedrv().name)) and every name below is built on it, while the glue finds the driver from the content's basename (retro_init.cpp:285-305). For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is spelled exactly as MAME spells the driver. running_machine takes its basename straight from the driver (machine.cpp:74, m_basename(_config.gamedrv().name)) and every name below is built on it, while the glue finds the driver from the content's basename (retro_init.cpp:285-305). For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
                 "files_citation": "machine.cpp:74 and :1116-1147 at libretro/mame a90e86e1"
               },
               {
@@ -1397,7 +1411,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is spelled exactly as MAME spells the driver. The file is named after the driver, not after the ROM file: MAME 2000 matches the content's basename against its driver table case-insensitively (libretro.c:862-871, and a miss refuses the load), and then writes the table's own spelling. For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is spelled exactly as MAME spells the driver. The file is named after the driver, not after the ROM file: MAME 2000 matches the content's basename against its driver table case-insensitively (libretro.c:862-871, and a miss refuses the load), and then writes the table's own spelling. For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
                 "files_citation": "libretro/fileio.c:763 at libretro/mame2000-libretro 2ec60f6"
               },
               {
@@ -1472,7 +1487,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is spelled exactly as MAME spells the driver. Every name here is Machine->gamedrv->name, the driver's own (mame.c:497 and :530 for the NVRAM, hiscore.c:166 and :203 for the score table), while the glue finds the driver by matching the content's basename against the driver table. For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is spelled exactly as MAME spells the driver. Every name here is Machine->gamedrv->name, the driver's own (mame.c:497 and :530 for the NVRAM, hiscore.c:166 and :203 for the score table), while the glue finds the driver by matching the content's basename against the driver table. For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
                 "files_citation": "mame.c:497 and :530 at libretro/mame2003-libretro 3570605"
               },
               {
@@ -1515,7 +1531,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is spelled exactly as MAME spells the driver. Every name here is Machine->gamedrv->name, the driver's own (mame.c:497 and :530 for the NVRAM, hiscore.c:166 and :203 for the score table), while the glue finds the driver by matching the content's basename against the driver table. For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is spelled exactly as MAME spells the driver. Every name here is Machine->gamedrv->name, the driver's own (mame.c:497 and :530 for the NVRAM, hiscore.c:166 and :203 for the score table), while the glue finds the driver by matching the content's basename against the driver table. For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
                 "files_citation": "mame.c:497 and :530 at libretro/mame2003-libretro 3570605"
               },
               {
@@ -1612,7 +1629,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is spelled exactly as MAME spells the driver. Every name here is Machine->gamedrv->name, the driver's own (mame.c:497 and :530 for the NVRAM, hiscore.c:166 and :203 for the score table), while the glue finds the driver by matching the content's basename against the driver table. For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is spelled exactly as MAME spells the driver. Every name here is Machine->gamedrv->name, the driver's own (mame.c:497 and :530 for the NVRAM, hiscore.c:166 and :203 for the score table), while the glue finds the driver by matching the content's basename against the driver table. For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
                 "files_citation": "mame.c:497 and :530 at libretro/mame2003-plus-libretro 62c7089"
               },
               {
@@ -1655,7 +1673,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is spelled exactly as MAME spells the driver. Every name here is Machine->gamedrv->name, the driver's own (mame.c:497 and :530 for the NVRAM, hiscore.c:166 and :203 for the score table), while the glue finds the driver by matching the content's basename against the driver table. For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is spelled exactly as MAME spells the driver. Every name here is Machine->gamedrv->name, the driver's own (mame.c:497 and :530 for the NVRAM, hiscore.c:166 and :203 for the score table), while the glue finds the driver by matching the content's basename against the driver table. For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
                 "files_citation": "mame.c:497 and :530 at libretro/mame2003-plus-libretro 62c7089"
               },
               {
@@ -1748,7 +1767,8 @@
                 ],
                 "granularity": "per-game-file",
                 "role": "battery",
-                "files_established_for": "content whose file stem is spelled exactly as MAME spells the driver. running_machine takes its basename straight from the driver (machine.c:183, m_basename(driver.name)) and every name below is built on it, while the glue finds the driver from the content's basename (retromain.c). For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
+                "files_established_for": "driver-named-content",
+                "files_established_note": "The class here is content whose file stem is spelled exactly as MAME spells the driver. running_machine takes its basename straight from the driver (machine.c:183, m_basename(driver.name)) and every name below is built on it, while the glue finds the driver from the content's basename (retromain.c). For a MAME-conformant romset the two are the same string; for a collection that spells its files otherwise, the stem here is right up to case.",
                 "files_citation": "src/emu/machine/generic.c:325-331 at libretro/mame2010-libretro c5b413b"
               },
               {
@@ -2033,27 +2053,268 @@
         ]
       },
       "saves": {
-        "governing_option": {
-          "key": "opera_nvram_storage"
+        "governing_rule": {
+          "options": [
+            "opera_nvram_storage",
+            "opera_nvram_version"
+          ]
         },
         "modes": {
-          "per game": {
+          "per-game-0": {
             "root": "savefile_directory",
             "groups": [
               {
                 "subdir": "opera/per_game",
-                "files": null,
+                "files": [
+                  "<rom_stem>.0.srm"
+                ],
                 "granularity": "per-game-file",
                 "role": "battery"
               }
             ]
           },
-          "shared": {
+          "per-game-1": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/per_game",
+                "files": [
+                  "<rom_stem>.1.srm"
+                ],
+                "granularity": "per-game-file",
+                "role": "battery"
+              }
+            ]
+          },
+          "per-game-2": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/per_game",
+                "files": [
+                  "<rom_stem>.2.srm"
+                ],
+                "granularity": "per-game-file",
+                "role": "battery"
+              }
+            ]
+          },
+          "per-game-3": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/per_game",
+                "files": [
+                  "<rom_stem>.3.srm"
+                ],
+                "granularity": "per-game-file",
+                "role": "battery"
+              }
+            ]
+          },
+          "per-game-4": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/per_game",
+                "files": [
+                  "<rom_stem>.4.srm"
+                ],
+                "granularity": "per-game-file",
+                "role": "battery"
+              }
+            ]
+          },
+          "per-game-5": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/per_game",
+                "files": [
+                  "<rom_stem>.5.srm"
+                ],
+                "granularity": "per-game-file",
+                "role": "battery"
+              }
+            ]
+          },
+          "per-game-6": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/per_game",
+                "files": [
+                  "<rom_stem>.6.srm"
+                ],
+                "granularity": "per-game-file",
+                "role": "battery"
+              }
+            ]
+          },
+          "per-game-7": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/per_game",
+                "files": [
+                  "<rom_stem>.7.srm"
+                ],
+                "granularity": "per-game-file",
+                "role": "battery"
+              }
+            ]
+          },
+          "per-game-8": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/per_game",
+                "files": [
+                  "<rom_stem>.8.srm"
+                ],
+                "granularity": "per-game-file",
+                "role": "battery"
+              }
+            ]
+          },
+          "per-game-9": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/per_game",
+                "files": [
+                  "<rom_stem>.9.srm"
+                ],
+                "granularity": "per-game-file",
+                "role": "battery"
+              }
+            ]
+          },
+          "shared-0": {
             "root": "savefile_directory",
             "groups": [
               {
                 "subdir": "opera/shared",
-                "files": null,
+                "files": [
+                  "nvram.0.srm"
+                ],
+                "granularity": "shared-card",
+                "role": "battery"
+              }
+            ]
+          },
+          "shared-1": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/shared",
+                "files": [
+                  "nvram.1.srm"
+                ],
+                "granularity": "shared-card",
+                "role": "battery"
+              }
+            ]
+          },
+          "shared-2": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/shared",
+                "files": [
+                  "nvram.2.srm"
+                ],
+                "granularity": "shared-card",
+                "role": "battery"
+              }
+            ]
+          },
+          "shared-3": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/shared",
+                "files": [
+                  "nvram.3.srm"
+                ],
+                "granularity": "shared-card",
+                "role": "battery"
+              }
+            ]
+          },
+          "shared-4": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/shared",
+                "files": [
+                  "nvram.4.srm"
+                ],
+                "granularity": "shared-card",
+                "role": "battery"
+              }
+            ]
+          },
+          "shared-5": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/shared",
+                "files": [
+                  "nvram.5.srm"
+                ],
+                "granularity": "shared-card",
+                "role": "battery"
+              }
+            ]
+          },
+          "shared-6": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/shared",
+                "files": [
+                  "nvram.6.srm"
+                ],
+                "granularity": "shared-card",
+                "role": "battery"
+              }
+            ]
+          },
+          "shared-7": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/shared",
+                "files": [
+                  "nvram.7.srm"
+                ],
+                "granularity": "shared-card",
+                "role": "battery"
+              }
+            ]
+          },
+          "shared-8": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/shared",
+                "files": [
+                  "nvram.8.srm"
+                ],
+                "granularity": "shared-card",
+                "role": "battery"
+              }
+            ]
+          },
+          "shared-9": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": "opera/shared",
+                "files": [
+                  "nvram.9.srm"
+                ],
                 "granularity": "shared-card",
                 "role": "battery"
               }
@@ -2064,6 +2325,9 @@
           "opera_nvram_storage": {
             "literal": "opera_nvram_storage"
           },
+          "opera_nvram_version": {
+            "literal": "opera_nvram_version"
+          },
           "opera": {
             "literal": "opera"
           },
@@ -2072,14 +2336,92 @@
           },
           "shared": {
             "literal": "shared"
+          },
+          "<rom_stem>.0.srm": {
+            "literal": "%s.%u.srm"
+          },
+          "<rom_stem>.1.srm": {
+            "literal": "%s.%u.srm"
+          },
+          "<rom_stem>.2.srm": {
+            "literal": "%s.%u.srm"
+          },
+          "<rom_stem>.3.srm": {
+            "literal": "%s.%u.srm"
+          },
+          "<rom_stem>.4.srm": {
+            "literal": "%s.%u.srm"
+          },
+          "<rom_stem>.5.srm": {
+            "literal": "%s.%u.srm"
+          },
+          "<rom_stem>.6.srm": {
+            "literal": "%s.%u.srm"
+          },
+          "<rom_stem>.7.srm": {
+            "literal": "%s.%u.srm"
+          },
+          "<rom_stem>.8.srm": {
+            "literal": "%s.%u.srm"
+          },
+          "<rom_stem>.9.srm": {
+            "literal": "%s.%u.srm"
+          },
+          "nvram.0.srm": {
+            "literal": "nvram.%u.srm"
+          },
+          "nvram.1.srm": {
+            "literal": "nvram.%u.srm"
+          },
+          "nvram.2.srm": {
+            "literal": "nvram.%u.srm"
+          },
+          "nvram.3.srm": {
+            "literal": "nvram.%u.srm"
+          },
+          "nvram.4.srm": {
+            "literal": "nvram.%u.srm"
+          },
+          "nvram.5.srm": {
+            "literal": "nvram.%u.srm"
+          },
+          "nvram.6.srm": {
+            "literal": "nvram.%u.srm"
+          },
+          "nvram.7.srm": {
+            "literal": "nvram.%u.srm"
+          },
+          "nvram.8.srm": {
+            "literal": "nvram.%u.srm"
+          },
+          "nvram.9.srm": {
+            "literal": "nvram.%u.srm"
           }
         }
       },
       "provenance": {
-        "source": "opera-libretro @ 67a29e6, the revision the shipped binary names in its library_version: NVRAM is written to '<save_dir>/opera/per_game/<rom_stem>.<version>.srm' (opera_lr_nvram.c:130-152) or '<save_dir>/opera/shared/nvram.<version>.srm' (:154-175); <version> comes from opera_nvram_version (libretro_core_options.c:188-206), which is why per-mode file lists are omitted rather than declared — the option's values are read from the core, not recorded here. The 'opera' directory is joined onto the save directory the frontend gives (:115-128), which falls back to the system directory only when the frontend provides none (:102-113) — never the case under RetroArch. RETRO_MEMORY_SAVE_RAM returns NULL (libretro.c:430-444), so these files are the ONLY persistence; no RetroArch-side .srm exists. Legacy locations are tried at load only, in order: the per_game/shared file, then '<save_dir>/<rom_stem>.srm' and '<system_dir>/<rom_stem>.srm' for a per-game load (opera_lr_nvram.c:177-217, :243-265), or '<save_dir>/3DO.nvram' and '<system_dir>/3DO.nvram' for a shared one (:267-303, :328-349, name at :17).",
+        "source": "opera-libretro @ 67a29e6, the revision the shipped binary names in its library_version ('1.0.0 67a29e6'). RETRO_MEMORY_SAVE_RAM answers NULL and size 0 (libretro.c:430-444, :446-460), so RetroArch writes no .srm and these NVRAM files are the whole save.\n\nThe core writes one file, and its name carries two option values, which is why the modes are the product of two switches rather than the values of one. get_opera_path joins the frontend's save directory with 'opera' (opera_lr_nvram.c:115-128) — the save directory from GET_SAVE_DIRECTORY (get_save_path, :70-84), the system directory standing in only where the frontend names none (get_save_or_system_path, :102-113) — never the case under RetroArch: its environment callback answers that case by handing over runloop_st->savefile_dir and breaking (runloop.c:2001-2005 at a79435a), so it returns true (:3792) and the pointer is an array member of the runloop state (runloop.h:298) and never NULL, which fails both halves of the core's guard (opera_lr_nvram.c:78). opera_lr_nvram_save then branches on the storage switch: shared, or a NULL game path, writes '<opera>/shared/nvram.<version>.srm' (opera_lr_nvram_save_shared, :154-175, the name built at :168-170); per game writes '<opera>/per_game/<stem>.<version>.srm' (opera_lr_nvram_save_pergame, :130-152, the name at :145-147), the stem being the content path's basename with its extension removed (:369-374). <version> is opera_nvram_version, read as an integer and formatted into the name (opera_lr_opts.c:346-351, getval_as_int at :73-85, the 'opera_' prefix added to every key at :53-71); the storage is opera_nvram_storage compared against 'shared' (:330-337). The core's own fallback where the frontend answers nothing is 'shared' rather than the registered default (the third argument of getval_is_str, :101-114). For an option this core registers RetroArch does not reach it: GET_VARIABLE is answered out of the option manager built from the core's own registration (runloop.c:1442-1445 at a79435a). It does answer NULL for a key the manager does not hold, and before any options exist at all (:1447-1452, :1429-1433), so that fallback belongs to a build that stopped registering the switch rather than to this one.\n\nBoth switches are registered — opera_nvram_storage with 'per game' and 'shared', default 'per game'; opera_nvram_version with '0' through '9', default '0' (libretro_core_options.c:177-187, :188-206) — so the file each configuration writes is the closed product of two known value sets: twenty modes, one per (storage, version) pair, each naming its one file literally. The alternative would have been a mode per storage with the version left as a hole in the name, and the file-name vocabulary has no such hole: its two tokens are filled from the content, not from a core option. Enumerating the product is what lets all twenty names be stated facts instead of templates atlas cannot fill.\n\nThe file is written at unload (retro_unload_game, libretro.c:379-392) and at reset (:497-515), and read at load (:364-366) and again after a reset (:512-514). The name's stem comes from g_GAME_INFO_PATH, the path the frontend passed, saved at load (game_info_path_save, :323-335, called at :350). The core sets need_fullpath (:187), so for content inside an archive RetroArch extracts the matching member to a temporary directory and hands the core that path (tasks/task_content.c:1487-1495, content_file_extract_from_archive at :1226-1272), and the extracted file carries the member's own basename (libretro-common/file/archive_file.c:111-116, at RetroArch a79435a) — so a zipped game's per-game NVRAM is named after the file inside the archive, not after the .zip the question names.\n\nLegacy locations are read and never written, which is why no mode claims a closed candidate universe: a per-game load tries the opera directory first, then '<save_dir>/<stem>.srm' and '<system_dir>/<stem>.srm' (opera_lr_nvram_load_pergame, :243-265, the two spellings at :177-196 and :198-217); a shared load tries the opera directory first, then '<save_dir>/3DO.nvram' and '<system_dir>/3DO.nvram' (:328-349, the two at :267-284 and :286-303, the name at :17). A machine carried over from an older Opera can still be holding one of those beside the declared file.",
         "status": {
-          "per game": "paths verified from source; file names are opera_nvram_version-parameterized and therefore not declared; not yet live-observed",
-          "shared": "paths verified from source; not yet live-observed"
+          "per-game-0": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'per_game' and '%s.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '0'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "per-game-1": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'per_game' and '%s.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '1'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "per-game-2": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'per_game' and '%s.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '2'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "per-game-3": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'per_game' and '%s.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '3'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "per-game-4": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'per_game' and '%s.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '4'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "per-game-5": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'per_game' and '%s.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '5'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "per-game-6": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'per_game' and '%s.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '6'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "per-game-7": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'per_game' and '%s.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '7'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "per-game-8": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'per_game' and '%s.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '8'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "per-game-9": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'per_game' and '%s.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '9'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "shared-0": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'shared' and 'nvram.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '0'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "shared-1": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'shared' and 'nvram.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '1'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "shared-2": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'shared' and 'nvram.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '2'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "shared-3": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'shared' and 'nvram.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '3'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "shared-4": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'shared' and 'nvram.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '4'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "shared-5": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'shared' and 'nvram.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '5'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "shared-6": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'shared' and 'nvram.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '6'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "shared-7": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'shared' and 'nvram.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '7'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "shared-8": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'shared' and 'nvram.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '8'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed.",
+          "shared-9": "[D] Derived from source at 67a29e6 and bound to the shipped binary by the whole strings 'opera', 'shared' and 'nvram.%u.srm'; the version in the name is this mode's own opera_nvram_version value, '9'. No 3DO content and no opera save tree exist on the reference machine, so no mode of this card has been live-observed."
         }
       }
     },
@@ -2197,6 +2539,41 @@
         }
       }
     },
+    "mednafen_ngp": {
+      "identifiers": {
+        "library_name": [
+          "Beetle NeoPop"
+        ]
+      },
+      "saves": {
+        "modes": {
+          "always": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": null,
+                "files": [
+                  "<rom_stem>.flash"
+                ],
+                "granularity": "per-game-file",
+                "role": "battery"
+              }
+            ]
+          }
+        },
+        "anchors": {
+          "<rom_stem>.flash": {
+            "literal": "flash"
+          }
+        }
+      },
+      "provenance": {
+        "source": "beetle-ngp-libretro at 139fe34, the revision the shipped binary names in its library_version ('v1.29.0.0 139fe34'). retro_get_memory_data and retro_get_memory_size answer system RAM alone — CPUExRAM, 16384 bytes of it (libretro.c:780-781, :787-788) — while save RAM falls past both conditions to NULL and 0 (:782, :789), so RetroArch writes no .srm. The core writes the Neo Geo Pocket's flash memory itself, through one name-building function: MDFN_MakeFName joins the frontend's save directory, a slash, the content stem and a dot to the suffix its caller passes (libretro.c:796-816), and both of its callers pass the literal 'flash' — the read at mednafen/ngp/system.c:22 and the write at :40. The directory is RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, taken once in retro_init (libretro.c:417-418); the system directory stands in only where the frontend names none (:419-425) — never the case under RetroArch. The stem is libretro's canonical content name where the frontend offers RETRO_ENVIRONMENT_GET_GAME_INFO_EXT — info_ext->name, copied at load under the comment 'Use canonical content name for save files' (libretro.c:215-223) — and otherwise the content path's basename cut at its last dot (extract_basename, :146-164, called at :230-231). For content inside an archive that name is the frontend's choice between the archive's own basename and the inner file's, and RetroArch chooses the archive's (libretro-common/include/libretro.h:3534-3556), so a zipped ROM's save is named after the .zip rather than after the ROM in it.\n\nThe file is written once, at unload: retro_unload_game calls rom_unload (libretro.c:510-514), which calls flash_commit (mednafen/ngp/rom.c:81-87). flash_commit writes only what make_flash_commit returns, and that is NULL while no flash block was ever registered (mednafen/ngp/flash.c:261-271, :210-218) — an untouched game leaves no file. That is the whole route into the writer: system_io_flash_write's only caller is flash_commit (flash.c:269), whose only caller is rom_unload (rom.c:87), whose only caller is retro_unload_game (libretro.c:514). make_flash_commit's second caller, FLASH_StateAction (system.c:54-106), serializes the same blocks into a savestate and opens no file — its only I/O is MDFNSS_StateAction, at :72 and :92. An existing file is read back at load — rom_loaded calls flash_read (rom.c:56-78), which is silent where no file exists yet (flash.c:165-166) and refuses one whose header id is wrong (:169-170). The core registers one option, 'ngp_language' (libretro_core_options.h:31-43, the whole array), which chooses the language games display text in and moves no file — one mode.",
+        "status": {
+          "always": "[V-live] A content-keyed .flash was observed in the standard save directory on a RetroDECK arrangement (2026-07-23, the audit's observation). The derivation is read from source at 139fe34, the revision the binary names, and bound to that binary by the whole literal 'flash'."
+        }
+      }
+    },
     "prboom": {
       "identifiers": {
         "library_name": [
@@ -2222,7 +2599,8 @@
                 ],
                 "granularity": "per-game-files",
                 "role": "battery",
-                "files_established_for": "content whose DeHackEd patch does not rename the savegame base",
+                "files_established_for": "default-save-name",
+                "files_established_note": "The class here is content whose DeHackEd patch does not rename the savegame base.",
                 "files_citation": "d_deh.c:492 sets the base to 'prbmsav'; :840 lists SAVEGAMENAME among the strings a .deh may replace, and the loader passes a matching .deh found beside the content (libretro.c:2399, :2611)"
               },
               {
@@ -2296,7 +2674,8 @@
                 ],
                 "granularity": "per-game-files",
                 "role": "disk-diff",
-                "files_established_for": "content loaded as a single disk image. Every disk the core opens gets a differencing file named after that image's own stem — an .m3u playlist's member images each bring theirs, and the core's built-in menu can open further images with theirs",
+                "files_established_for": "single-disk-image",
+                "files_established_note": "The class here is content loaded as a single disk image: every disk the core opens gets a differencing file named after that image's own stem — an .m3u playlist's member images each bring theirs, and the core's built-in menu can open further images with theirs.",
                 "files_citation": "src/LIBRETRO/file-op.c:252-254 at libretro/quasi88-libretro 42be798 — the diff is named after the opened image's basename; libretro.c:684-685 inserts the content path, load_m3u (:616-670) appends each playlist member, menu.c:2469 opens what the menu picks"
               }
             ]
@@ -2387,7 +2766,8 @@
                 ],
                 "granularity": "per-game-files",
                 "role": "battery",
-                "files_established_for": "saves made through the menu's twelve slots — the console's save command takes a free name, defaults its extension to .sav and lands the file beside them",
+                "files_established_for": "menu-slot-saves",
+                "files_established_note": "The class here is the saves made through the menu's twelve slots — the console's save command takes a free name, defaults its extension to .sav and lands the file beside them.",
                 "files_citation": "common/menu.c:643 at libretro/tyrquake dfdae65 stuffs 'save s%i' for the twelve slots (MAX_SAVEGAMES, menu.c:487); host_cmd.c:512-513 joins the save directory with the given name and defaults the extension"
               },
               {
@@ -3725,7 +4105,8 @@
                 "files": [
                   "<rom_stem>.srm"
                 ],
-                "files_established_for": "a raw .bin loaded as the cartridge dump it is in every ordinary library — one that carries the Sega CD disc header boots as a disc instead and takes the CD modes, a class the extension alone cannot settle",
+                "files_established_for": "raw-cartridge-image",
+                "files_established_note": "The class here is a raw .bin loaded as the cartridge dump it is in every ordinary library — one that carries the Sega CD disc header boots as a disc instead and takes the CD modes, a class the extension alone cannot settle.",
                 "files_citation": "core/loadrom.c load-time system detection at 46a5521",
                 "granularity": "per-game-file",
                 "role": "battery"
@@ -4402,6 +4783,260 @@
         "status": {
           "disabled": "[D] Read from source at 228c14e, the revision the shipped binary names. Not live-observed.",
           "enabled": "[D] Read from source at 228c14e, the revision the shipped binary names. Not live-observed."
+        }
+      }
+    },
+    "puae": {
+      "identifiers": {
+        "library_name": [
+          "PUAE"
+        ]
+      },
+      "saves": {
+        "governing_rule": {
+          "options": [
+            "puae_floppy_write_protection",
+            "puae_floppy_write_redirect",
+            "puae_shared_nvram",
+            "puae_model",
+            "puae_use_boot_hd"
+          ]
+        },
+        "modes": {
+          "floppy-writeback": {
+            "root": "content_directory",
+            "inside_content": "with both floppy switches off — the registered defaults — a plain image takes the emulation's track writes into itself. Nothing creates a write file while the emulation runs: disk_setwriteprotect is the only thing that creates one (sources/src/disk.c:3258-3259 at 0043cf9) and its only callers are the two libretro redirect helpers (libretro/libretro-core.c:605, :642). So openwritefile finds none, leaves the drive's wrprot at 0 for a writable host file (disk.c:1251-1270), and drive_write_data writes the track back through drive_write_adf_amigados into the loaded image (:2937-2969, ADF_NORMAL) — the content file is the save medium and no file of the core's own appears anywhere. The extension selects this mode and the header is what the emulator actually checks: an .adf carrying a UAE--ADF, CAPS or FDI header needs a write file instead (diskfile_iswriteprotect, :1307-1327) and then keeps nothing, exactly as the read-only formats do"
+          },
+          "floppy-format-discarded": {
+            "root": "content_directory",
+            "writes_discarded": "with both floppy switches off — the registered defaults — an image the emulator cannot write in place keeps nothing anywhere. A gzipped .adz or a .dms is unpacked into memory, so openwritefile write-protects the drive once it finds no write file (sources/src/disk.c:1266-1268 at 0043cf9), and an .ipf or .fdi is write-protected at insert (:1494-1501, :1517-1520); drive_writeprotected then makes drive_write_data drop the track before any writer runs (:853-866, :2937-2946). No write file is created either — disk_setwriteprotect is the only thing that creates one and runs from the redirect helpers alone (libretro/libretro-core.c:605, :642) — and the one floppy_close_redirect makes at unload is empty and unlinked in the same call (disk.c:3258-3267). Switching 'puae_floppy_write_redirect' on is what makes these formats keep a save"
+          },
+          "floppy-discarded": {
+            "root": "content_directory",
+            "writes_discarded": "with 'puae_floppy_write_protection' on the emulated drive is write-protected whatever the image is: the option writes floppy_write_protect=true into the UAE config and sets p->floppy_read_only live (libretro/libretro-core.c:4097-4112 at 0043cf9), drive_writeprotected returns true for every drive on that flag alone (sources/src/disk.c:865) and drive_write_data drops the track (:2937-2946). No write file is created either — disk_setwriteprotect returns before creating one whenever the flag is set (:3248-3251) — so the setting outranks 'puae_floppy_write_redirect' and nothing anywhere keeps the progress"
+          },
+          "floppy-redirected": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": null,
+                "files": [
+                  "<rom_stem>_save.adf",
+                  "<rom_stem>_save.adf.gz"
+                ],
+                "granularity": "per-game-files",
+                "role": "disk-diff",
+                "complete": false,
+                "files_established_for": "single-disk-image",
+                "files_established_note": "The class here is content loaded as a single disk image: the write file is named after the opened image's own stem, so a playlist's members and an archive's extracted members each bring their own name rather than the question's. The two names are then one save under the two spellings it takes. With 'puae_floppy_write_redirect' on, diskfile_iswriteprotect demands a write file for every floppy whatever its format (sources/src/disk.c:1300-1306 at 0043cf9); floppy_open_redirect creates <save dir>/<stem>_save.adf through disk_setwriteprotect (libretro/libretro-core.c:564-610, disk.c:3256-3259) and reinserts the disk, the emulation's tracks land in that file (:2947-2950), and the original image is chmod'd read-only so it is never written (:3276-3282). At close — retro_unload_game, a disk-control eject, or the option being switched off — floppy_close_redirect gzips the write file to <stem>_save.adf.gz and removes the plain one (libretro-core.c:612-658, :4143, :4876, :8729), so the .gz is the form at rest and the plain .adf the form while the core holds the disk or after a crash. A write file nothing ever wrote to is unlinked instead of kept (disk.c:3261-3267).",
+                "files_citation": "sources/src/disk.c:1300-1306, :3229-3285 and libretro/libretro-core.c:564-658 at libretro/libretro-uae 0043cf9"
+              }
+            ]
+          },
+          "cd-per-game": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": null,
+                "files": [
+                  "<rom_stem>.nvr"
+                ],
+                "granularity": "per-game-file",
+                "role": "battery",
+                "complete": false
+              }
+            ]
+          },
+          "cd-shared": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": null,
+                "files": [
+                  "puae_libretro.nvr",
+                  "puae_libretro_cdtv.nvr"
+                ],
+                "granularity": "shared-file",
+                "role": "battery",
+                "complete": false
+              }
+            ]
+          },
+          "cd-no-nvram": {
+            "root": "savefile_directory",
+            "writes_discarded": "with 'puae_model' naming a model that has no extended Kickstart — every model but CDTV, CD32 and CD32FR (emu_config_string, libretro/libretro-core.c:5969-5978 at 0043cf9) — retro_config_kickstart appends no flash_file line at all (:5577-5578, :5640-5661). The emulated machine then has no non-volatile memory for a CD title to write into, so nothing keeps its progress; naming a CD model outright is what makes the file exist, whatever else is configured (the preset is written straight, :6263); leaving 'puae_model' on 'auto' does it too, but only while 'puae_use_boot_hd' is disabled — a boot hard drive otherwise takes the hard-disk model wherever no marker in the launch path names a CD one (:7000-7028)"
+          }
+        },
+        "anchors": {
+          "puae_floppy_write_protection": {
+            "literal": "puae_floppy_write_protection"
+          },
+          "puae_floppy_write_redirect": {
+            "literal": "puae_floppy_write_redirect"
+          },
+          "puae_shared_nvram": {
+            "literal": "puae_shared_nvram"
+          },
+          "puae_model": {
+            "literal": "puae_model"
+          },
+          "puae_use_boot_hd": {
+            "literal": "puae_use_boot_hd"
+          },
+          "<rom_stem>_save.adf": {
+            "literal": "_save.adf"
+          },
+          "<rom_stem>_save.adf.gz": {
+            "unprotected": "composed at run time: the '_save.adf' half is a whole literal in the shipped binary and pinned above, while the '.gz' is appended by floppy_close_redirect with snprintf(\"%s%s\", saveimagepath, \".gz\") (libretro/libretro-core.c:647-651), so no field of the binary carries the finished name"
+          },
+          "<rom_stem>.nvr": {
+            "literal": "%s.nvr"
+          },
+          "puae_libretro.nvr": {
+            "literal": "puae_libretro"
+          },
+          "puae_libretro_cdtv.nvr": {
+            "literal": "%s_cdtv.nvr"
+          }
+        }
+      },
+      "provenance": {
+        "source": "libretro/libretro-uae at 0043cf9, the revision the shipped binary names in its library_version ('5.3.0 0043cf9'). retro_get_memory_size answers RETRO_MEMORY_SYSTEM_RAM alone and returns 0 for every other id (libretro/libretro-core.c:8874-8886), so RetroArch writes no .srm and every save here is the core's own. Two stories share the core and which one applies is the content's class, dispatched off the extension by dc_get_image_type (libretro/libretro-dc.c:825-868): floppy (adf/adz/fdi/dms/raw/ipf), CD (cue/ccd/nrg/mds/iso/chd), hard disk (hdf/hdz or a directory), WHDLoad (lha/slave/info) and archive (zip/7z). The card states the floppy and CD classes; the rule answers a content-class-unrecorded refusal for the rest, and the reason is below.\n\nThe floppy story is UAE's own. fetch_path returns the frontend's save directory for every path name under __LIBRETRO__ (sources/src/misc.c:609-617, fetch_saveimagepath at :634-637), and saveimageoriginalpath is fixed at 0 with nothing assigning it (misc.c:155), so DISK_get_saveimagepath(-2) falls through its whole search to DISK_get_default_saveimagepath and composes <save dir>/<stem>_save.adf (disk.c:1166-1210, :1151-1160; the stem is the basename cut at its last dot, saveimagecutfilepart :1115-1140; the '_save.adf' spelling saveimageaddfilename :1142-1149). The '.save_adf' spelling the same function can build is only ever looked for, never created: the creating call reaches it through type -1, which takes the '_save.adf' branch (:1194-1198). The search does look beside the content as well as under the save root, so a write file a user put next to the image is used where it exists (:1170-1192) — a discovery path, not one the core writes to.\n\nWhether a write file exists at all is disk_setwriteprotect (:3229-3285), and its only two callers are the libretro redirect helpers (libretro-core.c:605, :642). With both floppy switches off none is created while the emulation runs, and the image's own format decides what a write does: a plain image is written in place, while a compressed one (adz, dms — unpacked into memory, zfile_iscompressed) or a raw-disk one (ipf, fdi, and the UAE--ADF header) write-protects the drive and the write is dropped. 'puae_floppy_write_protection' discards every write whatever the format and outranks the redirect switch, because p->floppy_read_only both write-protects every drive (disk.c:865) and makes disk_setwriteprotect return before creating anything (:3248-3251). 'puae_floppy_write_redirect' makes every floppy need a write file (:1300-1306), and its close helper leaves <stem>_save.adf.gz behind.\n\nThe CD story is the flash chip. retro_config_kickstart appends flash_file=<save dir>/<name>.nvr only where the model has an extended Kickstart (libretro-core.c:5577-5578, :5640-5661), which emu_config_string gives CDTV, CD32 and CD32FR alone (:5969-5978); UAE opens that path and creates it at hardware reset when it is missing — akiko.c:203-238 for the CD32's 1 KiB EEPROM (\"wb\" at :229, reached from akiko_reset :2101-2105, which akiko_init registers as the device reset at :2137-2140) and cdtv.c:1591-1611 for the CDTV's 32 KiB battery RAM (\"wb\" at :1600, called from cdtv_init at :1758) — so the file is there from launch, before anything is saved. The line is appended for the MODEL, not for the content's class: a floppy run on an explicitly selected CD32 or CDTV gets one too, which the recorded floppy modes do not state, so the rule refuses that combination rather than under-stating it. Which model runs a CD is 'puae_model' where it names one, and on 'auto' the CD default 'puae_model_cd' — whose registered values are CD models only — unless 'puae_use_boot_hd' is set, in which case the hard-disk model applies except where a marker in the content's own launch path names a CD one (:7000-7028); that path is not a value this answer reads, so the rule refuses that combination too. The per-game name is the content path's own basename with its extension cut (:5651-5659), so a playlist of CD images is named after the playlist file and an archive of them after the .m3u the loader generates from the archive's own stem (:6301-6304, :6376-6386). The shared name is the core's own prefix, and the two spellings are a closed candidate set of which one is written per run: the CDTV one is taken when the main Kickstart file on this machine is 256 KiB (:5646-5649, ROM_SIZE_256 in sources/src/include/memory.h:71), which is Kickstart 1.3, the ROM the CDTV preset names (:5964, libretro-core.h:186-190), while CD32 and CD32FR name a different ROM file (:5965-5966, libretro-core.h:235-239) whose size the code never states — it tests only that the main Kickstart is at most 512 KiB before looking for an external extended ROM (:5588), so the plain spelling is what any size other than 256 KiB takes — that size is a property of the file installed here and 'puae_kickstart' can override which file it is (:5504-5505), so the card states both names and claims neither. 'puae_model_cd' itself is deliberately not declared: every value it can take keeps an NVRAM file, so reading it would change no answer.\n\nWhat this record does not state, and why. An archive (zip, 7z, and the rp9 the same branch takes) is extracted into <save dir>/TEMP and re-dispatched by what is inside it — a generated .m3u for several images, a single WHDLoad image, or the extracted directory (libretro-core.c:6280-6389) — and the TEMP tree is removed at the next retro_init and at retro_deinit (:5094-5096, :5144-5146, the path built at :721), so a floppy extracted there keeps nothing unless the redirect switch is on, in which case its write file is keyed by the extracted member's stem and outlives the tree. An .m3u playlist is the same shape: each member takes its own class's behaviour under its own stem, and the playlist itself is never written. Both classes therefore turn on what the members are, which is inside a file this answer does not read — an archive of WHDLoad content keeps its saves in a directory that survives, an archive of floppies keeps nothing — so the rule names the extension and refuses rather than stating one of the two. Hard-disk and WHDLoad content are a follow-up's subject and outside this record: an .lha is mounted read-only (:5706-5708) while 'puae_use_whdload' on its registered default mounts <save dir>/WHDSaves/ as the WHDSaves: volume that WHDLoad.prefs points its SavePath at (:6767-6785, whdload/WHDLoad.prefs:37), 'hdfs' mounts <save dir>/WHDSaves.hdf instead (:6824-6852), and .hdf/.hdz images and mapped directories take their writes in place (:5709-5720) under a UAE config key, harddrive_write_protect, that no core option ever sets (sources/src/cfgfile.c:5967). Two more files of the core's own are outside the save story: <m3u stem>.save<n>.adf, blank disks the user creates from the core's own hotkey (dc_add_m3u_save_disk, libretro-dc.c:476-480, reached from dc_save_disk_toggle :549), and puae_libretro_global.uae, a configuration file (libretro-core.c:7330). One reading that bounds every path above: the core strips a trailing one-letter directory from the save path it was handed (:715-718), so an arrangement that sorts saves into single-letter folders would have the core write one level up — no arrangement atlas reads does that, and the modes state the root the frontend names. A .uae file is a fourth class outside this record: it is in the core's valid_extensions (:5227) and the loader applies it row by row as a UAE configuration (:7087-7152), which can name content of any of the classes above. A launch with no content at all takes the shared spelling whatever the sharing switch says (string_is_empty(full_path), :5644; the option's own sublabel states it at :1213), and it still reaches retro_config_kickstart — but the rule refuses a content-less question before any of that, because the class it splits on is the content's. Two writable stores sit beside every mode this card states, which is why no group claims a closed candidate universe. 'puae_use_boot_hd' on anything but its registered 'disabled' mounts a Boot HD read-write — <save dir>/puae_libretro.hdf under the hdf sizes (:5443) or <save dir>/BootHD/ under 'files' (:5474), retro_config_boot_hd at :5390-5493 — and it does so for floppy and CD content alike (:6495 and :7039); only a content-less launch skips it for the CD models (:7319-7322). Composing that store with the save story this card does state needs a mode form carrying two independent stories, so it is recorded here and claimed nowhere. The other store is configuration: two .uae files under the save root are appended after every line this rule reasons about — puae_libretro_global.uae (:7330-7343) and <save dir>/<content stem>.uae (:7345-7362) — so either can override a mode outright, later lines winning in a UAE config (flash_file is parsed by cfgfile_string, sources/src/cfgfile.c:6068, whose body at :3250-3257 copies into the destination on every match with no first-wins guard, so the last occurrence stands). Neither is read here. The model preset puae_libretro_<model>.uae (:6009-6032) cannot override a mode: it is read into uae_custom_config (:6022), concatenated into the preset (:6231) and emitted with it (:6488 for floppies, :7031 for CDs) before retro_config_kickstart writes the flash_file line (:6491, :7034), so the core's own line wins over anything it says. What it does reach is the Kickstart, parsed straight out of it (:6024).",
+        "status": {
+          "floppy-writeback": "[D] Read from source at 0043cf9, the revision the shipped binary names. Not live-observed: no Amiga content and no Amiga save exists on the machine the audit ran on.",
+          "floppy-format-discarded": "[D] Read from source at 0043cf9, the revision the shipped binary names. Not live-observed.",
+          "floppy-discarded": "[D] Read from source at 0043cf9, the revision the shipped binary names. Not live-observed.",
+          "floppy-redirected": "[D] Read from source at 0043cf9, the revision the shipped binary names. Not live-observed.",
+          "cd-per-game": "[D] Read from source at 0043cf9, the revision the shipped binary names. Not live-observed.",
+          "cd-shared": "[D] Read from source at 0043cf9, the revision the shipped binary names. Not live-observed.",
+          "cd-no-nvram": "[D] Read from source at 0043cf9, the revision the shipped binary names. Not live-observed."
+        }
+      }
+    },
+    "puae2021": {
+      "identifiers": {
+        "library_name": [
+          "PUAE 2021"
+        ]
+      },
+      "saves": {
+        "governing_rule": {
+          "options": [
+            "puae_floppy_write_protection",
+            "puae_floppy_write_redirect",
+            "puae_shared_nvram",
+            "puae_model",
+            "puae_use_boot_hd"
+          ]
+        },
+        "modes": {
+          "floppy-writeback": {
+            "root": "content_directory",
+            "inside_content": "with both floppy switches off — the registered defaults — a plain image takes the emulation's track writes into itself. Nothing creates a write file while the emulation runs: disk_setwriteprotect is the only thing that creates one (sources/src/disk.c:2626-2627 at 58527ce) and its only callers are the two libretro redirect helpers (libretro/libretro-core.c:606, :643). So openwritefile finds none, leaves the drive's wrprot at 0 for a writable host file (disk.c:1012-1031), and drive_write_data writes the track back through drive_write_adf_amigados into the loaded image (:2312-2328, ADF_NORMAL) — the content file is the save medium and no file of the core's own appears anywhere. The extension selects this mode and the header is what the emulator actually checks: an .adf carrying a UAE--ADF, CAPS or FDI header needs a write file instead (diskfile_iswriteprotect, :1060-1080) and then keeps nothing, exactly as the read-only formats do"
+          },
+          "floppy-format-discarded": {
+            "root": "content_directory",
+            "writes_discarded": "with both floppy switches off — the registered defaults — an image the emulator cannot write in place keeps nothing anywhere. A gzipped .adz or a .dms is unpacked into memory, so openwritefile write-protects the drive once it finds no write file (sources/src/disk.c:1027-1029 at 58527ce), and an .ipf or .fdi is write-protected at insert (:1170-1179, :1182-1187); drive_writeprotected then makes drive_write_data drop the track before any writer runs (:1459-1466, :2312-2321). No write file is created either — disk_setwriteprotect is the only thing that creates one and runs from the redirect helpers alone (libretro/libretro-core.c:606, :643) — and the one floppy_close_redirect makes at unload is empty and unlinked in the same call (disk.c:2626-2635). Switching 'puae_floppy_write_redirect' on is what makes these formats keep a save"
+          },
+          "floppy-discarded": {
+            "root": "content_directory",
+            "writes_discarded": "with 'puae_floppy_write_protection' on the emulated drive is write-protected whatever the image is: the option writes floppy_write_protect=true into the UAE config and sets p->floppy_read_only live (libretro/libretro-core.c:4048-4077 at 58527ce), drive_writeprotected returns true for every drive on that flag alone (sources/src/disk.c:1465) and drive_write_data drops the track (:2312-2321). No write file is created either — disk_setwriteprotect returns before creating one whenever the flag is set (:2616-2619) — so the setting outranks 'puae_floppy_write_redirect' and nothing anywhere keeps the progress"
+          },
+          "floppy-redirected": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": null,
+                "files": [
+                  "<rom_stem>_save.adf",
+                  "<rom_stem>_save.adf.gz"
+                ],
+                "granularity": "per-game-files",
+                "role": "disk-diff",
+                "complete": false,
+                "files_established_for": "single-disk-image",
+                "files_established_note": "The class here is content loaded as a single disk image: the write file is named after the opened image's own stem, so a playlist's members and an archive's extracted members each bring their own name rather than the question's. The two names are then one save under the two spellings it takes. With 'puae_floppy_write_redirect' on, diskfile_iswriteprotect demands a write file for every floppy whatever its format (sources/src/disk.c:1053-1059 at 58527ce); floppy_open_redirect creates <save dir>/<stem>_save.adf through disk_setwriteprotect (libretro/libretro-core.c:565-611, disk.c:2624-2627) and reinserts the disk, the emulation's tracks land in that file (:2322-2325), and the original image is chmod'd read-only so it is never written (:2644-2650). At close — retro_unload_game, a disk-control eject, or the option being switched off — floppy_close_redirect gzips the write file to <stem>_save.adf.gz and removes the plain one (libretro-core.c:613-659, :4094, :4815, :8647), so the .gz is the form at rest and the plain .adf the form while the core holds the disk or after a crash. A write file nothing ever wrote to is unlinked instead of kept (disk.c:2629-2635).",
+                "files_citation": "sources/src/disk.c:1053-1059, :2599-2653 and libretro/libretro-core.c:565-659 at libretro/libretro-uae 58527ce"
+              }
+            ]
+          },
+          "cd-per-game": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": null,
+                "files": [
+                  "<rom_stem>.nvr"
+                ],
+                "granularity": "per-game-file",
+                "role": "battery",
+                "complete": false
+              }
+            ]
+          },
+          "cd-shared": {
+            "root": "savefile_directory",
+            "groups": [
+              {
+                "subdir": null,
+                "files": [
+                  "puae_libretro.nvr",
+                  "puae_libretro_cdtv.nvr"
+                ],
+                "granularity": "shared-file",
+                "role": "battery",
+                "complete": false
+              }
+            ]
+          },
+          "cd-no-nvram": {
+            "root": "savefile_directory",
+            "writes_discarded": "with 'puae_model' naming a model that has no extended Kickstart — every model but CDTV, CD32 and CD32FR (emu_config_string, libretro/libretro-core.c:5893-5902 at 58527ce) — retro_config_kickstart appends no flash_file line at all (:5501-5502, :5564-5585). The emulated machine then has no non-volatile memory for a CD title to write into, so nothing keeps its progress; naming a CD model outright is what makes the file exist, whatever else is configured (the preset is written straight, :6187); leaving 'puae_model' on 'auto' does it too, but only while 'puae_use_boot_hd' is disabled — a boot hard drive otherwise takes the hard-disk model wherever no marker in the launch path names a CD one (:6924-6952)"
+          }
+        },
+        "anchors": {
+          "puae_floppy_write_protection": {
+            "literal": "puae_floppy_write_protection"
+          },
+          "puae_floppy_write_redirect": {
+            "literal": "puae_floppy_write_redirect"
+          },
+          "puae_shared_nvram": {
+            "literal": "puae_shared_nvram"
+          },
+          "puae_model": {
+            "literal": "puae_model"
+          },
+          "puae_use_boot_hd": {
+            "literal": "puae_use_boot_hd"
+          },
+          "<rom_stem>_save.adf": {
+            "literal": "_save.adf"
+          },
+          "<rom_stem>_save.adf.gz": {
+            "unprotected": "composed at run time: the '_save.adf' half is a whole literal in the shipped binary and pinned above, while the '.gz' is appended by floppy_close_redirect with snprintf(\"%s%s\", saveimagepath, \".gz\") (libretro/libretro-core.c:648-652), so no field of the binary carries the finished name"
+          },
+          "<rom_stem>.nvr": {
+            "literal": "%s.nvr"
+          },
+          "puae_libretro.nvr": {
+            "literal": "puae_libretro"
+          },
+          "puae_libretro_cdtv.nvr": {
+            "literal": "%s_cdtv.nvr"
+          }
+        }
+      },
+      "provenance": {
+        "source": "libretro/libretro-uae at 58527ce, the revision the shipped binary names in its library_version ('2.6.1 58527ce') — the 2021 generation of the same core, kept beside the current one, and this card is that generation's reading. retro_get_memory_size answers RETRO_MEMORY_SYSTEM_RAM alone and returns 0 for every other id (libretro/libretro-core.c:8792-8804), so RetroArch writes no .srm. Which story applies is the content's class, dispatched off the extension by dc_get_image_type exactly as in the current generation (libretro/libretro-dc.c:825-868): floppy (adf/adz/fdi/dms/raw/ipf), CD (cue/ccd/nrg/mds/iso/chd), hard disk (hdf/hdz or a directory), WHDLoad (lha/slave/info) and archive (zip/7z). The card states the floppy and CD classes; the rule answers a content-class-unrecorded refusal for the rest.\n\nThe floppy story is UAE's own. fetch_path returns the frontend's save directory for every path name under __LIBRETRO__ (sources/src/misc.c:450-473, fetch_saveimagepath at :475-478), and saveimageoriginalpath is fixed at 0 with nothing assigning it (misc.c:109), so DISK_get_saveimagepath(-2) falls through its whole search to DISK_get_default_saveimagepath and composes <save dir>/<stem>_save.adf (disk.c:942-966, :927-936; the stem is the basename cut at its last dot, saveimagecutfilepart :891-916; the '_save.adf' spelling saveimageaddfilename :918-925). This generation's search is shorter than the current one's — getexistingwritefile asks for two spellings rather than four (:968-983) — and lands on the same name.\n\nWhether a write file exists at all is disk_setwriteprotect (:2599-2653), and its only two callers are the libretro redirect helpers (libretro-core.c:606, :643). With both floppy switches off none is created while the emulation runs, and the image's own format decides what a write does: a plain image is written in place, while a compressed one (adz, dms — unpacked into memory, zfile_iscompressed) or a raw-disk one (ipf, fdi, and the UAE--ADF header) write-protects the drive and the write is dropped. 'puae_floppy_write_protection' discards every write whatever the format and outranks the redirect switch, because p->floppy_read_only both write-protects every drive (disk.c:1465) and makes disk_setwriteprotect return before creating anything (:2616-2619). 'puae_floppy_write_redirect' makes every floppy need a write file (:1053-1059), and its close helper leaves <stem>_save.adf.gz behind.\n\nThe CD story is the flash chip. retro_config_kickstart appends flash_file=<save dir>/<name>.nvr only where the model has an extended Kickstart (libretro-core.c:5501-5502, :5564-5585), which emu_config_string gives CDTV, CD32 and CD32FR alone (:5893-5902). One difference from the current generation, and it is about when the file appears rather than where: this UAE creates the CD32 EEPROM on the first write rather than at reset (nvram_write opens \"wb\" when the file is missing, sources/src/akiko.c:128-143, while nvram_read at :145-156 only reads — reached from akiko_reset :2010-2013, which akiko_init calls through akiko_free at :2050-2054), whereas the CDTV's battery RAM is still created at reset (cdtv.c:1636-1655, called from cdtv_init at :1791). So a CD32 title that never saved leaves no file, and a CDTV has one from launch. The line is appended for the MODEL, not for the content's class: a floppy run on an explicitly selected CD32 or CDTV gets one too, which the recorded floppy modes do not state, so the rule refuses that combination rather than under-stating it. Which model runs a CD is 'puae_model' where it names one, and on 'auto' the CD default 'puae_model_cd' — whose registered values are CD models only — unless 'puae_use_boot_hd' is set, in which case the hard-disk model applies except where a marker in the content's own launch path names a CD one (:6924-6952); that path is not a value this answer reads, so the rule refuses that combination too. The per-game name is the content path's own basename with its extension cut (:5575-5582), so a playlist of CD images is named after the playlist file and an archive of them after the .m3u the loader generates from the archive's own stem (:6225-6228, :6300-6310). The shared name is the core's own prefix, and the two spellings are a closed candidate set of which one is written per run: the CDTV one is taken when the main Kickstart file on this machine is 256 KiB (:5570-5573, ROM_SIZE_256 in sources/src/include/memory_uae.h:80), which is Kickstart 1.3, the ROM the CDTV preset names (:5888, libretro-core.h:186-190), while CD32 and CD32FR name a different ROM file (:5889-5890, libretro-core.h:235-239) whose size the code never states — it tests only that the main Kickstart is at most 512 KiB before looking for an external extended ROM (:5512), so the plain spelling is what any size other than 256 KiB takes — that size is a property of the file installed here and 'puae_kickstart' can override which file it is (:5428-5429), so the card states both names and claims neither.\n\nWhat this record does not state, and why. An archive (zip, 7z, and the rp9 the same branch takes) is extracted into <save dir>/TEMP and re-dispatched by what is inside it — a generated .m3u for several images, a single WHDLoad image, or the extracted directory (libretro-core.c:6204-6312) — and the TEMP tree is removed at the next retro_init and at retro_deinit (:5033-5035, :5083-5085, the path built at :722), so a floppy extracted there keeps nothing unless the redirect switch is on, in which case its write file is keyed by the extracted member's stem and outlives the tree. An .m3u playlist is the same shape: each member takes its own class's behaviour under its own stem, and the playlist itself is never written. Both classes therefore turn on what the members are, which is inside a file this answer does not read, so the rule names the extension and refuses rather than stating one of two outcomes. Hard-disk and WHDLoad content are a follow-up's subject and outside this record: an .lha is mounted read-only (:5630-5632) while 'puae_use_whdload' on its registered default mounts <save dir>/WHDSaves/ as the WHDSaves: volume that WHDLoad.prefs points its SavePath at (:6691-6709, whdload/WHDLoad.prefs:37), 'hdfs' mounts <save dir>/WHDSaves.hdf instead (:6748-6776), and .hdf/.hdz images and mapped directories take their writes in place (:5633-5651) — this generation's UAE has no harddrive_write_protect key at all, so nothing switches that off. Two more files of the core's own are outside the save story: <m3u stem>.save<n>.adf, blank disks the user creates from the core's own hotkey (dc_add_m3u_save_disk, libretro-dc.c:476-480, reached from dc_save_disk_toggle :549), and puae_libretro_global.uae, a configuration file (libretro-core.c:7254). One reading that bounds every path above: the core strips a trailing one-letter directory from the save path it was handed (:716-719), so an arrangement that sorts saves into single-letter folders would have the core write one level up — no arrangement atlas reads does that, and the modes state the root the frontend names. A .uae file is a fourth class outside this record: it is in the core's valid_extensions (:5151) and the loader applies it row by row as a UAE configuration (:7010-7076), which can name content of any of the classes above. A launch with no content at all takes the shared spelling whatever the sharing switch says (string_is_empty(full_path), :5568; the option's own sublabel states it at :1212), and it still reaches retro_config_kickstart — but the rule refuses a content-less question before any of that, because the class it splits on is the content's. Two writable stores sit beside every mode this card states, which is why no group claims a closed candidate universe. 'puae_use_boot_hd' on anything but its registered 'disabled' mounts a Boot HD read-write — <save dir>/puae_libretro.hdf under the hdf sizes (:5367) or <save dir>/BootHD/ under 'files' (:5398), retro_config_boot_hd at :5314-5417 — and it does so for floppy and CD content alike (:6419 and :6963); only a content-less launch skips it for the CD models (:7244-7246). Composing that store with the save story this card does state needs a mode form carrying two independent stories, so it is recorded here and claimed nowhere. The other store is configuration: two .uae files under the save root are appended after every line this rule reasons about — puae_libretro_global.uae (:7252-7267) and <save dir>/<content stem>.uae (:7269-7286) — so either can override a mode outright, later lines winning in a UAE config (flash_file is parsed through cfgfile_path_mp, sources/src/cfgfile.c:3413, which delegates to cfgfile_string at :1559-1562; that body at :1550-1557 copies into the destination on every match with no first-wins guard, so the last occurrence stands). Neither is read here. The model preset puae_libretro_<model>.uae (:5933-5956) cannot override a mode: it is read into uae_custom_config (:5946), concatenated into the preset (:6155) and emitted with it (:6412 for floppies, :6955 for CDs) before retro_config_kickstart writes the flash_file line (:6415, :6958), so the core's own line wins over anything it says. What it does reach is the Kickstart, parsed straight out of it (:5948).",
+        "status": {
+          "floppy-writeback": "[D] Read from source at 58527ce, the revision the shipped binary names. Not live-observed: no Amiga content and no Amiga save exists on the machine the audit ran on.",
+          "floppy-format-discarded": "[D] Read from source at 58527ce, the revision the shipped binary names. Not live-observed.",
+          "floppy-discarded": "[D] Read from source at 58527ce, the revision the shipped binary names. Not live-observed.",
+          "floppy-redirected": "[D] Read from source at 58527ce, the revision the shipped binary names. Not live-observed.",
+          "cd-per-game": "[D] Read from source at 58527ce, the revision the shipped binary names. Not live-observed.",
+          "cd-shared": "[D] Read from source at 58527ce, the revision the shipped binary names. Not live-observed.",
+          "cd-no-nvram": "[D] Read from source at 58527ce, the revision the shipped binary names. Not live-observed."
         }
       }
     }

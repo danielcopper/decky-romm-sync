@@ -130,8 +130,8 @@ class IgnoredSetting:
 
     ``kind`` is :data:`IGNORED_LINE_DROPPED` (the parser refused the line) or
     :data:`IGNORED_VALUE_REJECTED` (the value is outside the setting's
-    vocabulary, so the value from before this layer stands). ``layer`` names
-    the file it was written in, ``key`` the setting it aims at, and ``text``
+    vocabulary, so the value from before this layer stands). ``layer`` is the
+    chain file it was written in, ``key`` the setting it aims at, and ``text``
     the offending spelling — the whole line for a dropped line, the value for
     a rejected one. atlas behaves exactly as RetroArch does; consumers state
     these as caveats because the gap between what the file says and what the
@@ -139,7 +139,7 @@ class IgnoredSetting:
     """
 
     kind: str
-    layer: str
+    layer: "CfgSource"
     key: str
     text: str
 
@@ -149,8 +149,8 @@ class RejectedDirectory:
     """A configured directory RetroArch read and refused as a root.
 
     ``path_is_directory`` failed on it, so that read set nothing
-    (``configuration.c:6920-6932``). ``layer`` names the file that stated the
-    value, ``value`` the value as RetroArch tested it (``~`` expanded). Unlike
+    (``configuration.c:6920-6932``). ``layer`` is the chain file that stated
+    the value, ``value`` the value as RetroArch tested it (``~`` expanded). Unlike
     :class:`IgnoredSetting` this is not a spelling mistake: the value is
     well-formed, the machine just has no such directory.
 
@@ -163,7 +163,7 @@ class RejectedDirectory:
     would invert the causality.
     """
 
-    layer: str
+    layer: "CfgSource"
     value: str
     superseded: bool = False
 
@@ -492,12 +492,64 @@ def expand_home(raw: str, *, home: str | None) -> str | None:
     return raw
 
 
-# One layer of the chain: its provenance label, its parsed content, and whether
-# it is an override (the global cfg is not).
-_Layer = tuple[str, ParsedCfg, bool]
+# Which file of the override chain a value was read from — the kind, not the
+# path. Four kinds and no more: RetroArch loads the global cfg and then, in
+# this order, the core, content-directory and game override
+# (``configuration.c:7095``). A client branching on where a refused root came
+# from reads these; the file itself rides beside them.
+CFG_LAYER_GLOBAL = "global"
+CFG_LAYER_CORE_OVERRIDE = "core-override"
+CFG_LAYER_CONTENT_DIR_OVERRIDE = "content-dir-override"
+CFG_LAYER_GAME_OVERRIDE = "game-override"
+CFG_LAYER_KINDS = (
+    CFG_LAYER_GLOBAL,
+    CFG_LAYER_CORE_OVERRIDE,
+    CFG_LAYER_CONTENT_DIR_OVERRIDE,
+    CFG_LAYER_GAME_OVERRIDE,
+)
+# How each kind reads in a sentence. The global cfg is named by its file alone
+# — "retroarch.cfg: save_directory = …" — and an override says which kind it is
+# in front of the file, which is the phrasing every provenance line and message
+# in this package already uses.
+_CFG_LAYER_PHRASE = {
+    CFG_LAYER_GLOBAL: "",
+    CFG_LAYER_CORE_OVERRIDE: "core override ",
+    CFG_LAYER_CONTENT_DIR_OVERRIDE: "content-dir override ",
+    CFG_LAYER_GAME_OVERRIDE: "game override ",
+}
 
-# One layer as a caller holds it before parsing: label and text, in load order.
-CfgLayer = tuple[str, str]
+
+@dataclass(frozen=True, slots=True)
+class CfgSource:
+    """One file of the chain: which kind of layer it is, and which file it is.
+
+    Two facts, kept apart because a client acts on each: ``kind`` is one of
+    :data:`CFG_LAYER_KINDS` and says how the file got into the chain, ``file``
+    is the file this answer names it by and says what to edit. ``label`` is the
+    two of them as one phrase, for the provenance strings and messages — prose
+    built from the data rather than data parsed back out of prose, which is
+    what a caveat carrying ``"core override config/mGBA/mGBA.cfg"`` under one
+    key asked every client to do.
+    """
+
+    kind: str
+    file: str
+
+    def __post_init__(self) -> None:
+        if self.kind not in _CFG_LAYER_PHRASE:
+            raise ValueError(f"CfgSource: {self.kind!r} is not one of {CFG_LAYER_KINDS}")
+
+    @property
+    def label(self) -> str:
+        return f"{_CFG_LAYER_PHRASE[self.kind]}{self.file}"
+
+
+# One layer of the chain: where it came from, its parsed content, and whether
+# it is an override (the global cfg is not).
+_Layer = tuple[CfgSource, ParsedCfg, bool]
+
+# One layer as a caller holds it before parsing: source and text, in load order.
+CfgLayer = tuple[CfgSource, str]
 
 # ``path_is_directory`` as the machine answers it. A value the caller cannot
 # test — a path that exists only inside a sandbox — must answer true: the
@@ -508,7 +560,7 @@ DirectoryCheck = Callable[[str], bool]
 
 def _parse_layers(layers: Sequence[CfgLayer]) -> list[_Layer]:
     """Text layers as parsed layers — the global cfg first, its overrides after."""
-    return [(label, parse_cfg(text), index > 0) for index, (label, text) in enumerate(layers)]
+    return [(source, parse_cfg(text), index > 0) for index, (source, text) in enumerate(layers)]
 
 
 def _read_layers(layers: Sequence[_Layer], key: str) -> list[_Layer]:
@@ -544,19 +596,19 @@ def _apply_bool(layer: _Layer, key: str, standing: bool) -> tuple[bool, IgnoredS
     applies boolean settings writes nothing when ``config_get_bool`` fails
     (``configuration.c:6412-6417``), so *standing* stands on.
     """
-    label, parsed, _ = layer
+    source, parsed, _ = layer
     raw = parsed.values[key]
     decoded = cfg_bool(raw)
     if decoded is None:
-        return standing, IgnoredSetting(IGNORED_VALUE_REJECTED, label, key, raw)
+        return standing, IgnoredSetting(IGNORED_VALUE_REJECTED, source, key, raw)
     return decoded, None
 
 
 def _dropped_lines(layers: Sequence[_Layer], key: str) -> tuple[IgnoredSetting, ...]:
     """Lines aimed at *key* that RetroArch's parser refused, across the chain."""
     return tuple(
-        IgnoredSetting(IGNORED_LINE_DROPPED, label, line.key, line.line)
-        for label, parsed, _ in layers
+        IgnoredSetting(IGNORED_LINE_DROPPED, source, line.key, line.line)
+        for source, parsed, _ in layers
         for line in parsed.dropped
         if line.key == key
     )
@@ -605,13 +657,13 @@ def _resolve_flag(
     value, source = default, f"default: {key} = {str(default).lower()} ({defaults_label})"
     ignored: list[IgnoredSetting] = []
     for layer in _read_layers(layers, key):
-        label, parsed, is_override = layer
+        source_layer, parsed, is_override = layer
         value, refused = _apply_bool(layer, key, value)
         if refused is not None:
             ignored.append(refused)
             continue
         raw = parsed.values[key]
-        source = f'{label}: {key} = "{raw}"' + (" (override wins)" if is_override else "")
+        source = f'{source_layer.label}: {key} = "{raw}"' + (" (override wins)" if is_override else "")
     return value, source, tuple(ignored)
 
 
@@ -666,27 +718,27 @@ def _resolve_directory(
     # Which read produced the root that stands decides how a refusal reads: a
     # refusal the chain never got past fell back to what preceded it, while one
     # a later read overwrote did not — see RejectedDirectory.superseded.
-    refusals: list[tuple[int, str, str]] = []
+    refusals: list[tuple[int, CfgSource, str]] = []
     last_set = -1
-    for index, (label, parsed, is_override) in enumerate(_read_layers(layers, keys.directory)):
+    for index, (layer, parsed, is_override) in enumerate(_read_layers(layers, keys.directory)):
         raw = parsed.values[keys.directory]
         suffix = " (override wins)" if is_override else ""
         if raw == _UNSET_VALUE:
             directory, last_set = None, index
             source = (
-                f'{label}: {keys.directory} = "{raw}" — resets to the RetroArch '
+                f'{layer.label}: {keys.directory} = "{raw}" — resets to the RetroArch '
                 f"platform default{suffix}"
             )
             continue
         candidate = expand_home(raw, home=home)
         if candidate is None or (is_directory is not None and not is_directory(candidate)):
-            refusals.append((index, label, candidate if candidate is not None else raw))
+            refusals.append((index, layer, candidate if candidate is not None else raw))
             continue
         directory, last_set = candidate, index
-        source = f'{label}: {keys.directory} = "{raw}"{suffix}'
+        source = f'{layer.label}: {keys.directory} = "{raw}"{suffix}'
     rejected = [
-        RejectedDirectory(label, value, superseded=index < last_set)
-        for index, label, value in refusals
+        RejectedDirectory(layer, value, superseded=index < last_set)
+        for index, layer, value in refusals
     ]
     return directory, source, tuple(rejected)
 
@@ -702,8 +754,8 @@ def _dropped_governing_lines(layers: Sequence[_Layer], keys: LayoutKeys) -> tupl
     """
     governing = keys.governing
     return tuple(
-        IgnoredSetting(IGNORED_LINE_DROPPED, label, line.key, line.line)
-        for label, parsed, _ in layers
+        IgnoredSetting(IGNORED_LINE_DROPPED, source, line.key, line.line)
+        for source, parsed, _ in layers
         for line in parsed.dropped
         if line.key in governing
     )
@@ -742,11 +794,12 @@ def resolve_layout(
         usually the machine home, and ``None`` where that environment carries
         no usable HOME, which leaves a ``~`` value exactly as written.
     cfg_label:
-        Human-readable label for the global cfg, woven into provenance strings.
+        The global cfg's file name, woven into provenance strings and carried
+        as that layer's :class:`CfgSource`.
     defaults:
         The flavor's defaults, applied when no layer sets a key.
     overrides:
-        ``(label, text)`` pairs in load order (core, content-dir, game) —
+        ``(CfgSource, text)`` pairs in load order (core, content-dir, game) —
         exactly the files that exist, already read through the machine seam.
         Each layer overrides only the keys it actually sets.
     is_directory:
@@ -756,9 +809,13 @@ def resolve_layout(
     """
     empty = ParsedCfg({})
     layers: list[_Layer] = [
-        (cfg_label, parse_cfg(global_text) if global_text is not None else empty, False)
+        (
+            CfgSource(CFG_LAYER_GLOBAL, cfg_label),
+            parse_cfg(global_text) if global_text is not None else empty,
+            False,
+        )
     ]
-    layers.extend((label, parse_cfg(text), True) for label, text in overrides)
+    layers.extend((source, parse_cfg(text), True) for source, text in overrides)
 
     defaults_label = defaults.label
     in_content_dir, s1, i1 = _resolve_flag(

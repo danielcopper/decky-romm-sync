@@ -121,19 +121,25 @@ class CoreResolverFn(Protocol):
 class CoreInfoProvider(Protocol):
     """Emulator resolution for ES-DE configured systems, consumed by services.
 
-    Exposes the read seam services need to answer, from the live
-    ``es_systems.xml`` alone, "which emulator is the system-layer default
-    for this system, and what else could it launch with?" without depending
-    on the concrete adapter. Resolution is system-layer only; the plugin-owned
+    Exposes the read seam services need to answer, from the frontend's own
+    emulator catalogue alone, "which emulator is the system-layer default for
+    this system, and what else could it launch with?" without depending on the
+    concrete adapter. Resolution is system-layer only; the plugin-owned
     per-platform and per-game selections are layered on top by
     ``active_emulator_for_rom``, not here. Implementations own the underlying
-    file reads and may cache parse results; ``reset_cache`` lets writers
-    invalidate the cache after a per-platform core write.
+    reads and may cache answers; ``reset_cache`` lets writers invalidate the
+    cache after a per-platform core write.
 
     ``get_active_core`` stays libretro-only — it feeds the firmware layer's
     system-level BIOS filter, which keys on a RetroArch core. The launch-layer
     default (``get_default_emulator``) and the full picker
     (``get_emulator_options``) are emulator-kind-aware (libretro OR standalone).
+
+    Resolving an emulator to its sandbox launcher path is a different question
+    and is :class:`SandboxLauncherFn`'s: this one is answered out of the
+    catalogue, that one out of ES-DE's find rules. Holding both here would make
+    one implementation forward to the other and hide which source answered a
+    given call.
     """
 
     def get_active_core(self, system_name: str) -> tuple[str | None, str | None]: ...
@@ -142,9 +148,24 @@ class CoreInfoProvider(Protocol):
 
     def get_emulator_options(self, system_name: str) -> dict[str, Any]: ...
 
-    def resolve_sandbox_launcher(self, command: str) -> str | None: ...
-
     def reset_cache(self) -> None: ...
+
+
+class SandboxLauncherFn(Protocol):
+    """Resolve a standalone launch command to the launcher path inside RetroDECK's sandbox.
+
+    The folder-boot bake (ADR-0019) cannot go through RetroDECK's ``run_game.sh``
+    — it reinterprets a directory ``%ROM%`` as an ES-DE "directory as a file" —
+    so it execs the emulator's own component launcher via ``flatpak run
+    --command=``. That path comes from ES-DE's ``es_find_rules.xml``: the
+    catalogue names the emulator a command runs, never where its binary lives.
+
+    ``None`` when the command names no emulator token, when the find rules do not
+    carry it, or when none of its entries is reachable inside the sandbox — the
+    caller then keeps the standalone ``run_game.sh`` form.
+    """
+
+    def __call__(self, command: str) -> str | None: ...
 
 
 class SystemM3uSupportFn(Protocol):

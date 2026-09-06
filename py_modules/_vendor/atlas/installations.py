@@ -152,6 +152,7 @@ from .oddities import (
     lookup_card,
 )
 from .save_memory import SaveMemoryRecord, SystemMemory, lookup_save_memory
+from .squashfs import zstd_provider
 from .textures import (
     XDG_CONFIG,
     XDG_DATA,
@@ -251,13 +252,33 @@ from .placement import (
     UNRESOLVED_STANDALONE,
     UNRESOLVED_STANDALONE_VARIANT_UNESTABLISHED,
     UNRESOLVED_TEXTURE_WIRING_UNESTABLISHED,
+    REASON_ACTIVE_USER_UNRECORDED,
+    REASON_CONFIGURED_USER_HAS_NO_TREE,
+    REASON_CONFIGURED_USER_ID_UNREAD,
+    REASON_CONFIGURED_USER_TREE_NAMED,
+    REASON_CONFIGURED_USER_NOT_SET_UP,
+    REASON_CONFIGURED_USER_SETUP_UNESTABLISHED,
+    REASON_HDD_PATH_UNSET,
+    REASON_KEY_UNREAD,
+    REASON_LISTED_USER_ACCOUNT_UNESTABLISHED,
+    REASON_MLC_LAUNCH_FLAG_OUTRANKS_CONFIG,
+    REASON_NO_LISTED_USER_ACCOUNT,
+    REASON_NO_USER_DIRECTORY,
+    REASON_NO_USER_PRESELECTED,
+    REASON_SESSION_OVERRIDE_SET,
+    REASON_SLOT_DEVICE_UNINTERPRETED,
+    REASON_SLOT_HOLDS_AGP_DEVICE,
+    REASON_USER_LISTING_UNESTABLISHED,
+    REASON_VIRTUAL_SD_DISABLED,
     Caveat,
+    DataValue,
     FileGroup,
     FileSet,
     GRANULARITY_PER_GAME_DIRECTORY,
     GRANULARITY_PER_GAME_FILE,
     GRANULARITY_PER_GAME_FILES,
     GRANULARITY_SHARED_CARD,
+    GRANULARITY_SHARED_FILE,
     Granularity,
     ModeAlternative,
     ModPlacement,
@@ -290,11 +311,17 @@ from .standalone_savestates import (
     lookup_standalone_savestate_card,
 )
 from .retroarch_cfg import (
+    CFG_LAYER_CONTENT_DIR_OVERRIDE,
+    CFG_LAYER_CORE_OVERRIDE,
+    CFG_LAYER_GAME_OVERRIDE,
+    CFG_LAYER_GLOBAL,
     IGNORED_LINE_DROPPED,
     chain_value,
     SAVEFILE_KEYS,
     SAVESTATE_KEYS,
     UPSTREAM_DEFAULTS,
+    CfgLayer,
+    CfgSource,
     IgnoredSetting,
     LayoutDefaults,
     LayoutKeys,
@@ -798,9 +825,9 @@ def _core_path_from(sandbox: _Sandbox, global_text: str | None, core_so: str) ->
     return _CoreLookup(os.path.join(cores_dir, core_so), cores_dir)
 
 
-# One file of the override chain as it is read: its provenance label and its
+# One file of the override chain as it is read: where it came from and its
 # text, in load order (global cfg first, game override last).
-_CfgLayer = tuple[str, str]
+_CfgLayer = CfgLayer
 
 
 def _resolve_symlink_chain(machine: Machine, path: str) -> tuple[str | None, list[tuple[str, str]]]:
@@ -911,14 +938,14 @@ def _ignored_caveat(setting: IgnoredSetting) -> Caveat:
     if setting.kind == IGNORED_LINE_DROPPED:
         return Caveat(
             CAVEAT_CFG_LINE_DROPPED,
-            f"{setting.layer}: the line {setting.text!r} sets nothing — a key must be followed by "
+            f"{setting.layer.label}: the line {setting.text!r} sets nothing — a key must be followed by "
             "'=' after optional whitespace, and '=' is itself a key character, so RetroArch's "
             f"parser drops the line (config_file.c:596-623) and {setting.key} stays unset by it",
             {"key": setting.key, "line": setting.text},
         )
     return Caveat(
         CAVEAT_CFG_VALUE_REJECTED,
-        f'{setting.layer}: {setting.key} = "{setting.text}" is not a value RetroArch accepts — a '
+        f'{setting.layer.label}: {setting.key} = "{setting.text}" is not a value RetroArch accepts — a '
         "boolean is exactly 1, true, 0 or false, case-sensitively (config_file.c:1227-1262) — so "
         "the setting keeps the value it had before this file; it does not become false",
         {"key": setting.key, "value": setting.text},
@@ -1314,7 +1341,9 @@ def _override_gates(
     Where the override files are read from is :func:`_override_directory`'s
     question.
     """
-    layers: list[_CfgLayer] = [(cfg_label, global_text)] if global_text is not None else []
+    layers: list[_CfgLayer] = (
+        [(CfgSource(CFG_LAYER_GLOBAL, cfg_label), global_text)] if global_text is not None else []
+    )
     auto_overrides, auto_ignored = chain_bool(layers, "auto_overrides_enable", default=True)
     directory, dir_sources, dir_caveats = _override_directory(
         layers,
@@ -1395,42 +1424,45 @@ def _override_layers(
     gates: _OverrideGates,
     library_name: str | None,
     content: _Content,
-) -> tuple[list[tuple[str, str]], tuple[str, ...]]:
+) -> tuple[list[CfgLayer], tuple[str, ...]]:
     """The override files that exist, in RetroArch's load order (configuration.c:7095).
 
     Core, then content-dir, then game — each read through the seam, each kept
     only if it is there. Returns the layers and any provenance the reading
     itself produced.
     """
-    overrides: list[tuple[str, str]] = []
+    overrides: list[CfgLayer] = []
     if not gates.auto_overrides:
         return overrides, ('retroarch.cfg: auto_overrides_enable = "false" — override files not applied',)
     if library_name is None:
         return overrides, ()
     candidates = [
         (
-            f"core override config/{library_name}/{library_name}.cfg",
+            CfgSource(CFG_LAYER_CORE_OVERRIDE, f"config/{library_name}/{library_name}.cfg"),
             os.path.join(gates.override_config_dir, library_name, f"{library_name}.cfg"),
         )
     ]
     if content.dir_name:
         candidates.append(
             (
-                f"content-dir override config/{library_name}/{content.dir_name}.cfg",
+                CfgSource(
+                    CFG_LAYER_CONTENT_DIR_OVERRIDE,
+                    f"config/{library_name}/{content.dir_name}.cfg",
+                ),
                 os.path.join(gates.override_config_dir, library_name, f"{content.dir_name}.cfg"),
             )
         )
     if content.rom_stem:
         candidates.append(
             (
-                f"game override config/{library_name}/{content.rom_stem}.cfg",
+                CfgSource(CFG_LAYER_GAME_OVERRIDE, f"config/{library_name}/{content.rom_stem}.cfg"),
                 os.path.join(gates.override_config_dir, library_name, f"{content.rom_stem}.cfg"),
             )
         )
-    for label, path in candidates:
+    for source, path in candidates:
         text = machine.read_text(path).text
         if text is not None:
-            overrides.append((label, text))
+            overrides.append((source, text))
     return overrides, ()
 
 
@@ -1549,10 +1581,15 @@ def _rejected_dir_caveats(
         caveats.append(
             Caveat(
                 CAVEAT_INVALID_SAVE_DIRECTORY,
-                f"{entry.layer}: {key} {entry.value!r} is not an existing "
+                f"{entry.layer.label}: {key} {entry.value!r} is not an existing "
                 f"directory{looked_at} — RetroArch refuses it and {stands} "
                 "(configuration.c:6914-6960)",
-                {"layer": entry.layer, "configured": entry.value, "effective": effective},
+                {
+                    "layer": entry.layer.kind,
+                    "file": entry.layer.file,
+                    "configured": entry.value,
+                    "effective": effective,
+                },
             )
         )
         # When the rejection is a dead symlink, say why (REVIEW M7).
@@ -1593,13 +1630,14 @@ def _unaudited_caveats(so_basename: str) -> tuple[Caveat, ...]:
         # empty `granularity` field alone reads as nothing-to-report
         # (issue #23). The audit knows which options decide it, so the
         # answer names them instead of leaving the caller with "unknown".
-        options = ", ".join(verdict_entry.save_options)
+        options = verdict_entry.save_options
         caveats.append(
             Caveat(
                 CAVEAT_CORE_MULTI_OPTION,
                 f"core {short_name!r} places its saves in this directory, but its file set and "
-                f"granularity depend on core options atlas does not interpret ({options}) — the "
-                "granularity here is unstated, not standard (docs/research/core-audit.md)",
+                f"granularity depend on core options atlas does not interpret "
+                f"({', '.join(options)}) — the granularity here is unstated, not standard "
+                "(docs/research/core-audit.md)",
                 {"core": short_name, "verdict": verdict_entry.verdict, "options": options},
             )
         )
@@ -1772,7 +1810,7 @@ def _rule_confirmed_choice(card: CoreCard, registered: Mapping[str, CoreOption])
                     "recorded behaviour belongs to a different core generation and is not "
                     "applied; this core's actual save behaviour is unknown until re-audited, "
                     "so the standard answer below may miss the real save stack",
-                    {"core": card.key, "options": ", ".join(missing)},
+                    {"core": card.key, "options": missing},
                 ),
             )
         )
@@ -1846,9 +1884,14 @@ def _verification_notes(
             f"the governing option is feature-confirmed — the decision falls on observed evidence",
         ), ()
     if drift:
-        data = {"core": card.key, "arrangement": arrangement, "verification": "drifted", **drift}
+        data: dict[str, DataValue] = {
+            "core": card.key,
+            "arrangement": arrangement,
+            "verification": "drifted",
+            **drift,
+        }
         if missing:
-            data["missing"] = ", ".join(missing)
+            data["missing"] = missing
         return (), (
             Caveat(
                 CAVEAT_UNVERIFIED_VERSION,
@@ -1868,7 +1911,7 @@ def _verification_notes(
                     "core": card.key,
                     "arrangement": arrangement,
                     "verification": "runtime-version-unknown",
-                    "missing": ", ".join(missing),
+                    "missing": missing,
                 },
             ),
         )
@@ -2544,12 +2587,12 @@ def _file_set_caveats(
         )
     if mode.files_without_save_id is not None or mode.files_established_for is not None:
         stated = _card_files(mode.files, rom_stem) or mode.files
-        data = {"core": card.key, "mode": mode_value, "files": ", ".join(stated)}
+        data: dict[str, DataValue] = {"core": card.key, "mode": mode_value, "files": stated}
         spelling = ""
         scope = ""
         if mode.files_without_save_id is not None:
             alternative = _card_files(mode.files_without_save_id, rom_stem) or mode.files_without_save_id
-            data["files_without_save_id"] = ", ".join(alternative)
+            data["files_without_save_id"] = alternative
             spelling = (
                 " The names hold for content that carries a platform-native id; content without one "
                 "is named after the ROM instead, and that spelling is in this caveat's data — "
@@ -2557,10 +2600,14 @@ def _file_set_caveats(
             )
         if mode.files_established_for is not None:
             data["files_established_for"] = mode.files_established_for
+            # The token is the branch; the card's own paragraph about that
+            # class is prose and rides in the message beside it.
+            note = f" {mode.files_established_note}" if mode.files_established_note else ""
             scope = (
-                f" Which files exist at all was established for {mode.files_established_for} content "
-                "only: another content class connects a different set of devices, so a name stated "
-                "here may never appear for it, and one that does may be missing."
+                " Which files exist at all was established for one class of content only "
+                f"({mode.files_established_for}): another content class connects a different set "
+                "of devices, so a name stated here may never appear for it, and one that does may "
+                f"be missing.{note}"
             )
         if mode.files_citation is not None:
             data["citation"] = mode.files_citation
@@ -2852,7 +2899,7 @@ def _cross_root_parts(
                     "core": card.key,
                     "mode": mode_value or "",
                     "dir": directory,
-                    "files": ", ".join(names),
+                    "files": names,
                 },
             )
         )
@@ -3441,7 +3488,7 @@ def _across_systems_caveat(record: SaveMemoryRecord, *, system: str | None) -> C
         f"no system was named, and core {record.key!r} writes the same files for every system it "
         f"is recorded for ({', '.join(systems)}) — so this answer holds for whichever of them the "
         "content is, and states nothing about any other",
-        {"core": record.key, "systems": ", ".join(systems)},
+        {"core": record.key, "systems": systems},
     )
 
 
@@ -3953,8 +4000,11 @@ def _read_chain(machine: Machine, query: _SaveQuery, keys: LayoutKeys) -> _Chain
     )
     caveats.extend(_ignored_caveats(layout.ignored))
     layers: list[_CfgLayer] = [
-        (label, text)
-        for label, text in ((query.cfg_label, query.global_text), *overrides)
+        (source, text)
+        for source, text in (
+            (CfgSource(CFG_LAYER_GLOBAL, query.cfg_label), query.global_text),
+            *overrides,
+        )
         if text is not None
     ]
     saves_root = _host_save_dir(query.sandbox, layout)
@@ -4467,8 +4517,11 @@ def _screenshot_layers(
     )
     sources.extend(override_sources)
     layers: list[_CfgLayer] = [
-        (label, text)
-        for label, text in ((query.cfg_label, query.global_text), *overrides)
+        (source, text)
+        for source, text in (
+            (CfgSource(CFG_LAYER_GLOBAL, query.cfg_label), query.global_text),
+            *overrides,
+        )
         if text is not None
     ]
     return content, core, layers, sources, caveats
@@ -5354,7 +5407,7 @@ def _pcsx2_game_settings_caveats(
                     "per-game settings file is unknown — PCSX2 layers such a file over the "
                     f"whole configuration while that game runs ({_PCSX2_LAYER}), and the "
                     f"{plural} {spelled} would be read through it ({read_through}). {governs}",
-                    {"core": token, "dir": raw, "key": spelled},
+                    {"core": token, "dir": raw, "key": keys},
                 ),
             ]
         directory = host.path
@@ -5369,7 +5422,7 @@ def _pcsx2_game_settings_caveats(
                 "a per-game settings file is unknown — PCSX2 layers such a file over the whole "
                 f"configuration while that game runs ({_PCSX2_LAYER}), and the {plural} "
                 f"{spelled} would be read through it ({read_through}). {governs}",
-                {"core": token, "dir": directory, "key": spelled},
+                {"core": token, "dir": directory, "key": keys},
             )
         ]
     if not listing.matches:
@@ -5386,7 +5439,7 @@ def _pcsx2_game_settings_caveats(
                 "core": token,
                 "count": str(len(listing.matches)),
                 "dir": directory,
-                "key": spelled,
+                "key": keys,
             },
         )
     ]
@@ -5869,7 +5922,7 @@ def _dolphin_game_settings_caveats(
         f"file may set ({layer.unfiltered}), so the {plural} {spelled} — {governs} — can be "
         f"answered differently there for a game this answer cannot name; the user's own "
         f"{directory} outranks it ({layer.order})",
-        {"core": token, "key": spelled, "layer": "GlobalGame"},
+        {"core": token, "key": keys, "layer": "GlobalGame"},
     )
     # What the USER's directory has to say comes first, where it says anything:
     # it is the layer that outranks the build's, so a reader meets the stronger
@@ -5888,7 +5941,7 @@ def _dolphin_game_settings_caveats(
                 f"file over the whole configuration while that game runs, above every value "
                 f"Dolphin.ini states ({layer.loader}, {layer.order} at {layer.build}), and the "
                 f"{plural} {spelled} — {governs} — would be read through it",
-                {"core": token, "dir": directory, "key": spelled},
+                {"core": token, "dir": directory, "key": keys},
             )
         )
     elif listing.matches:
@@ -5905,7 +5958,7 @@ def _dolphin_game_settings_caveats(
                     "core": token,
                     "count": str(len(listing.matches)),
                     "dir": directory,
-                    "key": spelled,
+                    "key": keys,
                 },
             )
         )
@@ -6043,7 +6096,12 @@ def _dolphin_raw_slot(
     return _DolphinSlot(
         mode="card",
         groups=tuple(
-            FileGroup(dir=directory, files=(name,), granularity="shared-file", role="memory-card")
+            FileGroup(
+                dir=directory,
+                files=(name,),
+                granularity=GRANULARITY_SHARED_FILE,
+                role=ROLE_MEMORY_CARD,
+            )
             for name in names
         ),
         readings=(
@@ -6095,7 +6153,12 @@ def _dolphin_folder_slot(
     return _DolphinSlot(
         mode="folder",
         groups=tuple(
-            FileGroup(dir=d, files=None, granularity="per-game-files", role="memory-card")
+            FileGroup(
+                dir=d,
+                files=None,
+                granularity=GRANULARITY_PER_GAME_FILES,
+                role=ROLE_MEMORY_CARD,
+            )
             for d in dirs
         ),
         readings=(
@@ -6186,7 +6249,11 @@ def _dolphin_slot(
                     f"Dolphin's slot {letter} holds a GBA cartridge adapter (AGP, EXI device 9) — "
                     "its saves go onto the cartridge image the emulator is configured with, which "
                     "this answer does not model; the other slot's statement stands on its own",
-                    {"core": "DOLPHIN", "reason": f"slot {letter} is an AGP device"},
+                    {
+                        "core": "DOLPHIN",
+                        "reason": REASON_SLOT_HOLDS_AGP_DEVICE,
+                        "slot": letter,
+                    },
                 ),
             ),
         )
@@ -6199,7 +6266,16 @@ def _dolphin_slot(
                     CAVEAT_CORE_MODE_UNESTABLISHED,
                     f'Dolphin.ini sets Slot{letter} to "{raw_value}", a device this card cannot '
                     "interpret — what sits in that slot and where it saves is unestablished",
-                    {"core": "DOLPHIN", "reason": f'Slot{letter} = "{raw_value}" is uninterpreted'},
+                    {
+                        "core": "DOLPHIN",
+                        "reason": REASON_SLOT_DEVICE_UNINTERPRETED,
+                        "slot": letter,
+                        # A slot whose key is absent takes the compiled
+                        # default, which this card reads, so the raw value is
+                        # a string wherever this branch is reached; the empty
+                        # spelling is the one a blank ``Slot<letter> =`` has.
+                        "value": raw_value or "",
+                    },
                 ),
             ),
         )
@@ -6311,8 +6387,8 @@ def _reading_with_file(reading: OptionReading, options_file: str | None) -> Opti
 # the mode it flips FROM; slot B's combinations multiply the space without
 # changing the shape of any answer, so they stay as they are.
 _DOLPHIN_SLOT_A_FLIPS = {
-    "folder": ("card", _DOLPHIN_DEVICE_RAW, "shared-file"),
-    "card": ("folder", _DOLPHIN_DEVICE_FOLDER, "per-game-files"),
+    "folder": ("card", _DOLPHIN_DEVICE_RAW, GRANULARITY_SHARED_FILE),
+    "card": ("folder", _DOLPHIN_DEVICE_FOLDER, GRANULARITY_PER_GAME_FILES),
 }
 
 
@@ -6362,14 +6438,19 @@ def _unnamed_tree_placement(
             f"declared by standalone save card '{card.token}'",
             complete=False,
             groups=(
-                FileGroup(dir=directory, files=None, granularity="per-game-files", role=ROLE_BATTERY),
+                FileGroup(
+                    dir=directory,
+                    files=None,
+                    granularity=GRANULARITY_PER_GAME_FILES,
+                    role=ROLE_BATTERY,
+                ),
             ),
         ),
         sources=(f"standalone save card '{card.token}': {card.provenance}",),
         caveats=caveats,
         physical_dir=physical,
         granularity=Granularity(
-            value="per-game-files",
+            value=GRANULARITY_PER_GAME_FILES,
             mode=mode,
             readings=readings,
             alternatives=(),
@@ -6512,7 +6593,7 @@ def _dolphin_savefile_placement(
             f"Dolphin.ini carries {key}, a per-session override a movie or netplay session "
             f"sets ({cite('session_overrides')}) — while one runs, the cards live at its "
             "path, not at the answer's",
-            {"core": card.token, "reason": f"{key} is set"},
+            {"core": card.token, "reason": REASON_SESSION_OVERRIDE_SET, "key": key},
         )
         for key in ("GCIFolderAPathOverride", "GCIFolderBPathOverride")
         if _simpleini_value(values, "Core", key)[0]
@@ -6661,7 +6742,7 @@ def _xemu_group(
         head, name = os.path.split(value)
         directory = os.path.join(TEMPLATE_CWD, head) if head else TEMPLATE_CWD
         return (
-            FileGroup(dir=directory, files=(name,), granularity="shared-file", role=role),
+            FileGroup(dir=directory, files=(name,), granularity=GRANULARITY_SHARED_FILE, role=role),
             (_xemu_launch_dependent_caveat(core, key, value),),
         )
     resolved = sandbox.host(key, value)
@@ -6675,7 +6756,7 @@ def _xemu_group(
             ),
         )
     directory, name = os.path.split(resolved.path)
-    return FileGroup(dir=directory, files=(name,), granularity="shared-file", role=role), ()
+    return FileGroup(dir=directory, files=(name,), granularity=GRANULARITY_SHARED_FILE, role=role), ()
 
 
 def _xemu_document(
@@ -6722,7 +6803,7 @@ def _xemu_disk_pieces(
                 CAVEAT_CORE_MODE_UNESTABLISHED,
                 "xemu.toml names no hard-disk image ([sys.files] hdd_path) — the machine has "
                 "no disk to save onto, and where one would be attached is unknowable here",
-                {"core": card.token, "reason": "hdd_path is unset"},
+                {"core": card.token, "reason": REASON_HDD_PATH_UNSET},
             ),
         )
     group, group_caveats = _xemu_group(
@@ -6967,7 +7048,7 @@ def _cemu_savefile_placement(
                 "the launch command carries an --mlc flag, which outranks settings.xml "
                 "(ActiveSettings.cpp:242-251 at 2.6) — the tree below may not be the one "
                 "this launch uses",
-                {"core": card.token, "reason": "an --mlc launch flag outranks the config"},
+                {"core": card.token, "reason": REASON_MLC_LAUNCH_FLAG_OUTRANKS_CONFIG},
             )
         )
     mlc_root, reading, root_refusal = _cemu_mlc_root(doc, homes, sandbox, card.token, xml_path)
@@ -7077,7 +7158,7 @@ def _azahar_virtual_sd_caveat(
         "use_virtual_sd is switched off — no SD card is emulated, so whether and where "
         "a game's save lands is not established; the tree below is where the "
         "configuration would put it",
-        {"core": card.token, "reason": "use_virtual_sd = false disables the emulated SD"},
+        {"core": card.token, "reason": REASON_VIRTUAL_SD_DISABLED},
     )
 
 
@@ -7425,7 +7506,7 @@ def _duckstation_shared_slot(
             dir=os.path.dirname(resolved),
             files=(os.path.basename(resolved),),
             granularity=GRANULARITY_SHARED_CARD,
-            role="memory-card",
+            role=ROLE_MEMORY_CARD,
         ),
         readings=(type_reading, path_reading),
     )
@@ -7489,8 +7570,8 @@ def _duckstation_per_game_slot(
         {
             "core": card.token,
             "mode": mode,
-            "files": name,
-            "files_without_save_id": shared_fallback,
+            "files": (name,),
+            "files_without_save_id": (shared_fallback,),
             "save_id": fill,
             "citation": citation,
         },
@@ -7501,7 +7582,7 @@ def _duckstation_per_game_slot(
             dir=memcards_dir,
             files=(name,),
             granularity=GRANULARITY_PER_GAME_FILE,
-            role="memory-card",
+            role=ROLE_MEMORY_CARD,
         ),
         readings=tuple(readings),
         caveats=(caveat,),
@@ -8045,14 +8126,14 @@ def _pcsx2_slot_group(
             },
         )
         group = FileGroup(
-            dir=full, files=None, granularity=GRANULARITY_PER_GAME_FILES, role="memory-card"
+            dir=full, files=None, granularity=GRANULARITY_PER_GAME_FILES, role=ROLE_MEMORY_CARD
         )
         return "folder", group, tuple(readings), (caveat,)
     group = FileGroup(
         dir=os.path.dirname(full),
         files=(os.path.basename(full),),
         granularity=GRANULARITY_SHARED_CARD,
-        role="memory-card",
+        role=ROLE_MEMORY_CARD,
     )
     return "file", group, tuple(readings), ()
 
@@ -8534,7 +8615,7 @@ def _melonds_files(
         sentence,
         {
             "core": card.token,
-            "files": f"{TEMPLATE_ROM_STEM}.sav",
+            "files": (f"{TEMPLATE_ROM_STEM}.sav",),
             "rom_stem": "the loaded file's name without its last extension — for an "
             "archive, the archived file's",
             "citation": "EmuInstance.cpp:1884, :1846-1848 at 1.1",
@@ -8634,6 +8715,21 @@ _RPCS3_FIRST_USER = "00000001"
 # — a whole string in the shipped binary. Stated, not walked: what lands there
 # and under which names has not been read.
 _RPCS3_VMC_SUBDIR = os.path.join("savedata", "vmc")
+# When that tree comes into being, which is not when a game first saves:
+# ``Emulator::Init`` makes the whole home — ``home/<user>/`` with ``exdata/``,
+# ``savedata/`` and ``trophy/`` under it, and a ``localusername`` file beside
+# them — every time the emulator initialises (System.cpp:606-623 at build
+# 7c6b3dcd, the write at :617). Two guards stand above it, both satisfied on an
+# ordinary run: the VFS switch ``Initialize Directories`` (:583), whose
+# compiled default is on (system_config.h:105), and the creation of the drive
+# itself (``make_path_verbose(dev_hdd0, true)`` at :606), which the home tree
+# hangs inside. So the tree is the emulator's own startup work and the answer
+# no longer says a save has to happen first (#370).
+_RPCS3_HOME_CREATION = (
+    "which it creates at startup rather than on the first save (Emulator::Init, "
+    "System.cpp:583-623 at build 7c6b3dcd, under the VFS 'Initialize Directories' "
+    "switch that defaults on, system_config.h:105)"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -8696,7 +8792,7 @@ class _PerUserSaves:
     headline_user: str | None = None
     skipped: tuple[str, ...] = ()
     unestablished: tuple[str, ...] = ()
-    no_user_reason: str = "no user directory was found"
+    no_user_reason: str = REASON_NO_USER_DIRECTORY
 
 
 def _per_user_state(
@@ -8704,7 +8800,7 @@ def _per_user_state(
     card: StandaloneSaveCard,
     users: tuple[str, ...],
     listing: GlobResult,
-) -> tuple[str, dict[str, str]]:
+) -> tuple[str, dict[str, DataValue]]:
     """What the listing established about the users — three states, not two.
 
     "Users were found" and "no user exists here" are the two an emptied result
@@ -8721,17 +8817,21 @@ def _per_user_state(
         sentence = (
             f"{shape.user_root} could not be listed, so which users exist below it is not "
             "established — the tree named is the one the emulator starts with, and whether "
-            "this machine has that user, others, or none is unknown here"
+            "this machine has that user, others, or none beyond those handed back is "
+            "unknown here"
         )
-        reason = "which users exist here was not established"
+        reason = REASON_USER_LISTING_UNESTABLISHED
     elif not users:
         sentence, reason = shape.no_user_sentence, shape.no_user_reason
     else:
         sentence, reason = shape.user_sentence, shape.user_reason
-    data = {
+    data: dict[str, DataValue] = {
         "core": card.token,
         "reason": reason,
-        "users": ",".join(users) if users else shape.first_user,
+        # The trees this answer points at, as the list they are — where none
+        # was found, the one the emulator starts with, which is the tree the
+        # groups name too.
+        "users": users or (shape.first_user,),
     }
     # The recorded user is a reading of the configuration, not of the tree, so
     # it holds whatever the listing did or did not establish.
@@ -8741,9 +8841,9 @@ def _per_user_state(
     # user — structured, so a client sees the survey passed them over rather
     # than never reached them.
     if shape.skipped:
-        data["skipped"] = ",".join(shape.skipped)
+        data["skipped"] = shape.skipped
     if shape.unestablished:
-        data["unestablished"] = ",".join(shape.unestablished)
+        data["unestablished"] = shape.unestablished
     return sentence, data
 
 
@@ -8964,10 +9064,10 @@ def _series(names: list[str]) -> str:
 def _per_user_no_user_reason(survey: _PerUserSurvey) -> str:
     """Why no user is listed — three facts the empty survey can stand on."""
     if survey.unestablished:
-        return "whether the emulator would list a user account here was not established"
+        return REASON_LISTED_USER_ACCOUNT_UNESTABLISHED
     if survey.skipped:
-        return "no user account the emulator would list was found"
-    return "no user directory was found"
+        return REASON_NO_LISTED_USER_ACCOUNT
+    return REASON_NO_USER_DIRECTORY
 
 
 # What GetUserAccounts makes of one directory below home/ (user_account.cpp:35-66
@@ -9142,7 +9242,8 @@ def _rpcs3_savefile_placement(
             {
                 "emulator": card.token,
                 "config": vfs_path,
-                "reason": f"{_RPCS3_HDD0_KEY} is unread",
+                "reason": REASON_KEY_UNREAD,
+                "key": _RPCS3_HDD0_KEY,
             },
         )
     stated = read.get(_RPCS3_HDD0_KEY)
@@ -9175,7 +9276,7 @@ def _rpcs3_savefile_placement(
         no_user_sentence = (
             f"whether any user account RPCS3 would list exists below {user_root} is not "
             f"established{survey.aside}, and the tree named is user {_RPCS3_FIRST_USER} "
-            "(Emulator::m_usr, System.h:164), which it would create on the first save — "
+            f"(Emulator::m_usr, System.h:164), {_RPCS3_HOME_CREATION} — "
             "stated as that rather than as a user found here"
         )
     elif survey.skipped:
@@ -9185,7 +9286,7 @@ def _rpcs3_savefile_placement(
         no_user_sentence = (
             f"no user account RPCS3 would list exists below {user_root}{survey.aside}, and "
             f"the tree named is user {_RPCS3_FIRST_USER} (Emulator::m_usr, System.h:164), "
-            "which it would create on the first save — stated as that rather than as a user "
+            f"{_RPCS3_HOME_CREATION} — stated as that rather than as a user "
             "found here"
         )
     else:
@@ -9193,9 +9294,9 @@ def _rpcs3_savefile_placement(
         # starts with, stated as that and never as a home found on this
         # machine.
         no_user_sentence = (
-            f"no user home exists below {user_root} — nothing has saved here yet. The tree "
+            f"no user home exists below {user_root} — nothing has created one here yet. The tree "
             f"named is the one the emulator starts with, user {_RPCS3_FIRST_USER} "
-            "(Emulator::m_usr, System.h:164), which it would create on the first save; it is "
+            f"(Emulator::m_usr, System.h:164), {_RPCS3_HOME_CREATION}; it is "
             "not a home found on this machine"
         )
     return _per_user_savedata_placement(
@@ -9219,7 +9320,7 @@ def _rpcs3_savefile_placement(
                 f"({_RPCS3_SELECTION_CITATION}), read here the same way{survey.aside}"
             ),
             no_user_sentence=no_user_sentence,
-            user_reason="the active user account is not recorded on disk",
+            user_reason=REASON_ACTIVE_USER_UNRECORDED,
             no_user_reason=_per_user_no_user_reason(survey),
             skipped=survey.skipped,
             unestablished=survey.unestablished,
@@ -9258,7 +9359,11 @@ def _rpcs3_savefile_placement(
                     "core": card.token,
                     "mode": "hdd0",
                     "dir": vmc,
-                    "files": "",
+                    # Not read rather than none. This key is always stated,
+                    # so the empty list is what "no names established" looks
+                    # like here — unlike ``members`` and ``unlistable``, which
+                    # are dropped when they hold nothing.
+                    "files": (),
                 },
             ),
         ),
@@ -9473,7 +9578,7 @@ def _vita3k_recorded_user_state(
             "launch without user-auto-connect opens the user manager instead — every "
             f"user Vita3K itself would list is stated{survey.aside}"
         )
-        return configured, sentence, "the configured user's tree is the one named"
+        return configured, sentence, REASON_CONFIGURED_USER_TREE_NAMED
     tail = _vita3k_survey_tail(survey)
     if survey.unestablished:
         sentence = (
@@ -9483,7 +9588,7 @@ def _vita3k_recorded_user_state(
             "keyed by what those files state (get_users_list, user_management.cpp:83-97) "
             f"— so the record does not move the headline: {tail}"
         )
-        return None, sentence, "whether the configured user is set up here was not established"
+        return None, sentence, REASON_CONFIGURED_USER_SETUP_UNESTABLISHED
     if own is not None:
         if own.fate == _VITA3K_USER_NO_XML:
             detail = "the directory has no user.xml"
@@ -9501,14 +9606,14 @@ def _vita3k_recorded_user_state(
             "(get_users_list, user_management.cpp:83-97; init_home, gui.cpp:688-696); "
             f"the record does not move the headline: {tail}"
         )
-        return None, sentence, "the configured user is not set up here"
+        return None, sentence, REASON_CONFIGURED_USER_NOT_SET_UP
     sentence = (
         f"config.yml records {_VITA3K_USER_ID_KEY} {configured}, no directory of "
         f"that name exists below {user_root}, and no user.xml here names that id — "
         "nothing for a launch to reopen, so the user manager opens and the player "
         f"picks (init_home, gui.cpp:688-696) — {tail}"
     )
-    return None, sentence, "the configured user has no tree here"
+    return None, sentence, REASON_CONFIGURED_USER_HAS_NO_TREE
 
 
 def _vita3k_user(
@@ -9550,31 +9655,49 @@ def _vita3k_user(
             f"config.yml states {_VITA3K_USER_ID_KEY} as a construct atlas does not read, so "
             f"which user it preselects is unread here — {_vita3k_survey_tail(survey)}"
         )
-        reason = "the configured user id is stated in a construct atlas does not read"
+        reason = REASON_CONFIGURED_USER_ID_UNREAD
     elif configured is None:
         sentence = (
             f"config.yml records no {_VITA3K_USER_ID_KEY}, so nothing preselects a user and "
             "the user manager opens for the player to pick (init_home, gui.cpp:688-696) — "
             f"{_vita3k_survey_tail(survey)}"
         )
-        reason = "the configuration preselects no user"
-    elif listing.status == GLOB_COMPLETE and homes:
+        reason = REASON_NO_USER_PRESELECTED
+    else:
+        # Everywhere else the recorded id is held against the emulator's own
+        # listing — and then the headline is taken back if that listing came
+        # back short. The two halves used to be one branch and are not one
+        # fact:
+        #
+        # The REASON this state used to carry ("a launch's user depends on how
+        # the launch was made") was unreadable. :func:`_per_user_state` takes
+        # ``user_reason`` only where the listing completed and the survey kept
+        # a user, and a kept user is one of ``homes``, so the branch's own
+        # condition — listing short, or no homes — excluded the only path that
+        # reads it. A value the guide documents and no machine produces is the
+        # defect in data that the sentences were in prose, so the slug is gone.
+        #
+        # The HEADLINE was a different matter, and dropping the branch dropped
+        # a guard with it. ``dir`` is read on every path, so a recorded user
+        # found in a SHORT listing would become the tree this answer names,
+        # while the sentence beside it still says the tree named is the one the
+        # emulator starts with. Two things reach that state, and the first is
+        # not a hypothetical: :func:`_per_user_listing` globs TWICE, once per
+        # pattern, and a real machine reads the directory once per call. Each
+        # read is complete or empty on its own, but they are separated in time,
+        # so a directory that loses its read permission between them merges
+        # into a listing carrying matches and an unreadable place at once — a
+        # live race, on the running machine, with no foreign seam involved. The
+        # second is the seam itself: ``Machine`` is a protocol and
+        # :class:`~atlas.machine.GlobResult` permits incomplete WITH matches,
+        # which the same merge handles. A home a failed listing handed back is
+        # not a home found here, so the record does not move the headline until
+        # the listing that would confirm it succeeded.
         headline, sentence, reason = _vita3k_recorded_user_state(
             configured, homes, user_root, survey
         )
-    else:
-        # An empty or unlistable tree: _per_user_state answers those states
-        # with its own sentences, so what stands here is the config-side fact
-        # alone, never read in either state today.
-        sentence = (
-            f"config.yml records {_VITA3K_USER_ID_KEY} {configured} — Vita3K opens it when "
-            "the launch names an app on the command line, and on a plain launch when "
-            "user-auto-connect is on (init_home, gui.cpp:688-696); otherwise the user "
-            "manager opens and the player picks — so every user Vita3K itself would list "
-            "here is stated"
-        )
-        reason = "the configuration preselects a user, and whether a launch opens it depends "
-        reason += "on how the launch was made"
+        if listing.status != GLOB_COMPLETE:
+            headline = None
     readings = (
         OptionReading(
             _VITA3K_USER_ID_KEY,
@@ -9676,7 +9799,8 @@ def _vita3k_savefile_placement(
             {
                 "emulator": card.token,
                 "config": config_path,
-                "reason": f"{_VITA3K_PREF_PATH_KEY} is unread",
+                "reason": REASON_KEY_UNREAD,
+                "key": _VITA3K_PREF_PATH_KEY,
             },
         )
     stated = read.get(_VITA3K_PREF_PATH_KEY)
@@ -10143,7 +10267,7 @@ def _melonds_state_files(
         sentence,
         {
             "core": card.token,
-            "files": card.names,
+            "files": (card.names,),
             "rom_stem": "the loaded file's name without its last extension — for an "
             "archive, the archived file's",
             "citation": card.names_citation,
@@ -10668,17 +10792,26 @@ def _mame_standard_ini_layer(
     say a layer went unread, and it says which member it DID read.
     """
     suspects: list[str] = []
-    incomplete = False
+    unlistable: list[str] = []
     for element in elements:
         if element.resolved is None:
             continue
         found, failed = _mame_layer_suspects(machine, element.resolved, read=read)
         suspects.extend(found)
-        incomplete = incomplete or failed
-    if not suspects and not incomplete:
+        if failed:
+            unlistable.append(element.resolved)
+    if not suspects and not unlistable:
         return []
-    named = ", ".join(sorted(suspects)) if suspects else "the directory could not be listed"
-    data = {"key": key, "files": named}
+    files = tuple(sorted(suspects))
+    # One key, spelled as the list every other emitter of this code spells:
+    # DuckStation, PCSX2 and Dolphin all name several, MAME names one, and a
+    # client that reads data["key"] must not have to test the type first.
+    data: dict[str, DataValue] = {"key": (key,), "files": files}
+    # Two facts, two keys. They were one string before, and one of them was
+    # lost whenever both held: the joined names were stated and the directory
+    # that could not be listed silently dropped out of the answer.
+    if unlistable:
+        data["unlistable"] = tuple(unlistable)
     if driver_ini is not None:
         data["read"] = driver_ini
     return [
@@ -10687,14 +10820,24 @@ def _mame_standard_ini_layer(
             f"MAME layers per-machine and per-orientation ini files over {file} "
             f"(parse_standard_inis, mameopts.cpp:37-96)"
             + _mame_driver_ini_clause(file=file, driver_ini=driver_ini, word=word)
-            + f", and the path holds more than the files this answer read ({named}) — which "
-            "of those MAME opens follows from the driver's orientation flag, screen type, "
+            + f", and {_mame_unread_layer_clause(files, tuple(unlistable))}. Which of the files "
+            "on that path MAME opens follows from the driver's orientation flag, screen type, "
             "source file and clone chain, all compiled into the binary. Each parses BELOW "
             f"the driver ini (mameopts.h:31-39), so a {key} line in one of them governs only "
             "where the driver ini states none",
             data,
         ),
     ]
+
+
+def _mame_unread_layer_clause(files: tuple[str, ...], unlistable: tuple[str, ...]) -> str:
+    """What was found beside the files this answer read, and where the look stopped short."""
+    clauses: list[str] = []
+    if files:
+        clauses.append(f"the path holds more than the files this answer read ({', '.join(files)})")
+    if unlistable:
+        clauses.append(f"{', '.join(unlistable)} could not be listed")
+    return " and ".join(clauses)
 
 
 def _mame_savestate_placement(
@@ -12172,7 +12315,7 @@ def _patch_formats(
                     "its .xdelta applier are compile-time flags (Makefile.common:260-267) and "
                     "nothing on a running machine states how they were set, so each candidate "
                     "below is listed without a claim that this build tries it",
-                    {"formats": ",".join(PATCH_FORMATS)},
+                    {"formats": PATCH_FORMATS},
                 ),
             ),
         )
@@ -12370,7 +12513,9 @@ def _retroarch_firmware_context(
     caveats.extend(
         _ignored_caveats(
             tuple(
-                IgnoredSetting(IGNORED_LINE_DROPPED, cfg_label, line.key, line.line)
+                IgnoredSetting(
+                    IGNORED_LINE_DROPPED, CfgSource(CFG_LAYER_GLOBAL, cfg_label), line.key, line.line
+                )
                 for line in read.dropped
                 if line.key == "system_directory"
             )
@@ -12751,8 +12896,14 @@ class CatalogueAnswer:
     """
 
     entries: tuple[EmulatorEntry, ...] = ()
+    """The launch entries this catalogue declares for the system, in effective order —
+    an empty list says nothing on its own, and the caveats say which empty it is.
+    """
     sources: tuple[str, ...] = ()
     caveats: tuple[Caveat, ...] = ()
+    """Every degradation of this answer, and on an empty one the statement of which of
+    the three empties it is.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -12765,8 +12916,12 @@ class SystemsAnswer:
     """
 
     systems: tuple[str, ...] = ()
+    """Every system this frontend catalogue declares, in the catalogue's own spelling."""
     sources: tuple[str, ...] = ()
     caveats: tuple[Caveat, ...] = ()
+    """Every degradation of this answer, and on an empty one the statement of whether
+    the catalogue declares no systems or could not be read.
+    """
 
 
 # The three statuses a platform question states about a system (issue #68).
@@ -12799,9 +12954,19 @@ class PlatformSystemMatch:
     """
 
     system: str
+    """The system that answers to the queried platform id."""
     status: str
+    """How firmly this system is here — ``declared``, ``disabled`` in the catalogue's own
+    text, or ``absent`` and known to the vocabulary alone.
+    """
     platforms: tuple[str, ...]
+    """The system's whole platform tag list, not just the matching tag — a consumer
+    deciding between two matches reads it.
+    """
     tags_source: str
+    """Where those tags came from — ``catalogue`` for a read of this machine,
+    ``vocabulary`` for the stated build's snapshot column.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -12816,11 +12981,26 @@ class PlatformSystemsAnswer:
     """
 
     vocabulary: str
+    """The platform vocabulary the question was asked in, one of
+    :data:`~atlas.platforms.KNOWN_PLATFORM_VOCABULARIES`.
+    """
     value: str
+    """The platform id the question was asked with, verbatim — a numeric id passes as its
+    decimal string.
+    """
     platforms: tuple[str, ...] = ()
+    """What the crosswalk resolved the id to — empty exactly when the
+    ``platform-unmapped`` caveat states why.
+    """
     matches: tuple[PlatformSystemMatch, ...] = ()
+    """Every system answering to those platforms, each qualified by how firmly it is
+    here — declared first, then disabled, then absent, each group alphabetical.
+    """
     sources: tuple[str, ...] = ()
     caveats: tuple[Caveat, ...] = ()
+    """Every degradation of this answer, including the statement that no platform
+    corresponds to the id.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -12836,15 +13016,31 @@ class SystemPlatformsAnswer:
     """
 
     system: str
+    """The system the question was asked about, echoed back as the caller spelled it."""
     status: str
+    """How firmly that system is here — ``declared``, ``disabled`` in the catalogue's own
+    text, or ``absent``, which this installation does not have.
+    """
     tags_source: str
+    """Where the tags came from — ``catalogue`` for a read of this machine,
+    ``vocabulary`` for the stated build's snapshot column and for a name nobody knows.
+    """
     platforms: tuple[str, ...] = ()
+    """The system's platform tags; empty under ``declared`` is the catalogue's own
+    statement that the system block carries none.
+    """
     identities: tuple[PlatformIdentities, ...] = ()
+    """One entry per tag the crosswalk knows — a tag it does not know is stated as a
+    caveat instead, so the two lists and the caveats always add up.
+    """
     sources: tuple[str, ...] = ()
     caveats: tuple[Caveat, ...] = ()
+    """Every degradation of this answer, and the statement for every tag no identity is
+    listed for.
+    """
 
 
-# The launchability verdicts (issue #36) — four claims that never collapse.
+# The launchability verdicts (issue #36) — five claims that never collapse.
 # "not-accepted" is a read of the machine: the frontend's accept-list for the
 # system does not carry this file's extension, so ES-DE never scans it and
 # nothing here will launch it. "needs-installation" is that same 'no' with its
@@ -12913,12 +13109,28 @@ class LaunchabilityAnswer:
     """
 
     verdict: str
+    """Whether this file launches as this system's content here, and why not when not —
+    one of :data:`LAUNCH_VERDICTS`, which never collapse into one another.
+    """
     extension: str
+    """The token ES-DE would derive from the file, from the last dot with case preserved
+    — stated on every verdict, so a no shows the exact string that missed.
+    """
     accepted: tuple[str, ...] = ()
+    """The system's declared accept-list verbatim, and empty where nothing was read."""
     entry: EmulatorEntry | None = None
+    """The launch entry that would run, the frontend's own selection hierarchy applied —
+    stated on the two verdicts where one exists, and ``None`` on the others.
+    """
     alternatives: tuple[str, ...] = ()
+    """The labels of the declared entries established to take this file — one of the two
+    remedies the entry-not-accepted verdict leaves open, and empty on every other.
+    """
     sources: tuple[str, ...] = ()
     caveats: tuple[Caveat, ...] = ()
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
 
 
 # Flatpak's per-app overrides are GKeyFile INI, and only the environment they
@@ -13701,6 +13913,10 @@ def _entries_from(
     if specs and chosen_label is not None:
         for index, spec in enumerate(specs):
             if spec.label == chosen_label:
+                # Only ``selection`` is replaced: ``declared_index`` is the
+                # shipped position, and a promotion is precisely the thing that
+                # must not overwrite it — the pair is what says "promoted from
+                # position 3" rather than "first, and also selected".
                 promoted = _dc_replace(spec, selection=chosen_source)
                 specs = (promoted, *specs[:index], *specs[index + 1 :])
                 break
@@ -13834,10 +14050,22 @@ class RomPlacement:
     """
 
     dir: str | None = None
+    """The directory this system's ROMs live in, from the catalogue's own declaration —
+    ``None`` wherever atlas could not resolve one, and never a partial path.
+    """
     physical_dir: str | None = None
+    """The fully link-resolved backing directory where ``dir`` reaches its files through
+    symlinks, and ``None`` otherwise.
+    """
     extensions: tuple[str, ...] = ()
+    """The extensions the catalogue declares for this system, verbatim — the frontend's
+    declaration, never a filter atlas applies.
+    """
     sources: tuple[str, ...] = ()
     caveats: tuple[Caveat, ...] = ()
+    """Every degradation of this answer, and on an absent ``dir`` the statement of which
+    kind of unresolved it is.
+    """
 
 
 def _declared_entries(
@@ -13865,18 +14093,24 @@ class EmulatorEntry:
 
     @property
     def system(self) -> str:
+        """The system this entry launches, in the catalogue's own spelling."""
         return self._spec.system
 
     @property
     def label(self) -> str:
+        """The name this entry carries on this machine, as the catalogue spells it."""
         return self._spec.label
 
     @property
     def kind(self) -> str:
+        """Whether this entry launches a libretro core or a standalone emulator."""
         return self._spec.kind
 
     @property
     def core_so(self) -> str | None:
+        """The ``.so`` short name of the core this entry loads, and ``None`` for a standalone
+        entry, which loads none.
+        """
         return self._spec.core_so
 
     @property
@@ -13887,6 +14121,22 @@ class EmulatorEntry:
     def provenance(self) -> str:
         """Which catalogue layer declared this entry — prose, for debugging."""
         return self._spec.provenance
+
+    @property
+    def declared_index(self) -> int | None:
+        """This entry's place, from 0, in the launch list the declaring layer yields.
+
+        The shipped position, which promotion never touches — read it beside
+        :attr:`selection` to tell an entry promoted out of the middle from the
+        declared first that a user also selected. It is ES-DE's own numbering
+        rather than a count of ``<command>`` elements
+        (:func:`atlas.esde._stored_commands`), so the values across one answer
+        are distinct and ascending *in declared order* — the answer itself is
+        in effective order, where a promoted entry may put a higher position
+        first — and they may skip one. ``None`` on a derived entry: no layer
+        declared it, so it has no declared position (#133).
+        """
+        return self._spec.declared_index
 
     @property
     def selection(self) -> str | None:
@@ -14358,7 +14608,10 @@ def _derived_catalogue_entries(
     string would be an invention. The order is the enumeration's own
     (alphabetical by ``.so``) and claims nothing — with no catalogue and no
     user selection there is no "entry that would run", and the
-    ``emulator-list-derived`` caveat says all of that in one stable code.
+    ``emulator-list-derived`` caveat says all of that in one stable code. That
+    is also why every entry's ``declared_index`` is ``None`` rather than its
+    place in this list: a number here would read as a shipped position, and no
+    layer shipped one.
     """
     selected, hidden = derived_core_selection(context.cores, system)
     entries = tuple(
@@ -14371,6 +14624,7 @@ def _derived_catalogue_entries(
                 core_so=core.core_so,
                 command="",
                 provenance=_DERIVED_ENTRY_PROVENANCE,
+                declared_index=None,
             ),
         )
         for core in selected
@@ -16539,9 +16793,12 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
     _ESDE_SETTINGS_SUFFIX = os.path.join("settings", "es_settings.xml")
     _ROM_DIRECTORY_SETTING = "ROMDirectory"
     _FRONTEND_MARKER_KEY = "doInstallESDE"
+    # The catalogue's provenance, with a hole for the zstd provider that opens
+    # the AppImage-embedded layer: which provider answers is the runtime's
+    # state and not a constant, so :meth:`_catalogue_provenance` fills it.
     _CATALOGUE_SOURCE = (
         "ES-DE catalogue read live (es_systems.xml — on-disk layers under ~/ES-DE, "
-        "and the AppImage-embedded bundled layer where the runtime can open it)"
+        "and the AppImage-embedded bundled layer where the runtime can open it{provider})"
     )
     _ROM_DIRECTORY_SOURCE = "ES-DE ROMDirectory read live (es_settings.xml)"
 
@@ -16661,6 +16918,37 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
             {"system": system} if system is not None else {},
         )
 
+    def _catalogue_provenance(self, exclusive: bool) -> str:
+        """Where a catalogue answer was read — and which provider opens the sealed layer.
+
+        The exclusive reading names no AppImage at all: a document-level
+        ``<loadExclusive/>`` makes the overlay the whole catalogue, and the
+        embedded layer is opened by neither ES-DE nor atlas. Every other
+        reading may reach the image, so the sentence names the provider zstd
+        images go through here (:func:`atlas.zstd_provider`) — the runtime
+        capability that decides whether the sealed layer can be opened at all,
+        and the one a host can now hand over itself.
+
+        It is a statement about the runtime, never about this read. No
+        per-read provenance exists at that seam and none is invented here:
+        :class:`atlas.machine.AppImageReadResult` carries a status and the
+        text, and a gzip image is decompressed through ``zlib`` without
+        touching a zstd provider at all. Where none resolves the sentence
+        stays exactly what it always was, and the ``sealed`` caveat states the
+        consequence.
+        """
+        if exclusive:
+            return _CATALOGUE_SOURCE_EXCLUSIVE
+        provider = zstd_provider()
+        if provider is None:
+            return self._CATALOGUE_SOURCE.format(provider="")
+        through = (
+            f"the host's registered provider {provider.name}"
+            if provider.registered
+            else provider.name
+        )
+        return self._CATALOGUE_SOURCE.format(provider=f"; zstd images go through {through}")
+
     def _catalogue_exclusive(self, system: str | None = None) -> tuple[Caveat, ...]:
         return _catalogue_exclusive_caveat(
             os.path.join(self._esde_appdata_dir(), self._ESDE_OVERLAY_SUFFIX), system
@@ -16697,12 +16985,12 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
         against the deployed AppImage — and where that read answers text,
         the catalogue is ``complete`` and nothing is sealed. Every other
         outcome of that read — no AppImage, not an AppImage, no such entry,
-        an interpreter without the image's codec (zstd needs Python >= 3.14),
-        unreadable bytes — leaves the ``sealed`` state exactly as it always
-        was: ``complete`` ``False``, the caveat naming the sealed layer. A
-        ``<loadExclusive/>`` in the shadow or the embedded file is ignored
-        the way ES-DE ignores one in the bundled layer (the LogWarning
-        branch, ``:886-895``).
+        an interpreter without the image's codec (zstd needs a provider — see
+        :mod:`atlas.squashfs`), unreadable bytes — leaves the ``sealed`` state
+        exactly as it always was: ``complete`` ``False``, the caveat naming
+        the sealed layer. A ``<loadExclusive/>`` in the shadow or the embedded
+        file is ignored the way ES-DE ignores one in the bundled layer (the
+        LogWarning branch, ``:886-895``).
 
         The overlay is EmuDeck's own write (``emuDeckESDE.sh:18,127``,
         deployed from ``configs/emulationstation/custom_systems/`` and
@@ -16995,9 +17283,7 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
             return SystemsAnswer(caveats=snapshot.refusal), version
         systems = set(snapshot.by_system)
         derived_mark: tuple[Caveat, ...] = ()
-        sources: tuple[str, ...] = (
-            _CATALOGUE_SOURCE_EXCLUSIVE if snapshot.exclusive else self._CATALOGUE_SOURCE,
-        )
+        sources: tuple[str, ...] = (self._catalogue_provenance(snapshot.exclusive),)
         if not snapshot.complete:
             context = self._derived_context(snapshot)
             derived = {
@@ -17048,9 +17334,7 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
             name: declaration.platforms for name, declaration in snapshot.by_system.items()
         }
         vocabulary_backed: set[str] = set()
-        sources: tuple[str, ...] = (
-            _CATALOGUE_SOURCE_EXCLUSIVE if snapshot.exclusive else self._CATALOGUE_SOURCE,
-        )
+        sources: tuple[str, ...] = (self._catalogue_provenance(snapshot.exclusive),)
         derived_mark: tuple[Caveat, ...] = ()
         if not snapshot.complete:
             context = self._derived_context(snapshot)
@@ -17133,7 +17417,7 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
                     system_roms_dir=anchor.directory,
                     content_path=content_path,
                 ),
-                (_CATALOGUE_SOURCE_EXCLUSIVE if snapshot.exclusive else self._CATALOGUE_SOURCE,),
+                (self._catalogue_provenance(snapshot.exclusive),),
                 (*snapshot.findings, *snapshot.tail, *anchor.caveats),
             ),
             version,
@@ -17211,7 +17495,7 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
                 entry=entry,
                 alternatives=alternatives,
                 sources=(
-                    _CATALOGUE_SOURCE_EXCLUSIVE if snapshot.exclusive else self._CATALOGUE_SOURCE,
+                    self._catalogue_provenance(snapshot.exclusive),
                     *core_reader.sources,
                     *sources,
                 ),
@@ -17243,7 +17527,7 @@ class EmuDeck(_FirmwareQueries, _CatalogueQueries):
         placement = RomPlacement(
             extensions=() if declaration is None else declaration.extensions,
             sources=(
-                _CATALOGUE_SOURCE_EXCLUSIVE if snapshot.exclusive else self._CATALOGUE_SOURCE,
+                self._catalogue_provenance(snapshot.exclusive),
                 *resolved.sources,
             ),
             caveats=(*snapshot.findings, *snapshot.tail, *resolved.caveats),
@@ -18664,14 +18948,28 @@ class Installation(Protocol):
     """
 
     @property
-    def kind(self) -> str: ...
+    def kind(self) -> str:
+        """The identifier of the arrangement this handle answers for — a key to branch and
+        store on, never a name to show.
+        """
+        ...
 
     @property
-    def kinds(self) -> tuple[str, ...]: ...
+    def kinds(self) -> tuple[str, ...]:
+        """Every arrangement description this handle claims, since one installation can be
+        more than one thing — EmuDeck is also a configured RetroArch Flatpak.
+        """
+        ...
 
-    def root(self) -> str: ...
+    def root(self) -> str:
+        """The directory this installation is anchored at, as its own arrangement defines it."""
+        ...
 
-    def health(self) -> Health: ...
+    def health(self) -> Health:
+        """What is structurally wrong with this installation, as findings a client acts on —
+        an answer with none is a healthy installation.
+        """
+        ...
 
     def savefile_location(
         self,

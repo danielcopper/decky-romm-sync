@@ -47,7 +47,7 @@ class FakeCoreInfoProvider:
     :class:`EmulatorOption` values or synthesized from the ``available_cores``
     convenience — a list of ``{"core_so", "label", "is_default"}`` dicts turned
     into bakeable libretro options (the shape most core-selection tests use).
-    ``available`` mirrors the adapter's "es_systems.xml readable?" flag.
+    ``available`` mirrors the adapter's "was the catalogue readable?" flag.
 
     ``reset_cache`` increments ``reset_cache_count`` so writers can assert the
     cache was invalidated after a write. ``active_core_calls`` and
@@ -61,6 +61,9 @@ class FakeCoreInfoProvider:
     real adapter and projects :meth:`get_active_core` into a libretro invocation
     (so ``get_active_core`` is still consulted — and recorded — for the libretro
     path).
+
+    The sandbox-launcher seam is :class:`FakeSandboxLauncher`, a separate object
+    because it is a separate Protocol answered from a separate source.
     """
 
     def __init__(
@@ -71,7 +74,6 @@ class FakeCoreInfoProvider:
         options: list[EmulatorOption] | None = None,
         available: bool = True,
         standalone: dict[str, EmulatorInvocation] | None = None,
-        sandbox_launchers: dict[str, str] | None = None,
     ) -> None:
         self.active_core = active_core
         self._available_cores: list[dict[str, Any]] = []
@@ -83,13 +85,9 @@ class FakeCoreInfoProvider:
             self.available_cores = available_cores or []
         self.available = available
         self.standalone: dict[str, EmulatorInvocation] = standalone if standalone is not None else {}
-        # Maps a standalone command → its sandbox launcher path (the folder-boot
-        # direct-bake probe); an unseeded command resolves to ``None``.
-        self.sandbox_launchers: dict[str, str] = sandbox_launchers if sandbox_launchers is not None else {}
         self.reset_cache_count = 0
         self.active_core_calls: list[str] = []
         self.emulator_options_calls: list[str] = []
-        self.sandbox_launcher_calls: list[str] = []
 
     @property
     def available_cores(self) -> list[dict[str, Any]]:
@@ -118,9 +116,23 @@ class FakeCoreInfoProvider:
         self.emulator_options_calls.append(system_name)
         return {"available": self.available, "options": self.options}
 
-    def resolve_sandbox_launcher(self, command: str) -> str | None:
-        self.sandbox_launcher_calls.append(command)
-        return self.sandbox_launchers.get(command)
-
     def reset_cache(self) -> None:
         self.reset_cache_count += 1
+
+
+class FakeSandboxLauncher:
+    """In-memory ``SandboxLauncherFn`` for tests.
+
+    Maps a standalone command to the sandbox launcher path the folder-boot bake
+    execs; an unseeded command resolves to ``None``, which is what a command with
+    no emulator token or no reachable find-rule entry answers. ``calls`` records
+    every command asked about.
+    """
+
+    def __init__(self, launchers: dict[str, str] | None = None) -> None:
+        self.launchers: dict[str, str] = launchers if launchers is not None else {}
+        self.calls: list[str] = []
+
+    def __call__(self, command: str) -> str | None:
+        self.calls.append(command)
+        return self.launchers.get(command)

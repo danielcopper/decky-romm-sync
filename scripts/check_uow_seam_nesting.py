@@ -73,18 +73,19 @@ own) has no method name to match: the consumer writes
 ``self._candidate_probe(...)``, never the seam's own name. Rule 1 leaves it
 open — the ``current_save_sorting`` / ``has_adoption_candidate`` entries guard
 only call sites that name the method, which is the owning service's own and any
-peer holding the object rather than the bound method. Rule 2's four
+peer holding the object rather than the bound method. Rule 2's five
 call-shaped seams are closed the cheap way instead: every consumer in
 ``services/`` binds each to one attribute — ``self._resolve_system``,
-``self._system_extensions``, ``self._system_known``,
+``self._sandbox_launcher``, ``self._system_extensions``, ``self._system_known``,
 ``self._firmware_folder_verdicts`` — and those attribute names are what the
-list carries (``resolve_system`` is listed beside its own, being the
-implementation's real method name, ``RommHttpAdapter.resolve_system``, for a
-peer holding the object; the other three have no such twin). That is a
-convention, not a guarantee — a consumer binding one under a different
-attribute slips past, and it only works while the attribute name means one
-thing. Doing the same for rule 1 means a second list of holding attributes to
-keep in step, and is not built.
+list carries (``resolve_system`` and ``resolve_sandbox_launcher`` are listed
+beside theirs, being the implementations' real method names,
+``RommHttpAdapter.resolve_system`` and
+``EsFindRulesAdapter.resolve_sandbox_launcher``, for a peer holding the object;
+the other three have no such twin). That is a convention, not a guarantee — a
+consumer binding one under a different attribute slips past, and it only works
+while the attribute name means one thing. Doing the same for rule 1 means a
+second list of holding attributes to keep in step, and is not built.
 
 Conversely, matching only *attribute* calls is what keeps the ``enumerate_discs``
 entry safe: the pure ``domain.disc_selection.enumerate_discs`` does no I/O of
@@ -170,18 +171,30 @@ IO_SEAM_METHODS: frozenset[str] = frozenset(
         # DiscResolver — the same recursive walk, resolving the persisted disc
         # pin over it.
         "resolve_for_install",
-        # CoreInfoProvider (services/protocols/paths.py) — all four reads of
-        # RetroDECK's ES-DE configuration. Each re-probes the flatpak install
-        # roots for ITS file and re-stats it before it may answer from the parse
-        # cache: es_systems.xml for the first three, es_find_rules.xml for
-        # resolve_sandbox_launcher. get_emulator_options touches both — it globs
-        # every option's emulator install through the find rules. Listing one of
-        # the four would be arbitrary: services/firmware/status.py calls two of them
-        # inside one loop, and services/active_core_resolver.py the other two.
+        # CoreInfoProvider (services/protocols/paths.py) — the three catalogue
+        # reads. Each is answered by the vendored emu-atlas resolver, which reads
+        # ES-DE's own catalogue off the flatpak install: a system's first read
+        # opens it, and the adapter's per-system cache is what a second one hits.
+        # get_emulator_options also globs each BAKEABLE STANDALONE option's
+        # emulator install through the find rules, on every call — that probe is
+        # not cached, because a component the user installs mid-session has to be
+        # seen. Listing one of the three would be arbitrary: every consumer pairs
+        # two of them. FirmwareStatusReader._enrich_platform_map calls
+        # get_active_core beside get_emulator_options inside one loop, and
+        # ActiveCoreResolver reaches get_emulator_options (active_emulator_for_rom)
+        # and get_default_emulator (_resolve_by_precedence) on one resolution.
         "get_active_core",
         "get_default_emulator",
         "get_emulator_options",
+        # SandboxLauncherFn (services/protocols/paths.py) — reads ES-DE's
+        # es_find_rules.xml (re-probing the flatpak roots for it and re-statting
+        # it before it may answer from the parse cache) to resolve a standalone
+        # command's launcher inside the RetroDECK sandbox. The Protocol is
+        # call-shaped, so `_sandbox_launcher` — the attribute every consumer in
+        # services/ binds it to — is listed beside `resolve_sandbox_launcher`,
+        # the implementation's own method name.
         "resolve_sandbox_launcher",
+        "_sandbox_launcher",
         # SystemResolver (services/protocols/paths.py) — parses the plugin's OWN
         # bundled config.json (plugin root, else defaults/config.json) for its
         # platform_map. Implemented on the RomM HTTP adapter, which the name makes
@@ -197,18 +210,19 @@ IO_SEAM_METHODS: frozenset[str] = frozenset(
         # FirmwareFolderVerdictFn (services/protocols/paths.py) — lists one
         # core's declared folder and reads every candidate inside it the way the
         # core does (0.26 s for LRPS2 on the reference machine, against 0.24 s
-        # for the whole machine's unverified inventory). The fourth call-shaped
+        # for the whole machine's unverified inventory). Another call-shaped
         # seam, so the list carries the attribute every consumer in services/
-        # binds it to, as it does for the other three.
+        # binds it to, as it does for the others.
         "_firmware_folder_verdicts",
         # SystemSupportedExtensionsFn / SystemKnownFn (services/protocols/paths.py)
-        # — two questions to es_systems.xml, through the same every-call flatpak
-        # probe as the CoreInfoProvider reads above. Both Protocols are
-        # call-shaped, and unlike SystemResolver there is no method name a
-        # service could write beside the attribute: the implementations
-        # (CoreResolver.get_supported_extensions / .is_known_system) are on no
-        # Protocol a service holds. So the attribute is all there is, and it is
-        # matchable because each of these means one thing in the tree.
+        # — two more questions to ES-DE's catalogue, answered by the same
+        # resolver and through the same adapter cache as the CoreInfoProvider
+        # reads above. Both Protocols are call-shaped, and unlike SystemResolver
+        # there is no method name a service could write beside the attribute: the
+        # implementations (AtlasCatalogueAdapter.get_supported_extensions /
+        # .is_known_system) are on no Protocol a service holds. So the attribute
+        # is all there is, and it is matchable because each of these means one
+        # thing in the tree.
         "_system_extensions",
         "_system_known",
     }

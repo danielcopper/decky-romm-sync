@@ -33,7 +33,17 @@ from .placement import (
     CAVEAT_CORE_OPTION_VALUE_UNESTABLISHED,
     CAVEAT_SAVE_ROOT_REDIRECTED,
     CAVEAT_SAVE_ROOT_UNRESOLVABLE,
+    REASON_CARD_INDEX_OUTSIDE_RECORDED_NAMES,
+    REASON_CONTENT_CLASS_UNNAMED,
+    REASON_CONTENT_CLASS_UNRECORDED,
+    REASON_EMULATED_MODEL_UNRECORDED,
+    REASON_INI_OUTRANKED_BY_CASCADE,
+    REASON_INI_PRESENCE_UNESTABLISHED,
+    REASON_INI_SEARCH_PATH_UNLISTABLE,
+    REASON_SAVEPATH_CONFIG_UNREADABLE,
+    REASON_SAVEPATH_UNTRANSLATABLE,
     Caveat,
+    DataValue,
     OptionReading,
 )
 
@@ -144,14 +154,21 @@ def _unknown_value(core: str, option_key: str, value: str) -> Caveat:
     )
 
 
-def _mode_unestablished(core: str, reason: str) -> Caveat:
-    """The rule as a whole could not decide — the reason travels with the code."""
+def _mode_unestablished(core: str, reason: str, because: str, **facts: DataValue) -> Caveat:
+    """The rule as a whole could not decide — the slug and its subject travel with the code.
+
+    *reason* is the slug from :data:`CORE_MODE_UNESTABLISHED_REASONS` a client
+    branches on, *because* the sentence that says the same thing to a person,
+    and *facts* the subject the sentence names — the extension it saw, the path
+    it could not translate, the ini files it is about. Three arguments rather
+    than one, because the sentence used to be all three at once.
+    """
     return Caveat(
         CAVEAT_CORE_MODE_UNESTABLISHED,
         f"core {core!r} is recorded as selecting between save behaviours by a rule, and the rule "
-        f"could not decide here: {reason} — the recorded behaviour is not applied; the standard "
+        f"could not decide here: {because} — the recorded behaviour is not applied; the standard "
         "answer below may miss the real save stack",
-        {"core": core, "reason": reason},
+        {"core": core, "reason": reason, **facts},
     )
 
 
@@ -239,6 +256,7 @@ def _hatari(reading: RuleReading) -> ModeChoice:
             caveats=(
                 _mode_unestablished(
                     "hatari",
+                    REASON_CONTENT_CLASS_UNNAMED,
                     "which write-protect option governs depends on the content's class (a floppy "
                     "image is written back into itself, a hard-disk image takes writes in place), "
                     "and no content was named",
@@ -255,9 +273,11 @@ def _hatari(reading: RuleReading) -> ModeChoice:
             caveats=(
                 _mode_unestablished(
                     "hatari",
+                    REASON_CONTENT_CLASS_UNRECORDED,
                     f"the content's extension {extension!r} is outside both recorded classes "
                     "(floppy: st/msa/stx/dim/ipf/zip/m3u; hard disk: ide/vhd/gem), so which "
                     "write-protect option governs was never established",
+                    extension=extension,
                 ),
             ),
         )
@@ -317,6 +337,7 @@ def _scummvm(reading: RuleReading) -> ModeChoice:
             caveats=(
                 _mode_unestablished(
                     "scummvm",
+                    REASON_SAVEPATH_CONFIG_UNREADABLE,
                     "the save directory is ScummVM's own 'savepath' setting in scummvm.ini, and "
                     "the ini could not be read — whether the saves were routed elsewhere is "
                     "unknowable here",
@@ -343,8 +364,10 @@ def _scummvm(reading: RuleReading) -> ModeChoice:
             caveats=(
                 _mode_unestablished(
                     "scummvm",
+                    REASON_SAVEPATH_UNTRANSLATABLE,
                     f"scummvm.ini sets savepath to {savepath!r}, which no view of this machine "
                     "translates to a host path — whether it governs cannot be established",
+                    path=savepath,
                 ),
             ),
             readings=(
@@ -566,9 +589,15 @@ def _beetle_psx_rule(prefix: str, core: str) -> Callable[[RuleReading], ModeChoi
                 caveats=(
                     _mode_unestablished(
                         core,
+                        REASON_CARD_INDEX_OUTSIDE_RECORDED_NAMES,
                         f"the card-image index options select other card files than the recorded "
                         f"names cover ({names} — the digit in <stem>.<idx>.mcr is the option's "
                         "value, libretro.cpp:2159-2164 at d6383bf)",
+                        # An option nothing on this machine states carries the
+                        # empty value this package spells an absent value with,
+                        # rather than dropping the key and hiding which options
+                        # the statement is about.
+                        options={key: value or "" for key, value in offset},
                     ),
                 ),
             )
@@ -618,6 +647,7 @@ def _gpgx_content_class(extension: str | None) -> ModeChoice | None:
             caveats=(
                 _mode_unestablished(
                     "genesis_plus_gx",
+                    REASON_CONTENT_CLASS_UNNAMED,
                     "the save story splits on the content's class (a cartridge fills the "
                     "frontend's SRAM interface, a CD writes the core's own BRAM files), and no "
                     "content was named",
@@ -637,9 +667,11 @@ def _gpgx_content_class(extension: str | None) -> ModeChoice | None:
             caveats=(
                 _mode_unestablished(
                     "genesis_plus_gx",
+                    REASON_CONTENT_CLASS_UNRECORDED,
                     f"the content's extension {extension!r} is outside both recorded classes "
                     "(cartridge: md/smd/gen/sms/gg/sg/68k/sgd/mdx/bms and raw .bin; CD: "
                     "cue/iso/chd/m3u), so which save story applies was never established",
+                    extension=extension,
                 ),
             ),
         )
@@ -835,27 +867,52 @@ def _mame_redirected(key: str, path: str, options_file: str | None) -> Caveat:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _MameRefusal:
+    """Why the ini branch cannot decide: the slug, the sentence, and the inis it is about.
+
+    One shape for all four refusals rather than a tuple whose length says which
+    one it is — ``members`` is the cascade file or files the statement names,
+    empty where the refusal is about the search path itself and no ini was
+    reached.
+    """
+
+    reason: str
+    because: str
+    members: tuple[str, ...] = ()
+
+    @property
+    def facts(self) -> dict[str, DataValue]:
+        """``members`` where the refusal names inis, nothing where it names none."""
+        return {"members": self.members} if self.members else {}
+
+
 def _mame_cascade_refusal(
     main: FileLookup, driver: FileLookup, stem: str | None, strays: tuple[str, ...] | None
-) -> str | None:
+) -> _MameRefusal | None:
     """Why the ini branch cannot decide — ``None`` when it can."""
     if main.status == FILE_UNREADABLE:
-        return (
+        return _MameRefusal(
+            REASON_INI_PRESENCE_UNESTABLISHED,
             "MAME's own paths and ini reading are both on, and whether a mame.ini exists "
             "along the emulator's search path could not be established — whether the save "
-            "trees were routed elsewhere is unknowable here"
+            "trees were routed elsewhere is unknowable here",
+            (_MAME_MAIN_INI,),
         )
     if driver.status == FILE_UNREADABLE:
-        return (
+        return _MameRefusal(
+            REASON_INI_PRESENCE_UNESTABLISHED,
             f"MAME's own paths and ini reading are both on, and whether a {stem}.ini exists "
             "along the emulator's search path could not be established — the driver's ini "
-            "outranks mame.ini, so which values govern is unknowable here"
+            "outranks mame.ini, so which values govern is unknowable here",
+            (f"{stem}.ini",),
         )
     if strays is None:
-        return (
+        return _MameRefusal(
+            REASON_INI_SEARCH_PATH_UNLISTABLE,
             "MAME reads an ini cascade, and one of its search directories could not be "
             "listed — whether a higher-priority ini overrides the values read is unknowable "
-            "here"
+            "here",
         )
     if strays:
         outranks = (
@@ -863,10 +920,12 @@ def _mame_cascade_refusal(
             if len(strays) == 1
             else f"{', '.join(strays)} on its search path outrank mame.ini"
         )
-        return (
+        return _MameRefusal(
+            REASON_INI_OUTRANKED_BY_CASCADE,
             "MAME reads an ini cascade whose members apply by driver metadata inside the "
             f"binary, which atlas cannot attribute — {outranks}, so which values govern was "
-            "never established"
+            "never established",
+            strays,
         )
     return None
 
@@ -925,7 +984,12 @@ def _mame_own_ini(reading: RuleReading) -> ModeChoice:
     )
     refusal = _mame_cascade_refusal(main, driver, stem, _mame_stray_inis(reading, stem))
     if refusal is not None:
-        return ModeChoice(None, caveats=(_mode_unestablished("mame", refusal),))
+        return ModeChoice(
+            None,
+            caveats=(
+                _mode_unestablished("mame", refusal.reason, refusal.because, **refusal.facts),
+            ),
+        )
     values, sources = _mame_ini_readings(main, driver)
     return ModeChoice(None, caveats=_mame_tree_caveats(values, sources))
 
@@ -960,6 +1024,423 @@ def _mame(reading: RuleReading) -> ModeChoice:
     return _mame_own_ini(reading)
 
 
+# ---------------------------------------------------------------------------
+# puae — an Amiga's save is the floppy's own write or the CD models' NVRAM, and
+# which of the two applies is the content's class, read off the extension the
+# way libretro-dc.c's dc_get_image_type dispatches it (:825-868 at 0043cf9):
+# adf/adz/fdi/dms/raw/ipf load as floppies, cue/ccd/nrg/mds/iso/chd as CDs.
+# retro_get_memory_size answers RETRO_MEMORY_SYSTEM_RAM alone
+# (libretro-core.c:8881-8886), so nothing reaches the frontend's .srm.
+#
+# Floppies. UAE's fetch_path returns the frontend's save directory for every
+# name under __LIBRETRO__ (misc.c:609-617), so the write file it composes —
+# <save dir>/<stem>_save.adf, DISK_get_saveimagepath(-2) falling through to
+# DISK_get_default_saveimagepath with saveimageoriginalpath fixed at 0
+# (disk.c:1166-1210, misc.c:155; the "_save.adf" spelling at :1142-1149) —
+# stands under the save root. Whether one is created at all is
+# disk_setwriteprotect (:3229-3285), and its only callers are the two libretro
+# redirect helpers (libretro-core.c:605, :642). With both switches off no write
+# file exists while the emulation runs, and the image's own format decides:
+# a plain image leaves drv->wrprot at 0 and drive_write_data writes the track
+# back into the content file (disk.c:2937-2969, ADF_NORMAL), while a gzipped or
+# DMS image is unpacked into memory so openwritefile sets it (:1266-1268) and an
+# IPF or FDI image sets it at insert (:1494-1501, :1517-1520) — either way
+# drive_writeprotected (:853-866) makes drive_write_data drop the write. The
+# extension is what this rule reads and the header is what the emulator checks,
+# so an .adf carrying a UAE--ADF header takes the read-only path too
+# (:1324-1327, :1533-1534); the card's mode prose says so.
+# 'puae_floppy_write_protection' writes floppy_write_protect=true
+# (libretro-core.c:4097-4112), which is p->floppy_read_only: it makes
+# drive_writeprotected true for every image (disk.c:865) and makes
+# disk_setwriteprotect return before creating anything (:3248-3251), so it
+# discards the writes whatever the redirect switch says.
+# 'puae_floppy_write_redirect' (libretro-core.c:4128-4162) makes
+# diskfile_iswriteprotect demand a write file for every image
+# (disk.c:1300-1306); floppy_open_redirect creates it and reinserts
+# (libretro-core.c:564-610), floppy_close_redirect gzips it to
+# <stem>_save.adf.gz and removes the plain file (:612-658), and the original
+# image is chmod'd read-only (disk.c:3276-3282).
+#
+# CD. retro_config_kickstart appends flash_file=<save dir>/<name>.nvr only where
+# the model has an extended Kickstart (libretro-core.c:5577-5578, :5640-5661),
+# which emu_config_string gives CDTV, CD32 and CD32FR alone (:5969-5978) — and
+# it appends it for the *model*, so a floppy on a CD model gets one too. The
+# name is the content's own stem, or the shared puae_libretro(_cdtv).nvr under
+# 'puae_shared_nvram'. Which model runs a CD is 'puae_model' where it names one,
+# and on 'auto' the CD default 'puae_model_cd' — always a CD model — unless a
+# boot hard drive is configured, in which case the hard-disk model applies
+# except where a marker in the content's own launch path names a CD one
+# (:7000-7028). That path is not a value this answer reads, so the rule refuses
+# it rather than picking one of the two.
+#
+# Two writable stores sit beside every mode here and none of them is stated, so
+# no group claims a closed candidate universe. 'puae_use_boot_hd' on anything
+# but 'disabled' mounts a Boot HD read-write for floppy and CD content alike
+# (retro_config_boot_hd, :5390-5493, called at :6495 and :7039) —
+# <save dir>/puae_libretro.hdf under the hdf sizes, <save dir>/BootHD/ under
+# 'files'. And two .uae files under the save root are appended after every line
+# this rule reasons about — puae_libretro_global.uae (:7330-7343) and
+# <save dir>/<content stem>.uae (:7345-7362) — so either can override a mode
+# outright: flash_file is parsed by cfgfile_string (cfgfile.c:6068), whose body
+# at :3250-3257 copies into the destination on every match with no first-wins
+# guard, so the last occurrence in a UAE config stands. The model preset
+# puae_libretro_<model>.uae (:6009-6032) cannot: it is read into
+# uae_custom_config (:6022), concatenated into the preset (:6231) and emitted
+# with it (:6488 for floppies, :7031 for CDs) *before* retro_config_kickstart
+# writes flash_file= (:6491, :7034), so the core's own line wins over it. What
+# it does reach is the Kickstart, parsed straight out of it at :6024.
+# ---------------------------------------------------------------------------
+
+_PUAE_PROTECT = "puae_floppy_write_protection"
+_PUAE_REDIRECT = "puae_floppy_write_redirect"
+_PUAE_SHARED_NVRAM = "puae_shared_nvram"
+_PUAE_MODEL = "puae_model"
+_PUAE_BOOT_HD = "puae_use_boot_hd"
+_PUAE_AUTO = "auto"
+_PUAE_DISABLED = "disabled"
+_PUAE_ENABLED = "enabled"
+_PUAE_TOGGLES = (_PUAE_DISABLED, _PUAE_ENABLED)
+# The classes this record covers, and the class token each extension carries.
+# The two floppy sets differ in what an unswitched write does, which is the
+# image format rather than the dispatch: dc_get_image_type puts all six in one
+# class, and diskfile_iswriteprotect's header checks split them again.
+_PUAE_CLASS_FLOPPY = "floppy"
+_PUAE_CLASS_FLOPPY_READ_ONLY = "floppy-read-only"
+_PUAE_CLASS_CD = "cd"
+_PUAE_FLOPPY_IN_PLACE = frozenset({"adf", "raw"})
+_PUAE_FLOPPY_READ_ONLY = frozenset({"adz", "dms", "fdi", "ipf"})
+_PUAE_CD = frozenset({"cue", "ccd", "nrg", "mds", "iso", "chd"})
+_PUAE_CD32 = "CD32"
+_PUAE_CD_MODELS = frozenset({"CDTV", _PUAE_CD32, "CD32FR"})
+# puae_use_boot_hd's registered value set. The core's handler has no else
+# (libretro-core.c:4478-4488), so an unrecognized value leaves the flag as it
+# was rather than meaning 'disabled' — the rule refuses it instead of reading
+# a machine's setting as a value the core never saw.
+_PUAE_BOOT_HD_VALUES = (
+    _PUAE_DISABLED,
+    "files",
+    "hdf20",
+    "hdf40",
+    "hdf80",
+    "hdf128",
+    "hdf256",
+    "hdf512",
+)
+_PUAE_MODELS = frozenset(
+    {
+        _PUAE_AUTO,
+        "A500OG",
+        "A500",
+        "A500PLUS",
+        "A600",
+        "A1200OG",
+        "A1200",
+        "A2000OG",
+        "A2000",
+        "A4030",
+        "A4040",
+    }
+) | _PUAE_CD_MODELS
+_PUAE_FLOPPY_WRITEBACK = "floppy-writeback"
+_PUAE_FLOPPY_FORMAT_DISCARDED = "floppy-format-discarded"
+_PUAE_FLOPPY_DISCARDED = "floppy-discarded"
+_PUAE_FLOPPY_REDIRECTED = "floppy-redirected"
+_PUAE_CD_PER_GAME = "cd-per-game"
+_PUAE_CD_SHARED = "cd-shared"
+_PUAE_CD_NO_NVRAM = "cd-no-nvram"
+# What a floppy class does with both switches off — the only place the two
+# floppy classes differ.
+_PUAE_UNSWITCHED = {
+    _PUAE_CLASS_FLOPPY: _PUAE_FLOPPY_WRITEBACK,
+    _PUAE_CLASS_FLOPPY_READ_ONLY: _PUAE_FLOPPY_FORMAT_DISCARDED,
+}
+
+
+def _puae_flipped(value: str) -> str:
+    """The other value of a two-value switch."""
+    return _PUAE_DISABLED if value == _PUAE_ENABLED else _PUAE_ENABLED
+
+
+def _puae_model_unrecorded(core: str, because: str, model: str) -> Caveat:
+    """The emulated model decides part of the save story and this one is outside it."""
+    return _mode_unestablished(core, REASON_EMULATED_MODEL_UNRECORDED, because, model=model)
+
+
+def _puae_class(core: str, extension: str | None) -> str | ModeChoice:
+    """The class token this extension carries, or the refusal to name one."""
+    if extension is None:
+        return ModeChoice(
+            None,
+            caveats=(
+                _mode_unestablished(
+                    core,
+                    REASON_CONTENT_CLASS_UNNAMED,
+                    "the save story splits on the content's class (a floppy takes its writes "
+                    "into its own image or into a write file under the save root, a CD writes "
+                    "the emulated model's non-volatile memory), and no content was named",
+                ),
+            ),
+        )
+    if extension in _PUAE_FLOPPY_IN_PLACE:
+        return _PUAE_CLASS_FLOPPY
+    if extension in _PUAE_FLOPPY_READ_ONLY:
+        return _PUAE_CLASS_FLOPPY_READ_ONLY
+    if extension in _PUAE_CD:
+        return _PUAE_CLASS_CD
+    return ModeChoice(
+        None,
+        caveats=(
+            _mode_unestablished(
+                core,
+                REASON_CONTENT_CLASS_UNRECORDED,
+                f"the content's extension {extension!r} is outside every recorded class "
+                "(floppy: adf/raw written in place, adz/dms/fdi/ipf read-only; CD: "
+                "cue/ccd/nrg/mds/iso/chd), so which save story applies was never established",
+                extension=extension,
+            ),
+        ),
+    )
+
+
+def _puae_floppy_mode(protect: str, redirect: str, unswitched: str) -> str:
+    """Which floppy mode a pair of switch values selects — protection wins."""
+    if protect == _PUAE_ENABLED:
+        return _PUAE_FLOPPY_DISCARDED
+    if redirect == _PUAE_ENABLED:
+        return _PUAE_FLOPPY_REDIRECTED
+    return unswitched
+
+
+def _puae_floppy_alternatives(
+    protect: str, redirect: str, unswitched: str
+) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    """The one-edit neighbours — each floppy switch flipped on its own.
+
+    Write protection outranks redirection, so one of the two flips can land
+    back on the mode in force; such a neighbour is dropped rather than offered
+    as a change that changes nothing.
+    """
+    here = _puae_floppy_mode(protect, redirect, unswitched)
+    neighbours = (
+        (
+            _PUAE_PROTECT,
+            _puae_flipped(protect),
+            _puae_floppy_mode(_puae_flipped(protect), redirect, unswitched),
+        ),
+        (
+            _PUAE_REDIRECT,
+            _puae_flipped(redirect),
+            _puae_floppy_mode(protect, _puae_flipped(redirect), unswitched),
+        ),
+    )
+    return tuple((mode, ((key, value),)) for key, value, mode in neighbours if mode != here)
+
+
+def _puae_floppy(core: str, reading: RuleReading, model: str, content_class: str) -> ModeChoice:
+    """The floppy half: the two write switches, on a model that keeps no NVRAM."""
+    if model in _PUAE_CD_MODELS:
+        return ModeChoice(
+            None,
+            caveats=(
+                _puae_model_unrecorded(
+                    core,
+                    f"the selected model {model!r} keeps a non-volatile memory file beside the "
+                    "floppy's own save story — the flash_file line is appended for the model, "
+                    "not for the content's class — and the recorded floppy modes state only the "
+                    "floppy half",
+                    model,
+                ),
+            ),
+        )
+    protect = reading.option_values[_PUAE_PROTECT]
+    redirect = reading.option_values[_PUAE_REDIRECT]
+    switches = ((_PUAE_PROTECT, protect), (_PUAE_REDIRECT, redirect))
+    missing = _require_values(core, switches)
+    if missing:
+        return ModeChoice(None, caveats=missing)
+    alien = _refuse_alien(core, tuple((key, value, _PUAE_TOGGLES) for key, value in switches))
+    if alien:
+        return ModeChoice(None, caveats=alien)
+    unswitched = _PUAE_UNSWITCHED[content_class]
+    here, there = protect or "", redirect or ""
+    return ModeChoice(
+        _puae_floppy_mode(here, there, unswitched),
+        alternatives=_puae_floppy_alternatives(here, there, unswitched),
+    )
+
+
+def _puae_cd_nvram_mode(shared: str) -> str:
+    """Which NVRAM mode the sharing switch selects."""
+    return _PUAE_CD_SHARED if shared == _PUAE_ENABLED else _PUAE_CD_PER_GAME
+
+
+def _puae_cd_model(core: str, reading: RuleReading, model: str, shared: str) -> ModeChoice | None:
+    """The model a CD runs on — ``None`` where it keeps a non-volatile memory file.
+
+    The alternative offered for a model without one names ``CD32`` rather than
+    ``auto``: an explicit CD model reaches the NVRAM mode whatever the boot
+    hard drive says (libretro-core.c:6263 writes the preset straight, and the
+    CD branch's marker logic is skipped at :7000), while ``auto`` reaches it
+    only with ``puae_use_boot_hd`` disabled — an alternative that does not
+    select the mode it names would be worse than none.
+    """
+    if model in _PUAE_CD_MODELS:
+        return None
+    if model != _PUAE_AUTO:
+        return ModeChoice(
+            _PUAE_CD_NO_NVRAM,
+            alternatives=((_puae_cd_nvram_mode(shared), ((_PUAE_MODEL, _PUAE_CD32),)),),
+        )
+    boot_hd = reading.option_values[_PUAE_BOOT_HD]
+    if boot_hd == _PUAE_DISABLED:
+        return None
+    return ModeChoice(
+        None,
+        caveats=(
+            _puae_model_unrecorded(
+                core,
+                "with the model on 'auto' and a boot hard drive configured, which machine runs "
+                "a CD is decided first by markers in the content's own launch path and only "
+                "otherwise by the hard-disk model, which keeps no non-volatile memory at all — "
+                "and that launch path is not a value this answer reads",
+                model,
+            ),
+        ),
+    )
+
+
+def _puae_cd_switches(core: str, reading: RuleReading, model: str) -> tuple[Caveat, ...]:
+    """Every CD switch the rule will consult, refused together rather than one at a time.
+
+    Which switches those are is the model's: ``puae_use_boot_hd`` decides the
+    machine only where ``puae_model`` is ``auto``, so naming it for an explicit
+    model would report a switch that did not matter here.
+    """
+    pairs = ((_PUAE_SHARED_NVRAM, reading.option_values[_PUAE_SHARED_NVRAM]),)
+    known = ((_PUAE_SHARED_NVRAM, _PUAE_TOGGLES),)
+    if model == _PUAE_AUTO:
+        pairs += ((_PUAE_BOOT_HD, reading.option_values[_PUAE_BOOT_HD]),)
+        known += ((_PUAE_BOOT_HD, _PUAE_BOOT_HD_VALUES),)
+    missing = _require_values(core, pairs)
+    if missing:
+        return missing
+    values = dict(pairs)
+    return _refuse_alien(core, tuple((key, values[key], allowed) for key, allowed in known))
+
+
+def _puae_cd(core: str, reading: RuleReading, model: str) -> ModeChoice:
+    """The CD half: the sharing switch, once the model is one that has an NVRAM."""
+    refused = _puae_cd_switches(core, reading, model)
+    if refused:
+        return ModeChoice(None, caveats=refused)
+    shared = reading.option_values[_PUAE_SHARED_NVRAM] or ""
+    without_nvram = _puae_cd_model(core, reading, model, shared)
+    if without_nvram is not None:
+        return without_nvram
+    flipped = _puae_flipped(shared)
+    return ModeChoice(
+        _puae_cd_nvram_mode(shared),
+        alternatives=((_puae_cd_nvram_mode(flipped), ((_PUAE_SHARED_NVRAM, flipped),)),),
+    )
+
+
+def _puae_rule(core: str) -> Callable[[RuleReading], ModeChoice]:
+    """Both PUAE generations read the same switches; only the caveats' core differs."""
+
+    def rule(reading: RuleReading) -> ModeChoice:
+        content_class = _puae_class(core, reading.content_extension)
+        if isinstance(content_class, ModeChoice):
+            return content_class
+        model = reading.option_values[_PUAE_MODEL]
+        if model is None:
+            return ModeChoice(None, caveats=(_value_unestablished(core, _PUAE_MODEL),))
+        if model not in _PUAE_MODELS:
+            return ModeChoice(None, caveats=(_unknown_value(core, _PUAE_MODEL, model),))
+        if content_class == _PUAE_CLASS_CD:
+            return _puae_cd(core, reading, model)
+        return _puae_floppy(core, reading, model, content_class)
+
+    return rule
+
+
+# ---------------------------------------------------------------------------
+# opera — the NVRAM file's name carries two option values, so the modes are
+# their product. 'opera_nvram_storage' picks the directory and the naming
+# scheme and 'opera_nvram_version' the number in the name: per game writes
+# <save dir>/opera/per_game/<stem>.<version>.srm and shared writes
+# <save dir>/opera/shared/nvram.<version>.srm (opera_lr_nvram.c:130-152,
+# :154-175 at 67a29e6; the 'opera' segment joined onto the frontend's save
+# directory at :115-128, the stem taken from the content path at :369-374).
+# Ten registered versions times two storages is twenty modes naming one file
+# each — the file-name vocabulary has no option-valued hole, so the product is
+# enumerated in the card rather than parametrized (issue #387).
+#
+# Both switches are registered options, 'per game'/'shared' defaulting to
+# 'per game' and '0' through '9' defaulting to '0' (libretro_core_options.c
+# :177-187, :188-206), read through a helper that prefixes 'opera_' to the key
+# (opera_lr_opts.c:53-71): the storage is a string comparison against 'shared'
+# (:330-337), the version an atoi (:346-351, getval_as_int at :73-85). Either
+# would still act on a value outside its registered set, and the rule refuses
+# such a value instead of naming the file it would make — the record covers
+# the twenty modes the core registers, and a value outside them says the
+# record lags rather than that the mode is one of the twenty.
+#
+# Twenty is a space too large to list whole, so the alternatives are the
+# one-edit neighbours — every switch, changed once: the other storage at this
+# version, and each other version at this storage.
+# ---------------------------------------------------------------------------
+
+_OPERA_STORAGE = "opera_nvram_storage"
+_OPERA_VERSION = "opera_nvram_version"
+_OPERA_PER_GAME = "per game"
+_OPERA_SHARED = "shared"
+# What each storage value opens a mode name with, and the versions that close
+# it — the two registered sets whose product the card states.
+_OPERA_STORAGE_MODES = {_OPERA_PER_GAME: "per-game", _OPERA_SHARED: "shared"}
+_OPERA_STORAGES = tuple(_OPERA_STORAGE_MODES)
+_OPERA_VERSIONS = tuple(str(version) for version in range(10))
+
+
+def _opera_mode(storage: str, version: str) -> str:
+    """The mode one (storage, version) pair names."""
+    return f"{_OPERA_STORAGE_MODES[storage]}-{version}"
+
+
+def _opera_alternatives(
+    storage: str, version: str
+) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    """The one-edit neighbours: the other storage here, each other version here."""
+    return tuple(
+        (_opera_mode(other, version), ((_OPERA_STORAGE, other),))
+        for other in _OPERA_STORAGES
+        if other != storage
+    ) + tuple(
+        (_opera_mode(storage, other), ((_OPERA_VERSION, other),))
+        for other in _OPERA_VERSIONS
+        if other != version
+    )
+
+
+def _opera(reading: RuleReading) -> ModeChoice:
+    storage = reading.option_values[_OPERA_STORAGE]
+    version = reading.option_values[_OPERA_VERSION]
+    missing = _require_values("opera", ((_OPERA_STORAGE, storage), (_OPERA_VERSION, version)))
+    if missing:
+        return ModeChoice(None, caveats=missing)
+    alien = _refuse_alien(
+        "opera",
+        ((_OPERA_STORAGE, storage, _OPERA_STORAGES), (_OPERA_VERSION, version, _OPERA_VERSIONS)),
+    )
+    if alien:
+        return ModeChoice(None, caveats=alien)
+    # Both are stated past _require_values; the fallbacks are the checker's.
+    chosen_storage, chosen_version = storage or "", version or ""
+    return ModeChoice(
+        _opera_mode(chosen_storage, chosen_version),
+        alternatives=_opera_alternatives(chosen_storage, chosen_version),
+    )
+
+
 # The registry the card loader validates against: a card stating a
 # ``governing_rule`` must have its function here, and the test suite holds
 # the mirror claim — a rule with no card would be code describing nothing.
@@ -972,4 +1453,7 @@ RULES: Mapping[str, Callable[[RuleReading], ModeChoice]] = {
     "mednafen_psx_hw": _beetle_psx_rule("beetle_psx_hw_", "mednafen_psx_hw"),
     "genesis_plus_gx": _genesis_plus_gx,
     "mame": _mame,
+    "puae": _puae_rule("puae"),
+    "puae2021": _puae_rule("puae2021"),
+    "opera": _opera,
 }

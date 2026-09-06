@@ -30,6 +30,7 @@ from typing import Any, Mapping
 from ._data import packaged_text
 from .mode_rules import RULES as MODE_RULES
 from .placement import (
+    FILES_ESTABLISHED_FOR_TOKENS,
     GRANULARITIES,
     GRANULARITY_NONE,
     GRANULARITY_PER_GAME_FILE,
@@ -236,6 +237,7 @@ class SaveGroup:
     complete: bool = False
     files_without_save_id: tuple[str, ...] | None = None
     files_established_for: str | None = None
+    files_established_note: str | None = None
     files_citation: str | None = None
     unnamed: str | None = None
     root: str | None = None
@@ -271,12 +273,15 @@ class SaveMode:
       fact atlas does not read, so the resolver states the id-keyed set and
       hands the alternative to the caller in a caveat instead of picking one.
     - ``files_established_for`` names the class of content the list itself was
-      established for, and ``files_citation`` cites that. Not every difference
-      between content classes is a spelling: Flycast connects four VMUs on a
-      Dreamcast and two on a Naomi board, so for arcade content two of the
-      four declared names can never exist. The scope travels into the same
-      caveat, machine-readably, so the list is never read as established for
-      content it was not.
+      established for — one token from
+      :data:`~atlas.placement.FILES_ESTABLISHED_FOR_TOKENS`, because it reaches
+      a client as the value it decides on. ``files_established_note`` is that
+      class spelled out for a person, and ``files_citation`` cites it. Not every
+      difference between content classes is a spelling: Flycast connects four
+      VMUs on a Dreamcast and two on a Naomi board, so for arcade content two of
+      the four declared names can never exist. The token travels into the same
+      caveat's data and the note into its message, so the list is never read as
+      established for content it was not.
     A group may anchor at a different root than its mode (``SaveGroup.root``)
     — the spanning-save answer that retired the old ``also_under`` field: the
     mode states every part with its files instead of naming a second root it
@@ -470,6 +475,10 @@ class SaveMode:
         return next((g.files_established_for for g in self.here if g.files_established_for), None)
 
     @property
+    def files_established_note(self) -> str | None:
+        return next((g.files_established_note for g in self.here if g.files_established_note), None)
+
+    @property
     def files_citation(self) -> str | None:
         return next((g.files_citation for g in self.here if g.files_citation), None)
 
@@ -657,7 +666,11 @@ def _check_group_root(group: SaveGroup, *, index: int, mode_root: str, where: st
             f"{at}: 'unnamed' and 'observe' answer for the mode's own directory — neither is "
             "established on a cross-root group"
         )
-    if group.files_without_save_id is not None or group.files_established_for is not None:
+    if (
+        group.files_without_save_id is not None
+        or group.files_established_for is not None
+        or group.files_established_note is not None
+    ):
         raise ValueError(
             f"{at}: the file-list scopes answer for the mode's own directory — none is "
             "established on a cross-root group"
@@ -682,15 +695,39 @@ def _id_less_alternative(alternative: Any, files: Any, where: str) -> tuple[str,
     return names
 
 
-def _file_list_scope(mode: Any, files: Any, where: str) -> tuple[str | None, str | None]:
-    """The content class a file list was established for, and the source for it.
+@dataclass(frozen=True, slots=True)
+class _FileListScope:
+    """What a group says about the class its file list was established for.
 
-    Both are answer content rather than flags: an empty one would reach the
-    caller as an empty scope or an empty citation, which says nothing at all.
+    Three fields for three jobs: the ``token`` a client branches on, the
+    ``note`` that says the same thing to a person, and the ``citation`` behind
+    it. Each is answer content rather than a flag — an empty one would reach
+    the caller as an empty scope, an empty explanation or an empty citation,
+    which says nothing at all.
     """
+
+    token: str | None = None
+    note: str | None = None
+    citation: str | None = None
+
+
+def _file_list_scope(mode: Any, files: Any, where: str) -> _FileListScope:
+    """The content class a file list was established for, spelled three ways."""
     raw_scope = mode.get("files_established_for")
     established_for = (
         _expect_str(raw_scope, f"{where}: files_established_for") if raw_scope is not None else None
+    )
+    if established_for is not None and established_for not in FILES_ESTABLISHED_FOR_TOKENS:
+        # It reaches the caller as the value a client decides on — "does this
+        # answer hold for the content I am holding?" — so a token outside the
+        # vocabulary would be an enumeration value nobody can enumerate.
+        raise ValueError(
+            f"{where}: files_established_for must be one of "
+            f"{sorted(FILES_ESTABLISHED_FOR_TOKENS)}, got {established_for!r}"
+        )
+    raw_note = mode.get("files_established_note")
+    note = (
+        _expect_str(raw_note, f"{where}: files_established_note") if raw_note is not None else None
     )
     raw_citation = mode.get("files_citation")
     citation = _expect_str(raw_citation, f"{where}: files_citation") if raw_citation is not None else None
@@ -699,12 +736,13 @@ def _file_list_scope(mode: Any, files: Any, where: str) -> tuple[str | None, str
             f"{where}: 'files_established_for' scopes a declared set — a mode that states no 'files' "
             "has nothing to scope"
         )
-    if citation is not None and established_for is None:
-        raise ValueError(
-            f"{where}: 'files_citation' cites the scope in 'files_established_for', which this mode "
-            "does not state"
-        )
-    return established_for, citation
+    for field_name, value in (("files_established_note", note), ("files_citation", citation)):
+        if value is not None and established_for is None:
+            raise ValueError(
+                f"{where}: '{field_name}' belongs to the scope in 'files_established_for', which "
+                "this mode does not state"
+            )
+    return _FileListScope(established_for, note, citation)
 
 
 def _save_group(mode: Any, where: str) -> SaveGroup:
@@ -730,7 +768,7 @@ def _save_group(mode: Any, where: str) -> SaveGroup:
         # bool("false") is True in Python — never coerce this claim.
         raise ValueError(f"{where}: 'complete' must be a JSON boolean")
     alternative_names = _id_less_alternative(mode.get("files_without_save_id"), files, where)
-    established_for, citation = _file_list_scope(mode, files, where)
+    scope = _file_list_scope(mode, files, where)
     raw_unnamed = mode.get("unnamed")
     unnamed = _expect_str(raw_unnamed, f"{where}: unnamed") if raw_unnamed is not None else None
     if unnamed is not None and files is not None:
@@ -754,8 +792,9 @@ def _save_group(mode: Any, where: str) -> SaveGroup:
         observe=_expect_file_names(observe, f"{where}: observe") if observe is not None else None,
         complete=complete,
         files_without_save_id=alternative_names,
-        files_established_for=established_for,
-        files_citation=citation,
+        files_established_for=scope.token,
+        files_established_note=scope.note,
+        files_citation=scope.citation,
         unnamed=unnamed,
     )
 

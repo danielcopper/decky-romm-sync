@@ -69,22 +69,29 @@ from .placement import (
 AnswerT = TypeVar("AnswerT")
 
 
-def _caveats_contract(caveats: Sequence[Caveat]) -> list[dict[str, Any]]:
-    """One ``{code, data}`` per caveat, in order — the one serialization of a caveat.
+def data_contract(data: Mapping[str, "str | Sequence[str] | Mapping[str, str]"]) -> dict[str, Any]:
+    """The one rule for serializing a ``data`` block, caveat or refusal alike.
 
-    Mapping-valued data (the alternative-emulator tally) serializes as a plain
-    object, the way an aggregate refusal's tuples serialize as lists.
+    Three shapes, one each: a string stays a string, a sequence of strings
+    becomes a JSON array in the emitter's own order, and a mapping — a tally,
+    at the two keys the guide documents — becomes a plain object. Written once
+    because both callers below and the generated contract reference must agree
+    literally — a second copy is a second answer waiting to happen.
     """
-    return [
-        {
-            "code": c.code,
-            "data": {
-                key: dict(value) if isinstance(value, Mapping) else value
-                for key, value in c.data.items()
-            },
-        }
-        for c in caveats
-    ]
+    out: dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, str):
+            out[key] = value
+        elif isinstance(value, Mapping):
+            out[key] = dict(value)
+        else:
+            out[key] = list(value)
+    return out
+
+
+def _caveats_contract(caveats: Sequence[Caveat]) -> list[dict[str, Any]]:
+    """One ``{code, data}`` per caveat, in order — the one serialization of a caveat."""
+    return [{"code": c.code, "data": data_contract(c.data)} for c in caveats]
 
 
 def _placement_core(placement: SavefilePlacement | SavestatePlacement) -> dict[str, Any]:
@@ -290,18 +297,11 @@ def soft_patch_contract(answer: SoftPatchAnswer) -> dict[str, Any]:
 def unresolved_contract(unresolved: Unresolved) -> dict[str, Any]:
     """The stable form of an :class:`~atlas.placement.Unresolved` outcome.
 
-    Tuple-valued data (an aggregate refusal's ``paths``) serializes as the
-    JSON list it is in the written contract.
+    Its ``data`` serializes by the same rule a caveat's does
+    (:func:`data_contract`), because it is the same vocabulary: an aggregate
+    refusal's ``paths`` is the JSON list it is in the written contract.
     """
-    return {
-        "unresolved": {
-            "code": unresolved.code,
-            "data": {
-                key: list(value) if isinstance(value, tuple) else value
-                for key, value in unresolved.data.items()
-            },
-        }
-    }
+    return {"unresolved": {"code": unresolved.code, "data": data_contract(unresolved.data)}}
 
 
 def _findings_contract(health: Health) -> list[dict[str, Any]]:
@@ -542,6 +542,20 @@ def emulator_contract(entry: EmulatorEntry) -> dict[str, Any]:
     a client's own list, into a serialized answer read later — otherwise names
     the emulator without naming what it launches.
 
+    ``declared_index`` is the entry's 0-based place in the launch list ES-DE
+    builds from the declaring layer's ``<command>`` elements, and ``selection``
+    says why the list order moved. The list travels in *effective* order, so
+    without the pair a reader cannot tell an entry promoted out of the middle
+    from the declared first one a user also selected — and a client whose own
+    default is the frontend's default looks for ``declared_index == 0``, never
+    ``entries[0]``. That lookup can legitimately find nothing: the values are
+    distinct and ascending *in declared order* — never guaranteed in
+    serialized order, which a promotion can reshuffle — and they may skip
+    one, because a command
+    ES-DE keeps with empty text holds a position that carries no entry here. It
+    is ``null`` on a derived entry (``emulator-list-derived``), which no layer
+    declared and which therefore has no declared position.
+
     ``caveats`` serialize ``{code, data}`` like every other caveat in this
     module. Bare codes were this serializer's own dialect and lost what the
     data says (which game's override was not checked), which is exactly the
@@ -552,6 +566,7 @@ def emulator_contract(entry: EmulatorEntry) -> dict[str, Any]:
         "label": entry.label,
         "kind": entry.kind,
         "core_so": entry.core_so,
+        "declared_index": entry.declared_index,
         "selection": entry.selection,
         "caveats": _caveats_contract(entry.caveats),
     }
