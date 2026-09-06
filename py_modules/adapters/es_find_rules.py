@@ -52,6 +52,15 @@ _RETRODECK_APP_ID = "net.retrodeck.retrodeck"
 # if none of the emulator's staticpaths exist, it is genuinely not launchable.
 _RETRODECK_COMPONENT_MARKERS = ("retrodeck/components/", "retrodeck/external_components/")
 
+# The three sandbox-absolute prefixes a ``staticpath`` can carry. ``/app`` is the
+# flatpak's own files tree; ``/var/data`` and ``/var/config`` are the trees the
+# sandbox maps the app's host data and config dirs onto. Everything a
+# ``staticpath`` states is read against one of these or is host-native.
+_SANDBOX_APP_PREFIX = "/app/"
+_SANDBOX_VAR_DATA_PREFIX = "/var/data/"
+_SANDBOX_VAR_CONFIG_PREFIX = "/var/config/"
+_SANDBOX_PREFIXES = (_SANDBOX_APP_PREFIX, _SANDBOX_VAR_DATA_PREFIX, _SANDBOX_VAR_CONFIG_PREFIX)
+
 # es_find_rules.xml lives under the RetroDECK flatpak's files tree, in ES-DE's
 # per-flavor systems dir. Prefer linux/ (RetroDECK-customized, more complete),
 # then unix/ as fallback — WITHIN each install root.
@@ -175,7 +184,7 @@ class EsFindRulesAdapter:
         sandbox = [path for path in candidates if self._is_sandbox_component(path)]
         if not sandbox:
             return None
-        return next((path for path in sandbox if path.startswith("/app/")), sandbox[0])
+        return next((path for path in sandbox if path.startswith(_SANDBOX_APP_PREFIX)), sandbox[0])
 
     def command_emulator_installed(self, command: str) -> bool:
         """Whether the emulator *command* names is installed in RetroDECK.
@@ -199,8 +208,7 @@ class EsFindRulesAdapter:
         INSIDE the RetroDECK sandbox and can be run via ``flatpak run
         --command=``. Host-native paths (``~/…``, host flatpak exports) are not.
         """
-        sandbox_prefixes = ("/app/", "/var/data/", "/var/config/")
-        if not any(path.startswith(prefix) for prefix in sandbox_prefixes):
+        if not any(path.startswith(prefix) for prefix in _SANDBOX_PREFIXES):
             return False
         return any(marker in path for marker in _RETRODECK_COMPONENT_MARKERS)
 
@@ -344,13 +352,13 @@ class EsFindRulesAdapter:
         any other absolute path (host flatpak exports, ``/run`` …) is taken
         literally.
         """
-        if path.startswith("/app/"):
-            rest = path[len("/app/") :]
+        if path.startswith(_SANDBOX_APP_PREFIX):
+            rest = path[len(_SANDBOX_APP_PREFIX) :]
             return [os.path.join(files_dir, rest) for files_dir in flatpak_app_files_dirs(self._user_home)]
-        if path.startswith("/var/data/"):
-            return [self._retrodeck_var_dir("data", path[len("/var/data/") :])]
-        if path.startswith("/var/config/"):
-            return [self._retrodeck_var_dir("config", path[len("/var/config/") :])]
+        if path.startswith(_SANDBOX_VAR_DATA_PREFIX):
+            return [self._retrodeck_var_dir("data", path[len(_SANDBOX_VAR_DATA_PREFIX) :])]
+        if path.startswith(_SANDBOX_VAR_CONFIG_PREFIX):
+            return [self._retrodeck_var_dir("config", path[len(_SANDBOX_VAR_CONFIG_PREFIX) :])]
         if path == "~":
             return [self._user_home]
         if path.startswith("~/"):
