@@ -14,13 +14,17 @@ BIOS-requirement filter, the save-directory name, the save-sync core tag, the co
 the same resolved emulator. The plugin **owns emulator selection end to end**: it reads RetroDECK/ES-DE configuration
 for the default emulator, but its own launches never depend on ES-DE's `gamelist.xml` — it neither reads nor writes that
 file. The **live `es_systems.xml` is the sole source** for the system-layer default and the picker's emulator list;
-there is no bundled snapshot (the curated `core_defaults.json` and its generator were deleted in #1210). See
+there is no bundled snapshot (the curated `core_defaults.json` and its generator were deleted in #1210). What **reads**
+that file is the vendored emu-atlas resolver, through `adapters/atlas_catalogue.py` — the plugin's own parser is gone
+(#1840). See
 [ADR-0011](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0011-per-game-core-override-in-db-applied-via-e-flag.md)
 (the per-game DB override + `-e`),
 [ADR-0012](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0012-plugin-owns-core-selection-always-e-no-gamelist.md)
-(per-platform core in `settings.json`, always `-e`, gamelist dropped), and
+(per-platform core in `settings.json`, always `-e`, gamelist dropped),
 [ADR-0020](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0020-live-es-systems-emulator-resolution.md)
-(live `es_systems.xml` as the only source; the default is the first safely-bakeable command) for the decision records.
+(live `es_systems.xml` as the only source; the default is the first safely-bakeable command), and
+[ADR-0030](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0030-the-emulator-catalogue-is-read-by-the-vendored-resolver.md)
+(the resolver is what reads it; ES-DE's selections are ignored and its overlays honoured) for the decision records.
 
 ### Two emulator kinds: libretro core and standalone
 
@@ -140,13 +144,14 @@ Layers 1 and 2 resolve their LABEL through `domain.emulator_commands.label_to_in
 carrying that label and renders it into an `EmulatorInvocation` **only if it is bakeable** — so a pin may name a
 standalone emulator or a libretro core, and a label that is unknown, un-bakeable, or `needs_setup` reads as "this pin no
 longer resolves" and degrades to the next layer with a WARNING (never a bogus `None.so`). The system-layer fallback is
-`CoreResolver.get_default_emulator(system)` (`adapters/es_de_config.py`): **the first safely-bakeable command in the
-live `es_systems.xml` document order** (see
+`AtlasCatalogueAdapter.get_default_emulator(system)` (`adapters/atlas_catalogue.py`): **the first safely-bakeable
+command in the live `es_systems.xml` document order** (see
 [Standalone-emulator selection](#standalone-emulator-selection-first-safely-bakeable)), which may itself be standalone
-(PCSX2, RPCS3, Dolphin, …) or libretro. It reads **only** the live file — no bundled snapshot, and **no gamelist**
-(neither a per-game `<altemulator>` nor a system-level `<alternativeEmulator>`; the gamelist is off every plugin code
-path). When nothing is bakeable, or `es_systems.xml` cannot be read, it returns `None` and the caller bakes the plain
-RetroDECK launch.
+(PCSX2, RPCS3, Dolphin, …) or libretro. It reads **only** the live file — no bundled snapshot — and **no gamelist
+selection ever moves it**: the resolver reads the gamelist and states which entry a per-game `<altemulator>` or a
+system-level `<alternativeEmulator>` promotes, and the adapter discards that by sorting on the shipped position, so the
+gamelist stays off every plugin launch path. When nothing is bakeable, or the catalogue cannot be read, it returns
+`None` and the caller bakes the plain RetroDECK launch.
 
 ### Standalone-emulator selection: first safely-bakeable
 
@@ -155,6 +160,16 @@ Selection is **data-derived from the live `es_systems.xml` alone** — there is 
 `kind`, `core_so`, `command`, `status`, `reason`), and `select_default_option` returns **the first `bakeable` command in
 document order**. ES-DE already lists a system's emulators in preference order, so ES-DE's own preference picks the
 default — no plugin curation, no per-system table.
+
+**Document order is recovered, not taken.** The resolver states its entries in _effective_ order, where a gamelist
+promotion may put a later entry first, and carries each entry's shipped position as `declared_index`. The adapter sorts
+on that position before classifying, so the list handed to `select_default_option`, `label_to_invocation`,
+`resolve_platform_label` and `options_to_payload` is already in declared order and every one of them keeps its rule
+unchanged. The indices are ascending but need not start at 0 or be dense — ES-DE's own walk lets an empty-text
+`<command>` hold a position without yielding an entry, and drops a duplicate label entirely — so neither `entries[0]`
+nor "index 0 exists" is assumed. An entry with **no** declared position sorts last; that is the resolver's derived
+enumeration for a catalogue-less arrangement, and such an entry carries an empty command, which rule 3 below reads as
+`no_rom_target`.
 
 A command is `bakeable` only when it is a real emulator invocation the plugin can carry verbatim into a Steam shortcut's
 `-e`. `classify_command` applies these rules in order, first match wins:
@@ -178,24 +193,30 @@ standalone invocation. The kind is `libretro` when the command matches the stric
 **Existence probe (a bakeable standalone whose emulator is not installed → `needs_setup` `not_installed`).** RetroDECK
 lists more standalone emulators in `es_systems.xml` than it bundles, so a system's bakeable default could name an
 emulator that is not on disk (Ryubing on `switch`, any un-installed external component) — baking it produces a shortcut
-that dies in ~0.4 s. To prevent that regression the adapter probes existence against the sibling `es_find_rules.xml`: it
-maps a standalone command's `%EMULATOR_<NAME>%` token to the find-rule entry, checks whether any of that entry's
-`staticpath` locations exist on disk (mapping the sandbox `/app` and `/var/{data,config}` prefixes to their host paths,
-glob-aware), and hands the verdict to the pure `downgrade_if_not_installed(option, installed)` rule — which turns a
-bakeable **standalone** whose emulator is absent into `needs_setup` with reason `not_installed`. It then drops out of
-`select_default_option` (the system plain-launches, as it did before #1210) and shows disabled in the picker. The probe
-is **absence-only** — it downgrades only on positive evidence that a RetroDECK component (`retrodeck/components/…` or
-`retrodeck/external_components/…`) is missing; a `systempath`-only emulator (binary on RetroDECK's sandbox `PATH`, not
-visible from outside), an emulator with no find rule, and the whole `es_find_rules.xml`-unreadable case are all assumed
-installed, so it never falsely downgrades. Libretro is always installed (RetroArch ships with RetroDECK), so libretro
-options are never downgraded. See [ADR-0020](../adr/0020-live-es-systems-emulator-resolution.md) §2.
+that dies in ~0.4 s. To prevent that regression the catalogue adapter asks an injected probe backed by
+`es_find_rules.xml` (`adapters/es_find_rules.py` — the resolver states the emulator a command names, never where its
+binary lives): it maps a standalone command's `%EMULATOR_<NAME>%` token to the find-rule entry, checks whether any of
+that entry's `staticpath` locations exist on disk (mapping the sandbox `/app` and `/var/{data,config}` prefixes to their
+host paths, glob-aware), and hands the verdict to the pure `downgrade_if_not_installed(option, installed)` rule — which
+turns a bakeable **standalone** whose emulator is absent into `needs_setup` with reason `not_installed`. It then drops
+out of `select_default_option` (the system plain-launches, as it did before #1210) and shows disabled in the picker. The
+probe is **absence-only** — it downgrades only on positive evidence that a RetroDECK component (`retrodeck/components/…`
+or `retrodeck/external_components/…`) is missing; a `systempath`-only emulator (binary on RetroDECK's sandbox `PATH`,
+not visible from outside), an emulator with no find rule, and the whole `es_find_rules.xml`-unreadable case are all
+assumed installed, so it never falsely downgrades. Libretro is always installed (RetroArch ships with RetroDECK), so
+libretro options are never downgraded. See [ADR-0020](../adr/0020-live-es-systems-emulator-resolution.md) §2.
 
 `get_emulator_options(system)` returns `{"available": bool, "options": [EmulatorOption, ...]}`. **`available` is `False`
-when `es_systems.xml` cannot be found or parsed** — the picker surfaces that as "Emulator list unavailable" rather than
-an empty list it cannot distinguish from a system with no commands; the launch degrades to plain. `options_to_payload`
-projects the list to the frontend picker shape (`{label, kind, core_so, is_default, bakeable, reason}`): bakeable
-entries are clickable, the default is marked, and `needs_setup` / `unbakeable` entries are disabled with their reason.
-See [ADR-0020](../adr/0020-live-es-systems-emulator-resolution.md) — including the 27 default flips this selection rule
+when the catalogue answer carries one of the four `emulator-catalogue-*` refusals** — the arrangement ships no
+catalogue, the resolver has not located one, the one it has could not be read, or only part of it is readable — and the
+picker surfaces that as "Emulator list unavailable" rather than an empty list it cannot distinguish from a system the
+frontend knows no emulator for; the launch degrades to plain. An empty list carrying none of those codes is that real
+"knows none", and `emulator-catalogue-exclusive` is not a refusal at all: a custom `es_systems.xml` declaring itself the
+whole catalogue gives a complete answer, merely a small one. The test is the codes and never an empty caveat list — a
+broken installation states health findings on every answer it gives. `options_to_payload` projects the list to the
+frontend picker shape (`{label, kind, core_so, is_default, bakeable, reason}`): bakeable entries are clickable, the
+default is marked, and `needs_setup` / `unbakeable` entries are disabled with their reason. See
+[ADR-0020](../adr/0020-live-es-systems-emulator-resolution.md) — including the 27 default flips this selection rule
 produces relative to the old first-libretro default.
 
 Adding a new standalone system needs **no plugin change** — the moment a RetroDECK update lists its emulator in
@@ -313,9 +334,10 @@ Enumerating a ROM's discs needs two different facts kept separate:
   `DISC_IMAGE_EXTENSIONS = {.cue, .chd, .iso}`, the irreducible set of launchable disc-image containers. A `.bin` is a
   **sidecar** (owned by its `.cue`, never launched directly) and an `.m3u` is a **playlist**; both are excluded simply
   by not being in the set. The disc unit is the `.cue`/`.chd`/`.iso` itself, never the `.bin`.
-- **The per-system accept-list is a capability and read live** — `CoreResolver.get_supported_extensions(system)`
-  (`adapters/es_de_config.py`) returns the system's es_systems `<extension>` set, threaded into the resolver through the
-  `SystemSupportedExtensionsFn` Protocol, exactly as `system_supports_m3u` is read for the `.m3u` gate
+- **The per-system accept-list is a capability and read live** —
+  `AtlasCatalogueAdapter.get_supported_extensions(system)` (`adapters/atlas_catalogue.py`) returns the system's
+  es_systems `<extension>` set, lowercased, threaded into the resolver through the `SystemSupportedExtensionsFn`
+  Protocol, exactly as `system_supports_m3u` is read for the `.m3u` gate
   ([ADR-0013](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0013-platform-gated-m3u-via-es-systems.md)).
 
 Enumeration keeps the files whose extension is in **the intersection** of the two, so a disc the emulator cannot launch
@@ -372,7 +394,7 @@ baked as a **direct sandbox invocation** that bypasses `run_game.sh`:
 `flatpak run --command=<launcher> net.retrodeck.retrodeck <args> "<folder>"`, running the emulator's own launcher inside
 the sandbox. `ActiveCoreResolver.active_emulator_for_rom` makes this rewrite: when the resolved emulator is a standalone
 and the ROM's install is a folder-boot layout (same `folder_boot_root` fact), it resolves the emulator's sandbox
-launcher via the `es_find_rules.xml` probe (`CoreResolver.resolve_sandbox_launcher` → the
+launcher via the `SandboxLauncherFn` seam (`EsFindRulesAdapter.resolve_sandbox_launcher` → the
 `/app/retrodeck/components/<x>/…` component path) and returns an `EmulatorInvocation.direct`;
 `resolve_emulator_invocation` renders the `--command=` form, stripping `%EMULATOR_*%` + `%ROM%` down to the middle args
 (`--no-gui`). A libretro emulator, a non-folder install, or an unresolvable launcher leave the standard `run_game` `-e`

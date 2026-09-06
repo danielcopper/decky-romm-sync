@@ -462,8 +462,8 @@ pin — they may need setting up, or ES-DE's command for them may not be one the
 RetroDECK picks one itself when a game starts. Where the emulator RetroDECK would have fallen back to is **not
 installed**, the pane names it and says nothing here can pin a different one; those games will not start until it is
 installed. And a platform RetroDECK lists **no** emulator for says so, which is a different thing again: there is
-nothing for RetroDECK to fall back to at all. If RetroDECK can't be found (no `es_systems.xml`), the pane says the
-emulator list is unavailable rather than showing an empty picker.
+nothing for RetroDECK to fall back to at all. If the emulator list itself can't be read — RetroDECK not found, or its
+ES-DE configuration missing or unreadable — the pane says it is unavailable rather than showing an empty picker.
 
 The plugin stores the choice in its own settings and **immediately re-applies it** to every installed game on that
 platform — the change takes effect right away, with no sync needed (games that already have a per-game core keep their
@@ -542,6 +542,11 @@ upgrading from an older build or who edits ES-DE directly:
   the core the plugin knows about, and the plugin's launches always use the core it has baked in. ES-DE-native launches
   still honour your ES-DE setting. To keep the plugin's badges, save paths, and launches in sync, set the core through
   the plugin (the CPU-button menu for one game, Library › Platforms for a whole platform) instead.
+- **A custom system definition IS seen.** If you have added your own
+  `<RetroDECK home>/ES-DE/custom_systems/es_systems.xml`, the plugin now reads it the way ES-DE does: a system you
+  redefine there replaces the shipped one entirely, and a `<loadExclusive/>` in that file makes it the whole list. So
+  the emulators the picker offers, and the default it marks, can differ from what an older plugin build showed for a
+  system you customised. That is deliberate — the plugin's list should match the emulators your ES-DE actually has.
 
 ### Non-Default Core Indicator
 

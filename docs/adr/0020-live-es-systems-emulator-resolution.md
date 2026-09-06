@@ -13,6 +13,12 @@ the `Rom` aggregate), the always-`-e` bake ([ADR-0009](0009-launcher-pure-exec-w
 the never-touch-the-gamelist ownership rule (ADR-0012) are unchanged. Tracked under
 [#1210](https://github.com/danielcopper/decky-romm-sync/issues/1210).
 
+**Refined by [ADR-0030](0030-the-emulator-catalogue-is-read-by-the-vendored-resolver.md):** the source and the "first
+safely-bakeable command in document order" rule below are unchanged, but the reader is no longer the plugin's own parser
+— `adapters/es_de_config.py` and `CoreResolver`, named throughout this record, are deleted and the vendored emu-atlas
+resolver answers in their place. The `es_find_rules.xml` probe of §2 stays plugin-side and moves to
+`adapters/es_find_rules.py`.
+
 ## Context
 
 ADR-0012 made the plugin the sole owner of core selection for its own launches and left the system-layer default coming
