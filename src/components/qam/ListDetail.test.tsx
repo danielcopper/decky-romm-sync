@@ -199,6 +199,43 @@ describe("ListDetail", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("makes a control-less row a focus stop, and selects it on press", () => {
+    // A row that renders a label and nothing else is a bare container: Steam's
+    // base panel takes `focusable` from an activate handler, so without one the
+    // reader cannot reach the row and cannot scroll past it. The stub surfaces
+    // the handler as `data-activate`, which is all happy-dom can show — it has
+    // no nav tree.
+    const onSelect = vi.fn();
+    render(
+      <ListDetail
+        items={[
+          { id: "general", render: () => <span>General</span> },
+          { id: "library", render: () => <span>Library</span> },
+        ]}
+        selectedId="general"
+        onSelect={onSelect}
+        renderDetail={(id) => <div>detail for {id ?? "nothing"}</div>}
+        selectOnActivate
+      />,
+    );
+
+    const row = screen.getByText("Library").closest("[data-testid='focusable']") as HTMLElement;
+    expect(row.dataset.activate).toBe("true");
+
+    fireEvent(row, new CustomEvent("decky-button-down", { detail: { button: 1 }, bubbles: true }));
+
+    expect(onSelect).toHaveBeenCalledWith("library");
+  });
+
+  it("leaves a row a plain container without selectOnActivate, so A stays with its control", () => {
+    // The default: a row that carries a toggle must not spend A on the
+    // selection, which focus already made.
+    render(<ControlledHost />);
+
+    const row = screen.getByRole("button", { name: /PlayStation/ }).closest("[data-testid='focusable']");
+    expect((row as HTMLElement).dataset.activate).toBeUndefined();
+  });
+
   it("renders a detail for an empty selection", () => {
     render(
       <ListDetail

@@ -176,9 +176,14 @@ vi.mock("@decky/ui", () => {
     // Focusable forwards onButtonDown as a real DOM "decky-button-down"
     // listener so tests can drive gamepad input via
     // fireEvent(el, new CustomEvent("decky-button-down", { detail: { button } })).
-    // onCancelButton rides the same event, filtered to CANCEL (B), because that
-    // is how Steam delivers it — one gamepad stream, dispatched to the handler
-    // the button maps to — so a test drives it the same way.
+    // onCancelButton and onActivate ride the same event, filtered to CANCEL (B)
+    // and OK (A), because that is how Steam delivers them — one gamepad stream,
+    // dispatched to the handler the button maps to — so a test drives them the
+    // same way.
+    // onActivate is also surfaced as data-activate, because it is what makes a
+    // Focusable a focus stop rather than a container: a test asserting that a
+    // row with no control of its own is reachable has nothing else to look at,
+    // and happy-dom has no nav tree to ask.
     // onFocus is forwarded because a Focusable is how the list-and-detail layout
     // learns that focus moved to a row — dropping it would make focus-selects
     // vacuously untestable. Other FooterLegend-only props (flow-children,
@@ -189,6 +194,7 @@ vi.mock("@decky/ui", () => {
       style,
       onButtonDown,
       onCancelButton,
+      onActivate,
       onFocus,
       role,
       tabIndex,
@@ -197,12 +203,14 @@ vi.mock("@decky/ui", () => {
       style?: unknown;
       onButtonDown?: (evt: unknown) => void;
       onCancelButton?: (evt: unknown) => void;
+      onActivate?: (evt: unknown) => void;
       onFocus?: (evt: unknown) => void;
     }) =>
       createElement(
         "div",
         {
           "data-testid": "focusable",
+          "data-activate": onActivate ? "true" : undefined,
           style,
           role,
           tabIndex,
@@ -212,11 +220,12 @@ vi.mock("@decky/ui", () => {
             if (!el) return;
             const prev = (el as unknown as { _deckyButtonDown?: EventListener })._deckyButtonDown;
             if (prev) el.removeEventListener("decky-button-down", prev);
-            if (!onButtonDown && !onCancelButton) return;
+            if (!onButtonDown && !onCancelButton && !onActivate) return;
             const listener = ((e: Event) => {
               onButtonDown?.(e);
               const button = (e as CustomEvent<{ button?: number } | null>).detail?.button;
               if (button === 2) onCancelButton?.(e);
+              if (button === 1) onActivate?.(e);
             }) as EventListener;
             (el as unknown as { _deckyButtonDown?: EventListener })._deckyButtonDown = listener;
             el.addEventListener("decky-button-down", listener);

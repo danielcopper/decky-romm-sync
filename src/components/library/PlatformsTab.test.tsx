@@ -1616,8 +1616,9 @@ describe("Library › Platforms", () => {
       // nobody can focus is a row nobody can scroll past. A row with neither
       // button needs the Focusable wrapper, and the wrapper was lost once
       // because the prop it keys on became an always-truthy element. happy-dom
-      // has no nav tree, but the `Focusable` mock does render a testid, so this
-      // one the suite can see.
+      // has no nav tree, but the `Focusable` mock renders a testid AND surfaces
+      // the activate handler — which is what makes the wrapper a focus stop
+      // rather than a container that passes focus to children it has none of.
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
@@ -1645,6 +1646,7 @@ describe("Library › Platforms", () => {
       // grid cell → grid → the row's wrapper, which must be the Focusable.
       const wrapper = nameCell!.closest("div")!.parentElement!;
       expect(wrapper.dataset.testid).toBe("focusable");
+      expect(wrapper.dataset.activate).toBe("true");
     });
 
     it("offers a per-row Delete only where a download record still holds the file", async () => {

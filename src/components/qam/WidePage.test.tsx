@@ -1,6 +1,7 @@
 /**
  * WidePage tests — the frame's own contract: the Back row, the title, a body
- * with a definite measured height, a tab bar that survives Steam's `Tabs` probe
+ * with a definite measured height, whose regions and entry focus it owns and
+ * whose it leaves to the page, a tab bar that survives Steam's `Tabs` probe
  * coming back undefined, and the two ends of the width the frame is for.
  *
  * `Tabs` is read at module scope, so each test loads a fresh copy of the
@@ -11,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import type { FC, ReactNode } from "react";
 import { WIDE_ROOT_CLASS } from "../../utils/qamExpansion";
 import { OWNS_ENTRY_FOCUS_ATTR, type WidePageProps, type WidePageTab } from "./WidePage";
@@ -372,28 +373,87 @@ describe("WidePage", () => {
     expect(container.firstElementChild).toHaveAttribute(OWNS_ENTRY_FOCUS_ATTR);
   });
 
-  it("claims no entry focus without tabs, where nothing here places any", async () => {
+  it("claims entry focus without tabs too, and puts it in the body", async () => {
     const WidePage = await loadWidePage(StubTabs);
+    vi.useFakeTimers();
+    try {
+      const { container } = render(
+        <WidePage title="Settings" onBack={vi.fn()}>
+          <button>a page row</button>
+        </WidePage>,
+      );
+      act(() => {
+        vi.advanceTimersByTime(50);
+      });
 
-    const { container } = render(
-      <WidePage title="Settings" onBack={vi.fn()}>
+      // The frame's first button is the Back chip, which is above the body: the
+      // router's own focus would land there, which is why the page claims it.
+      const row = screen.getByRole("button", { name: "a page row" });
+      expect(body()).toContainElement(row);
+      expect(row).toHaveFocus();
+      expect(row).toHaveClass("gpfocus");
+      expect(screen.getByRole("button", { name: "‹ Back" })).not.toHaveFocus();
+      expect(container.firstElementChild).toHaveAttribute(OWNS_ENTRY_FOCUS_ATTR);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("places entry focus in the active tab's content when the Tabs probe missed", async () => {
+    const WidePage = await loadWidePage(undefined);
+    const tabs: WidePageTab[] = [{ id: "platforms", title: "Platforms", content: <button>a tab row</button> }];
+    vi.useFakeTimers();
+    try {
+      const { container } = render(
+        <WidePage title="Library" onBack={vi.fn()} tabs={tabs} activeTab="platforms" onShowTab={vi.fn()} />,
+      );
+      act(() => {
+        vi.advanceTimersByTime(50);
+      });
+
+      // The fallback renders the tab's content raw, with no `autoFocusContents`
+      // to consume it — so the frame's own timer is what places focus, and the
+      // claim on the root stays true.
+      const row = screen.getByRole("button", { name: "a tab row" });
+      expect(row).toHaveFocus();
+      expect(row).toHaveClass("gpfocus");
+      expect(container.firstElementChild).toHaveAttribute(OWNS_ENTRY_FOCUS_ATTR);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves entry focus to Steam's tabbed page, placing none itself", async () => {
+    const WidePage = await loadWidePage(StubTabs);
+    vi.useFakeTimers();
+    try {
+      render(<WidePage title="Library" onBack={vi.fn()} tabs={TAB_SET} activeTab="platforms" onShowTab={vi.fn()} />);
+      act(() => {
+        vi.advanceTimersByTime(50);
+      });
+
+      // `autoFocusContents` has already done it. A second placement from here
+      // would race Steam's for the same page and could land elsewhere in it.
+      expect(screen.getByTestId("steam-tabs")).toHaveAttribute("data-auto-focus-contents", "true");
+      expect(document.querySelector(".gpfocus")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("wraps no region around a body whose page builds its own", async () => {
+    const WidePage = await loadWidePage(StubTabs, StubScrollPanel);
+
+    render(
+      <WidePage title="Sync" onBack={vi.fn()} ownRegions>
         <div>page body</div>
       </WidePage>,
     );
 
-    expect(container.firstElementChild).not.toHaveAttribute(OWNS_ENTRY_FOCUS_ATTR);
-  });
-
-  it("claims no entry focus when the Tabs probe missed, so the router still covers the page", async () => {
-    const WidePage = await loadWidePage(undefined);
-
-    const { container } = render(
-      <WidePage title="Library" onBack={vi.fn()} tabs={TAB_SET} activeTab="platforms" onShowTab={vi.fn()} />,
-    );
-
-    // The fallback renders the tab's content raw, with nothing to autofocus. A
-    // marker here would opt the page out of the only focus it would get.
-    expect(container.firstElementChild).not.toHaveAttribute(OWNS_ENTRY_FOCUS_ATTR);
+    // A page laying regions out side by side would get one wrapped around both
+    // of them, which is a scroller over the two that must not scroll together.
+    expect(screen.queryByTestId("scroll-panel")).not.toBeInTheDocument();
+    expect(body().firstElementChild).toBe(screen.getByText("page body"));
   });
 
   it("takes no children beside tabs, whose body is the active tab's content", async () => {

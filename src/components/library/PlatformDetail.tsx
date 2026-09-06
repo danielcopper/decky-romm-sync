@@ -23,27 +23,30 @@ import { buildEmulatorMenu } from "../../utils/emulatorMenu";
 import { getEventTarget } from "../../utils/events";
 import { pluralize } from "../../utils/pluralize";
 import { SYNC_RUNNING_HINT, useSyncRunning } from "../../utils/syncRunning";
-import type { CoreAnswer, PlatformRow, PlatformsPageState, StatusScope } from "./usePlatformsPage";
+import {
+  AMBER,
+  BusyElsewhere,
+  ButtonRow,
+  FLAT_BUTTON,
+  GREEN,
+  GroupStatus,
+  MUTED,
+  Muted,
+  PALE_GREEN,
+  RED,
+  ROW_BUTTON,
+  SECONDARY_FONT,
+  SectionTitle,
+  VIOLET,
+  type ScopedStatus,
+} from "../qam/pane";
+import type { CoreAnswer, DetailStatus, PlatformRow, PlatformsPageState, StatusScope } from "./usePlatformsPage";
 
-/** The size every secondary LINE on this pane is set in: the header's counts
- *  clause, the under-row description and note lines, the Contents cell beside
- *  them, the muted sentences, the table header and the legend. One constant,
- *  because the device pass asked for the cell to match those lines and a second
- *  literal is how they drift apart again. Button labels are not lines and keep
- *  their own sizes. */
-const SECONDARY_FONT = "11px";
-
-const MUTED = "#8f98a0";
-const RED = "#d94126";
-const GREEN = "#5ba32b";
-const AMBER = "#d4a72c";
-/** A satisfied row nothing is waiting on — present, and not this core's problem.
- *  Green's quieter twin, so "there and needed" and "there and spare" are one
- *  glance apart rather than one reading apart. */
-const PALE_GREEN = "#8fc46b";
-/** The second mark's own colour, deliberately outside the verdict palette's
- *  traffic light: what it reports is not a degree of wrongness. */
-const VIOLET = "#a48fd4";
+/** The page's status line as the pane primitives read it: on this page the key
+ *  a line is bound to is the platform slug. The scope type travels with it, so
+ *  the literal each `GroupStatus` names is checked against the page's groups. */
+const scopedStatus = (status: DetailStatus | null): ScopedStatus<StatusScope> | null =>
+  status && { key: status.slug, scope: status.scope, text: status.text };
 
 /**
  * The second mark: your RomM library does not hold this file.
@@ -59,37 +62,6 @@ const VIOLET = "#a48fd4";
  * fallback the `✓`/`✗` glyphs already rely on for this table.
  */
 const LIBRARY_MARK = { glyph: "⊘", color: VIOLET, title: "not in your RomM library" } as const;
-
-/**
- * The padding a `DialogButton` is given wherever this pane puts buttons in a
- * row.
- *
- * `ButtonItem` — the full-width control most of the panel uses — takes no style
- * or class of its own: its props are `ItemProps`, which has neither
- * (`@decky/ui/dist/components/Item.d.ts`), so its height is Steam's and cannot
- * be argued with from here. `DialogButton` does take `style`
- * (`DialogButtonProps extends DialogCommonProps`, `Dialog.d.ts`), and is Steam's
- * own button component rather than a lookalike of one.
- *
- * They are the same button, and the difference is the row around it. In
- * `chunk~2dcc5aaf7.js` module 12316, the `forwardRef` decky's prop-list regex
- * matches (`highlightOnFocus` then `childrenContainerWidth`) renders a `Field`
- * whose first child is a second `forwardRef`, and that one renders `o.$n`;
- * module 64608 re-exports `$n` from module 44351, where it is the `forwardRef`
- * whose className is `"DialogButton","_DialogLayout","Secondary"` — the exact
- * string `@decky/ui` searches for to bind its own `DialogButton`
- * (`components/Dialog.js`, `DialogButton = DialogButtonSecondary`). So
- * `ButtonItem` IS a `Field` wrapped around this component, and what a `Field`
- * costs is the row's own padding: 10px top and bottom inside the QAM, where it
- * renders in its `Classic` mode.
- */
-const FLAT_BUTTON = { flex: "1 1 auto", minWidth: 0, padding: "6px 10px", fontSize: "13px" } as const;
-
-/** The button in a BIOS row's action column. Narrow because the column is
- *  sized for it and the file name beside it is the thing worth width: 4px of
- *  horizontal padding on a 92px column still leaves a target wider than it is
- *  tall, which is what keeps it pressable at the Deck's scale. */
-const ROW_BUTTON = { width: "100%", minWidth: 0, padding: "4px", fontSize: "11px" } as const;
 
 /**
  * The core picker's button in the header line — the game page's icon button, at
@@ -264,46 +236,6 @@ function diskMark(file: FirmwareRow): { glyph: string; color: string; title: str
 function libraryMark(file: FirmwareRow): typeof LIBRARY_MARK | null {
   return file.on_server === false && file.declared_kind !== "directory" ? LIBRARY_MARK : null;
 }
-
-const SectionTitle: FC<{ title: string; note?: string; noteColor?: string }> = ({ title, note, noteColor }) => (
-  <div style={{ display: "flex", alignItems: "baseline", gap: "8px", padding: "12px 16px 4px" }}>
-    <span style={{ fontSize: "12px", fontWeight: 600, letterSpacing: "0.5px", color: "#dcdedf" }}>
-      {title.toUpperCase()}
-    </span>
-    {note && <span style={{ fontSize: SECONDARY_FONT, color: noteColor ?? MUTED }}>{note}</span>}
-  </div>
-);
-
-const Muted: FC<{ children: ReactNode }> = ({ children }) => (
-  <div style={{ fontSize: SECONDARY_FONT, color: MUTED, padding: "0 16px 6px" }}>{children}</div>
-);
-
-/** The status line for one group of one platform, or nothing. Both halves
- *  matter: a failed core switch must not be reported under Remove, and an
- *  action's result must not follow the reader onto the next platform's pane. */
-const GroupStatus: FC<{ state: PlatformsPageState; slug: string; scope: StatusScope }> = ({ state, slug, scope }) =>
-  state.status && state.status.slug === slug && state.status.scope === scope ? (
-    <div data-testid={`status-${scope}`} style={{ fontSize: "12px", color: "#dcdedf", padding: "0 16px 8px" }}>
-      {state.status.text}
-    </div>
-  ) : null;
-
-/**
- * Why this pane's buttons are dead while nothing on it is running.
- *
- * An action disables every platform's actions, not just its own, because the
- * page holds one `status`, one `removalProgress` and one `busySlug` — a second
- * action would clobber the first's line and the first `finally` would clear the
- * busy state under the second. The line that would explain the wait —
- * {@link GroupStatus} — is bound to the platform the action belongs to, so
- * walking away from a running removal leaves a pane full of disabled buttons and
- * nothing said. This is what it says.
- */
-const BusyElsewhere: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ row, state }) => {
-  if (state.busySlug === null || state.busySlug === row.slug) return null;
-  const other = state.rows.get(state.busySlug)?.name ?? "another platform";
-  return <Muted>{`Working on ${other} — actions here are paused until it finishes.`}</Muted>;
-};
 
 // File, On disk, Contents, and the row's own button. Every column but the first
 // is sized for the widest thing it can hold, measured on the device at the
@@ -696,7 +628,7 @@ function coreOffer(row: PlatformRow, core: CoreAnswer): CoreOffer {
 const CoreNotice: FC<{ row: PlatformRow; state: PlatformsPageState; offer: CoreOffer }> = ({ row, state, offer }) => (
   <>
     {offer.kind === "blocked" && offer.notice !== undefined && <Muted>{offer.notice}</Muted>}
-    <GroupStatus state={state} slug={row.slug} scope="core" />
+    <GroupStatus status={scopedStatus(state.status)} forKey={row.slug} scope="core" />
   </>
 );
 
@@ -946,7 +878,7 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
           disk, which is exactly what the delete unlinks. The library ratio
           counts a different set and was wrong here in both directions,
           including hiding the button over downloads RomM had stopped listing. */}
-      <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px", padding: "2px 16px 6px" }}>
+      <ButtonRow padding="2px 16px 6px">
         <DialogButton
           style={FLAT_BUTTON}
           disabled={!showRequired || state.busySlug !== null}
@@ -968,8 +900,8 @@ const BiosSection: FC<{ row: PlatformRow; state: PlatformsPageState; firmware: F
         >
           <span style={{ color: RED }}>{`Delete BIOS (${deletable})`}</span>
         </DialogButton>
-      </Focusable>
-      <GroupStatus state={state} slug={row.slug} scope="bios" />
+      </ButtonRow>
+      <GroupStatus status={scopedStatus(state.status)} forKey={row.slug} scope="bios" />
     </>
   );
 };
@@ -1015,7 +947,7 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
       {/* One row, and no REMOVE heading over it: both buttons say what they
           remove and are drawn in red, so a title above them names nothing the
           buttons do not — and it would cost the pane a row. */}
-      <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px", padding: "6px 16px 4px" }}>
+      <ButtonRow padding="6px 16px 4px">
         <DialogButton
           style={FLAT_BUTTON}
           disabled={state.busySlug !== null || syncRunning || row.shortcutCount === 0}
@@ -1040,7 +972,7 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
             {typeof saveCount === "number" ? `Delete ${pluralize(saveCount, "save file")}` : "Delete save files"}
           </span>
         </DialogButton>
-      </Focusable>
+      </ButtonRow>
       {/* The one read of the five whose failure had nothing to say. With the
           spinner above it that became worse rather than better — a spinner that
           never stops — so the two land together. */}
@@ -1057,7 +989,7 @@ const RemoveSection: FC<{ row: PlatformRow; state: PlatformsPageState }> = ({ ro
           blocks, and widening it to make a line true would be the tail wagging
           the dog. */}
       {syncRunning && <Muted>{`Removing shortcuts: ${SYNC_RUNNING_HINT}`}</Muted>}
-      <GroupStatus state={state} slug={row.slug} scope="remove" />
+      <GroupStatus status={scopedStatus(state.status)} forKey={row.slug} scope="remove" />
     </>
   );
 };
@@ -1179,7 +1111,11 @@ export const PlatformDetail: FC<{ row: PlatformRow; state: PlatformsPageState }>
       {state.removalProgress?.slug === row.slug && (
         <Muted>{`Removing ${state.removalProgress.removed} of ${state.removalProgress.total}…`}</Muted>
       )}
-      <BusyElsewhere row={row} state={state} />
+      <BusyElsewhere
+        busyKey={state.busySlug}
+        ownKey={row.slug}
+        busyName={state.rows.get(state.busySlug ?? "")?.name ?? "another platform"}
+      />
       <CoreNotice row={row} state={state} offer={offer} />
       {/* A failed read is said on EVERY pane, not only the ones with no entry.
           A failed refresh does not clear the map, so a platform that has an

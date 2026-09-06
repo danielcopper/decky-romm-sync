@@ -60,6 +60,7 @@ import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError, setServerRetryProgress } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
 import { findOutermostScrollParent } from "./utils/scrollHelpers";
+import { ENTRY_FOCUS_DELAY_MS, firstPageButton, placeEntryFocus } from "./utils/entryFocus";
 import { collapseQamOnDismount } from "./utils/qamExpansion";
 import { detach } from "./utils/detach";
 import type {
@@ -114,25 +115,20 @@ const QAMPanel: FC = () => {
     });
     // Steam's gamepad nav retains a focus pointer across page swaps and
     // resolves it on the next input — landing on a button at the old page's
-    // position. Force focus to the first button so navigation starts at the
-    // top. Same querySelector + .focus() + gpfocus pattern as CustomPlayButton.
+    // position. Force focus to the page's first stop so navigation starts at
+    // the top.
     //
-    // A page carrying the opt-out marker places entry focus itself, and this
-    // focus would undo it: the first button of a wide page is the Back row,
-    // which sits above the tabs and therefore outside Steam's tabbed page —
-    // and Steam draws the L1/R1 glyphs only while gamepad focus is within it
-    // (`chunk~2dcc5aaf7.js`, the tab row's `showGlyphs`). Landing here would
-    // leave a tabbed page with no visible way to switch tabs.
+    // A page carrying the marker places entry focus itself, and this focus
+    // would undo it: the first button of a wide page is the Back row, which
+    // sits above the body — and above the tabs of a tabbed one, therefore
+    // outside Steam's tabbed page, whose tab row draws the L1/R1 glyphs only
+    // while gamepad focus is within it (`chunk~2dcc5aaf7.js`, the tab row's
+    // `showGlyphs`). Landing here would leave such a page with no visible way
+    // to switch tabs.
     const ownsFocus = el.querySelector(`[${OWNS_ENTRY_FOCUS_ATTR}]`) !== null;
     const focusTimer = ownsFocus
       ? undefined
-      : setTimeout(() => {
-          const btn = el.querySelector("button");
-          if (btn) {
-            btn.focus();
-            btn.classList.add("gpfocus");
-          }
-        }, 50);
+      : setTimeout(() => placeEntryFocus(el, firstPageButton), ENTRY_FOCUS_DELAY_MS);
     return () => {
       cancelAnimationFrame(rafHandle);
       clearTimeout(focusTimer);
