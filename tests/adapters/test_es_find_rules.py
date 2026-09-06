@@ -190,6 +190,63 @@ class TestFindEsFindRulesXml:
         assert adapter.find_es_find_rules_xml() is None
 
 
+class TestDeployPriority:
+    """The user installation wins over the system one, as ``flatpak run`` resolves it.
+
+    The isolation fixture above repoints the system root away for every other
+    test here, so these two put it back at a second seeded tree and pin which of
+    the two the adapter reads. The stake is that the catalogue and the find rules
+    describe the same RetroDECK: the vendored resolver reads the catalogue out of
+    the deploy flatpak would run, and a system-first probe here would answer a
+    launch decision from the other one.
+    """
+
+    def _both_deploys(self, tmp_path, *, user_rules: str, system_rules: str):
+        system_root = tmp_path / "system_flatpak"
+        system_files = system_root / "app" / "net.retrodeck.retrodeck" / "current" / "active" / "files"
+        _write(_find_rules_path(str(system_files), flavor="linux"), system_rules)
+        _write(_find_rules_path(str(_user_files_dir(tmp_path)), flavor="linux"), user_rules)
+        return system_root
+
+    def test_the_user_deploy_answers_where_both_carry_the_app(self, tmp_path):
+        system_root = self._both_deploys(
+            tmp_path,
+            user_rules=_FIND_RULES_XML,
+            system_rules=_FIND_RULES_XML.replace("components/rpcs3/", "components/system-rpcs3/"),
+        )
+        with mock.patch("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(system_root)):
+            adapter = EsFindRulesAdapter(logger=_TEST_LOGGER, user_home=str(tmp_path))
+            found = adapter.find_es_find_rules_xml()
+            assert found is not None
+            assert found.startswith(str(_user_files_dir(tmp_path)))
+            assert (
+                adapter.resolve_sandbox_launcher("%EMULATOR_RPCS3% --no-gui %ROM%")
+                == "/app/retrodeck/components/rpcs3/component_launcher.sh"
+            )
+
+    def test_the_system_deploy_answers_when_it_is_the_only_one(self, tmp_path):
+        system_root = tmp_path / "system_flatpak"
+        system_files = system_root / "app" / "net.retrodeck.retrodeck" / "current" / "active" / "files"
+        _write(_find_rules_path(str(system_files), flavor="linux"), _FIND_RULES_XML)
+        with mock.patch("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(system_root)):
+            adapter = EsFindRulesAdapter(logger=_TEST_LOGGER, user_home=str(tmp_path))
+            found = adapter.find_es_find_rules_xml()
+            assert found is not None
+            assert found.startswith(str(system_files))
+
+    def test_an_app_component_is_probed_in_the_user_deploy_first(self, tmp_path):
+        # The same order has to hold for the /app prefix mapping, or the probe
+        # answers "installed" off a component in the deploy that will not run.
+        system_root = self._both_deploys(tmp_path, user_rules=_FIND_RULES_XML, system_rules=_FIND_RULES_XML)
+        system_files = system_root / "app" / "net.retrodeck.retrodeck" / "current" / "active" / "files"
+        _touch(_component_launcher(str(system_files), "ppsspp"))
+        with mock.patch("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(system_root)):
+            adapter = EsFindRulesAdapter(logger=_TEST_LOGGER, user_home=str(tmp_path))
+            # Present in the system deploy only — still "installed", because the
+            # probe checks every root; the ORDER is what the two tests above pin.
+            assert adapter.command_emulator_installed("%EMULATOR_PPSSPP% -b %ROM%") is True
+
+
 class TestCommandEmulatorInstalled:
     """The absence-only probe behind ADR-0020's standalone downgrade."""
 

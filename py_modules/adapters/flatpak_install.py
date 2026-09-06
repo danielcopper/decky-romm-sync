@@ -33,21 +33,29 @@ _USER_FLATPAK_SUFFIX = os.path.join(".local", "share", "flatpak")
 _APP_FILES_RELATIVE = os.path.join("current", "active", "files")
 
 
-def flatpak_app_files_dirs(user_home: str, app_id: str = _DEFAULT_APP_ID) -> list[str]:
+def flatpak_app_files_dirs(user_home: str, app_id: str = _DEFAULT_APP_ID, *, user_first: bool = False) -> list[str]:
     """Return existing ``<root>/app/<app_id>/current/active/files`` dirs across flatpak roots.
 
-    Roots probed, in priority order:
+    Roots probed, system first by default:
       1. system : ``/var/lib/flatpak``
       2. user   : ``<user_home>/.local/share/flatpak``
+
+    *user_first* reverses that, which is the order **flatpak itself** resolves an
+    app in: ``flatpak run`` moves the user installation to the front of the list
+    it searches, under the comment "Move the user dir to the front so it 'wins'
+    in case an app is in more than one installation"
+    (``app/flatpak-builtins-run.c:240-255``). So on a machine carrying both
+    deploys, the user one is the RetroDECK that actually runs. A caller whose
+    answer has to agree with a launch asks for it; the default is kept because
+    changing every caller's resolution is not this parameter's job.
 
     ``current/active`` is a symlink flatpak maintains, so existence is checked
     via :func:`os.path.exists` (which follows symlinks). Only dirs that exist on
     disk are returned; an empty list means the app's flatpak is not installed.
     """
-    roots = [
-        SYSTEM_FLATPAK_ROOT,
-        os.path.join(user_home, _USER_FLATPAK_SUFFIX),
-    ]
+    system_root = SYSTEM_FLATPAK_ROOT
+    user_root = os.path.join(user_home, _USER_FLATPAK_SUFFIX)
+    roots = [user_root, system_root] if user_first else [system_root, user_root]
     files_dirs = []
     for root in roots:
         files_dir = os.path.join(root, "app", app_id, _APP_FILES_RELATIVE)

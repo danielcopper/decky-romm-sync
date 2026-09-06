@@ -1,28 +1,28 @@
 """ES-DE find-rules adapter — where an emulator's binary lives on this machine.
 
-Owns the read-only I/O for ``es_find_rules.xml``, the sibling of the catalogue
-ES-DE resolves a ``%EMULATOR_<NAME>%`` token through. The catalogue itself is
-the vendored resolver's to read (:mod:`adapters.atlas_catalogue`); this file
-answers the two questions the resolver does not, because both are about the
-plugin's own launcher rather than about the machine's emulator knowledge:
+Owns the read-only I/O for ``es_find_rules.xml``, the file ES-DE resolves a
+``%EMULATOR_<NAME>%`` token through. The catalogue is the vendored resolver's to
+read (:mod:`adapters.atlas_catalogue`); this file answers the two questions the
+resolver does not, and they are two different kinds of question:
 
-- **Is a standalone emulator installed at all?** A command ES-DE lists may name
-  an emulator RetroDECK ships no binary for. Baking such a command produces a
-  Steam shortcut that dies in ~0.4 s, so the option is downgraded to
-  ``needs_setup`` before it can become the system default (ADR-0020).
-- **Which path does the folder-boot bake exec inside the sandbox?** A game that
-  boots from a directory cannot go through RetroDECK's ``run_game.sh`` at all,
-  so the bake needs the emulator's own component launcher (ADR-0019).
+- **Is a standalone emulator installed at all?** A fact about the machine, which
+  atlas does not answer because it states the token a command names, not the
+  host path that token resolves to (emu-atlas#84). A command ES-DE lists may
+  name an emulator RetroDECK ships no binary for; baking it produces a Steam
+  shortcut that dies in ~0.4 s, so the option is downgraded to ``needs_setup``
+  before it can become the system default (ADR-0020).
+- **Which path does the folder-boot bake exec inside the sandbox?** A question
+  about this plugin's own launcher: a game that boots from a directory cannot go
+  through RetroDECK's ``run_game.sh`` at all, so the bake needs the emulator's
+  own component launcher (ADR-0019). Nothing but this plugin asks it.
 
-Atlas states the token a command names, not the host path it resolves to, so
-both stay here until it answers them (emu-atlas#84).
-
-The file is located by probing the flatpak install roots directly rather than
-beside a resolved ``es_systems.xml``: the catalogue's own path is the resolver's
-business now and is not necessarily one of these two. Both probes prefer
-``linux/`` over ``unix/`` within each root, which is ES-DE's own per-flavor
-layout and the order the catalogue read used to guarantee the sibling by
-construction.
+Both probes prefer ``linux/`` over ``unix/`` within a root, which is ES-DE's own
+per-flavor layout, and they take the **user** flatpak installation before the
+system one. That is flatpak's own resolution order for an app — ``flatpak run``
+moves the user dir to the front so it wins where both installations carry the
+app — so on a machine with both deploys the user one is the RetroDECK that runs,
+and it is the deploy the resolver reads the catalogue out of. Probing the other
+way round would let one launch decision be made from two different deploys.
 """
 
 from __future__ import annotations
@@ -209,12 +209,13 @@ class EsFindRulesAdapter:
     def find_es_find_rules_xml(self) -> str | None:
         """Locate ``es_find_rules.xml`` inside the RetroDECK flatpak installation.
 
-        Probes each flatpak install root (system, then per-user) and, within
-        each, searches linux/ first (RetroDECK-customized) then unix/ as
-        fallback. Returns the path or ``None`` (find rules absent → the probe
-        assumes every emulator installed).
+        Probes each flatpak install root (per-user, then system — the module
+        docstring says why) and, within each, searches linux/ first
+        (RetroDECK-customized) then unix/ as fallback. Returns the path or
+        ``None`` (find rules absent → the probe assumes every emulator
+        installed).
         """
-        for files_dir in flatpak_app_files_dirs(self._user_home):
+        for files_dir in flatpak_app_files_dirs(self._user_home, user_first=True):
             for suffix in _ES_FIND_RULES_SUFFIXES:
                 path = os.path.join(files_dir, suffix)
                 if os.path.exists(path):
@@ -341,13 +342,16 @@ class EsFindRulesAdapter:
         """Map one sandbox-relative ``staticpath`` to its host candidate path(s).
 
         ``/app`` is RetroDECK's flatpak files tree (checked under every install
-        root); ``/var/data`` and ``/var/config`` are the RetroDECK app's host
-        data/config dirs; ``~`` expands to the user home; any other absolute path
-        (host flatpak exports, ``/run`` …) is taken literally.
+        root, the running deploy first); ``/var/data`` and ``/var/config`` are the
+        RetroDECK app's host data/config dirs; ``~`` expands to the user home;
+        any other absolute path (host flatpak exports, ``/run`` …) is taken
+        literally.
         """
         if path.startswith("/app/"):
             rest = path[len("/app/") :]
-            return [os.path.join(files_dir, rest) for files_dir in flatpak_app_files_dirs(self._user_home)]
+            return [
+                os.path.join(files_dir, rest) for files_dir in flatpak_app_files_dirs(self._user_home, user_first=True)
+            ]
         if path.startswith("/var/data/"):
             return [self._retrodeck_var_dir("data", path[len("/var/data/") :])]
         if path.startswith("/var/config/"):
