@@ -486,9 +486,9 @@ What the plugin's Quick Access Menu panel shows at one time, chosen by the panel
 page the panel opens on: notices, status, the Sync button, the download summary and the menu. A **wide page** is a page
 that widens the panel from 348 px to 854 px for as long as it is mounted — the full screen width on the Deck, whose Big
 Picture viewport is 854 CSS px across. The width belongs to the page, not to a view inside it, and it collapses again
-when the page unmounts, the QAM tab changes, the panel closes or the plugin is dismounted. Main and Downloads are
-narrow; every other page is wide. _Avoid_: sub-page, screen, route (a **route** is a Steam page outside the QAM, such as
-the game detail page).
+when the page unmounts, the QAM tab changes, the panel closes or the plugin is dismounted. Every page is one or the
+other, and the page table in `docs/architecture/qam-panel.md` is where each page's width is decided. _Avoid_: sub-page,
+screen, route (a **route** is a Steam page outside the QAM, such as the game detail page).
 
 ### List and detail
 

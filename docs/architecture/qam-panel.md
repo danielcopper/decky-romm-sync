@@ -16,20 +16,21 @@ without restating it. The width mechanism's decision record is
 
 ## Where the code lives
 
-| Module                                                        | Responsibility                                                                                                                            |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/index.tsx` (`QAMPanel`)                                  | The router: one `Page` value, one mounted page, a module-level `currentPage` that survives a QAM remount                                  |
-| `src/types/navigation.ts`                                     | The `Page` union — every page the router can land on                                                                                      |
-| `src/components/MainPage.tsx`                                 | Main                                                                                                                                      |
-| `src/components/LibraryPage.tsx`                              | Library — the frame, the two tabs and their state                                                                                         |
-| `src/components/SettingsPage.tsx`, `src/components/settings/` | Settings and its sections                                                                                                                 |
-| `src/components/DangerZone.tsx`, `RemovedGamesCleanup.tsx`    | Data Management                                                                                                                           |
-| `src/components/DownloadQueue.tsx`                            | Downloads                                                                                                                                 |
-| `src/components/library/`                                     | The Library page's tabs: `usePlatformsPage` (its reads and actions), `PlatformsTab`, `PlatformDetail`                                     |
-| `src/utils/deckyUiInternals.ts`                               | Honest typing for `@decky/ui` values that come from a webpack probe: the frame's class names, `Tabs`, `ScrollPanel`, the controller glyph |
-| `src/utils/qamExpansion.ts`                                   | The panel's width: the expand and hide messages, the injected `max-width` rule, and the four paths that clear both                        |
-| `src/components/qam/`                                         | The wide-page frame: `WidePage` (the Back/title line, tabs, measured height), `ListDetail` and `ScrollRegion`                             |
-| `src/utils/` module stores                                    | State that must outlive a page: sync progress, pending preview, downloads, prune, notices                                                 |
+| Module                                                        | Responsibility                                                                                                                             |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/index.tsx` (`QAMPanel`)                                  | The router: one `Page` value, one mounted page, a module-level `currentPage` that survives a QAM remount                                   |
+| `src/types/navigation.ts`                                     | The `Page` union — every page the router can land on                                                                                       |
+| `src/components/MainPage.tsx`                                 | Main                                                                                                                                       |
+| `src/components/LibraryPage.tsx`                              | Library — the frame, the two tabs and their state                                                                                          |
+| `src/components/SettingsPage.tsx`, `src/components/settings/` | Settings and its sections                                                                                                                  |
+| `src/components/DangerZone.tsx`, `RemovedGamesCleanup.tsx`    | Data Management                                                                                                                            |
+| `src/components/DownloadQueue.tsx`                            | Downloads                                                                                                                                  |
+| `src/components/library/`                                     | The Library page's tabs: `usePlatformsPage` (its reads and actions), `PlatformsTab`, `PlatformDetail`                                      |
+| `src/utils/deckyUiInternals.ts`                               | Honest typing for `@decky/ui` values that come from a webpack probe: the frame's class names, `Tabs`, `ScrollPanel`, the controller glyph  |
+| `src/utils/qamExpansion.ts`                                   | The panel's width: the expand and hide messages, the injected `max-width` rule, and the four paths that clear both                         |
+| `src/components/qam/`                                         | The wide-page frame: `WidePage` (the Back/title line, tabs, measured height, entry focus), `ScrollRegion`, `Columns`, `ListDetail`, `pane` |
+| `src/utils/entryFocus.ts`                                     | Which stop a page opens on, and the `.focus()` + `gpfocus` pair that places it — the frame's and the router's one implementation           |
+| `src/utils/` module stores                                    | State that must outlive a page: sync progress, pending preview, downloads, prune, the game-detail caches                                   |
 
 ## Two widths
 
@@ -118,18 +119,22 @@ what makes it a stop: `FocusableProps` exposes no `focusable` prop, an activate 
 a row, a hint under a group, scrolls with its neighbours and need not be reachable itself. This is what focus-driven
 scrolling costs: content nobody can focus cannot be scrolled to.
 
-**The one place a page cannot buy its way out of that is the content ABOVE its first focusable row**, and the frame
-handles it rather than each page: a heading, a counts line, a column header sitting over the topmost row is not
-focusable and has nothing below it to ride along with, so once the reader has scrolled past it Steam has no reason to
-bring it back — it scrolls only far enough to show the focused element. `ScrollRegion` therefore scrolls itself to the
-top when focus reaches the first stop in it. Every region **built with `ScrollRegion`** gets that, which is not the same
-as every region on every wide page: a tabbed page's own tab content sits in Steam's `ScrollingTab`, so a tab that does
-not build its own regions — Collections today — is not covered. Two properties make that safe rather than a fight with
-Steam's own scrolling. The trigger is **"nothing focusable is above me"**, not "I am the first match" — a container
-`Focusable` renders `tabindex="0"` of its own and precedes the row inside it in document order, so an equality test
-would silently never fire on a page that wraps its rows, which `ListDetail` does for every row. And it acts only where
-the focused element still fits in the region at offset zero: where the content above it is taller than the region there
-is no offset showing both, Steam would scroll the element straight back, so nothing is done at all.
+**The one place a page cannot buy its way out of that is the content OUTSIDE its focusable rows**, and the frame handles
+it rather than each page: a heading, a counts line or a column header sitting over the topmost row, and a legend, a
+total or a hint under the last one, are not focusable and have no neighbour to ride along with, so once the reader has
+scrolled past them Steam has no reason to bring them back — it scrolls only far enough to show the focused element.
+`ScrollRegion` therefore scrolls itself to the top when focus reaches the first stop in it, and to its end when focus
+reaches the last. Every region **built with `ScrollRegion`** gets that, which is not the same as every region on every
+wide page: a tabbed page's own tab content sits in Steam's `ScrollingTab`, so a tab that does not build its own regions
+— Collections today — is not covered. Two properties make it safe rather than a fight with Steam's own scrolling. The
+triggers are **"nothing focusable is above me"** and **"nothing focusable is below me"**, never "I am the first match"
+or "the last" — a container `Focusable` renders `tabindex="0"` of its own and precedes in document order every row it
+wraps, so it is never the last match and a wrapped row is never the first, and an equality test against either end would
+silently never fire wherever a page wraps its rows, which `ListDetail` does for every row. So the first rule discounts
+the focused element's own ancestors and the second its own descendants. And each acts only where the focused element
+still fits in the region at the offset it would move to: where the content beyond it is taller than the region there is
+no offset showing both, Steam would scroll the element straight back, so nothing is done at all. A stop at both ends at
+once reveals the top where the top fits, and otherwise the end where that fits.
 
 The set of shapes it counts as a focus stop is measured in the running QAM, not assumed: Steam's own components render
 `div[tabindex="0"]` and a `DialogButton` is a native `button` carrying no tabindex attribute at all.
@@ -150,8 +155,9 @@ tried on the device and rejected. It is focusable and its OK button focuses its 
 became a focus stop of its own: the whole list outlined as one block, A to step into it, and only then rows taking
 focus. Steam's own QAM does not behave that way.
 
-Both of a list-and-detail page's regions are `ScrollRegion`s, and so is the frame's body when the page has no tabs. A
-tabbed body gets none from the frame: see "Building blocks → Tabs" for whose job it is instead.
+Both of a list-and-detail page's regions are `ScrollRegion`s, and so is the frame's body when the page has no tabs and
+does not say it owns its regions. A tabbed body gets none from the frame, and neither does one whose page passes
+`ownRegions`: see "Building blocks → Tabs" for whose job it is instead.
 
 ## Pages
 
@@ -189,9 +195,10 @@ every value, and the wrong one draws the wrong glyph without failing.
 `onCancelButton: !cancelSkipTabHeader && <focus the tab row>` (`chunk~2dcc5aaf7.js`), so without the flag the first B
 inside a tab is spent moving focus to the tab row and never reaches the router. `WidePage` passes `cancelSkipTabHeader`
 — Steam's own prop, which it uses in its controller-configurator dialogs, and which upstream's `TabsProps` predates;
-`src/utils/deckyUiInternals.ts` types it. After a navigation the router scrolls to the top and places gamepad focus on
-the page's first button, as it does today. The module-level `currentPage` survives a QAM remount, so reopening the QAM
-lands on the page that was open, and a wide page re-expands on mount.
+`src/utils/deckyUiInternals.ts` types it. After a navigation the router scrolls the panel to the top, and gamepad focus
+is placed on the page's first stop — by the router for a narrow page, and by the frame itself for a wide one, which says
+so on its root so the router leaves it alone (see "Building blocks → Tabs"). The module-level `currentPage` survives a
+QAM remount, so reopening the QAM lands on the page that was open, and a wide page re-expands on mount.
 
 ## Building blocks
 
@@ -202,14 +209,59 @@ glyphs overlap the labels, which is why the Library page's tab bar is hand-rolle
 
 Entry focus lands in the content — the active tab's, so the list of a list-and-detail page — and the bumper glyphs
 follow, because Steam draws them only while gamepad focus is within the tabbed page. Back stays reachable by moving up.
-A tabbed page therefore marks itself as placing its own entry focus, and the panel's router leaves it alone instead of
-focusing the page's first button, which is the Back row above the tabs.
+
+**Entry focus belongs to the frame, on every wide page.** `WidePage` marks its root as placing its own, so the panel's
+router leaves the page alone rather than focusing its first button, which is the Back chip above the body. Where Steam's
+tabbed page renders, its `autoFocusContents` does the placing; everywhere else — an untabbed page, and a tabbed one
+whose `Tabs` probe missed — the frame focuses the first stop inside the body itself, on the same 50 ms delay the router
+uses, because Steam's navigation resolves a focus pointer it retained across the page swap after the mount.
+
+**The stop it picks is the first enabled focus stop in document order that contains no focus stop at all.** Document
+order rather than "the first button", because a page's first button is not its first row: on a list-and-detail page
+whose list rows carry no control, the first button in the body is in the DETAIL pane, so a button-first rule would open
+the page inside the detail and move as the detail's content changed. Innermost, because a container `Focusable` carries
+`tabindex="0"` of its own and precedes every row it wraps, so the first match would be the container and the reader
+would start a step away from the row. Enabled, because a page opening on a dead control says nothing about where the
+reader is — the reveal rules in `ScrollRegion` read the same shapes and do NOT skip a disabled control, since focus
+still lands on one.
+
+**The two halves read different selectors, and the difference is load-bearing.** A candidate has to be enabled, but a
+container is skipped for holding a stop of ANY kind: a button row whose every button is disabled is still a container
+Steam does not stop on, so treating it as the innermost candidate would put the focus ring on it and take it off the
+next real row. The test cannot tell that row from one carrying an activate handler, so it skips both; a row whose only
+inner stop is disabled is stepped over, which no body's first column produces today. Where that leaves no candidate — no
+enabled stop that is free of stops inside it — nothing is placed and the page keeps whatever Steam's retained pointer
+resolves to. The narrow pages the router still covers keep a button-first rule — their first button, now skipped past a
+disabled one — because a narrow page is one column of Steam's own full-width rows and there the first button IS the
+first row. Both finders, the shared set of shapes and the `.focus()` + `gpfocus` pair are `src/utils/entryFocus.ts`.
 
 **A tab's content is the page's business, not the frame's.** The frame wraps an untabbed body in a `ScrollRegion` and a
 tabbed one in nothing: Steam's tabbed page already wraps each tab's content in this same plain scroll panel, so a region
 from the frame would only nest a second scroller around it. Rows of one column therefore scroll in a tab with nothing
 added. A page that needs more than that one scroller — a list and a detail scrolling independently side by side — builds
-its regions with `ScrollRegion` itself, which is what Library's tabs do.
+its regions with `ScrollRegion` itself, which is what Library's tabs do, and an untabbed page that does the same says so
+with `ownRegions` so the frame wraps its body in none either.
+
+### Columns
+
+One row of side-by-side scrolling regions, which is what every wide page whose content is more than one column is built
+from: a `Focusable` the stick crosses horizontally, and a `ScrollRegion` per column. A column names a fixed width or
+takes what is left, and may name a **region key** — joined to the column's id to form the React key its region carries —
+so that changing it remounts that one column and its content opens at its own top rather than at the offset the previous
+content was left at. A column that names none keeps one constant key and is never remounted. A key rather than a ref
+that scrolls the region back: Steam's scroll panel is reached through a webpack probe and nothing establishes that it
+forwards one.
+
+List and detail is `Columns` with two columns. The Sync page's table beside its controls column is the next.
+
+### The pane primitives
+
+The pieces a detail pane is built from, in `src/components/qam/pane.tsx` so that the next pane is written against the
+same scale rather than a second literal for the same size: the 11 px every secondary line is set in, the verdict
+palette, the two button shapes (`FLAT_BUTTON` for a button sharing a row, `ROW_BUTTON` for a table row's action column),
+a section title, a muted line, a row of buttons, and the two lines that report an action — the status line bound to the
+entry and the group it belongs under, and the sentence saying which other entry is working while this pane's buttons are
+disabled.
 
 ### List and detail
 
@@ -217,6 +269,11 @@ The list takes about a third of the width (264 px in the prototype), the detail 
 the list changes the detail at once, as Steam's own settings do. A list row may carry a toggle; A operates it, never the
 selection. Both regions scroll independently inside the page's measured height, and both scroll by moving focus — so a
 detail pane is built from focusable rows, not from paragraphs.
+
+A list whose rows carry no control of their own — a label and nothing else, which is what Settings and Data Management
+have — asks for `selectOnActivate`, and every row wrapper takes an activate handler that selects it. That handler is
+what makes the wrapper a focus stop rather than a container, so without it those rows are unreachable and the list
+cannot be scrolled. It is off by default, because a row that does carry a control must leave A to it.
 
 A list that is grouped or sorted by state computes its order when the page mounts and keeps it while the page is open,
 so toggling a row does not move it out from under the focus. The next mount shows the new order.
