@@ -89,10 +89,12 @@ becomes the same "unavailable" an unreadable catalogue gives. It is never an emp
 
 ### 4. One answer per system, per process, dropped on `reset_cache`
 
-The adapter caches the chosen installation and one catalogue answer and one `rom_location` per system. Measured on a
-RetroDECK install: `emulators_for` 15–30 ms warm, `rom_location` ~430 ms on the first call and ~27 ms after — and a
-per-platform core change fans out one resolution per installed ROM on the platform, so an uncached read is paid per
-game.
+The adapter caches the chosen installation and every answer read through it: one catalogue answer and one `rom_location`
+per system, plus the one `systems()` listing, which is per installation rather than per system. Measured on a RetroDECK
+install: `emulators_for` 15–30 ms warm, `rom_location` ~430 ms on the first call and ~27 ms after, and `systems()` 16 ms
+over 172 systems — and a per-platform core change fans out one resolution per installed ROM on the platform, so an
+uncached read is paid per game. Caching the listing is also what keeps the candidate search where it was: the deleted
+parser answered `is_known_system` out of its own cached parse.
 
 **The invalidation story changed and is weaker on paper.** The old parser held an mtime guard, so a RetroDECK update
 that rewrote `es_systems.xml` was picked up on the next read. What the resolver read to answer is now its own business

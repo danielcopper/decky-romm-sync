@@ -295,6 +295,87 @@ class TestResolveSandboxLauncher:
         assert adapter.resolve_sandbox_launcher("%EMULATOR_RPCS3% --no-gui %ROM%") is None
 
 
+class TestStaticPathMapping:
+    """Each sandbox prefix a find rule may use resolves to its host location.
+
+    Only the ``/app`` and ``/var/data`` shapes appear in the rule fixtures above,
+    because those are what RetroDECK actually ships. The rest are the mapping's
+    own branches, exercised through the probe so a wrong host path shows up as a
+    wrong verdict rather than as a passing unit assertion about a string.
+    """
+
+    _RULES = """\
+<?xml version="1.0"?>
+<ruleList>
+  <emulator name="VARCONFIG">
+    <rule type="staticpath">
+      <entry>/var/config/retrodeck/components/varconfig/component_launcher.sh</entry>
+    </rule>
+  </emulator>
+  <emulator name="TILDE">
+    <rule type="staticpath">
+      <entry>~/Applications/tilde*.AppImage</entry>
+    </rule>
+  </emulator>
+  <emulator name="HOME">
+    <rule type="staticpath">
+      <entry>~</entry>
+    </rule>
+  </emulator>
+  <emulator name="LITERAL">
+    <rule type="staticpath">
+      <entry>/var/lib/flatpak/exports/bin/net.example.Literal</entry>
+    </rule>
+  </emulator>
+  <emulator name="EMPTYENTRY">
+    <rule type="staticpath">
+      <entry></entry>
+    </rule>
+  </emulator>
+</ruleList>
+"""
+
+    def test_a_var_config_component_maps_under_the_app_config_tree(self, tmp_path):
+        adapter = _seed(tmp_path, find_rules=self._RULES)
+        assert adapter.command_emulator_installed("%EMULATOR_VARCONFIG% %ROM%") is False
+
+        _touch(
+            os.path.join(
+                str(tmp_path),
+                ".var",
+                "app",
+                "net.retrodeck.retrodeck",
+                "config",
+                "retrodeck",
+                "components",
+                "varconfig",
+                "component_launcher.sh",
+            )
+        )
+        assert adapter.command_emulator_installed("%EMULATOR_VARCONFIG% %ROM%") is True
+
+    def test_a_tilde_entry_globs_under_the_user_home(self, tmp_path):
+        adapter = _seed(tmp_path, find_rules=self._RULES)
+        # No RetroDECK component among its entries, so an absent host install is
+        # never a downgrade — the launcher lookup is what the mapping shows.
+        assert adapter.resolve_sandbox_launcher("%EMULATOR_TILDE% %ROM%") is None
+        _touch(os.path.join(str(tmp_path), "Applications", "tilde-1.2.AppImage"))
+        assert adapter.command_emulator_installed("%EMULATOR_TILDE% %ROM%") is True
+
+    def test_a_bare_tilde_is_the_user_home_itself(self, tmp_path):
+        adapter = _seed(tmp_path, find_rules=self._RULES)
+        assert adapter.command_emulator_installed("%EMULATOR_HOME% %ROM%") is True
+
+    def test_any_other_absolute_path_is_taken_literally(self, tmp_path):
+        adapter = _seed(tmp_path, find_rules=self._RULES)
+        assert adapter.command_emulator_installed("%EMULATOR_LITERAL% %ROM%") is True
+
+    def test_an_empty_entry_resolves_to_nothing(self, tmp_path):
+        adapter = _seed(tmp_path, find_rules=self._RULES)
+        assert adapter.command_emulator_installed("%EMULATOR_EMPTYENTRY% %ROM%") is True
+        assert adapter.resolve_sandbox_launcher("%EMULATOR_EMPTYENTRY% %ROM%") is None
+
+
 class TestParseFailures:
     """A file that cannot be read or parsed leaves every emulator assumed installed."""
 

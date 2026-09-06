@@ -482,21 +482,37 @@ class TestCaching:
 
         assert installation.catalogue_calls == ["ps3", "psx"]
 
+    def test_the_systems_listing_is_read_once(self, traces):
+        # The listing enumerates every system the catalogue has, and a candidate
+        # search asks it once per platform it visits.
+        installation = _Installation(systems=SystemsAnswer(systems=("psx", "ps2")))
+        adapter = _adapter(installation, traces)
+
+        adapter.is_known_system("psx")
+        adapter.is_known_system("ps2")
+        adapter.is_known_system("n64")
+
+        assert installation.systems_calls == 1
+
     def test_reset_cache_re_asks(self, traces):
         installation = _Installation(
             catalogue=_answer(_entry(label="RPCS3", command="%EMULATOR_RPCS3% %ROM%", declared_index=0)),
             placement=RomPlacement(dir="/roms/ps3", extensions=(".ps3",)),
+            systems=SystemsAnswer(systems=("ps3",)),
         )
         adapter = _adapter(installation, traces)
         adapter.get_emulator_options("ps3")
         adapter.get_supported_extensions("ps3")
+        adapter.is_known_system("ps3")
 
         adapter.reset_cache()
         adapter.get_emulator_options("ps3")
         adapter.get_supported_extensions("ps3")
+        adapter.is_known_system("ps3")
 
         assert installation.catalogue_calls == ["ps3", "ps3"]
         assert installation.placement_calls == ["ps3", "ps3"]
+        assert installation.systems_calls == 2
 
     def test_a_detection_that_found_nothing_is_re_run(self, traces):
         # The one state where memoising would cost something real: RetroDECK

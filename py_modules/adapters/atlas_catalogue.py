@@ -103,7 +103,7 @@ def first_detected_installation(user_home: str) -> Any:
     return installations[0] if installations else None
 
 
-def _plugin_core_so(core_so: str | None) -> str | None:
+def _plugin_core_so(core_so: str) -> str:
     """Atlas's ``mgba_libretro.so`` in the plugin's own identifier space.
 
     Every core identifier the plugin holds — the resolved active core, the
@@ -111,8 +111,6 @@ def _plugin_core_so(core_so: str | None) -> str | None:
     ``.so`` basename without its extension. Comparing the two spellings without
     normalising here would silently match nothing.
     """
-    if core_so is None:
-        return None
     return core_so[: -len(_CORE_SO_SUFFIX)] if core_so.endswith(_CORE_SO_SUFFIX) else core_so
 
 
@@ -158,7 +156,7 @@ class AtlasCatalogueAdapter:
     :class:`services.active_core_resolver.ActiveCoreResolver`, not here — and
     ES-DE's own selections are ignored, which is what ``_declared_order`` is for.
 
-    Caches the chosen installation and one answer per system as instance
+    Caches the chosen installation and every answer read through it as instance
     attributes. There is no mtime guard to fall back on any more: what the
     resolver read to answer is its own business, so a change to ES-DE's catalogue
     lands on a :meth:`reset_cache` (which a per-platform core write already
@@ -178,6 +176,7 @@ class AtlasCatalogueAdapter:
         self._installation: Any = None
         self._catalogues: dict[str, Any] = {}
         self._locations: dict[str, Any] = {}
+        self._systems: Any = None
 
     def reset_cache(self) -> None:
         """Drop the chosen installation and every answer read through it.
@@ -190,6 +189,7 @@ class AtlasCatalogueAdapter:
         self._installation = None
         self._catalogues = {}
         self._locations = {}
+        self._systems = None
 
     # -- public API ----------------------------------------------------------
 
@@ -279,10 +279,7 @@ class AtlasCatalogueAdapter:
         empty set. ``False`` is therefore a positive statement: this catalogue was
         read, and it does not name this system.
         """
-        installation = self._installation_handle()
-        if installation is None:
-            return None
-        answer = self._ask(lambda: installation.systems(), "systems")
+        answer = self._systems_answer()
         if answer is None or _refused(answer):
             return None
         return system_name in answer.systems
@@ -366,6 +363,20 @@ class AtlasCatalogueAdapter:
             )
             self._catalogues[system_name] = answer
         return self._catalogues[system_name]
+
+    def _systems_answer(self) -> Any:
+        """Every system the catalogue declares, cached, or ``None`` with nothing to ask.
+
+        Cached like the per-system answers rather than asked per call: this one
+        is per installation, it enumerates every system the catalogue has, and
+        the caller asks it once per platform a candidate search visits.
+        """
+        installation = self._installation_handle()
+        if installation is None:
+            return None
+        if self._systems is None:
+            self._systems = self._ask(lambda: installation.systems(), "systems")
+        return self._systems
 
     def _rom_location(self, system_name: str) -> Any:
         """Where *system_name*'s content lives and what it accepts, cached, or ``None``."""
