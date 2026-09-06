@@ -8,12 +8,12 @@
  * the bargain — every row a reader must reach is a focusable row, and text that
  * only accompanies one scrolls along with it.
  *
- * The one thing the caller cannot buy that way is the content ABOVE its first
- * focusable row: Steam scrolls a region only far enough to show the focused
- * element, so a heading, a counts line or a column header sitting over the
- * topmost row stays off the top once the reader has scrolled past it. That is
+ * The one thing the caller cannot buy that way is the content OUTSIDE its
+ * focusable rows: Steam scrolls a region only far enough to show the focused
+ * element, so a heading or a column header over the topmost row stays off the
+ * top, and a legend or a total under the last row stays off the bottom. That is
  * this component's own job, and it is here rather than on a page so that every
- * region built with `ScrollRegion` inherits it — see `revealTop`. That is not
+ * region built with `ScrollRegion` inherits it — see `revealEdge`. That is not
  * every region on every wide page: a TABBED page's content sits in Steam's own
  * `ScrollingTab`, which the frame does not wrap, so a tab that does not build
  * its own regions does not get this.
@@ -69,23 +69,58 @@ const BOUNDS: CSSProperties = { height: "100%", minHeight: 0, overscrollBehavior
 const AFTER_STEAMS_OWN_SCROLL_MS = 50;
 
 /**
- * Reveal the region's top once focus reaches the first thing in it that can
- * hold focus.
- *
- * The rule is "nothing focusable is above me", not "I am the first match":
- * a container `Focusable` renders `tabindex="0"` of its own and precedes the
- * row inside it in document order, so an equality test would silently never
- * fire wherever a page wraps its rows. An ancestor of the focused element is
- * therefore not something above it.
+ * Reveal the region's top, once focus has reached the first thing in it that
+ * can hold focus, and answer whether it did.
  *
  * **It cannot fight Steam's own scrolling, because it never moves the focused
  * element out of view**: the scroll happens only when that element still fits
  * within the region at offset zero. Where the content above the first row is
  * taller than the region itself there is no offset that shows both, and Steam
- * would immediately scroll the element back — so nothing is done at all and the
- * reader keeps the behaviour they had.
+ * would immediately scroll the element back — so this refuses, and the caller
+ * decides what else is worth trying.
  */
-function revealTop(event: FocusEvent<HTMLElement>): void {
+function revealTop(region: HTMLElement, focused: HTMLElement): boolean {
+  const focusedBottom = offsetWithinScroller(focused, region) + focused.getBoundingClientRect().height;
+  if (focusedBottom > region.clientHeight) return false;
+  setTimeout(() => region.scrollTo({ top: 0, behavior: "smooth" }), AFTER_STEAMS_OWN_SCROLL_MS);
+  return true;
+}
+
+/**
+ * Reveal the region's end, once focus has reached the last thing in it that can
+ * hold focus — the mirror of {@link revealTop}, for the legend, the total line
+ * or the hint a page puts under its last row.
+ *
+ * It never moves the focused element out of view either, and by the same test
+ * read from the other end: the scroll happens only where everything from that
+ * element to the end of the content fits within the region, so the element is
+ * still on screen once the region sits at its end. It answers whether it
+ * scrolled for symmetry with {@link revealTop}; nothing follows it today.
+ */
+function revealBottom(region: HTMLElement, focused: HTMLElement): boolean {
+  if (region.scrollHeight - offsetWithinScroller(focused, region) > region.clientHeight) return false;
+  setTimeout(() => region.scrollTo({ top: region.scrollHeight, behavior: "smooth" }), AFTER_STEAMS_OWN_SCROLL_MS);
+  return true;
+}
+
+/**
+ * Reveal whichever end of the region focus has just reached, if either.
+ *
+ * Both rules are stated against what else can hold focus, never against a
+ * position in the match list: a container `Focusable` renders `tabindex="0"` of
+ * its own and precedes in document order every row it wraps, so it is never the
+ * last match and a wrapped row is never the first — an equality test against
+ * either end would silently never fire wherever a page wraps its rows. So
+ * "nothing focusable is above me" discounts the focused element's own ancestors,
+ * and "nothing focusable is below me" discounts its own descendants.
+ *
+ * A stop at both ends at once reveals the top where the top fits, and otherwise
+ * the end where that fits. Reaching such a stop is entering the region, so the
+ * top is what a reader has yet to see; but a region whose one row sits below a
+ * screenful of heading has no offset showing that row and its top together, and
+ * there the end is still worth revealing.
+ */
+function revealEdge(event: FocusEvent<HTMLElement>): void {
   const region = event.currentTarget;
   const focused = event.target;
   // Asked of the node's OWN view, never the module's global. Plugin code runs
@@ -100,10 +135,12 @@ function revealTop(event: FocusEvent<HTMLElement>): void {
 
   const stops = [...region.querySelectorAll(FOCUS_STOPS)];
   const reached = stops.indexOf(focused);
-  if (reached < 0 || stops.slice(0, reached).some((stop) => !stop.contains(focused))) return;
+  if (reached < 0) return;
 
-  if (offsetWithinScroller(focused, region) + focused.getBoundingClientRect().height > region.clientHeight) return;
-  setTimeout(() => region.scrollTo({ top: 0, behavior: "smooth" }), AFTER_STEAMS_OWN_SCROLL_MS);
+  const isFirst = !stops.slice(0, reached).some((stop) => !stop.contains(focused));
+  const isLast = !stops.slice(reached + 1).some((stop) => !focused.contains(stop));
+  if (isFirst && revealTop(region, focused)) return;
+  if (isLast) revealBottom(region, focused);
 }
 
 export const ScrollRegion: FC<ScrollRegionProps> = ({ style, children }) =>
@@ -118,11 +155,11 @@ export const ScrollRegion: FC<ScrollRegionProps> = ({ style, children }) =>
   // and that is the element the attribute lands on. React delivers it through
   // `focusin`, so it fires for focus landing anywhere inside the region.
   ScrollPanel ? (
-    <ScrollPanel style={{ ...BOUNDS, ...style }} onFocus={revealTop}>
+    <ScrollPanel style={{ ...BOUNDS, ...style }} onFocus={revealEdge}>
       {children}
     </ScrollPanel>
   ) : (
-    <Focusable style={{ ...BOUNDS, overflow: "auto", ...style }} onFocus={revealTop}>
+    <Focusable style={{ ...BOUNDS, overflow: "auto", ...style }} onFocus={revealEdge}>
       {children}
     </Focusable>
   );

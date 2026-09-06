@@ -131,18 +131,18 @@ describe("ScrollRegion", () => {
   });
 
   /**
-   * Revealing the region's top.
+   * Revealing the region's two ends.
    *
    * happy-dom lays nothing out and has no gamepad, so the geometry every branch
    * reads is mocked and what is pinned is the DECISION, not the scroll a reader
    * would see. That the panel and the reader agree about which element is
-   * topmost, and that the scroll looks right on a controller, is the device
-   * round's to settle.
+   * topmost or last, and that the scroll looks right on a controller, is the
+   * device round's to settle.
    */
-  describe("revealing what sits above the first focusable row", () => {
-    /** A region 500 tall over 1200 of content, with each stop placed by data. */
-    function mockGeometry(): void {
-      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1200);
+  describe("revealing what sits outside the first and last focusable rows", () => {
+    /** A region 500 tall over `scrollHeight` of content, each stop placed by data. */
+    function mockGeometry(scrollHeight: number): void {
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(scrollHeight);
       vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(500);
       vi.spyOn(HTMLElement.prototype, "clientTop", "get").mockReturnValue(0);
       vi.spyOn(Element.prototype, "scrollTop", "get").mockReturnValue(0);
@@ -151,9 +151,9 @@ describe("ScrollRegion", () => {
       });
     }
 
-    async function renderRegion(children: ReactNode) {
+    async function renderRegion(children: ReactNode, scrollHeight = 1200) {
       const ScrollRegion = await loadScrollRegion(StubScrollPanel);
-      mockGeometry();
+      mockGeometry(scrollHeight);
       render(<ScrollRegion>{children}</ScrollRegion>);
       const region = screen.getByTestId("scroll-panel");
       const scrollTo = vi.spyOn(region, "scrollTo").mockImplementation(() => {});
@@ -184,13 +184,14 @@ describe("ScrollRegion", () => {
       expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: "smooth" });
     });
 
-    it("leaves the scroll alone for every stop below the first", async () => {
+    it("leaves the scroll alone for a stop with focusable rows on both sides", async () => {
       const { scrollTo } = await renderRegion(
         <>
           <button data-top="90">first</button>
           <button data-testid="second" data-top="140">
             second
           </button>
+          <button data-top="190">third</button>
         </>,
       );
 
@@ -223,17 +224,12 @@ describe("ScrollRegion", () => {
     });
 
     it("does nothing where the region has nothing to scroll", async () => {
-      const ScrollRegion = await loadScrollRegion(StubScrollPanel);
-      mockGeometry();
-      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(500);
-      render(
-        <ScrollRegion>
-          <button data-testid="only" data-top="90">
-            only
-          </button>
-        </ScrollRegion>,
+      const { scrollTo } = await renderRegion(
+        <button data-testid="only" data-top="90">
+          only
+        </button>,
+        500,
       );
-      const scrollTo = vi.spyOn(screen.getByTestId("scroll-panel"), "scrollTo").mockImplementation(() => {});
 
       fireEvent.focusIn(screen.getByTestId("only"));
       vi.advanceTimersByTime(50);
@@ -304,9 +300,106 @@ describe("ScrollRegion", () => {
       }
     });
 
+    it("scrolls to the end when focus reaches the last stop in it", async () => {
+      // The mirror of the heading above the first row: a legend, a total or a
+      // hint under the last row has nothing below it to ride along with, and
+      // Steam scrolls only far enough to show the focused element.
+      const { scrollTo } = await renderRegion(
+        <>
+          <button data-top="90">first</button>
+          <button data-testid="last" data-top="800">
+            last
+          </button>
+        </>,
+      );
+
+      fireEvent.focusIn(screen.getByTestId("last"));
+      vi.advanceTimersByTime(50);
+
+      expect(scrollTo).toHaveBeenCalledWith({ top: 1200, behavior: "smooth" });
+    });
+
+    it("counts the row inside a focused wrapper as its descendant, not as something below it", async () => {
+      // The same shape as the first-stop case read from the other end: a
+      // container `Focusable` carries `tabindex="0"` and precedes the row it
+      // wraps, so focus landing on the wrapper has a match after it that is its
+      // own child. Counting that as something below would make the rule
+      // silently never fire wherever a page wraps its rows.
+      const { scrollTo } = await renderRegion(
+        <>
+          <button data-top="90">first</button>
+          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- reproducing verbatim what Steam's container Focusable renders, which is the shape under test; giving it an interactive role would make it a different node from the one the handler has to see through. */}
+          <div tabIndex={0} data-testid="wrapper" data-top="800">
+            <button data-top="800">last</button>
+          </div>
+        </>,
+      );
+
+      fireEvent.focusIn(screen.getByTestId("wrapper"));
+      vi.advanceTimersByTime(50);
+
+      expect(scrollTo).toHaveBeenCalledWith({ top: 1200, behavior: "smooth" });
+    });
+
+    it("refuses to scroll the last stop out of view to show what is below it", async () => {
+      // Content below it taller than the region: there is no offset that shows
+      // both, so Steam would scroll the element straight back and the two would
+      // fight. Doing nothing leaves the reader the behaviour they had.
+      const { scrollTo } = await renderRegion(
+        <>
+          <button data-top="50">first</button>
+          <button data-testid="last" data-top="100">
+            last
+          </button>
+        </>,
+      );
+
+      fireEvent.focusIn(screen.getByTestId("last"));
+      vi.advanceTimersByTime(50);
+
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    it("reveals the top rather than the end for a stop at both ends at once", async () => {
+      // A region only a little taller than its viewport, where one stop
+      // qualifies for both ends — 1200/500 cannot produce that, since no offset
+      // is both within one screen of the top and within one of the end.
+      // Reaching such a stop is entering the region, so the top wins.
+      const { scrollTo } = await renderRegion(
+        <button data-testid="only" data-top="150">
+          only
+        </button>,
+        600,
+      );
+
+      fireEvent.focusIn(screen.getByTestId("only"));
+      vi.advanceTimersByTime(50);
+
+      expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: "smooth" });
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls through to the end for a stop at both ends whose top does not fit", async () => {
+      // The region's one row sits below a screenful of heading: no offset shows
+      // that row and the region's top together, so revealing the top is refused
+      // — and the end, which does fit, is still worth revealing. Stopping at the
+      // refusal would leave whatever sits under the row permanently off-screen.
+      const { scrollTo } = await renderRegion(
+        <button data-testid="only" data-top="800" data-h="40">
+          only
+        </button>,
+      );
+
+      fireEvent.focusIn(screen.getByTestId("only"));
+      vi.advanceTimersByTime(50);
+
+      expect(scrollTo).toHaveBeenCalledWith({ top: 1200, behavior: "smooth" });
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+    });
+
     it("reveals the top on the fallback branch too", async () => {
       const ScrollRegion = await loadScrollRegion(undefined);
-      mockGeometry();
+      mockGeometry(1200);
       render(
         <ScrollRegion>
           <button data-testid="first" data-top="90">
