@@ -65,6 +65,12 @@ const FAILED_NOTICE_MS = 2000;
 const LEASE_OWNER = "library-platforms";
 const REMOVAL_REPORT_TIMEOUT_MS = 15000;
 
+/** What a sync write that did not take says when there is no answer to quote.
+ *  A refusal always carries a message (`.claude/rules/callables.md`) and that
+ *  message is what the reader gets. A REJECTION has no answer at all — the call
+ *  never returned one — and the revert would otherwise happen in silence. */
+export const SYNC_WRITE_FAILED = "Could not save that; the change was undone.";
+
 /** Which group of the detail a status line belongs under, so a failed core
  *  switch is not reported below the removal buttons. */
 export type StatusScope = "core" | "bios" | "remove";
@@ -167,9 +173,20 @@ export interface PlatformsPageState {
   saveCountFor: (slug: string) => SaveCountAnswer;
   status: DetailStatus | null;
   /**
-   * The platform whose action is in flight, or `null`. Every action on every
-   * platform disables while one is running, and the slug is what lets a pane
-   * that is not the one acting say why its buttons are dead.
+   * Why the last sync write did not take, or `null`. The list's own line, not a
+   * platform pane's: Enable all is about the whole list, and a row's toggle is
+   * about a row the reader is already looking at, so neither belongs in
+   * {@link DetailStatus}, which is bound to one platform's pane.
+   *
+   * Cleared by the next sync write that succeeds — a line about a toggle the
+   * reader has since put right is a line about nothing.
+   */
+  listStatus: string | null;
+  /**
+   * The platform whose action is in flight, or `null`. Every action the detail
+   * offers disables on every platform while one is running; the list's own sync
+   * writes are outside the hold. The slug is what lets a pane that is not the
+   * one acting say why its buttons are dead.
    *
    * **What forbids running two at once is this page's own state, not a lock
    * anywhere else.** `status`, `removalProgress` and `busySlug` are each
@@ -280,6 +297,7 @@ export function usePlatformsPage(): PlatformsPageState {
   const [cores, setCores] = useState<Record<string, SystemCoreInfo | null>>({});
   const [saveCounts, setSaveCounts] = useState<Record<string, number | null>>({});
   const [status, setStatus] = useState<DetailStatus | null>(null);
+  const [listStatus, setListStatus] = useState<string | null>(null);
   const [busySlug, setBusySlug] = useState<string | null>(null);
   const [removalProgress, setRemovalProgress] = useState<{ slug: string; removed: number; total: number } | null>(null);
 
@@ -455,14 +473,28 @@ export function usePlatformsPage(): PlatformsPageState {
     platformsRef.current = platforms;
   }, [platforms]);
 
+  // Both sync writes below treat a refusal and a rejection as one outcome: the
+  // write did not take, the optimistic flip goes back, and the reader is told.
+  // A flip that silently returns to where it was is what a toggle that never
+  // moved looks like, and neither callable throws to refuse.
   const toggleSync = useCallback((row: PlatformRow, enabled: boolean) => {
     const flip = (want: boolean) =>
       setPlatforms((prev) => prev.map((p) => (p.slug === row.slug ? { ...p, sync_enabled: want } : p)));
     flip(enabled);
     detach(
-      savePlatformSync(row.id, enabled).catch(() => {
-        flip(!enabled);
-      }),
+      savePlatformSync(row.id, enabled)
+        .then((result) => {
+          if (result.success) {
+            setListStatus(null);
+            return;
+          }
+          flip(!enabled);
+          setListStatus(result.message || SYNC_WRITE_FAILED);
+        })
+        .catch(() => {
+          flip(!enabled);
+          setListStatus(SYNC_WRITE_FAILED);
+        }),
     );
   }, []);
 
@@ -470,10 +502,28 @@ export function usePlatformsPage(): PlatformsPageState {
     const previous = platformsRef.current;
     setPlatforms((prev) => prev.map((p) => ({ ...p, sync_enabled: enabled })));
     detach(
-      setAllPlatformsSync(enabled).catch(() => {
-        setPlatforms(previous);
-      }),
+      setAllPlatformsSync(enabled)
+        .then((result) => {
+          if (result.success) {
+            setListStatus(null);
+            return;
+          }
+          setPlatforms(previous);
+          setListStatus(result.message || SYNC_WRITE_FAILED);
+        })
+        .catch(() => {
+          setPlatforms(previous);
+          setListStatus(SYNC_WRITE_FAILED);
+        }),
     );
+  }, []);
+
+  /** Take back the core line this pick wrote, and only that one. The page holds
+   *  a single status, and the clear runs after an await: naming the line means a
+   *  line that landed in the meantime is left where it is rather than taken by
+   *  a clear that was about something else. */
+  const clearCoreLine = useCallback((slug: string) => {
+    setStatus((prev) => (prev?.slug === slug && prev.scope === "core" ? null : prev));
   }, []);
 
   const changeCore = useCallback(
@@ -483,11 +533,15 @@ export function usePlatformsPage(): PlatformsPageState {
       // (empty label → follow the es_systems default); any other pins it.
       const defaultLabel = answer?.emulators.find((e) => e.is_default)?.label;
       const label = pickedLabel === defaultLabel ? "" : pickedLabel;
+      setBusySlug(slug);
+      setStatus({ slug, scope: "core", text: `Switching to ${pickedLabel}…` });
+      // Captured before the continuation starts, so the catch can tell a
+      // cancelled continuation from a failed switch.
+      const admission = capturePruneLeaseAdmission(LEASE_OWNER);
       detach(debugLog(`setSystemCore: slug=${slug} label=${label} (selected=${pickedLabel})`));
       detach(
         (async () => {
           try {
-            const admission = capturePruneLeaseAdmission(LEASE_OWNER);
             const result = await setSystemCore(slug, label);
             detach(debugLog(`setSystemCore: result success=${result.success}`));
             if (!result.success) {
@@ -510,7 +564,7 @@ export function usePlatformsPage(): PlatformsPageState {
               LEASE_OWNER,
               admission,
             );
-            setStatus(null);
+            clearCoreLine(slug);
             reloadCore(slug);
             // A different core wants different BIOS files, so the table below
             // the picker is stale until the overview is read again.
@@ -519,13 +573,24 @@ export function usePlatformsPage(): PlatformsPageState {
               new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: slug } }),
             );
           } catch (e) {
+            // Leaving the page cancels the continuation, which is teardown
+            // rather than a failure: the switch either committed or never ran
+            // (`isPruneLeaseCancellation`), and either way there is no pane
+            // left to report to. The line the pick put up goes with it.
+            if (isPruneLeaseCancellation(e, admission)) {
+              logWarn(`Core switch continuation was cancelled: ${e}`);
+              clearCoreLine(slug);
+              return;
+            }
             detach(debugLog(`setSystemCore: error: ${e}`));
             setStatus({ slug, scope: "core", text: "Could not change the core" });
+          } finally {
+            setBusySlug(null);
           }
         })(),
       );
     },
-    [cores, refreshFirmware, reloadCore],
+    [clearCoreLine, cores, refreshFirmware, reloadCore],
   );
 
   /** Hold the pressed button on a red `Failed` for a moment before everything
@@ -765,6 +830,7 @@ export function usePlatformsPage(): PlatformsPageState {
     coreFor,
     saveCountFor,
     status,
+    listStatus,
     busySlug,
     removalProgress,
     toggleSync,

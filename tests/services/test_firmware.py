@@ -647,8 +647,8 @@ class TestAFolderRowCountsWhatWePutInside:
     """The folder branch of the row field, which nothing else exercises.
 
     A declared folder has no name a record could carry, so its ``deletable_count``
-    counts the records written UNDERNEATH it — the rule that a folder is never a
-    download says nothing about the files already in one.
+    counts the distinct FILES our records name underneath it — the rule that a
+    folder is never a download says nothing about the files already in one.
     """
 
     _CORE = "pcsx2_libretro"
@@ -669,7 +669,7 @@ class TestAFolderRowCountsWhatWePutInside:
         return fw
 
     @pytest.mark.asyncio
-    async def test_the_folder_row_counts_the_records_beneath_it(self, plugin, tmp_path):
+    async def test_the_folder_row_counts_the_files_beneath_it(self, plugin, tmp_path):
         _seed_rom(plugin._uow, rom_id=61, platform_slug="dc", app_id=1)
         inside = os.path.join(str(tmp_path / "bios"), "pcsx2", "bios", "scph39001.bin")
         hand_placed = os.path.join(str(tmp_path / "bios"), "pcsx2", "bios", "scph70012.bin")
@@ -699,6 +699,42 @@ class TestAFolderRowCountsWhatWePutInside:
         # there is not ours, and our own download outside it belongs to the
         # platform button rather than to this row.
         assert row["deletable_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_two_records_naming_one_file_are_one_deletion(self, plugin, tmp_path):
+        """The row promises unlinks, and the same path unlinks once.
+
+        A file downloaded twice — once under ``psx``, once under ``ps``, the two
+        spellings RomM files one platform's firmware under — leaves two records
+        at one path. Counting records there offers ``Delete (2)`` and takes one
+        file away, which is the platform count's own rule read one layer in.
+        """
+        _seed_rom(plugin._uow, rom_id=62, platform_slug="psx", app_id=1)
+        inside = os.path.join(str(tmp_path / "bios"), "pcsx2", "bios", "scph39001.bin")
+        store = FakeFirmwareFileStore({inside: b"\x00" * 8})
+        for slug in ("psx", "ps"):
+            plugin._uow.bios_files.save(
+                BiosFile.mark_downloaded(
+                    platform_slug=slug,
+                    file_name="scph39001.bin",
+                    file_path=inside,
+                    downloaded_at="2026-01-01T00:00:00+00:00",
+                    firmware_id=None,
+                )
+            )
+        resolver = FakeFirmwareResolver()
+        resolver.declare(
+            "bios", required_by=[self._CORE], relative_path="pcsx2/bios", present=True, declares_directory=True
+        )
+        fw = self._service(plugin, tmp_path, resolver, store)
+
+        result = await fw.get_firmware_status()
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "psx")
+
+        assert plat["files"][0]["declared_kind"] == "directory"
+        assert plat["files"][0]["deletable_count"] == 1
+        # And the platform button, which has counted paths all along, agrees.
+        assert plat["deletable_count"] == 1
 
 
 class TestAFolderRequirementIsAnsweredByItsContents:

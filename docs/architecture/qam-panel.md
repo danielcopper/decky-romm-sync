@@ -391,9 +391,16 @@ is made of. The layout study still draws it; on this point the study is supersed
 finding. Do not restore it as a regression. Enable all and Disable all sit above the groups, in the list column and
 outside every row, so reaching them reports no selection. The order freezes while the page is open.
 
-The row is the page's only sync control — focus is already there and A works the toggle — so the detail opens with one
-header line instead of a Sync section: the platform's name, `N on RomM · M in Steam · <core name>`, and the core
-picker's icon button, right-aligned.
+**Every sync write is optimistic, and a write that does not take says so.** The row flips before the backend answers, so
+a write that is refused or never lands puts the row — or, for Enable all and Disable all, the whole list — back where it
+was, and states why in a line under those two buttons: in the list column, scrolling with the rows, plain text rather
+than a focus stop. It carries the backend's own message, or a short fixed sentence where there is none, and the next
+write that succeeds takes it back. A refusal resolves rather than throwing (the migration gate answers one, and so does
+the RomM listing Enable all needs), so without the line a revert is indistinguishable from a toggle that never moved.
+
+The detail offers no sync control of its own — the row already is one, focus is already there and A works the toggle,
+and the list's two header buttons act on every row at once — so it opens with one header line instead of a Sync section:
+the platform's name, `N on RomM · M in Steam · <core name>`, and the core picker's icon button, right-aligned.
 
 **Both counts on that line are ROM files.** `N` is RomM's own `rom_count` for the platform; `M` is `reachable_count` —
 how many of the platform's ROMs a reader can get to through a shortcut, which is every member of a sibling group that
@@ -487,17 +494,22 @@ it, for the focused platform:
   are checked in that order: an empty menu is the case where RetroDECK's own fallback fails too, so it is answered
   before the not-bakeable one, and the surviving count branch then speaks only for a menu that really does hold one
   bakeable option. The frontend half of #1016 lands in the same place: a switch the backend refuses is reported there,
-  and the header keeps naming the core that is actually active.
+  and the header keeps naming the core that is actually active. A switch takes the page's busy hold from the moment it
+  is picked until it is over; an accepted one re-bakes the launch command of every bound shortcut, which is why the hold
+  has to cover the whole of it. The chip and the pane's buttons disable, another platform's pane says `Working on X`,
+  and the acting pane says `Switching to <emulator>…` in the same status line the outcome lands in — a success takes
+  that line back, a refusal replaces it, and a continuation cancelled by leaving the page takes it back too, because
+  such a switch either committed or never ran and there is no pane left to report to either way.
 - **BIOS files** — the summary (required, or files, and the two unknown states), then a table: File, On disk, Contents,
   and a **Download** button on every row that is missing and in the RomM library (#164) — never on a folder declaration,
   whatever its state, because the emulator opens that name as a directory — and a **Delete** button on every row a
   download record of ours still holds. That covers a declared **folder** too, where no record carries the row's name and
-  the button counts the records written underneath it (`Delete (N)`): a folder is never a download, which says nothing
-  about the files already inside one. Same authority as `Delete BIOS`, described below. Below the table one row of
-  buttons: Download required (_N_), Download all, Delete BIOS behind a `ConfirmModal`. **All three are always rendered
-  and disable when there is nothing to do**, the ruling the Remove group already had: on PS2 all three vanished at once,
-  and a button that disappears is a state the reader has to work out. A disabled `DialogButton` is still a focus stop,
-  so the row stays walkable.
+  the button counts the distinct files our records name underneath it (`Delete (N)`): a folder is never a download,
+  which says nothing about the files already inside one. Same authority as `Delete BIOS`, described below. Below the
+  table one row of buttons: Download required (_N_), Download all, Delete BIOS behind a `ConfirmModal`. **All three are
+  always rendered and disable when there is nothing to do**, the ruling the Remove group already had: on PS2 all three
+  vanished at once, and a button that disappears is a state the reader has to work out. A disabled `DialogButton` is
+  still a focus stop, so the row stays walkable.
 
   **A running download is said by the button that started it.** The pressed button — bulk or per-row — becomes a
   spinner, every other download button on the pane disables, and when it finishes the rows re-read. There is no
@@ -643,6 +655,13 @@ top, the kind filter (Standard, Smart, Virtual — with the Franchise / IGDB Col
 search with its 50-row render cap, Enable all / Disable all with today's semantics, and rows with name, kind, a **mine**
 marker (the payload carries `is_own`, not an owner name), ROM count and the toggle. The collections tab's permanent
 brick on one transient failure (#1020) is fixed as part of the rewrite.
+
+**Already shipped on the tab as it stands, and unchanged by that rewrite:** its four writes — a row's toggle, the
+whole-kind Enable all / Disable all, the batch write a search or filter narrows them to, and the Mine / All owner scope
+— are optimistic in the way the Platforms list is, and answer a refusal the same way. The control goes back where it was
+and a line under Enable all / Disable all says why, taken back by the next collection write that succeeds and by leaving
+the view it is about: entering the tab and switching sub-tab both reset the search and the filter, so the line resets
+with them.
 
 ## Settings
 

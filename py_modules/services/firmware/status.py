@@ -259,27 +259,29 @@ class FirmwareStatusReader:
 
         One pass over the download records and one probe each, so every answer
         on the pane comes from the same set. The platform count and the rows are
-        not the same NUMBER, and are not meant to be: the count is over records,
-        while a row exists only where something declares the file or the library
-        offers it — a download RomM has since dropped and no core declares
-        raises the count with no row to show it, and only the platform-wide
-        button can reach it.
+        not the same NUMBER, and are not meant to be: the count is drawn from
+        the download records, while a row exists only where something declares
+        the file or the library offers it — a download RomM has since dropped
+        and no core declares raises the count with no row to show it, and only
+        the platform-wide button can reach it.
 
         The delete is authorised by the record and unlinks the path that record
         holds, so this is exactly that set: recorded paths under one of the
-        platform's firmware slugs that are still on disk. The platform count is
-        of distinct paths, because two records naming one file are one unlink.
+        platform's firmware slugs that are still on disk, counted as distinct
+        PATHS because two records naming one file are one unlink.
 
         **A row's count is answered two ways, because a row is one of two
         things.** A declared FILE matches a record by name — the row knows its
         file name and not our record. A declared FOLDER has no name a record
-        could carry, so it matches the records written *underneath* it: the
-        emulator lists that folder and whatever we downloaded into it is ours to
-        remove, which is a rule about files and is independent of the separate
-        rule that a folder is never offered as a download. The folder path is
-        used to NARROW the record set and never to widen it, so a destination
-        that has since moved can only offer fewer files, never something the
-        plugin did not place.
+        could carry, so it counts the distinct files our records name
+        *underneath* it: the emulator lists that folder and whatever we
+        downloaded into it is ours to remove, which is a rule about files and is
+        independent of the separate rule that a folder is never offered as a
+        download. Distinct for the reason the platform count is — a row's number
+        is what its button promises to unlink. The folder path is used to NARROW
+        the record set and never to widen it, so a destination that has since
+        moved can only offer fewer files, never something the plugin did not
+        place.
 
         None of this is ``downloaded``, and none of it may be replaced by that:
         it is ``os.path.exists`` at the row's own destination, equally true of
@@ -298,7 +300,9 @@ class FirmwareStatusReader:
             if f.get("declared_kind") == DECLARED_DIRECTORY:
                 root = (f.get("local_path") or "").rstrip("/")
                 f["deletable_count"] = (
-                    sum(1 for record in present if record.file_path.startswith(f"{root}/")) if root else 0
+                    len({record.file_path for record in present if record.file_path.startswith(f"{root}/")})
+                    if root
+                    else 0
                 )
             else:
                 f["deletable_count"] = 1 if f["file_name"] in names else 0
