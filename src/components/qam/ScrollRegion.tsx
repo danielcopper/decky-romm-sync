@@ -30,6 +30,11 @@
 import type { CSSProperties, FC, FocusEvent, ReactNode } from "react";
 import { Focusable } from "@decky/ui";
 import { ScrollPanel } from "../../utils/deckyUiInternals";
+// The shapes a focus stop takes, shared with the entry-focus finder that reads
+// the same DOM for a different question. Disabled controls are in it: focus
+// lands on them, so a reveal rule that skipped them would misjudge which stop
+// is the first or the last.
+import { FOCUS_STOPS } from "../../utils/entryFocus";
 import { offsetWithinScroller } from "../../utils/scrollHelpers";
 
 export interface ScrollRegionProps {
@@ -57,15 +62,6 @@ export interface ScrollRegionProps {
 // and took the Back row off the top with it. A controller never showed it,
 // because Steam scrolls a region by moving focus rather than by wheel events.
 const BOUNDS: CSSProperties = { height: "100%", minHeight: 0, overscrollBehavior: "contain" };
-
-// Every shape Steam gives a focus stop inside a region, measured in the running
-// QAM rather than assumed: its own components render `div[tabindex="0"]`
-// (`Focusable`, a toggle row, a table row carrying an activate handler) and a
-// `DialogButton` is a native `button` with no tabindex attribute at all. A
-// container `Focusable` can carry `tabindex="0"` too, which is why the rule
-// below excludes the focused element's own ancestors rather than comparing
-// against the first match.
-const FOCUS_STOPS = "[tabindex], button, a[href], input, select, textarea";
 
 // Long enough to land after Steam's own focus scroll, which would otherwise
 // undo this one. The same 50 ms every helper in `utils/scrollHelpers.ts` uses,

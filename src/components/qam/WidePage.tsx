@@ -13,15 +13,16 @@
  * as the discoverable half and as the mouse path.
  *
  * The page's own content is `children`, or — when the page has tabs — the
- * `content` of each tab, which Steam's `Tabs` renders itself. A tabbed page
- * also opens with focus in that content rather than on the Back row.
+ * `content` of each tab, which Steam's `Tabs` renders itself. Either way the
+ * frame opens the page with focus inside that body rather than on the Back row.
  *
  * Structure and vocabulary: `docs/architecture/qam-panel.md`.
  */
 
-import { useLayoutEffect, useRef, useState, type FC, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FC, type ReactNode } from "react";
 import { DialogButton, Focusable } from "@decky/ui";
 import { ControllerGlyph, GLYPH_BUTTON_B, Tabs } from "../../utils/deckyUiInternals";
+import { ENTRY_FOCUS_DELAY_MS, firstBodyStop, placeEntryFocus } from "../../utils/entryFocus";
 import { WIDE_ROOT_CLASS, useWideQamPanel } from "../../utils/qamExpansion";
 import { offsetWithinScroller } from "../../utils/scrollHelpers";
 import { ScrollRegion } from "./ScrollRegion";
@@ -36,10 +37,32 @@ export interface WidePageTab {
  * A page has all three tab props or none of them, and `children` belongs to the
  * second case alone: a tabbed page's body is the active tab's `content`, so
  * children passed beside `tabs` would render nowhere.
+ *
+ * `ownRegions` belongs to that second case too, for the same reason the frame
+ * gives a tabbed body no region: it answers whose job the scrolling is, and a
+ * tabbed page has already handed that to Steam's tabbed page.
  */
 type TabProps =
-  | { tabs: WidePageTab[]; activeTab: string; onShowTab: (tabId: string) => void; children?: undefined }
-  | { tabs?: undefined; activeTab?: undefined; onShowTab?: undefined; children?: ReactNode };
+  | {
+      tabs: WidePageTab[];
+      activeTab: string;
+      onShowTab: (tabId: string) => void;
+      children?: undefined;
+      ownRegions?: undefined;
+    }
+  | {
+      tabs?: undefined;
+      activeTab?: undefined;
+      onShowTab?: undefined;
+      children?: ReactNode;
+      /**
+       * The page builds its own scrolling regions, so the frame wraps the body
+       * in none. For a page whose content is side-by-side regions — a list and
+       * a detail, a table beside a controls column — where a region from the
+       * frame would nest a scroller around both of them.
+       */
+      ownRegions?: boolean;
+    };
 
 export type WidePageProps = {
   title: string;
@@ -48,10 +71,10 @@ export type WidePageProps = {
 
 /**
  * Marks a page that places its own entry focus, which the panel's router reads
- * to keep its first-button focus away. A tabbed page sets it, because the
- * `autoFocusContents` it hands Steam's tabbed page is what puts focus in the
- * content; a page that cannot place focus itself never sets it, so the router
- * still covers it.
+ * to keep its first-button focus away. Every wide page sets it, because the
+ * frame places that focus: `autoFocusContents` where Steam's tabbed page is
+ * there to consume it, and this frame's own timer everywhere else. Either way
+ * focus lands inside the body, never on the Back row above it.
  */
 export const OWNS_ENTRY_FOCUS_ATTR = "data-romm-owns-entry-focus";
 
@@ -167,7 +190,7 @@ function remainingBodyHeight(body: HTMLElement, view: Window): number {
   return Math.max(MIN_BODY_HEIGHT, remaining - BODY_BOTTOM_GAP);
 }
 
-export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, onShowTab, children }) => {
+export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, onShowTab, children, ownRegions }) => {
   const rootRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [bodyHeight, setBodyHeight] = useState<number | null>(null);
@@ -205,23 +228,36 @@ export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, on
     return () => observer.disconnect();
   }, []);
 
+  // `autoFocusContents` lands entry focus in the active tab's content, so where
+  // Steam's tabbed page renders there is nothing for the frame to do. It is also
+  // what makes Steam draw the L1/R1 glyphs: its tab row shows them only while
+  // gamepad focus is within the tabbed page, and the Back row above the tabs is
+  // outside it (`chunk~2dcc5aaf7.js`, the tab row's `showGlyphs`).
+  const steamPlacesFocus = Boolean(tabs && Tabs);
+
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (steamPlacesFocus || !body) return;
+    // The same delay the panel's router uses for the pages it still covers:
+    // Steam's navigation resolves its retained focus pointer after the mount,
+    // and a focus placed before that is taken back.
+    const timer = setTimeout(() => placeEntryFocus(body, firstBodyStop), ENTRY_FOCUS_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [steamPlacesFocus]);
+
   // A `min-height` is not enough here — Steam's tabbed page fills its parent and
   // clips instead of growing, so the body needs a definite height.
   const bodyStyle = { height: bodyHeight === null ? undefined : `${bodyHeight}px`, overflow: "hidden" };
 
-  // Only the untabbed body gets a region from the frame. Steam's tabbed page
-  // already wraps each tab's content in this same plain scroll panel
-  // (`ScrollingTab<id>`, `scrollDirection: "y"`, in `chunk~2dcc5aaf7.js`), so
-  // one from the frame would nest a second scroller inside it. A tab that needs
-  // more than that one — a list and a detail scrolling side by side — builds its
-  // regions with `ScrollRegion` itself.
-  let body: ReactNode = <ScrollRegion>{children}</ScrollRegion>;
+  // The frame's region is for a body of rows in one column, and nothing else
+  // gets one. Steam's tabbed page already wraps each tab's content in this same
+  // plain scroll panel (`ScrollingTab<id>`, `scrollDirection: "y"`, in
+  // `chunk~2dcc5aaf7.js`), so a region from the frame would nest a second
+  // scroller inside it; and a page whose content is side-by-side regions —
+  // `ownRegions` — would get one wrapped around both of them. Either way any
+  // region the body needs is the page's to build with `ScrollRegion`.
+  let body: ReactNode = ownRegions ? children : <ScrollRegion>{children}</ScrollRegion>;
   if (tabs) {
-    // `autoFocusContents` lands entry focus in the active tab's content — the
-    // list of a list-and-detail page — which is also what makes Steam draw the
-    // L1/R1 glyphs: its tab row shows them only while gamepad focus is within
-    // the tabbed page, and the Back row above the tabs is outside it
-    // (`chunk~2dcc5aaf7.js`, the tab row's `showGlyphs`).
     body = Tabs ? (
       // `cancelSkipTabHeader` leaves the content pane's cancel handler unset, so
       // B reaches the router's binding instead of being spent moving focus to
@@ -232,12 +268,8 @@ export const WidePage: FC<WidePageProps> = ({ title, onBack, tabs, activeTab, on
     );
   }
 
-  // Claimed only where the claim is true: without Steam's tabbed page nothing
-  // here places focus, so the router's own must still run.
-  const ownsEntryFocus = Boolean(tabs && Tabs);
-
   return (
-    <div className={WIDE_ROOT_CLASS} ref={rootRef} {...(ownsEntryFocus ? { [OWNS_ENTRY_FOCUS_ATTR]: "" } : {})}>
+    <div className={WIDE_ROOT_CLASS} ref={rootRef} {...{ [OWNS_ENTRY_FOCUS_ATTR]: "" }}>
       {/* One line, not three: the full-width Back row and the title on its own
           line cost two of the four rows the Deck's body has to spend. */}
       <Focusable style={{ display: "flex", alignItems: "center", gap: "10px", padding: "4px 16px 6px" }}>
