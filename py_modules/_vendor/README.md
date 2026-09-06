@@ -145,19 +145,21 @@ this plugin's history too, it predates any vendoring at all, and the first atlas
   the bundle's `lib-dynload`. **This one bit the plugin's own code first.** Per-core BIOS filtering (#57, 2026-02-27)
   shipped `es_systems.xml` parsing on `xml.etree.ElementTree` and had to rewrite both of its readers onto expat's
   SAX-style callback API in the same change. That remedy is still load-bearing:
-  [`adapters/es_de_config.py`](../adapters/es_de_config.py) parses `es_systems.xml` and `es_find_rules.xml` through
-  `xml.parsers.expat` to this day and names the reason at each. Which readers carry it has shifted — #57's gamelist
-  `<alternativeEmulator>` reader is retired, and the find-rules reader arrived later (#1305) already written that way.
-  It then arrived a second time, vendored: the copy landed at atlas 0.5.0 (#1805), whose `installations.py` and
-  `esde.py` imported `xml.etree` at module level, reachable straight from `atlas/__init__.py`. The wiring is where it
-  surfaced — nothing in production imported `_vendor.atlas` until #1807, the change that both wired the resolver in and
-  bumped past it, and on a device that import raised at `installations.py:28` and killed the backend at bootstrap
-  ([emu-atlas#339](https://github.com/danielcopper/emu-atlas/issues/339), filed the day the copy landed). A device test
-  found it; no gate here would have said a word. A checksum-pinned copy cannot be patched around a problem like that, so
-  the assumption had to leave the library — upstream rebuilt the surface it uses directly on expat, importing
-  `xml.parsers.expat` with a `pyexpat` fallback, and released that as 0.5.1 the same evening; #1807 vendored 0.6.0. The
-  vendored [`atlas/_xml.py`](atlas/_xml.py) states the whole account, down to the namespace handling it deliberately
-  does not reproduce; read it before reaching for `xml.etree` anywhere near a vendored tree.
+  [`adapters/es_find_rules.py`](../adapters/es_find_rules.py) parses `es_find_rules.xml` through `xml.parsers.expat` to
+  this day and names the reason. Which readers carry it has shifted — #57's gamelist `<alternativeEmulator>` reader is
+  retired, the find-rules reader arrived later (#1305) already written that way, and the `es_systems.xml` reader left
+  with `adapters/es_de_config.py` (#1840): that file is the vendored resolver's to read now, which is why the same
+  assumption below is the one that matters. It then arrived a second time, vendored: the copy landed at atlas 0.5.0
+  (#1805), whose `installations.py` and `esde.py` imported `xml.etree` at module level, reachable straight from
+  `atlas/__init__.py`. The wiring is where it surfaced — nothing in production imported `_vendor.atlas` until #1807, the
+  change that both wired the resolver in and bumped past it, and on a device that import raised at `installations.py:28`
+  and killed the backend at bootstrap ([emu-atlas#339](https://github.com/danielcopper/emu-atlas/issues/339), filed the
+  day the copy landed). A device test found it; no gate here would have said a word. A checksum-pinned copy cannot be
+  patched around a problem like that, so the assumption had to leave the library — upstream rebuilt the surface it uses
+  directly on expat, importing `xml.parsers.expat` with a `pyexpat` fallback, and released that as 0.5.1 the same
+  evening; #1807 vendored 0.6.0. The vendored [`atlas/_xml.py`](atlas/_xml.py) states the whole account, down to the
+  namespace handling it deliberately does not reproduce; read it before reaching for `xml.etree` anywhere near a
+  vendored tree.
 - **A package named in a string rather than imported.** `importlib.resources.files("atlas")` addresses whatever package
   the host calls `atlas` — not this copy, which imports as `_vendor.atlas`. A string literal is invisible to an import
   rewrite and to every grep for import statements, which is what makes this shape cheap to miss. This one has not
