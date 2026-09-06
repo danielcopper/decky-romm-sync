@@ -19,14 +19,34 @@ from tests.contract._harness import ContractHarness, build_contract_harness
 def _isolate_system_flatpak_root(tmp_path):
     """Keep the contract harness hermetic — never read the host's real RetroDECK.
 
-    The real ``EsFindRulesAdapter`` / RetroArch core-info reader probe the system
-    flatpak root (``/var/lib/flatpak``) before the per-user one. On a dev machine
-    with RetroDECK installed, that real ES-DE tree would win over anything a test
-    seeds under ``tmp_path``. Repointing the system root at a nonexistent
-    tmp path makes the per-user seed the only source, so contract tests are
-    deterministic on any machine.
+    **Three readers can reach the host's system flatpak root, through two
+    constants.** The plugin's own two — ``EsFindRulesAdapter`` and the RetroArch
+    core-info reader — go through ``adapters.flatpak_install.SYSTEM_FLATPAK_ROOT``.
+    The third is the vendored resolver, which resolves the RetroDECK deploy its
+    ``/app`` paths live in through its own ``_running_deploy``
+    (``_vendor/atlas/installations.py``) off ``_FLATPAK_DEPLOY_SYSTEM``, and has
+    never heard of the plugin's constant. So the emulator catalogue needs the
+    second patch: with only the first, a ``tmp_path`` home carrying just
+    ``retrodeck.json`` answers out of the dev box's real ES-DE tree — measured,
+    five ``gba`` entries and 172 systems.
+
+    Both are repointed under ``tmp_path`` so the per-user seed is the only
+    source and contract tests are deterministic on any machine, with or without
+    RetroDECK installed.
+
+    Patching a **private vendored name** is the accepted cost here. The clean
+    seam upstream offers is a fixture ``Machine`` passed to
+    ``detect(home, machine=...)``, and this tier cannot reach it: the contract
+    harness builds the real ``bootstrap()``, whose chooser calls ``detect`` with
+    the real machine by design — injecting a fake would make the tier test
+    something other than production wiring. A rename upstream fails this fixture
+    loudly on the next version bump, which is the failure mode to prefer over a
+    silent re-leak.
     """
-    with mock.patch("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(tmp_path / "no_system_flatpak")):
+    with (
+        mock.patch("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(tmp_path / "no_system_flatpak")),
+        mock.patch("_vendor.atlas.installations._FLATPAK_DEPLOY_SYSTEM", str(tmp_path / "no_system_flatpak" / "app")),
+    ):
         yield
 
 
