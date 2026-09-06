@@ -6,13 +6,22 @@ own bake kernel, telling the four catalogue refusals apart from a frontend that
 genuinely declares no emulator, and refusing to turn any failure into an empty
 list. The resolver's own decisions are upstream's and are not re-tested here.
 
-Answers are built from real atlas value objects rather than mocks, so every
-invariant the resolver enforces on its own shapes is enforced on the fixtures too
-— a fixture that could not come off a real machine fails to construct.
+Answers are built from real atlas value objects rather than mocks, so the field
+names and shapes under test are the resolver's own and a rename upstream fails
+here rather than passing against a stand-in. It is not a guarantee that a fixture
+resembles a real machine: most of these shapes carry no validation, and some are
+assembled deliberately — a derived entry beside a declared one, say — to isolate
+one rule.
+
+The last class is the exception: it drives the REAL resolver over a fabricated
+RetroDECK deploy under ``tmp_path``, which is the only way to reach the answers
+a malformed catalogue produces.
 """
 
 from __future__ import annotations
 
+import json
+import os
 from typing import Any, cast
 
 import pytest
@@ -23,6 +32,8 @@ from _vendor.atlas import (
     CAVEAT_EMULATOR_CATALOGUE_UNESTABLISHED,
     CAVEAT_EMULATOR_CATALOGUE_UNREADABLE,
     CAVEAT_EMULATOR_LIST_DERIVED,
+    HEALTH_ISSUE_CATALOGUE_INVALID,
+    HEALTH_ISSUE_ROOT_MISSING,
     KIND_LIBRETRO,
     KIND_STANDALONE,
 )
@@ -30,12 +41,12 @@ from _vendor.atlas.esde import EmulatorSpec
 from _vendor.atlas.installations import CatalogueAnswer, EmulatorEntry, RomPlacement, SystemsAnswer
 from _vendor.atlas.placement import Caveat
 
-from adapters.atlas_catalogue import AtlasCatalogueAdapter
+from adapters.atlas_catalogue import AtlasCatalogueAdapter, first_detected_installation
 from domain.shortcut_data import EmulatorInvocation
 
 _RETROARCH = "%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/{core}.so %ROM%"
 
-_HEALTH = Caveat(code="retrodeck-config-unreadable", message="a health finding, on every answer this machine gives")
+_HEALTH = Caveat(code=HEALTH_ISSUE_ROOT_MISSING, message="a health finding, on every answer this machine gives")
 
 
 def _entry(
@@ -226,6 +237,27 @@ class TestDeclaredOrder:
         )
         assert _labels(_adapter(installation, traces)) == ["Declared", "Derived"]
 
+    def test_an_undeclared_entry_says_so_in_the_log(self, traces):
+        # "No default" is not a bug in this one shape, so the log has to be able
+        # to tell it apart from a default the plugin failed to find.
+        installation = _Installation(
+            catalogue=_answer(
+                _entry(label="Derived", command="", declared_index=None),
+                _entry(label="Declared", command="%EMULATOR_A% %ROM%", declared_index=0),
+            )
+        )
+        _adapter(installation, traces).get_emulator_options("ps3")
+
+        assert any("no declared position" in line and "Derived" in line for line in traces)
+
+    def test_a_fully_declared_listing_says_nothing_about_undeclared_entries(self, traces):
+        installation = _Installation(
+            catalogue=_answer(_entry(label="Declared", command="%EMULATOR_A% %ROM%", declared_index=0))
+        )
+        _adapter(installation, traces).get_emulator_options("ps3")
+
+        assert not any("no declared position" in line for line in traces)
+
 
 class TestCatalogueRefusals:
     """Five empties, and only one of them is a statement about the machine."""
@@ -237,6 +269,7 @@ class TestCatalogueRefusals:
             CAVEAT_EMULATOR_CATALOGUE_UNESTABLISHED,
             CAVEAT_EMULATOR_CATALOGUE_UNREADABLE,
             CAVEAT_EMULATOR_CATALOGUE_SEALED,
+            HEALTH_ISSUE_CATALOGUE_INVALID,
         ],
     )
     def test_a_refusal_answers_unavailable(self, traces, code):
@@ -290,6 +323,21 @@ class TestCatalogueRefusals:
         installation = _Installation(catalogue=_answer(caveats=(_refusal(CAVEAT_EMULATOR_CATALOGUE_UNREADABLE),)))
         _adapter(installation, traces).get_emulator_options("ps3")
         assert any(CAVEAT_EMULATOR_CATALOGUE_UNREADABLE in line for line in traces)
+
+    def test_the_codes_of_every_answer_reach_the_log(self, traces):
+        # The resolver never logs, so a code that reaches no log reaches nobody
+        # — and the catalogue is not the only answer that carries one.
+        installation = _Installation(
+            systems=SystemsAnswer(caveats=(_refusal(CAVEAT_EMULATOR_CATALOGUE_UNESTABLISHED),)),
+            placement=RomPlacement(caveats=(_refusal(CAVEAT_EMULATOR_CATALOGUE_UNREADABLE),)),
+        )
+        adapter = _adapter(installation, traces)
+
+        adapter.is_known_system("ps3")
+        adapter.get_supported_extensions("ps3")
+
+        assert any("systems" in line and CAVEAT_EMULATOR_CATALOGUE_UNESTABLISHED in line for line in traces)
+        assert any("extensions" in line and CAVEAT_EMULATOR_CATALOGUE_UNREADABLE in line for line in traces)
 
 
 class TestNothingToAsk:
@@ -548,3 +596,108 @@ class TestCaching:
         adapter.is_known_system("ps3")
 
         assert len(chooses) == 1
+
+
+# --- The real resolver, over a fabricated RetroDECK deploy -------------------
+
+_LINUX_SYSTEMS_SUFFIX = os.path.join(
+    "retrodeck", "components", "es-de", "share", "es-de", "resources", "systems", "linux", "es_systems.xml"
+)
+
+_VALID_ES_SYSTEMS_XML = """\
+<?xml version="1.0"?>
+<systemList>
+  <system>
+    <name>gba</name>
+    <extension>.gba</extension>
+    <command label="mGBA">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mgba_libretro.so %ROM%</command>
+  </system>
+</systemList>
+"""
+
+
+def _seed_retrodeck(tmp_path, *, catalogue: str) -> str:
+    """Lay down a RetroDECK marker and a bundled catalogue; return the home."""
+    home = tmp_path / "home"
+    marker = home / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck" / "retrodeck.json"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"paths": {"rd_home_path": str(home / "retrodeck")}}), encoding="utf-8")
+
+    deploy = home / ".local" / "share" / "flatpak" / "app" / "net.retrodeck.retrodeck" / "current" / "active" / "files"
+    bundled = deploy / _LINUX_SYSTEMS_SUFFIX
+    bundled.parent.mkdir(parents=True, exist_ok=True)
+    bundled.write_text(catalogue, encoding="utf-8")
+    return str(home)
+
+
+@pytest.fixture(autouse=True)
+def _no_host_deploy(tmp_path, monkeypatch):
+    """Never resolve ``/app`` out of the dev box's own RetroDECK deploy.
+
+    The resolver finds the flatpak deploy through its own module-level constants
+    — the user base under the given home, then the system one — so a tmp home
+    with a marker and no seeded deploy answers off the host unless the system
+    constant is repointed. Same reasoning, and the same accepted cost of naming a
+    private vendored symbol, as ``tests/contract/conftest.py``.
+    """
+    monkeypatch.setattr(
+        "_vendor.atlas.installations._FLATPAK_DEPLOY_SYSTEM", str(tmp_path / "no_system_flatpak" / "app")
+    )
+
+
+class TestTheRealResolverOverARealTree:
+    """The adapter against the real resolver, not a stand-in installation.
+
+    Successors to the deleted parser's ``test_unavailable_when_parse_fails`` and
+    ``test_wrong_root_tag_returns_empty``: ES-DE refuses its whole load on either
+    file, so the resolver truthfully enumerates nothing — and the plugin must not
+    render that as "this frontend knows no emulator".
+    """
+
+    def _adapter(self, home: str, traces: list[str]) -> AtlasCatalogueAdapter:
+        return AtlasCatalogueAdapter(
+            choose_installation=lambda: first_detected_installation(home),
+            emulator_installed=lambda command: True,
+            log_debug=traces.append,
+        )
+
+    def test_a_readable_catalogue_answers_from_the_seeded_tree(self, tmp_path, traces):
+        # The control: without it, every assertion below would also pass on a
+        # tree the resolver never found at all.
+        adapter = self._adapter(_seed_retrodeck(tmp_path, catalogue=_VALID_ES_SYSTEMS_XML), traces)
+
+        assert _labels(adapter, "gba") == ["mGBA"]
+        assert adapter.get_active_core("gba") == ("mgba_libretro", "mGBA")
+        assert adapter.is_known_system("gba") is True
+        assert adapter.get_supported_extensions("gba") == frozenset({".gba"})
+
+    def test_a_catalogue_that_does_not_parse_is_unavailable(self, tmp_path, traces):
+        home = _seed_retrodeck(tmp_path, catalogue="<systemList><system><name>gba</name>")
+        adapter = self._adapter(home, traces)
+
+        assert adapter.get_emulator_options("gba") == {"available": False, "options": []}
+        assert adapter.get_default_emulator("gba") is None
+        assert adapter.get_active_core("gba") == (None, None)
+        assert adapter.is_known_system("gba") is None
+
+    def test_a_wrong_root_tag_is_unavailable(self, tmp_path, traces):
+        home = _seed_retrodeck(tmp_path, catalogue='<?xml version="1.0"?>\n<notSystemList/>\n')
+        adapter = self._adapter(home, traces)
+
+        assert adapter.get_emulator_options("gba") == {"available": False, "options": []}
+        assert adapter.is_known_system("gba") is None
+
+    def test_an_empty_but_valid_catalogue_is_a_real_knows_none(self, tmp_path, traces):
+        # The boundary of the case above: a document ES-DE loads fine that simply
+        # declares no system is a statement about the machine, not a failure.
+        home = _seed_retrodeck(tmp_path, catalogue='<?xml version="1.0"?>\n<systemList/>\n')
+        adapter = self._adapter(home, traces)
+
+        assert adapter.get_emulator_options("gba") == {"available": True, "options": []}
+        assert adapter.is_known_system("gba") is False
+
+    def test_nothing_detected_answers_unavailable(self, tmp_path, traces):
+        adapter = self._adapter(str(tmp_path / "empty-home"), traces)
+
+        assert adapter.get_emulator_options("gba") == {"available": False, "options": []}
+        assert adapter.is_known_system("gba") is None

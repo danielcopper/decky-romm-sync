@@ -7,8 +7,8 @@ Accepted. **Refines [ADR-0020](0020-live-es-systems-emulator-resolution.md):** t
 parser. `adapters/es_de_config.py` and its `CoreResolver` are deleted; the vendored
 [emu-atlas](https://github.com/danielcopper/emu-atlas) resolver answers through `adapters/atlas_catalogue.py`.
 ADR-0020's bake classifier (`domain/emulator_commands.py`), its precedence chain, and its `es_find_rules.xml` existence
-probe are unchanged. **Carries forward [ADR-0012](0012-plugin-owns-core-selection-always-e-no-gamelist.md) §2** — the
-retired gamelist never moves this plugin's default — into a world where the resolver reads that gamelist and states its
+probe are unchanged. **Carries forward [ADR-0012](0012-plugin-owns-core-selection-always-e-no-gamelist.md) §3** — the
+precedence chain that removed the gamelist layer — into a world where the resolver reads that gamelist and states its
 effect. Tracked under [#1840](https://github.com/danielcopper/decky-romm-sync/issues/1840), cut 3 of
 [#1660](https://github.com/danielcopper/decky-romm-sync/issues/1660).
 
@@ -84,6 +84,15 @@ refusal that may arrive **with** entries; the plugin suppresses them, because a 
 shown as the whole one. The codes are traced through the injected debug logger and no caveat `message` is ever parsed —
 `code` is the stable half of that contract.
 
+A fifth code joins the four, and it is the plugin reading an answer differently from the resolver on purpose.
+`catalogue-invalid` means a catalogue file ES-DE refuses its whole load on — one that does not parse, or one with no
+document-level `<systemList>` — so ES-DE runs with no systems and atlas states that truthfully as an empty enumeration.
+Taken at face value the plugin would report "knows no emulator" for every platform, and `is_known_system` would answer a
+positive `False` the candidate search reads as a denial. What the user has is one typo in one file, most likely their
+own `custom_systems/es_systems.xml` — which the deleted parser never read, so this is new exposure — and it is also what
+that parser answered: an unparsable file and a wrong root tag both yielded "unavailable". A file ES-DE loads fine that
+simply declares no system stays a real "knows none"; the refusal is scoped to the invalid one.
+
 The resolver raises on its own invariant violations rather than degrading, so every call is wrapped and a failure
 becomes the same "unavailable" an unreadable catalogue gives. It is never an empty list.
 
@@ -120,15 +129,19 @@ a catalogue whose path is no longer the plugin's to know.
 `get_emulator_options`, `reset_cache`); resolving a launcher becomes the call-shaped `SandboxLauncherFn`. One Protocol
 spanning both would force one implementation to forward to the other and hide which source answered a given call.
 
+One behaviour changes relative to the deleted parser: the find-rules probe now takes the **user** flatpak installation
+before the system one. That is flatpak's own resolution order for an app, and it is the deploy the resolver reads the
+catalogue from — so on a machine carrying both, the catalogue and the find rules now describe the same RetroDECK where
+before they could describe two.
+
 ### 6. Nothing else moves
 
-No schema change, no new callable, no arity change. The frontend picker payload keeps its shape
-(`{label, kind, core_so,
-is_default, bakeable, reason}`), and the bake classifier `domain/emulator_commands.py` is
-untouched — whether a command can be carried verbatim into a Steam shortcut's `-e` is a fact about this plugin's
-launcher, not about the machine (upstream emu-atlas#84 may take part of it later). Stored pins keep resolving: the
-per-game pin is still a LABEL on the `Rom` aggregate and the per-platform choice a LABEL in `settings.json`, and the
-resolver speaks the same ES-DE labels.
+No schema change, no new callable, no arity change. The frontend picker payload keeps its shape (label, kind, `core_so`,
+`is_default`, `bakeable`, `reason`), and the bake classifier `domain/emulator_commands.py` is untouched — whether a
+command can be carried verbatim into a Steam shortcut's `-e` is a fact about this plugin's launcher, not about the
+machine (upstream emu-atlas#84 may take part of it later). Stored pins keep resolving: the per-game pin is still a LABEL
+on the `Rom` aggregate and the per-platform choice a LABEL in `settings.json`, and the resolver speaks the same ES-DE
+labels.
 
 ## Consequences
 

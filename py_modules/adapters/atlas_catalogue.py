@@ -35,10 +35,11 @@ and nothing here parses a message. Every resolver call is wrapped, and a failure
 becomes the same answer an unreadable catalogue gives — "unavailable", never an
 empty list a caller would read as "this frontend knows no emulator".
 
-An empty entry list is five different facts and the codes tell them apart, so
-:data:`_CATALOGUE_REFUSALS` is what decides "unavailable" — never an empty
-``caveats``, which a healthy answer does not have either (a broken installation
-states its health findings on every answer it gives).
+An empty entry list is several different facts and the codes tell them apart, so
+:data:`_CATALOGUE_REFUSALS` is what decides "unavailable". An empty ``caveats``
+is NOT that test: a broken installation states its health findings on every
+answer it gives, so "read, and it declares nothing" routinely arrives with a
+caveat list that is not empty.
 """
 
 from __future__ import annotations
@@ -50,6 +51,7 @@ from _vendor.atlas import (
     CAVEAT_EMULATOR_CATALOGUE_UNAVAILABLE,
     CAVEAT_EMULATOR_CATALOGUE_UNESTABLISHED,
     CAVEAT_EMULATOR_CATALOGUE_UNREADABLE,
+    HEALTH_ISSUE_CATALOGUE_INVALID,
     KIND_LIBRETRO,
     detect,
 )
@@ -67,13 +69,28 @@ if TYPE_CHECKING:
 
     from domain.shortcut_data import EmulatorInvocation
 
-# The four codes that mean nobody could answer from a catalogue at all: the
-# arrangement ships none, atlas has not established where it keeps one, the one
-# it has could not be read, or part of it sits where atlas does not open. Only
-# their absence makes an empty entry list a statement about the machine — "the
-# catalogue was read and this frontend knows no emulator for this system" — and
-# that is the one empty the picker may render as an empty list.
-# ``emulator-catalogue-exclusive`` is deliberately not here: it says a custom
+# The codes on which this plugin declines to answer from a catalogue. The first
+# four are the resolver's own "nobody could answer" family: the arrangement ships
+# none, atlas has not established where it keeps one, the one it has could not be
+# read, or part of it sits where atlas does not open. Only their absence makes an
+# empty entry list a statement about the machine — "the catalogue was read and
+# this frontend knows no emulator for this system" — and that is the one empty
+# the picker may render as an empty list.
+#
+# ``catalogue-invalid`` is the plugin's own addition, and it reads the same
+# answer differently from the resolver on purpose. It means a catalogue file
+# ES-DE refuses its whole load on — one that does not parse, or one carrying no
+# document-level ``<systemList>`` — so ES-DE runs with no systems at all, and
+# atlas states that truthfully as an empty enumeration. Taken at face value the
+# plugin would report "this frontend knows no emulator" for every platform, and
+# ``is_known_system`` would answer a positive False that the candidate search
+# reads as a denial. What the user actually has is one typo in one file, most
+# likely their own ``custom_systems/es_systems.xml`` — a file the deleted parser
+# never read, so this is new exposure — and "could not establish" is the honest
+# word for a state a single edit fixes. It is also what the deleted parser
+# answered: an unparsable file and a wrong root tag both yielded "unavailable".
+#
+# ``emulator-catalogue-exclusive`` is deliberately NOT here: it says a custom
 # es_systems.xml declared itself the whole catalogue, so the answer is COMPLETE
 # and merely small.
 _CATALOGUE_REFUSALS = frozenset(
@@ -82,12 +99,20 @@ _CATALOGUE_REFUSALS = frozenset(
         CAVEAT_EMULATOR_CATALOGUE_UNESTABLISHED,
         CAVEAT_EMULATOR_CATALOGUE_UNREADABLE,
         CAVEAT_EMULATOR_CATALOGUE_SEALED,
+        HEALTH_ISSUE_CATALOGUE_INVALID,
     }
 )
 
 _CORE_SO_SUFFIX = ".so"
 
-_UNAVAILABLE: dict[str, Any] = {"available": False, "options": []}
+
+def _unavailable() -> dict[str, Any]:
+    """The picker's "emulator list unavailable" answer, built fresh each call.
+
+    A module-level constant would hand every caller the same ``options`` list,
+    which a caller is free to mutate.
+    """
+    return {"available": False, "options": []}
 
 
 def first_detected_installation(user_home: str) -> Any:
@@ -252,7 +277,7 @@ class AtlasCatalogueAdapter:
         """
         answer = self._catalogue_answer(system_name)
         if answer is None or _refused(answer):
-            return dict(_UNAVAILABLE)
+            return _unavailable()
         options = [
             self._probe_installed(classify_command(entry.label, entry.command))
             for entry in _declared_order(answer.entries)
@@ -314,6 +339,29 @@ class AtlasCatalogueAdapter:
             return option
         return downgrade_if_not_installed(option, self._emulator_installed(option.command))
 
+    def _trace(self, subject: str, shape: str, answer: Any) -> None:
+        """Trace one answer's shape and the stable caveat codes it states.
+
+        Every answer the resolver gives is traced, not only the catalogue's: the
+        resolver never logs, so a code that reaches no log reaches nobody.
+        """
+        self._log_debug(f"[catalogue] {subject}: {shape} caveats={sorted(set(_caveat_codes(answer)))}")
+
+    def _trace_undeclared(self, system_name: str, entries: tuple[Any, ...]) -> None:
+        """Say when a listing carries entries no layer declared a position for.
+
+        Such an entry has no shipped place to sort by and cannot become the
+        default, so the picker's list is one nothing chose an order for. That is
+        a statement worth having in the log beside the codes, because it is the
+        one shape where "no default" is not a bug.
+        """
+        undeclared = [entry.label for entry in entries if entry.declared_index is None]
+        if undeclared:
+            self._log_debug(
+                f"[catalogue] {system_name}: {len(undeclared)} of {len(entries)} entries carry no declared "
+                f"position and can hold no default: {undeclared}"
+            )
+
     def _ask(self, question: Callable[[], Any], subject: str) -> Any:
         """Put one question to the resolver, or answer ``None`` where it could not be asked.
 
@@ -358,9 +406,8 @@ class AtlasCatalogueAdapter:
             answer = self._ask(lambda: installation.emulators_for(system_name), f"emulators_for({system_name!r})")
             if answer is None:
                 return None
-            self._log_debug(
-                f"[catalogue] {system_name}: entries={len(answer.entries)} caveats={sorted(set(_caveat_codes(answer)))}"
-            )
+            self._trace(system_name, f"entries={len(answer.entries)}", answer)
+            self._trace_undeclared(system_name, answer.entries)
             self._catalogues[system_name] = answer
         return self._catalogues[system_name]
 
@@ -375,7 +422,11 @@ class AtlasCatalogueAdapter:
         if installation is None:
             return None
         if self._systems is None:
-            self._systems = self._ask(lambda: installation.systems(), "systems")
+            answer = self._ask(lambda: installation.systems(), "systems")
+            if answer is None:
+                return None
+            self._trace("systems", f"declared={len(answer.systems)}", answer)
+            self._systems = answer
         return self._systems
 
     def _rom_location(self, system_name: str) -> Any:
@@ -387,5 +438,6 @@ class AtlasCatalogueAdapter:
             placement = self._ask(lambda: installation.rom_location(system_name), f"rom_location({system_name!r})")
             if placement is None:
                 return None
+            self._trace(system_name, f"extensions={len(placement.extensions)}", placement)
             self._locations[system_name] = placement
         return self._locations[system_name]
