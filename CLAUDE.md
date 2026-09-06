@@ -64,9 +64,10 @@ new code in it.
   `romm_origin=False` if it does not talk to RomM (not checked).
 - `bootstrap-wiring.md` — the `main.py` / `bootstrap/` split, and which half of `bootstrap/` new wiring belongs in.
 - `callables.md` — the `{success, reason, message}` failure shape and its two carve-outs. Checked.
-- `vendored-assets.md` — `_vendor/` and `native/` are checksum-pinned verbatim copies. The checksums are checked; the
-  reflex to fix the upstream artifact instead of the copy is not. `defaults/` holds no vendored artifact since the BIOS
-  registry left.
+- `vendored-assets.md` — `_vendor/` and `native/` are checksum-pinned upstream copies — verbatim, or verbatim plus a
+  documented local patch — and every vendored tree carries its own manifest. The checksums are checked; the reflex to
+  fix the upstream artifact instead of the copy is not. `defaults/` holds no vendored artifact since the BIOS registry
+  left.
 - `testing-backend.md` — test tiers, gate tests, vendored conformance vectors.
 - `testing-frontend.md` — the `@decky/api` event harness, non-vacuous catch assertions.
 - `comments.md` — an inline comment is the exception: only an outside-world fact, a road not taken, or a constraint the
@@ -128,6 +129,10 @@ locally with `mise run docs`.
   the constructor from the node — `el.ownerDocument.defaultView` — as `WidePage` and `ScrollRegion` do. **The frontend
   suite cannot see this**: happy-dom has one realm, so the wrong global and the right one are the same object and every
   test passes.
+- **A vendored package's stdlib assumptions are invisible to every check here**: nothing in this repo's toolchain runs
+  Decky Loader's frozen Python, so vendoring or bumping anything under `_vendor/` is a device-test trigger, and what it
+  risks is the plugin not loading at all rather than one feature misbehaving —
+  [`.claude/rules/vendored-assets.md`](.claude/rules/vendored-assets.md).
 
 ## Current State
 
@@ -362,6 +367,29 @@ Format: **invariant** — tier — enforced by.
   `scripts/check_markdown_links.py`
 - **Every stated RomM minimum version matches the enforced `Plugin._MIN_REQUIRED_VERSION`** — check —
   `scripts/check_romm_min_version.py` (ADRs excluded: frozen history)
+- **Every tree under `py_modules/_vendor/` is pinned by the `<pkg>.SHA256SUMS` beside it: every manifest entry under
+  `<pkg>/` matches the vendored file's digest, the vendored file set EQUALS the manifest's set restricted to that
+  prefix, and a package directory with NO manifest is a failure** — check — `scripts/check_vendored_trees.py` (the
+  manifest is discovered, never named in the script, so the next vendored package is guarded by default rather than when
+  someone remembers — the hole this closed was a second tree, `vdf`, sitting unpinned beside a pinned `atlas` while the
+  gate reported OK. The set-equality half is the part `sha256sum -c` cannot do at all: the plain form fails on a correct
+  copy, because a wheel's manifest lists release artifacts and dist-info files we never vendor, and `--ignore-missing` —
+  the flag that makes it green again — exits 0 after a vendored file is deleted). **What the check cannot see is the
+  manifest itself.** For `atlas` it is upstream's own release manifest, so the digests additionally prove identity with
+  the tagged release; for a patched copy like `vdf` it is our own digest of the tree we ship, so a manifest regenerated
+  to bless a hand-edit passes green and only review catches it — which is why regenerating one is the last step of a
+  deliberate re-copy and never the answer to a failing gate. The licence assertion is data-driven, not package-driven:
+  the sibling `<pkg>.LICENSE` is checked exactly where the manifest carries a dist-info licence entry, and a sibling the
+  manifest carries no entry for is reported as pinned by nothing — otherwise regenerating a wheel's manifest from its
+  own tree would delete the licence check in the same step, silently, while the file stayed. Deliberately outside it:
+  `py_modules/native/` is pinned by its own `sha256sum -c` over one `.so`, and `__pycache__` is ignored wherever it
+  appears, on both sides of the comparison. **Two things are outside it by accident of shape, and neither is loud.** The
+  gate sees **directories only** (`package_dirs` filters on `entry.is_dir()`), so a single-module dependency dropped in
+  as `_vendor/six.py` is never asked for a manifest — and there is no shape here that could pin one: dropping a
+  `six.SHA256SUMS` beside it makes the gate fail with "it pins no vendored tree", so the guarded-by-default half is a
+  property of package DIRECTORIES alone. And `rglob` does not descend into a symlinked directory, so every file below
+  one is invisible to the set comparison whatever the per-file symlink guard does; git records the link itself as mode
+  120000, which is what makes it a review question rather than a silent one
 - **Server-supplied path components pass `safe_join` (`lib/path_safety.py`)** — test + prompt-only — traversal tests per
   path builder; new call sites are prompt-only
 - **A firmware row's presence comes from the resolver wherever the resolver declared it; the plugin's own filesystem

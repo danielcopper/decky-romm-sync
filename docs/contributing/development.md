@@ -264,10 +264,10 @@ least of all — that is the growth the gate exists to stop. A raise taken silen
 than any module's size. The pin list lives in the script and entries only ever come out — a module that drops back under
 the threshold has to leave it, and the gate fails until it does — while a module that banks 50+ lines of slack gets a
 non-fatal note asking for its ceiling to be lowered. What the gate does not walk is listed at `SCOPE_DIRS` with the
-reason for each: `main.py` grows with the callable surface by design, `_vendor/` is a checksum-pinned copy, a large file
-under `tests/` is the one-file-per-source-module rule working, `scripts/` never ships, and `src/` needs a per-scope glob
-before it can be added. There is deliberately no `--update` flag — re-baselining should be a reviewable diff, never a
-command someone runs to get back to green.
+reason for each: `main.py` grows with the callable surface by design, `_vendor/` holds checksum-pinned upstream copies,
+a large file under `tests/` is the one-file-per-source-module rule working, `scripts/` never ships, and `src/` needs a
+per-scope glob before it can be added. There is deliberately no `--update` flag — re-baselining should be a reviewable
+diff, never a command someone runs to get back to green.
 
 The frontend has no size gate — deliberately, because a threshold only works when something else forbids the cheap way
 of getting under it, and `src/` has no equivalent of `service-independence`. What it has instead is direction rules, in

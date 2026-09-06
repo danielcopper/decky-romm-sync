@@ -1,6 +1,6 @@
 """The vendored emu-atlas copy resolves and is the release we pinned.
 
-``scripts/check_vendored_atlas.py`` proves the bytes on disk are the tagged
+``scripts/check_vendored_trees.py`` proves the bytes on disk are the tagged
 release's; this proves the copy is a working import under ``_vendor.atlas``
 rather than a tree that merely hashes correctly. Both halves are needed: upstream
 made the package relocatable (no absolute self-imports, no ``files("atlas")``),

@@ -39,11 +39,12 @@ line-length = 120
 extend-exclude = ["py_modules/_vendor", "./scripts", ".claude", ".worktrees"]
 # Ruff applies extend-exclude to a directory walk but ignores it for a path passed
 # explicitly, unless this is set. .githooks/pre-commit passes staged paths explicitly,
-# so without it the hook reformats the vendored verbatim copies it is excluding —
-# 26 of atlas's 35 modules — and breaks the byte-identity that
-# scripts/check_vendored_atlas.py exists to prove. Upstream runs no Python formatter
-# at all, so no line-length here rescues it: 88 rewrites 33 files, 100 rewrites 20,
-# 120 rewrites 26.
+# so without it the hook reformats the vendored copies it is excluding and breaks the
+# byte-identity that scripts/check_vendored_trees.py exists to prove. Upstream runs no
+# Python formatter at all, so no line-length here rescues it — measured against atlas
+# 0.10.0 (39 modules), `ruff format` rewrites 29 of them at 120, 22 at 100 and 37 at
+# 88, and both of vdf's at every one of the three. Re-measure before trusting those
+# counts: they describe the trees vendored today, not the setting.
 # This covers the whole extend-exclude list, so it also stops the hook formatting and
 # linting ./scripts. That is what the exclude already asked for and CI already did —
 # ruff's walk never reached scripts/ — but the hook was the only thing still checking

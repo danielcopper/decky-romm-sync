@@ -52,8 +52,8 @@ SLACK_ADVISORY = 50
 #   ``main.py`` owns the Decky lifecycle plus one ``async def`` per callable,
 #     so it grows with the callable surface by design (CLAUDE.md, "Process
 #     boundaries").
-#   ``py_modules/_vendor`` is a checksum-pinned verbatim copy; its size is
-#     upstream's decision (.claude/rules/vendored-assets.md).
+#   ``py_modules/_vendor`` holds checksum-pinned upstream copies; their size
+#     is upstream's decision (.claude/rules/vendored-assets.md).
 #   ``tests/`` is one file per source module by rule
 #     (.claude/rules/testing-backend.md), so a large test file is that rule
 #     working — gating it here would put two of our own rules in conflict.
