@@ -17,12 +17,10 @@ resolver does not, and they are two different kinds of question:
   own component launcher (ADR-0019). Nothing but this plugin asks it.
 
 Both probes prefer ``linux/`` over ``unix/`` within a root, which is ES-DE's own
-per-flavor layout, and they take the **user** flatpak installation before the
-system one. That is flatpak's own resolution order for an app — ``flatpak run``
-moves the user dir to the front so it wins where both installations carry the
-app — so on a machine with both deploys the user one is the RetroDECK that runs,
-and it is the deploy the resolver reads the catalogue out of. Probing the other
-way round would let one launch decision be made from two different deploys.
+per-flavor layout. Which root comes first is
+:func:`adapters.flatpak_install.flatpak_app_files_dirs`' to decide, and it is
+flatpak's own order — the user installation before the system one — so this file
+and the catalogue describe the same RetroDECK.
 """
 
 from __future__ import annotations
@@ -209,13 +207,12 @@ class EsFindRulesAdapter:
     def find_es_find_rules_xml(self) -> str | None:
         """Locate ``es_find_rules.xml`` inside the RetroDECK flatpak installation.
 
-        Probes each flatpak install root (per-user, then system — the module
-        docstring says why) and, within each, searches linux/ first
-        (RetroDECK-customized) then unix/ as fallback. Returns the path or
-        ``None`` (find rules absent → the probe assumes every emulator
-        installed).
+        Probes each flatpak install root (per-user, then system) and, within
+        each, searches linux/ first (RetroDECK-customized) then unix/ as
+        fallback. Returns the path or ``None`` (find rules absent → the probe
+        assumes every emulator installed).
         """
-        for files_dir in flatpak_app_files_dirs(self._user_home, user_first=True):
+        for files_dir in flatpak_app_files_dirs(self._user_home):
             for suffix in _ES_FIND_RULES_SUFFIXES:
                 path = os.path.join(files_dir, suffix)
                 if os.path.exists(path):
@@ -349,9 +346,7 @@ class EsFindRulesAdapter:
         """
         if path.startswith("/app/"):
             rest = path[len("/app/") :]
-            return [
-                os.path.join(files_dir, rest) for files_dir in flatpak_app_files_dirs(self._user_home, user_first=True)
-            ]
+            return [os.path.join(files_dir, rest) for files_dir in flatpak_app_files_dirs(self._user_home)]
         if path.startswith("/var/data/"):
             return [self._retrodeck_var_dir("data", path[len("/var/data/") :])]
         if path.startswith("/var/config/"):

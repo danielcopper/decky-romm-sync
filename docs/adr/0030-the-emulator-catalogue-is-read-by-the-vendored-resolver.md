@@ -130,10 +130,12 @@ a catalogue whose path is no longer the plugin's to know.
 `get_emulator_options`, `reset_cache`); resolving a launcher becomes the call-shaped `SandboxLauncherFn`. One Protocol
 spanning both would force one implementation to forward to the other and hide which source answered a given call.
 
-One behaviour changes relative to the deleted parser: the find-rules probe now takes the **user** flatpak installation
-before the system one. That is flatpak's own resolution order for an app, and it is the deploy the resolver reads the
-catalogue from — so on a machine carrying both, the catalogue and the find rules now describe the same RetroDECK where
-before they could describe two.
+One behaviour changes relative to the deleted parser, and it reaches further than this seam: **every** reader of the
+RetroDECK install now takes the user flatpak installation before the system one — the find rules, the per-core `.info`
+files, and the catalogue the resolver reads. That is flatpak's own resolution order for an app, so on a machine carrying
+both deploys all three describe the RetroDECK that actually runs, where before the first two could describe the other
+one. `flatpak_app_files_dirs` has a single order rather than a per-caller flag: two orders would be a thing to get wrong
+per reader, and no reader wants the other one.
 
 ### 6. Nothing else moves
 

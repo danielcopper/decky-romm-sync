@@ -453,13 +453,15 @@ Non-obvious design choices worth preserving:
   suffix.
 
 - **RetroDECK-only path resolution, standalone RetroArch out of scope.** The `.info` adapter only looks under
-  `net.retrodeck.retrodeck` Flatpak paths (system-wide `/var/lib/flatpak/...` and per-user
-  `~/.local/share/flatpak/...`). Support for `org.libretro.RetroArch` Flatpak, native RetroArch installs, and other
-  launchers is deferred — a separate long-term issue tracks broadening the plugin's launcher support beyond RetroDECK,
-  and this parser will be extended alongside that work.
+  `net.retrodeck.retrodeck` Flatpak paths — the per-user `~/.local/share/flatpak/...` before the system-wide
+  `/var/lib/flatpak/...`, which is flatpak's own order for an app and therefore the deploy a launch would start
+  (`adapters/flatpak_install.py`; the emulator catalogue and the find rules resolve through the same order, so all three
+  describe one RetroDECK). Support for `org.libretro.RetroArch` Flatpak, native RetroArch installs, and other launchers
+  is deferred — a separate long-term issue tracks broadening the plugin's launcher support beyond RetroDECK, and this
+  parser will be extended alongside that work.
 
-- **Candidate paths use the `current/active` Flatpak symlinks.** Both candidate paths for `.info` files (system and
-  per-user) route through `current/active`, which is Flatpak's stable symlink to the installed commit. This means the
+- **Candidate paths use the `current/active` Flatpak symlinks.** Both candidate paths for `.info` files (per-user and
+  system) route through `current/active`, which is Flatpak's stable symlink to the installed commit. This means the
   adapter does not need to know the specific Flatpak commit hash, and Flatpak updates do not break path resolution.
 
 ---

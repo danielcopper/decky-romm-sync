@@ -43,7 +43,14 @@ class TestFlatpakAppFilesDirs:
             result = flatpak_app_files_dirs(str(user_home))
         assert result == [str(user_files)]
 
-    def test_both_in_priority_order_system_first(self, tmp_path):
+    def test_both_in_priority_order_user_first(self, tmp_path):
+        """The user installation leads, as ``flatpak run`` resolves an app.
+
+        Every reader of the RetroDECK install answers from this list in order,
+        so the order decides which deploy the emulator catalogue, the find rules
+        and the per-core ``.info`` files all describe. Reversing it lets one
+        launch decision be made from two deploys.
+        """
         system_root = tmp_path / "system"
         user_home = tmp_path / "home"
         system_files = _system_files_dir(system_root)
@@ -53,7 +60,7 @@ class TestFlatpakAppFilesDirs:
 
         with mock.patch.object(flatpak_install, "SYSTEM_FLATPAK_ROOT", str(system_root)):
             result = flatpak_app_files_dirs(str(user_home))
-        assert result == [str(system_files), str(user_files)]
+        assert result == [str(user_files), str(system_files)]
 
     def test_empty_when_neither_exists(self, tmp_path):
         system_root = tmp_path / "nonexistent_system"
