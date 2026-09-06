@@ -207,17 +207,17 @@ assumed installed, so it never falsely downgrades. Libretro is always installed 
 libretro options are never downgraded. See [ADR-0020](../adr/0020-live-es-systems-emulator-resolution.md) §2.
 
 `get_emulator_options(system)` returns `{"available": bool, "options": [EmulatorOption, ...]}`. **`available` is `False`
-whenever nothing could be established**, which is five cases: no installation was detected at all; the resolver raised;
-or the catalogue answer carries one of the four `emulator-catalogue-*` refusals — the arrangement ships no catalogue,
-the resolver has not located one, the one it has could not be read, or only part of it is readable — or
-`catalogue-invalid`, a file ES-DE refuses its whole load on (usually a typo in the user's own `custom_systems` overlay).
-The picker surfaces all of them as "Emulator list unavailable" rather than an empty list it cannot distinguish from a
-system the frontend knows no emulator for; the launch degrades to plain. An empty list carrying none of those codes is
-that real "knows none", and `emulator-catalogue-exclusive` is not a refusal at all: a custom `es_systems.xml` declaring
-itself the whole catalogue gives a complete answer, merely a small one. The test is the codes and never an empty caveat
-list — a broken installation states health findings on every answer it gives. `options_to_payload` projects the list to
-the frontend picker shape (`{label, kind, core_so, is_default, bakeable, reason}`): bakeable entries are clickable, the
-default is marked, and `needs_setup` / `unbakeable` entries are disabled with their reason. See
+whenever nothing could be established**: no installation was detected at all; the resolver raised; the catalogue answer
+carries one of the four `emulator-catalogue-*` refusals — the arrangement ships no catalogue, the resolver has not
+located one, the one it has could not be read, or only part of it is readable; or it carries `catalogue-invalid`, a file
+ES-DE refuses its whole load on (usually a typo in the user's own `custom_systems` overlay). The picker surfaces all of
+them as "Emulator list unavailable" rather than an empty list it cannot distinguish from a system the frontend knows no
+emulator for; the launch degrades to plain. An empty list carrying none of those codes is that real "knows none", and
+`emulator-catalogue-exclusive` is not a refusal at all: a custom `es_systems.xml` declaring itself the whole catalogue
+gives a complete answer, merely a small one. The test is the codes and never an empty caveat list — a broken
+installation states health findings on every answer it gives. `options_to_payload` projects the list to the frontend
+picker shape (`{label, kind, core_so, is_default, bakeable, reason}`): bakeable entries are clickable, the default is
+marked, and `needs_setup` / `unbakeable` entries are disabled with their reason. See
 [ADR-0020](../adr/0020-live-es-systems-emulator-resolution.md) — including the 27 default flips this selection rule
 produces relative to the old first-libretro default.
 

@@ -264,8 +264,9 @@ class AtlasCatalogueAdapter:
         """Return every catalogue entry for a system, classified for bakeability.
 
         Returns ``{"available": bool, "options": [EmulatorOption, ...]}``.
-        ``available`` is ``False`` when the answer carries one of the four
-        catalogue refusals, or when no installation was detected at all — the
+        ``available`` is ``False`` when the answer carries one of the five
+        catalogue refusals, or when no installation was detected at all, or when
+        the resolver could not be asked at all — the
         caller surfaces that as "emulator list unavailable" rather than seeing an
         empty list it cannot distinguish from a system the frontend knows no
         emulator for. ``options`` is in DECLARED order, so the first bakeable

@@ -280,8 +280,9 @@ async def test_a_detected_installation_without_a_catalogue_reads_nothing_off_the
     ``retrodeck.json``, and the resolver then resolves its ``/app`` paths through
     the flatpak deploy — which, unguarded, is the real one on any machine with
     RetroDECK installed, so this test answered with five ``gba`` entries and 172
-    systems off the host. Every other contract test here happens to seed the
-    per-user deploy, which wins over the system one, so nothing else could see it.
+    systems off the host. Every other test in this file either seeds the per-user
+    deploy, which wins over the system one, or seeds no marker at all and is never
+    detected — so nothing else could see it.
     """
     seed_retrodeck_marker(harness)
     seed_rom(harness, 60, platform_slug="gba")

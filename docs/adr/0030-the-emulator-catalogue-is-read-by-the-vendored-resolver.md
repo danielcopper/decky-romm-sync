@@ -91,7 +91,8 @@ Taken at face value the plugin would report "knows no emulator" for every platfo
 positive `False` the candidate search reads as a denial. What the user has is one typo in one file, most likely their
 own `custom_systems/es_systems.xml` — which the deleted parser never read, so this is new exposure — and it is also what
 that parser answered: an unparsable file and a wrong root tag both yielded "unavailable". A file ES-DE loads fine that
-simply declares no system stays a real "knows none"; the refusal is scoped to the invalid one.
+simply declares no system is a real "knows none" — a distinction the resolver newly enables, since the deleted parser
+answered "unavailable" for an empty parse too; the refusal is scoped to the invalid file.
 
 The resolver raises on its own invariant violations rather than degrading, so every call is wrapped and a failure
 becomes the same "unavailable" an unreadable catalogue gives. It is never an empty list.

@@ -194,8 +194,8 @@ class TestDeployPriority:
     """The user installation wins over the system one, as ``flatpak run`` resolves it.
 
     The isolation fixture above repoints the system root away for every other
-    test here, so these two put it back at a second seeded tree and pin which of
-    the two the adapter reads. The stake is that the catalogue and the find rules
+    test here; these put it back at a second seeded tree and pin which of the two
+    the adapter reads. The stake is that the catalogue and the find rules
     describe the same RetroDECK: the vendored resolver reads the catalogue out of
     the deploy flatpak would run, and a system-first probe here would answer a
     launch decision from the other one.
@@ -234,16 +234,16 @@ class TestDeployPriority:
             assert found is not None
             assert found.startswith(str(system_files))
 
-    def test_an_app_component_is_probed_in_the_user_deploy_first(self, tmp_path):
-        # The same order has to hold for the /app prefix mapping, or the probe
-        # answers "installed" off a component in the deploy that will not run.
+    def test_an_app_component_in_either_deploy_counts_as_installed(self, tmp_path):
+        # The /app prefix maps to every install root, not only the one the find
+        # rules came from: the probe reports absence only on positive evidence,
+        # and a component sitting in the other deploy is not that.
         system_root = self._both_deploys(tmp_path, user_rules=_FIND_RULES_XML, system_rules=_FIND_RULES_XML)
         system_files = system_root / "app" / "net.retrodeck.retrodeck" / "current" / "active" / "files"
-        _touch(_component_launcher(str(system_files), "ppsspp"))
         with mock.patch("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(system_root)):
             adapter = EsFindRulesAdapter(logger=_TEST_LOGGER, user_home=str(tmp_path))
-            # Present in the system deploy only — still "installed", because the
-            # probe checks every root; the ORDER is what the two tests above pin.
+            assert adapter.command_emulator_installed("%EMULATOR_PPSSPP% -b %ROM%") is False
+            _touch(_component_launcher(str(system_files), "ppsspp"))
             assert adapter.command_emulator_installed("%EMULATOR_PPSSPP% -b %ROM%") is True
 
 

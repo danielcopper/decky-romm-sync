@@ -2,7 +2,7 @@
 
 What is under test is the adapter's own work: recovering the DECLARED order from
 an answer stated in effective order, classifying each entry through the plugin's
-own bake kernel, telling the four catalogue refusals apart from a frontend that
+own bake kernel, telling the five catalogue refusals apart from a frontend that
 genuinely declares no emulator, and refusing to turn any failure into an empty
 list. The resolver's own decisions are upstream's and are not re-tested here.
 
@@ -260,7 +260,11 @@ class TestDeclaredOrder:
 
 
 class TestCatalogueRefusals:
-    """Five empties, and only one of them is a statement about the machine."""
+    """Six ways to answer nothing, and only one is a statement about the machine.
+
+    Five refusal codes, plus the catalogue that was read and declares no emulator
+    for this system.
+    """
 
     @pytest.mark.parametrize(
         "code",
@@ -662,8 +666,8 @@ class TestTheRealResolverOverARealTree:
         )
 
     def test_a_readable_catalogue_answers_from_the_seeded_tree(self, tmp_path, traces):
-        # The control: without it, every assertion below would also pass on a
-        # tree the resolver never found at all.
+        # The control for the two unavailable cases below: without it, their
+        # assertions would also pass on a tree the resolver never found at all.
         adapter = self._adapter(_seed_retrodeck(tmp_path, catalogue=_VALID_ES_SYSTEMS_XML), traces)
 
         assert _labels(adapter, "gba") == ["mGBA"]

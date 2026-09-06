@@ -44,7 +44,7 @@ def flatpak_app_files_dirs(user_home: str, app_id: str = _DEFAULT_APP_ID, *, use
     app in: ``flatpak run`` moves the user installation to the front of the list
     it searches, under the comment "Move the user dir to the front so it 'wins'
     in case an app is in more than one installation"
-    (``app/flatpak-builtins-run.c:240-255``). So on a machine carrying both
+    (``app/flatpak-builtins-run.c:240-255`` @ flatpak 1.16.6). So on a machine carrying both
     deploys, the user one is the RetroDECK that actually runs. A caller whose
     answer has to agree with a launch asks for it; the default is kept because
     changing every caller's resolution is not this parameter's job.
