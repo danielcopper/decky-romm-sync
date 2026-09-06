@@ -54,8 +54,17 @@ class IgdbIdentity:
     """
 
     id: int
+    """The stable IGDB platform key, and the one field to match on — IGDB re-spells slugs
+    under an unchanged id.
+    """
     slug: str
+    """IGDB's slug for the platform as recorded at the pinned revision — a convenience,
+    never a key.
+    """
     name: str
+    """IGDB's display name for the platform as recorded at the pinned revision — a
+    convenience, never a key.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,10 +78,23 @@ class PlatformIdentities:
     """
 
     platform: str
+    """The ES-DE platform tag these identities belong to."""
     igdb: tuple[IgdbIdentity, ...]
+    """The IGDB platforms whose games belong on this ES-DE platform, family-canonical
+    only — empty is a reviewed absence rather than a gap.
+    """
     libretro: tuple[str, ...]
+    """The libretro platform names for this ES-DE platform, family-canonical only — empty
+    is a reviewed absence rather than a gap.
+    """
     screenscraper: int | None
+    """The ScreenScraper system id for this ES-DE platform, and ``None`` where the pinned
+    sources record none.
+    """
     thegamesdb: int | None
+    """The TheGamesDB platform id for this ES-DE platform, and ``None`` where the pinned
+    sources record none.
+    """
 
 
 def _expect_str(value: Any, where: str) -> str:

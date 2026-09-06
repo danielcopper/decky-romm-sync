@@ -78,7 +78,7 @@ import tomllib
 import re
 from dataclasses import dataclass
 from glob import escape as _glob_escape
-from typing import Any, Iterable, Literal, Mapping, Protocol, cast
+from typing import Any, Iterable, Literal, Mapping, Protocol, Sequence, TypeAlias, cast
 
 from ._data import packaged_text
 from .core_info import (
@@ -122,6 +122,7 @@ from .standalone_firmware import (
 from .placement import (
     CAVEAT_CORE_MODE_UNESTABLISHED,
     CAVEAT_SANDBOX_PATH_UNTRANSLATED,
+    REASON_REGION_DECIDED_BY_DISC,
     HOLE_CWD,
     ROOT_SYSTEM_DIRECTORY,
     TEMPLATE_CWD,
@@ -490,9 +491,15 @@ class FirmwareIdentity:
     """
 
     md5: str
+    """The MD5 the packaged table pins for this content."""
     sha1: str
+    """The SHA-1 the packaged table pins for this content."""
     size: int
+    """The size in bytes the packaged table pins for this content."""
     kind: FirmwareIdentityKind
+    """Whether these bytes are comparable at all, which decides what a difference from
+    them means: a ``mismatch`` for a ``file``, ``not-comparable`` for an ``archive``.
+    """
     archive_reason: ArchiveReason | None = None
     known_as: tuple[str, ...] = ()
     table_version: str = ""
@@ -1499,7 +1506,7 @@ def system_assignment_caveats(core: CoreDeclarations) -> tuple[Caveat, ...]:
         d.file_name for d in core.firmware if d.system_source != SOURCE_OVERRIDE and d.file_name
     )
     if derived:
-        files = ", ".join(sorted(set(derived)))
+        files = tuple(sorted(set(derived)))
         if not core.systemname:
             covers = (
                 f"its database field names {len(core.database)} systems ({'|'.join(core.database)})"
@@ -1510,11 +1517,11 @@ def system_assignment_caveats(core: CoreDeclarations) -> tuple[Caveat, ...]:
                 Caveat(
                     CAVEAT_CORE_WITHOUT_SYSTEMNAME,
                     f"{core.core_so} states no systemname in its .info, so nothing says which of its systems "
-                    f"these files belong to and they are filed as _unknown: {files} — {covers}",
+                    f"these files belong to and they are filed as _unknown: {', '.join(files)} — {covers}",
                     {
                         "core_so": core.core_so,
                         "files": files,
-                        "database": "|".join(core.database),
+                        "database": core.database,
                         "table_version": FIRMWARE_SYSTEM_OVERRIDE_VERSION,
                     },
                 )
@@ -1525,12 +1532,12 @@ def system_assignment_caveats(core: CoreDeclarations) -> tuple[Caveat, ...]:
                     CAVEAT_SYSTEM_ASSIGNMENT_DERIVED,
                     f"these files' system is inherited from {core.core_so}'s own systemname "
                     f"({core.systemname!r}); the core covers more than one system, and no per-file "
-                    f"source is established yet, so the filing may be wrong: {files}",
+                    f"source is established yet, so the filing may be wrong: {', '.join(files)}",
                     {
                         "core_so": core.core_so,
                         "systemname": core.systemname,
                         "files": files,
-                        "database": "|".join(core.database),
+                        "database": core.database,
                         "table_version": FIRMWARE_SYSTEM_OVERRIDE_VERSION,
                     },
                 )
@@ -1554,13 +1561,13 @@ def catalogue_vocabulary_caveats(core: CoreDeclarations) -> tuple[Caveat, ...]:
         if declaration.system in SYSTEMS_WITHOUT_CATALOGUE_ID and declaration.file_name:
             filed.setdefault(declaration.system, []).append(declaration.file_name)
     for system in sorted(filed):
-        files = ", ".join(sorted(set(filed[system])))
+        files = tuple(sorted(set(filed[system])))
         caveats.append(
             Caveat(
                 CAVEAT_SYSTEM_NOT_IN_CATALOGUE,
                 f"no ES-DE system id exists for this system "
                 f"({SYSTEMS_WITHOUT_CATALOGUE_ID[system]}); {system!r} is atlas's own spelling — "
-                f"{core.core_so} files under it: {files}",
+                f"{core.core_so} files under it: {', '.join(files)}",
                 {
                     "core_so": core.core_so,
                     "system": system,
@@ -1608,8 +1615,17 @@ class SuppliedBy:
     """
 
     distribution: str
+    """The arrangement kind that ships the copy at this destination — the identifier to
+    branch on.
+    """
     source: str
+    """The shipped copy as this host reads it — the file that was hashed, so a caller can
+    look at it.
+    """
     card_version: str
+    """The revision of the packaged copy list that named this pair, read off the data
+    file rather than compiled in.
+    """
 
     @property
     def label(self) -> str:
@@ -1675,49 +1691,89 @@ class FirmwareRequirement:
     two files one launch needs.
     """
 
-    # ``None`` exactly for a card-declared requirement: a standalone emulator
-    # has no ``.so``, and inventing one would collide with the real namespace.
     core_so: str | None
+    """The ``.so`` short name of the core that declares this file.
+
+    ``None`` exactly for a card-declared requirement: a standalone emulator
+    has no ``.so``, and inventing one would collide with the real namespace.
+    """
     system: str
+    """The system this declared file belongs to, in atlas's own vocabulary — the
+    sentinel ``_unknown`` where the core's ``.info`` states no ``systemname``.
+    """
     system_source: SystemSource
+    """How that system was arrived at — a per-file override, the core's ``systemname``, a
+    mechanical slug of it, nothing at all, or a standalone card's own list.
+    """
     need: FirmwareNeed
+    """What the core asks for — ``required``, or ``optional`` where its declaration marks
+    the slot so.
+    """
     file_name: str
+    """The declaration's own file name: the basename the core opens, and the key the
+    per-file system override is looked up under.
+    """
     path: str
+    """The absolute, resolved destination — where the file lands once every symlink on
+    the way is followed, stated whether or not one is there.
+    """
     declared: str
+    """The string the core spelled for this file, which is the name it will open —
+    keeping it is what makes resolving ``path`` lose nothing.
+    """
     description: str
     identity: FirmwareIdentity | None
+    """What the packaged table pins for the declared name, and ``None`` where the table
+    does not cover it.
+    """
     found: PathKind
+    """The path kind read at the destination — a file, a directory in the way, nothing,
+    or a path that could not be looked at.
+    """
     checked: FirmwareChecked | None
+    """What comparing the bytes established, and ``None`` where nothing is at the
+    destination or the path could not be looked at.
+    """
     regions: tuple[str, ...] | None = None
-    # What the core opens this declaration at. It defaults to ``file`` because
-    # no other route declares a folder: a standalone card names a file
-    # (``StandaloneFirmwareFile.name``), and the search family resolves to one
-    # — its card names a directory to look in and nothing about which file, so
-    # the requirement it builds is the image the recognition table picked. A
-    # core's ``firmwareN_path`` is the one bare, typeless string in the model.
+    """The console regions whose launch this file serves, inside an alternatives group —
+    ``None`` on an ordinary requirement, which every launch needs.
+    """
     declared_kind: DeclaredKind = DECLARED_FILE
-    # Provenance, not a verdict: whether the file at ``path`` is the copy the
-    # distribution places itself (:class:`SuppliedBy`). It rides last because
-    # it is additive to every existing construction — and it is deliberately
-    # *not* folded into ``checked``, which answers a different question. A
-    # supplied file can be verified, not-comparable or unknown all the same;
-    # ecwolf.pk3 on a RetroDECK is supplied *and* not-comparable, and both
-    # statements stand.
+    """What the core opens this declaration at — a file it reads, or a folder it lists.
+
+    It defaults to ``file`` because no other route declares a folder: a
+    standalone card names a file (``StandaloneFirmwareFile.name``), and the
+    search family resolves to one — its card names a directory to look in
+    and nothing about which file, so the requirement it builds is the image
+    the recognition table picked. A core's ``firmwareN_path`` is the one
+    bare, typeless string in the model.
+    """
     supplied_by: SuppliedBy | None = None
-    # What listing a folder declaration's folder established about its
-    # contents — the verdict :attr:`satisfied` answers with over a directory
-    # at a directory declaration, and the one place that verdict lives, so no
-    # contract field is added for it: ``True`` for an image the core's own
-    # test passed, ``False`` for a folder holding nothing the core would even
-    # open and for one whose every candidate was read and fails that test,
-    # ``None`` for everything the read did not establish. It stays out of the
-    # serialization (:mod:`atlas.contract`) because ``satisfied`` already
-    # carries it, and one fact serialized twice is one fact that can disagree
-    # with itself. Only meaningful over a directory at a directory declaration,
-    # and refused everywhere else: a verdict about contents nobody listed
-    # would be a state that lies. Rides last for the reason ``supplied_by``
-    # does — additive to every existing construction.
+    """Whether the file at ``path`` is the copy the distribution places itself.
+
+    Provenance, not a verdict (:class:`SuppliedBy`). It rides last because
+    it is additive to every existing construction — and it is deliberately
+    *not* folded into ``checked``, which answers a different question. A
+    supplied file can be verified, not-comparable or unknown all the same;
+    ecwolf.pk3 on a RetroDECK is supplied *and* not-comparable, and both
+    statements stand.
+    """
     contents_satisfied: bool | None = None
+    """What listing a folder declaration's folder established about its contents.
+
+    The verdict :attr:`satisfied` answers with over a directory at a
+    directory declaration, and the one place that verdict lives, so no
+    contract field is added for it: ``True`` for an image the core's own
+    test passed, ``False`` for a folder holding nothing the core would even
+    open and for one whose every candidate was read and fails that test,
+    ``None`` for everything the read did not establish. It stays out of the
+    serialization (:mod:`atlas.contract`) because ``satisfied`` already
+    carries it, and one fact serialized twice is one fact that can disagree
+    with itself. Only meaningful over a directory at a directory
+    declaration, and refused everywhere else: a verdict about contents
+    nobody listed would be a state that lies. Rides last for the reason
+    ``supplied_by`` does — additive to every existing construction.
+    """
 
     def __post_init__(self) -> None:
         if self.need not in FIRMWARE_NEEDS:
@@ -1852,6 +1908,9 @@ class FirmwareAlternatives:
     """
 
     options: tuple[FirmwareRequirement, ...]
+    """The requirements one launch needs exactly one of, each carrying the regions whose
+    launch it serves.
+    """
 
     def __post_init__(self) -> None:
         if not self.options:
@@ -1909,8 +1968,15 @@ class RefusedDeclaration:
     """
 
     declared: str
+    """The string the core spelled for a file atlas would not follow to a destination."""
     need: FirmwareNeed
+    """What the core asks for — ``required``, or ``optional`` where its declaration marks
+    the slot so.
+    """
     reason: str
+    """The caveat code that says why the declaration was refused — leaving the firmware
+    root and being unresolvable are different facts about the machine.
+    """
 
 
 CoreDeclarationState = Literal["read", "unreadable", "absent", "unsupported", "packaged"]
@@ -1969,40 +2035,64 @@ class CoreFirmware:
     """
 
     core_so: str | None
+    """The core's ``.so`` short name, and ``None`` where the emulator is a standalone one
+    with no ``.so`` to name.
+    """
     label: str | None
+    """The name this emulator carries on this machine, as the catalogue spells it, and
+    ``None`` where no catalogue entry named it.
+    """
     declaration: CoreDeclarationState
+    """Where the requirement list came from, and therefore what an empty one means — only
+    ``read`` makes it mean this emulator needs no firmware.
+    """
     requirements: tuple[FirmwareRequirement | FirmwareAlternatives, ...]
+    """A conjunction: every entry is needed, and where one is an alternatives group what
+    is needed is exactly one of its options.
+    """
     caveats: tuple[Caveat, ...]
+    """Every degradation of this core's answer, and on any declaration but ``read`` the
+    statement of why the list is not the whole story.
+    """
     refused: tuple[RefusedDeclaration, ...] = ()
-    # The ``.info`` path keys RetroArch's own enumeration never takes (a
-    # spelling it does not compose, a slot past the count, an empty value it
-    # discards). A field rather than a caveat read back out of the answer:
-    # whether this core declares something nobody asks for is a fact about the
-    # core, and the identification route needs it as data, not as the presence
-    # of a message. It stays out of the contract — the caveat that states it
-    # already carries the keys, and one fact serialized twice is one fact that
-    # can disagree with itself.
+    """The declarations atlas would not follow, each with its reason, so a dropped file
+    can never make a core look complete.
+    """
     unread: tuple[str, ...] = ()
-    # The part of ``unread`` that put a value behind the key. Both are needed
-    # because they answer different questions: ``unread`` is what the caveat
-    # states (a line the file spends and the emulator ignores, whatever it
-    # holds), this one is what the identification route may count (only a
-    # declaration that stated a path could have been about some particular
-    # file). Also out of the contract, and for the same reason.
+    """The ``.info`` path keys RetroArch's own enumeration never takes.
+
+    A spelling it does not compose, a slot past the count, an empty value it
+    discards. A field rather than a caveat read back out of the answer:
+    whether this core declares something nobody asks for is a fact about the
+    core, and the identification route needs it as data, not as the presence
+    of a message. It stays out of the contract — the caveat that states it
+    already carries the keys, and one fact serialized twice is one fact that
+    can disagree with itself.
+    """
     unread_stating_a_path: tuple[str, ...] = ()
-    # Every file a listed folder's read accounted for — an image the core's
-    # test passed, a candidate the table names and the test denies, one whose
-    # header read did not come back, or one whose digest could not be taken
-    # — as RESOLVED paths, sorted: the
-    # exclusion compares resolved spellings, and a listed entry may be a link
-    # into another directory. The caveats that state
-    # these files carry the listed entry instead, the name the core lists
-    # and opens through the link. The declaration claims them: the
-    # inventory's unclaimed scan skips them the way it skips a declared
-    # destination, so a file the folder read stated is not stated again as
-    # an unclaimed one. Out of the contract for the same reason ``unread``
-    # is — the caveats already carry the paths a consumer acts on.
+    """The part of ``unread`` that put a value behind the key.
+
+    Both are needed because they answer different questions: ``unread`` is
+    what the caveat states (a line the file spends and the emulator ignores,
+    whatever it holds), this one is what the identification route may count
+    (only a declaration that stated a path could have been about some
+    particular file). Also out of the contract, and for the same reason.
+    """
     folder_claims: tuple[str, ...] = ()
+    """Every file a listed folder's read accounted for, as resolved paths, sorted.
+
+    An image the core's test passed, a candidate the table names and the test
+    denies, one whose header read did not come back, or one whose digest
+    could not be taken — as RESOLVED paths, because the exclusion compares
+    resolved spellings and a listed entry may be a link into another
+    directory. The caveats that state these files carry the listed entry
+    instead, the name the core lists and opens through the link. The
+    declaration claims them: the inventory's unclaimed scan skips them the
+    way it skips a declared destination, so a file the folder read stated is
+    not stated again as an unclaimed one. Out of the contract for the same
+    reason ``unread`` is — the caveats already carry the paths a consumer
+    acts on.
+    """
 
     def __post_init__(self) -> None:
         if self.declaration not in CORE_DECLARATION_STATES:
@@ -2109,7 +2199,13 @@ class UnclaimedFile:
     """
 
     path: str
+    """The absolute path of the file in the firmware tree that no installed core asks
+    for.
+    """
     identity: FirmwareIdentity | None
+    """What the packaged table says these bytes are, matched by content and never by name
+    — ``None`` without verification, and for bytes it cannot read or does not know.
+    """
 
     @property
     def known_as(self) -> tuple[str, ...]:
@@ -2132,11 +2228,22 @@ class FirmwareAnswer:
     """
 
     root: str | None
+    """The resolved system directory RetroArch hands its cores, and ``None`` where the
+    configs state none.
+    """
     cores: tuple[CoreFirmware, ...]
+    """One entry per emulator this answer covers: what it wants, and how far that is met."""
     unclaimed: tuple[UnclaimedFile, ...]
+    """The files in the firmware tree no installed core asks for."""
     hash_checked: bool
+    """Whether identity verification ran at all, so a list of present files can never be
+    mistaken for a list of verified ones.
+    """
     sources: tuple[str, ...]
     caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, and on a rootless one the statement of why there
+    is no root.
+    """
 
     def __post_init__(self) -> None:
         if self.root is None and not self.caveats:
@@ -2161,9 +2268,18 @@ class FirmwareIdentification:
     """
 
     identity: FirmwareIdentity | None
+    """What the queried content is, and ``None`` where the packaged table does not
+    recognise it — which is not a claim that the file is junk.
+    """
     requirements: tuple[FirmwareRequirement, ...]
+    """Every place a core's own ``.info`` declares this content — a card-declared
+    requirement pins no identity, so it is never matched here.
+    """
     sources: tuple[str, ...]
     caveats: tuple[Caveat, ...]
+    """Every degradation of this answer, stated structurally so a client branches on the
+    code rather than on prose.
+    """
 
     @property
     def known_as(self) -> tuple[str, ...]:
@@ -3105,7 +3221,7 @@ def _no_image(paths: list[str], *, directory: str, core_so: str) -> Caveat:
         {
             "dir": directory,
             "candidates": str(len(paths)),
-            "paths": ", ".join(paths),
+            "paths": paths,
             "core_so": core_so,
             "table_version": FIRMWARE_DECLARED_DIRECTORY_VERSION,
         },
@@ -3237,7 +3353,7 @@ def _directory_contents(
                 CAVEAT_FIRMWARE_SCAN_INCOMPLETE,
                 f"{', '.join(unreadable)} could not be listed, so what this core would find in "
                 f"{directory} was seen only in part",
-                {"dir": directory, "unreadable": ", ".join(unreadable)},
+                {"dir": directory, "unreadable": unreadable},
             )
         )
     if not kept:
@@ -3443,18 +3559,27 @@ def _requirements_of(cores: tuple[CoreFirmware, ...]) -> tuple[FirmwareRequireme
 
 
 # What tells two caveats apart when an answer is assembled: the code and the
-# data, flattened. A data value is a string or a read-only mapping (the tally
-# the alternative-emulator code carries under ``emulators``), and a mapping
-# cannot be hashed, so it is spelled out as its sorted items.
-_CaveatKey = tuple[str, tuple[tuple[str, str | tuple[tuple[str, str], ...]], ...]]
+# data, flattened. A data value is a string, a sequence (the file, key and
+# region lists) or a read-only mapping (the tally the alternative-emulator
+# code carries under ``emulators``); neither of the last two is hashable as it
+# stands, so each is spelled out — the mapping as its sorted items, the
+# sequence as its own tuple, because its ORDER is part of the contract and two
+# caveats naming the same files in different orders are not the same statement.
+_FlatValue: TypeAlias = "str | tuple[str, ...] | tuple[tuple[str, str], ...]"
+_CaveatKey = tuple[str, tuple[tuple[str, _FlatValue], ...]]
+
+
+def _flat_value(value: "str | Sequence[str] | Mapping[str, str]") -> "_FlatValue":
+    """One data value as something hashable — ``str`` first, since a str is a Sequence."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        return tuple(sorted(value.items()))
+    return tuple(value)
 
 
 def _caveat_key(caveat: Caveat) -> _CaveatKey:
-    flat: list[tuple[str, str | tuple[tuple[str, str], ...]]] = []
-    for key in sorted(caveat.data):
-        value = caveat.data[key]
-        flat.append((key, tuple(sorted(value.items())) if isinstance(value, Mapping) else value))
-    return caveat.code, tuple(flat)
+    return caveat.code, tuple((key, _flat_value(caveat.data[key])) for key in sorted(caveat.data))
 
 
 def stated_once(caveats: Iterable[Caveat]) -> tuple[Caveat, ...]:
@@ -3665,16 +3790,15 @@ def _unread_declaration_caveats(core: CoreDeclarations) -> tuple[Caveat, ...]:
     """
     if not core.unread:
         return ()
-    keys = ", ".join(core.unread)
     return (
         Caveat(
             CAVEAT_FIRMWARE_DECLARATION_UNREAD,
-            f"{core.core_so} declares {keys}, which RetroArch does not take: "
+            f"{core.core_so} declares {', '.join(core.unread)}, which RetroArch does not take: "
             f"{_why_unread(core.unread, core.firmware_count)} "
             "— what they state is not part of this core's requirements",
             {
                 "core_so": core.core_so,
-                "declared": keys,
+                "declared": core.unread,
                 "firmware_count": core.firmware_count,
             },
         ),
@@ -3888,12 +4012,13 @@ def derived_core_selection(
     hidden = _cores_a_derived_assignment_may_hide(cores, selected, system)
     if not hidden:
         return selected, None
-    names = ", ".join(sorted(c.core_so for c in hidden))
+    names = tuple(sorted(c.core_so for c in hidden))
     return selected, Caveat(
         CAVEAT_SYSTEM_ASSIGNMENT_MAY_HIDE_CORES,
         f"this list is keyed on the cores' own systemname, and {len(hidden)} installed core(s) "
         f"name {system!r} in their database while filing firmware by a system that was derived "
-        f"rather than ruled — an emulator missing from this list is one of these: {names}",
+        f"rather than ruled — an emulator missing from this list is one of these: "
+        f"{', '.join(names)}",
         {
             "count": str(len(hidden)),
             "cores": names,
@@ -4845,9 +4970,9 @@ def _duckstation_region_caveats(
             "of any region; a disc of another region is served by its own",
             {
                 "core": card.token,
-                "reason": "the console's region is the running disc's",
+                "reason": REASON_REGION_DECIDED_BY_DISC,
                 "dir": bios_dir,
-                "regions": ", ".join(regions),
+                "regions": regions,
             },
         )
     ]
@@ -5196,7 +5321,7 @@ def _duckstation_search(
                 CAVEAT_FIRMWARE_SCAN_INCOMPLETE,
                 f"{', '.join(unreadable)} could not be listed, so the search below saw only "
                 "part of what this launch would see",
-                {"dir": bios_dir, "unreadable": ", ".join(unreadable)},
+                {"dir": bios_dir, "unreadable": unreadable},
             )
         )
     if not kept:
@@ -5234,7 +5359,7 @@ def _duckstation_search(
                     "declared": "",
                     "need": NEED_REQUIRED,
                     "dir": bios_dir,
-                    "regions": ", ".join(regions),
+                    "regions": regions,
                 },
             )
         )
@@ -5255,7 +5380,7 @@ def _duckstation_search(
                     # Which launches the unanswered search speaks for — all of
                     # them in the shipped all-keys-empty state, and only the
                     # leftover regions once a key names another region's image.
-                    "regions": ", ".join(regions),
+                    "regions": regions,
                 },
             )
         )

@@ -48,8 +48,8 @@ The [emu-atlas](https://github.com/danielcopper/emu-atlas) resolver — the conf
 extracted from this plugin.
 
 - **Upstream:** <https://github.com/danielcopper/emu-atlas>
-- **Version:** 0.10.0 — tag `v0.10.0`, from the release's `emu_atlas-0.10.0-py3-none-any.whl`
-  (`sha256:57f12effac303f3cda4aab851565dceb3fa0d4582bd12d8c16b3f7660a586de1`)
+- **Version:** 0.12.0 — tag `v0.12.0`, from the release's `emu_atlas-0.12.0-py3-none-any.whl`
+  (`sha256:ddd5286e12d7c13f68b14aeef4ce35b1bfa83ec1aebbd797ae07c40b7ff04a3c`)
 - **License:** MIT — see [`atlas.LICENSE`](atlas.LICENSE)
 - **Local patches:** none. Upstream made the package relocatable in
   [emu-atlas#327](https://github.com/danielcopper/emu-atlas/issues/327) — no absolute self-imports, no `files("atlas")`
@@ -62,9 +62,15 @@ verbatim as `atlas.SHA256SUMS`. That keeps `atlas/` exactly equal to the manifes
 exceptions. The equality half is not optional: `sha256sum -c --ignore-missing` exits 0 after a vendored file is deleted,
 so a plain checksum sweep would pass a half-copied tree.
 
-`_vendor.atlas` is consumed by `adapters/atlas_firmware.py` alone — the firmware seam behind
-`services.protocols.FirmwareResolver`. `tests/test_vendored_atlas.py` additionally imports it and asserts the pinned
-version, so the copy is proven to resolve and not merely to hash correctly even if that adapter ever stops importing it.
+`_vendor.atlas` is consumed by two adapters: `adapters/atlas_firmware.py` (the firmware seams behind
+`services.protocols.FirmwareResolver` and `FirmwareFolderVerdictFn`) and `adapters/atlas_catalogue.py` (the emulator
+catalogue behind `CoreInfoProvider`, `SystemSupportedExtensionsFn`, `SystemM3uSupportFn` and `SystemKnownFn`).
+`tests/test_vendored_atlas.py` additionally imports it and asserts the pinned version, so the copy is proven to resolve
+and not merely to hash correctly even if both adapters ever stop importing it. That test also imports the tree with
+`xml.etree` blocked at `sys.meta_path`: Decky Loader's PyInstaller runtime does not ship that module, upstream answers
+it with `atlas/_xml.py` (ElementTree's shape on expat directly), and nothing about a release states which parser it
+reaches for — so a version bump that reintroduces `xml.etree` would import cleanly in CI and kill the backend at
+bootstrap on a real Deck.
 
 ### How to update atlas
 

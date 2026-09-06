@@ -83,7 +83,9 @@ class InstallationAnswer(Generic[AnswerT]):
     """
 
     installation: Installation
+    """The handle that gave the answer — the handle itself, not a copy of its identity."""
     answer: AnswerT
+    """Whatever the question returns, unchanged and unwrapped."""
 
 
 class EveryInstallation:

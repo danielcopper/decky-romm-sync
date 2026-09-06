@@ -29,6 +29,7 @@ from .placement import (
     CAVEAT_CORE_MODE_UNESTABLISHED,
     CAVEAT_PER_GAME_LAYER_UNREAD,
     CAVEAT_PER_GAME_OVERRIDES_PRESENT,
+    REASON_DATA_ROOT_DECIDED_BY_LAUNCH,
     Caveat,
 )
 
@@ -171,7 +172,7 @@ def dataroot_caveat(token: str, below: str) -> Caveat:
         "from the launch environment (XDG_CONFIG_HOME set routes it to the config side, "
         f"qthost.cpp:562-582), which no file records; {below} hangs off the "
         "environment-unset side",
-        {"core": token, "reason": "the DataRoot is decided by the launch environment"},
+        {"core": token, "reason": REASON_DATA_ROOT_DECIDED_BY_LAUNCH},
     )
 
 
@@ -289,7 +290,11 @@ def applies_game_settings(values: Mapping[tuple[str, str], str]) -> bool:
 
 
 def _spelling(keys: tuple[str, ...]) -> tuple[str, str, str]:
-    """``(the keys joined, "key"/"keys", "is"/"are")`` — one arity, three places."""
+    """``(the keys joined, "key"/"keys", "is"/"are")`` — one arity, three places.
+
+    The joined spelling is for the SENTENCE only: ``data["key"]`` carries the
+    keys themselves, as the list they are.
+    """
     return ", ".join(keys), "keys" if len(keys) > 1 else "key", "are" if len(keys) > 1 else "is"
 
 
@@ -324,7 +329,7 @@ def per_game_unread_caveat(
         f"unknown — DuckStation layers such a file over the whole configuration while that "
         f"game runs ({_LAYER}), and the {plural} {spelled} would be read through it "
         f"({read_through}). {governs}",
-        {"core": token, "dir": directory, "key": spelled},
+        {"core": token, "dir": directory, "key": keys},
     )
 
 
@@ -387,7 +392,7 @@ def per_game_caveats(
                 "core": token,
                 "count": str(len(listing.matches)),
                 "dir": directory,
-                "key": spelled,
+                "key": keys,
             },
         )
     ]
