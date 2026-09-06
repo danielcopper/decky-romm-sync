@@ -30,7 +30,7 @@ from __future__ import annotations
 import glob
 import os
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from adapters.flatpak_install import flatpak_app_files_dirs
 
@@ -77,6 +77,60 @@ def emulator_token(command: str) -> str | None:
     """
     match = _EMULATOR_TOKEN_RE.search(command)
     return match.group(1) if match else None
+
+
+class _StaticPathCollector:
+    """Accumulates ``{EMULATOR_NAME: (staticpath, ...)}`` from expat's event stream.
+
+    An object rather than three closures over a shared dict: the parse is three
+    handlers reading and writing one piece of state, which is what the state
+    belonging to something looks like.
+
+    Only ``staticpath`` entries are kept. ``systempath`` binaries resolve on
+    RetroDECK's sandbox ``PATH``, which is not visible from outside the sandbox,
+    so recording them would let the probe claim an absence it cannot see. An
+    emulator whose rules hold no ``staticpath`` at all still gets a key, with an
+    empty list — that is the "cannot disprove" case, and it has to be
+    distinguishable from an emulator the file does not name.
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[str, list[str]] = {}
+        self._text = ""
+        self._emulator: str | None = None
+        self._rule_type: str | None = None
+
+    def start_element(self, name: str, attrs: dict[str, str]) -> None:
+        self._text = ""
+        if name == "emulator":
+            self._open_emulator(attrs.get("name"))
+        elif name == "rule":
+            self._rule_type = attrs.get("type")
+
+    def end_element(self, name: str) -> None:
+        if name == "entry":
+            self._close_entry()
+        elif name == "emulator":
+            self._emulator = None
+        elif name == "rule":
+            self._rule_type = None
+        self._text = ""
+
+    def character_data(self, data: str) -> None:
+        self._text += data
+
+    def collected(self) -> dict[str, tuple[str, ...]]:
+        """The finished map, each emulator's entries frozen in document order."""
+        return {name: tuple(entries) for name, entries in self._entries.items()}
+
+    def _open_emulator(self, name: str | None) -> None:
+        self._emulator = name
+        if name:
+            self._entries.setdefault(name, [])
+
+    def _close_entry(self) -> None:
+        if self._emulator and self._rule_type == "staticpath":
+            self._entries[self._emulator].append(self._text.strip())
 
 
 class EsFindRulesAdapter:
@@ -170,15 +224,11 @@ class EsFindRulesAdapter:
     def parse_es_find_rules(self, xml_path: str) -> dict[str, tuple[str, ...]]:
         """Parse ``es_find_rules.xml`` into ``{EMULATOR_NAME: (staticpath, ...)}``.
 
-        Only the ``staticpath`` entries are captured — the on-disk paths (bundled
-        ``/app`` components, external ``/var/data`` components, host installs) the
-        probe can honestly check. ``systempath`` binaries resolve on RetroDECK's
-        own sandbox ``PATH`` and are not verifiable from outside the sandbox, so
-        they are deliberately not recorded (see :meth:`_emulator_installed`). An
-        emulator with no ``staticpath`` rule maps to an empty tuple. Uses
-        ``xml.parsers.expat`` because Decky's PyInstaller-frozen Python does not
-        bundle ``xml.etree``. Returns ``{}`` if the file cannot be read or parsed
-        (the probe then assumes every emulator installed).
+        What is kept and why is :class:`_StaticPathCollector`'s; this method owns
+        the I/O and the three ways it can fail. Uses ``xml.parsers.expat``
+        because Decky's PyInstaller-frozen Python does not bundle ``xml.etree``.
+        Returns ``{}`` if the file cannot be read or parsed, which the probe
+        reads as "cannot disprove" and so assumes every emulator installed.
         """
         try:
             from xml.parsers import expat
@@ -193,42 +243,18 @@ class EsFindRulesAdapter:
             self._logger.warning("es_find_rules: failed to read %s: %s", xml_path, e)
             return {}
 
-        rules: dict[str, list[str]] = {}
-        state: dict[str, Any] = {"text": "", "name": None, "rule_type": None}
-
-        def start(name: str, attrs: dict[str, str]) -> None:
-            state["text"] = ""
-            if name == "emulator":
-                state["name"] = attrs.get("name")
-                if state["name"]:
-                    rules.setdefault(state["name"], [])
-            elif name == "rule":
-                state["rule_type"] = attrs.get("type")
-
-        def end(name: str) -> None:
-            if name == "entry" and state["name"] and state["rule_type"] == "staticpath":
-                rules[state["name"]].append(state["text"].strip())
-            elif name == "emulator":
-                state["name"] = None
-            elif name == "rule":
-                state["rule_type"] = None
-            state["text"] = ""
-
-        def char_data(data: str) -> None:
-            state["text"] += data
-
+        collector = _StaticPathCollector()
         parser = expat.ParserCreate()
-        parser.StartElementHandler = start
-        parser.EndElementHandler = end
-        parser.CharacterDataHandler = char_data
+        parser.StartElementHandler = collector.start_element
+        parser.EndElementHandler = collector.end_element
+        parser.CharacterDataHandler = collector.character_data
 
         try:
             parser.Parse(data, True)
         except expat.ExpatError as e:
             self._logger.warning("es_find_rules: failed to parse %s: %s", xml_path, e)
             return {}
-
-        return {name: tuple(entries) for name, entries in rules.items()}
+        return collector.collected()
 
     def _load_find_rules(self) -> dict[str, tuple[str, ...]]:
         """Load and cache the ``es_find_rules.xml`` parse (mtime-guarded).
