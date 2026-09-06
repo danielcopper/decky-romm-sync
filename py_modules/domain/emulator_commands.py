@@ -7,8 +7,8 @@ a standalone emulator. The system-layer default is the first *safely-bakeable*
 command in document order; the emulator picker offers every command annotated
 with its bakeability and, when it cannot be baked, the reason.
 
-Pure compute only — takes the already-parsed ``(label, text)`` pairs the
-:mod:`adapters.es_de_config` reader lifts from ``es_systems.xml`` and returns
+Pure compute only — takes the ``(label, text)`` pairs of one catalogue entry,
+which :mod:`adapters.atlas_catalogue` reads off ``es_systems.xml``, and returns
 value objects. The launch-bake itself (``EmulatorInvocation`` → the ``-e``
 string) lives in :mod:`domain.shortcut_data`; this module only decides *which*
 command becomes that invocation.

@@ -19,10 +19,10 @@ from tests.contract._harness import ContractHarness, build_contract_harness
 def _isolate_system_flatpak_root(tmp_path):
     """Keep the contract harness hermetic — never read the host's real RetroDECK.
 
-    The real ``CoreResolver`` / RetroArch core-info reader probe the system
+    The real ``EsFindRulesAdapter`` / RetroArch core-info reader probe the system
     flatpak root (``/var/lib/flatpak``) before the per-user one. On a dev machine
-    with RetroDECK installed, that real ``es_systems.xml`` would win over anything
-    a test seeds under ``tmp_path``. Repointing the system root at a nonexistent
+    with RetroDECK installed, that real ES-DE tree would win over anything a test
+    seeds under ``tmp_path``. Repointing the system root at a nonexistent
     tmp path makes the per-user seed the only source, so contract tests are
     deterministic on any machine.
     """

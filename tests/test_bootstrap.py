@@ -100,13 +100,13 @@ class TestBootstrap:
         assert isinstance(result.callbacks.retrodeck_paths, RetroDeckPathsAdapter)
 
     def test_returns_core_info_provider_on_adapters(self, tmp_path):
-        """``core_info_provider`` (CoreResolver) is bundled with adapters, not callbacks.
+        """``core_info_provider`` is bundled with adapters, not callbacks.
 
         The stateful adapter sits in :class:`AdapterBundle`;
         :class:`CallbackBundle` carries only provider callables and persisters.
         """
         result = _bootstrap_for(tmp_path)
-        # AdapterBundle exposes the stateful CoreResolver.
+        # AdapterBundle exposes the stateful catalogue adapter.
         assert result.adapters.core_info_provider is not None
         # CallbackBundle no longer carries it.
         assert not hasattr(result.callbacks, "core_info_provider")
